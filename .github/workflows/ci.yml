@@ -84,9 +84,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # jsdom 30's own package.json requires Node ^22.22.2 || ^24.15.0 || >=26.0.0
+      # (see node_modules/jsdom/package.json) — Node 20 fails at test time with
+      # "webidl.util.markAsUncloneable is not a function". Backend has no such
+      # dependency and stays on 20.
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
