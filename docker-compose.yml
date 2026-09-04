@@ -1,0 +1,82 @@
+# Lodgekeep — local development stack.
+#
+# MySQL is the source of truth for everything (ARCHITECTURE.md §1). Redis is
+# infrastructure only — the BullMQ job queue and rate-limit counters (§14, §15);
+# losing it degrades the system but risks no financial data.
+#
+# Host ports are deliberately non-default: this machine already runs MySQL on
+# 3306 and 3307, and adminer/phpmyadmin on 8082/8083, for other projects.
+# Change the left-hand side of any "ports" mapping if it collides on yours, and
+# update backend/.env to match.
+
+services:
+  mysql:
+    image: mysql:8
+    restart: unless-stopped
+    environment:
+      # Creates lodgekeep_dev and grants it to the app user on first start.
+      # lodgekeep_test is created by ./docker/mysql/init (see below).
+      MYSQL_DATABASE: lodgekeep_dev
+      MYSQL_USER: lodgekeep
+      MYSQL_PASSWORD: change-me
+      MYSQL_ROOT_PASSWORD: change-me-root
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    ports:
+      - "3310:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # Runs ONLY when the data volume is empty (MySQL's own entrypoint rule).
+      # An existing volume is never re-initialised — use `docker compose down -v`
+      # to force a clean re-init.
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Append-only persistence so a container restart doesn't silently drop
+    # queued jobs in development. Redis still holds nothing durable
+    # (ARCHITECTURE.md §14) — this is developer convenience, not a data store.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  adminer:
+    image: adminer
+    restart: unless-stopped
+    ports:
+      - "8084:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+    ports:
+      - "8085:80"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
+  redis-data:

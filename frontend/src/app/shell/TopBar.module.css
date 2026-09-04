@@ -1,0 +1,187 @@
+.topbar {
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  background: var(--surface-card);
+  border-bottom: 1px solid var(--border);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.iconButton {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--control-h-touch);
+  min-height: var(--control-h-touch);
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+
+  /* No token in the type scale covers a raw icon glyph (☰ ⛶ 🔔ーno icon
+     library is bundled yet, see IconBadge's header) — a deliberate, narrow
+     exception rather than an oversight. */
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.iconButton:hover {
+  background: var(--surface-sunken);
+}
+
+.badge {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  min-width: var(--space-4);
+  height: var(--space-4);
+
+  /* 0 3px was off the 4px spacing grid — DESIGN_SYSTEM.md §1: "all spacing
+     is a multiple of 4px." --space-1 (4px) is the closest step; the badge's
+     min-width already provides the horizontal room for two digits. */
+  padding: 0 var(--space-1);
+
+  /* No "fully round" token exists (--radius-* tops out at 14px) — 999px is
+     the standard CSS idiom for forcing a circle/pill regardless of content
+     width, kept as a documented literal rather than a fabricated token. */
+  border-radius: 999px;
+  background: var(--state-danger);
+  color: var(--text-inverse);
+  font-size: var(--text-caption-size); /* was a hardcoded 10px, below the spec's 12px floor */
+  font-weight: 700;
+  line-height: var(--space-4);
+  text-align: center;
+}
+
+.user {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.userButton {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-2) 0 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  cursor: pointer;
+}
+
+.userButton:hover,
+.userButton[aria-expanded='true'] {
+  background: var(--surface-sunken);
+}
+
+.chevron {
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+  line-height: 1;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 100;
+  min-width: 12rem;
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.menuUser {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-1);
+}
+
+.menuName {
+  margin: 0;
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.menuRole {
+  margin: 0;
+  font-size: var(--text-caption-size);
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.menuItem {
+  display: block;
+  width: 100%;
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menuItem:hover {
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+}
+
+.menuItemDanger {
+  color: var(--state-danger);
+}
+
+.menuItemDanger:hover {
+  background: var(--state-danger-bg);
+  color: var(--state-danger);
+}
+
+.avatar,
+.avatarFallback {
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.avatarFallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--domain-booking-tint);
+  color: var(--domain-booking);
+  font-weight: 600;
+}
+
+.userName {
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+@media (width <= 639px) {
+  .userName {
+    display: none;
+  }
+}

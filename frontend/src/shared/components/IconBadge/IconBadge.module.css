@@ -1,0 +1,29 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+}
+
+.booking {
+  background: var(--domain-booking-tint);
+  color: var(--domain-booking);
+}
+
+.rooms {
+  background: var(--domain-rooms-tint);
+  color: var(--domain-rooms);
+}
+
+.guest {
+  background: var(--domain-guest-tint);
+  color: var(--domain-guest);
+}
+
+.money {
+  background: var(--domain-money-tint);
+  color: var(--domain-money);
+}

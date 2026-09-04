@@ -1,0 +1,43 @@
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--surface-page);
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
+/* The off-canvas backdrop only exists as a concept below the 640px
+   breakpoint (DESIGN_SYSTEM.md §1) — above it, the sidebar is a normal
+   in-flow panel (full or icon-only), not an overlay, so there is nothing for
+   a backdrop to sit behind or dismiss. */
+.scrim {
+  display: none;
+}
+
+@media (width <= 639px) {
+  .scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(28, 36, 52, 0.4);
+    z-index: 150;
+  }
+}

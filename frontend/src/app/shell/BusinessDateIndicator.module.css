@@ -1,0 +1,24 @@
+.indicator {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.label {
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.value {
+  font-weight: var(--text-label-weight);
+  color: var(--text-primary);
+}
+
+.note {
+  color: var(--state-warning);
+  font-weight: var(--text-label-weight);
+}

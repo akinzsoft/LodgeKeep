@@ -1,0 +1,27 @@
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  background: var(--state-warning-bg);
+  color: var(--state-warning);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+}
+
+.message {
+  margin: 0;
+}
+
+.exit {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--state-warning);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--state-warning);
+  font-weight: var(--text-label-weight);
+  cursor: pointer;
+  flex-shrink: 0;
+}

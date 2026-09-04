@@ -1,0 +1,206 @@
+.sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  background: var(--surface-card);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  transition: width var(--transition-fast);
+}
+
+.collapsed {
+  width: var(--sidebar-w-collapsed);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.brandIcon {
+  width: var(--control-h);
+  height: var(--control-h);
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.brandWordmark {
+  font-size: var(--text-h3-size);
+  line-height: var(--text-h3-line);
+  font-weight: var(--text-h3-weight);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.userPanel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.avatar,
+.avatarFallback {
+  width: var(--control-h);
+  height: var(--control-h);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.avatarFallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--domain-booking-tint);
+  color: var(--domain-booking);
+  font-weight: 600;
+}
+
+.userName {
+  margin: 0;
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.userRole {
+  margin: 0;
+  font-size: var(--text-caption-size);
+  color: var(--text-secondary);
+}
+
+.quickAccess {
+  display: flex;
+  justify-content: space-around;
+  padding: var(--space-3) var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.quickAccessIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--control-h-touch);
+  min-height: var(--control-h-touch);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.quickAccessIcon:hover {
+  background: var(--surface-sunken);
+}
+
+.group {
+  padding: var(--space-3) var(--space-2);
+}
+
+.groupLabel {
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-3);
+
+  /* DESIGN_SYSTEM.md §1's type scale bottoms out at --text-caption-size
+     (12px) and states "never below 12px" outright — this used to be a
+     hardcoded 11px, which broke both rules at once. */
+  font-size: var(--text-caption-size);
+  font-weight: 600;
+
+  /* No letter-spacing token exists in tokens.css; DESIGN_SYSTEM.md §1
+     doesn't define one, so this stays a literal — an intentional, narrow
+     exception rather than an oversight. */
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+.item:hover {
+  background: var(--surface-sunken);
+}
+
+/* DESIGN_SYSTEM.md §1: "Active item highlighted with a tinted background
+   pill, not just bold text." */
+.active {
+  background: var(--domain-booking-tint);
+  color: var(--domain-booking);
+  font-weight: 600;
+}
+
+/* Referenced by Sidebar.jsx as styles.itemLabel but never previously
+   defined here — the label span rendered with no class at all and inherited
+   only .item's styles by cascade luck. Truncation needs its own class:
+   .item is a flex row, and without min-width: 0 on this child, a long label
+   pushes the badge out of view rather than ellipsizing. */
+.itemLabel {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemBadge {
+  background: var(--state-info-bg);
+  color: var(--state-info);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+
+  /* Was 2px — off the 4px spacing grid DESIGN_SYSTEM.md §1 requires
+     ("all spacing is a multiple of 4px"). --space-1 (4px) is the closest
+     step and keeps the badge's vertical rhythm on-grid. */
+  font-size: var(--text-caption-size); /* was a hardcoded 11px — see .groupLabel's note */
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* DESIGN_SYSTEM.md §1 responsive breakpoints: "Sidebar: full → icon-only at
+   1024px → off-canvas drawer below 640px." */
+@media (width <= 639px) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 200;
+    width: min(var(--sidebar-w), 85vw);
+    transform: translateX(-100%);
+    box-shadow: var(--shadow-raised);
+  }
+
+  .mobileOpen {
+    transform: translateX(0);
+  }
+
+  .collapsed {
+    width: min(var(--sidebar-w), 85vw);
+  }
+}

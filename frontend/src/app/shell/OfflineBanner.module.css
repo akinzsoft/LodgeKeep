@@ -1,0 +1,15 @@
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--state-neutral-bg);
+  color: var(--text-primary);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.message {
+  margin: 0;
+}

@@ -1,0 +1,25 @@
+.kpiCard {
+  min-width: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.label {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: var(--text-label-weight);
+  color: var(--text-secondary);
+}
+
+.value {
+  margin: 0;
+  font-size: var(--text-kpi-size);
+  line-height: var(--text-kpi-line);
+  font-weight: var(--text-kpi-weight);
+  color: var(--text-primary);
+}

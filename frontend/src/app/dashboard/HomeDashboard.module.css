@@ -1,0 +1,152 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.greetingRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.greeting {
+  margin: 0;
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line);
+  font-weight: var(--text-h1-weight);
+  color: var(--text-primary);
+}
+
+.summaryWidgets {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+}
+
+.summaryCard {
+  min-height: 5.5rem;
+}
+
+@media (width >= 640px) {
+  .summaryWidgets {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (width >= 1024px) {
+  .greetingRow {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .summaryWidgets {
+    width: 26rem;
+  }
+}
+
+/* DESIGN_SYSTEM.md §1: "KPI rows reflow 4 → 2 → 1." Mobile-first: 1 column
+   by default, 2 at the small-tablet breakpoint, 4 at desktop. */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+}
+
+@media (width >= 640px) {
+  .kpiGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (width >= 1280px) {
+  .kpiGrid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.kpiCard {
+  /* Card already applies --space-5 padding at >=640px (see Card.module.css)
+     — nothing extra needed here. */
+}
+
+/* KpiPlaceholder's own internal row: icon badge + label/value/caption,
+   modelled on KPICard.module.css's own .row shape. Distinct from .kpiGrid
+   above, which is the 4-card grid container — these must never share a
+   class name, since .kpiGrid is `display: grid` and this is `display: flex`. */
+.kpiRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.kpiText {
+  min-width: 0;
+}
+
+.kpiLabel {
+  margin: 0;
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  color: var(--text-secondary);
+}
+
+.kpiValue {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-kpi-size);
+  line-height: var(--text-kpi-line);
+  font-weight: var(--text-kpi-weight);
+  color: var(--text-muted);
+}
+
+.kpiCaption {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-caption-size);
+  color: var(--text-muted);
+}
+
+.chartRow {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+}
+
+@media (width >= 1024px) {
+  .chartRow {
+    grid-template-columns: 2fr 1fr;
+  }
+}
+
+.chartCardWide,
+.chartCardNarrow {
+  min-height: 16rem;
+}
+
+.alertList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.alertRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.alertRow:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.alertLabel {
+  font-size: var(--text-body-size);
+  color: var(--text-primary);
+}

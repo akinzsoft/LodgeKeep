@@ -1,0 +1,41 @@
+{
+  "name": "lodgekeep-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lodgekeep PMS \u2014 REST API. Multi-tenant SaaS hotel property management system.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "migrate": "knex migrate:latest",
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "migrate:make": "knex migrate:make",
+    "migrate:rollback": "knex migrate:rollback",
+    "migrate:status": "knex migrate:status",
+    "seed": "knex seed:run",
+    "seed:make": "knex seed:make",
+    "lint": "eslint .",
+    "test": "jest --runInBand",
+    "test:isolation": "jest --runInBand tests/isolation"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "bullmq": "^6.3.4",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.7.0",
+    "ioredis": "^6.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "knex": "^3.3.0",
+    "mysql2": "^3.24.3",
+    "rate-limit-redis": "^6.0.1"
+  },
+  "devDependencies": {
+    "eslint": "^10.9.1",
+    "jest": "^30.5.1",
+    "supertest": "^7.2.2"
+  }
+}

@@ -1,0 +1,45 @@
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  background: var(--state-success-bg);
+  color: var(--state-success);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+  padding: var(--space-3) var(--space-4);
+  min-width: 240px;
+  max-width: 360px;
+}
+
+.info {
+  background: var(--state-info-bg);
+  color: var(--state-info);
+}
+
+.icon {
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+.message {
+  margin: 0;
+  flex: 1;
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
+}
+
+.close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+  min-width: var(--control-h-touch);
+  min-height: var(--control-h-touch);
+  flex-shrink: 0;
+}

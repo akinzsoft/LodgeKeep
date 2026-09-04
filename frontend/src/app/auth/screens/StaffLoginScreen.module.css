@@ -1,0 +1,331 @@
+/* .page is a column now, not the row it used to be: .mainRow (the split
+   panel) plus <Footer/> stack vertically, the same shape AppShell.module.css's
+   .shell (row .body + Footer) uses — this screen and the authenticated shell
+   both carry the "Powered by LodgeKeep" credit, since a signed-out visitor
+   never reaches AppShell to see it there. */
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--surface-page);
+}
+
+.mainRow {
+  display: flex;
+  flex: 1;
+}
+
+/* Split-panel layout is the standard hotel-PMS login pattern (Opera Cloud,
+   Mews, Cloudbeds all use it) — a branded panel plus a plain form panel.
+   Below 1024px there's no room for both, so the brand panel drops out
+   entirely rather than stacking above the form (DESIGN_SYSTEM.md §1's
+   breakpoints treat 1024px as the tablet-landscape line generally). */
+.brandPanel {
+  display: none;
+}
+
+@media (width >= 1024px) {
+  .brandPanel {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-8);
+
+    /* A real photo (see the asset's own note below), not an illustration —
+       an unbranded, unpeopled hotel lobby with no readable signage, so
+       nothing in it competes with or misrepresents this product's own
+       identity. Two gradient layers sit on top of it, both composed from
+       tokens rather than a raw colour, same discipline as everywhere else:
+       the first (--text-primary, dark) darkens the bottom half so
+       .brandContent's white text stays legible over a bright marble floor —
+       verified against a real composite of these exact values, not just
+       eyeballed from the CSS, since the underlying photo is bright enough
+       that a modest overlay reads as barely-there; the second
+       (--domain-booking) washes the whole photo in the brand colour so the
+       panel still reads as "LodgeKeep" and not a stock photo that wandered
+       in from somewhere else.
+       Source: images.pexels.com/photos/6758532 (Max Vakhtbovych, Pexels
+       License — free for commercial use, no attribution required;
+       credited here anyway as a matter of record). Bundled locally as
+       src/assets/login-hotel-lobby.jpg rather than hotlinked, so the login
+       screen has no runtime dependency on a third party staying up. */
+    background-image:
+      linear-gradient(
+        to top,
+        color-mix(in srgb, var(--text-primary) 95%, transparent) 0%,
+        color-mix(in srgb, var(--text-primary) 45%, transparent) 40%,
+        transparent 75%
+      ),
+      linear-gradient(
+        160deg,
+        color-mix(in srgb, var(--domain-booking) 75%, transparent) 0%,
+        color-mix(in srgb, var(--domain-booking) 45%, transparent) 100%
+      ),
+      url('../../../assets/login-hotel-lobby.jpg');
+    background-size: cover;
+    background-position: center;
+    color: var(--text-inverse);
+  }
+}
+
+.brandTop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.logoMark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  flex-shrink: 0;
+  padding: var(--space-1);
+  border-radius: var(--radius-md);
+
+  /* A near-white chip, not the --text-inverse tint used elsewhere on this
+     panel: the logo's own colours (blue/teal/orange) are the point of
+     showing it, and tinting the chip purple would fight them rather than
+     frame them. */
+  background: color-mix(in srgb, var(--surface-card) 92%, transparent);
+}
+
+.logoMarkIcon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.wordmark {
+  margin: 0;
+  font-size: var(--text-h2-size);
+  line-height: var(--text-h2-line);
+  font-weight: var(--text-h2-weight);
+}
+
+.brandContent {
+  max-width: 32rem;
+}
+
+.tenantLabel {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line);
+  font-weight: var(--text-h1-weight);
+}
+
+.tagline {
+  margin: 0;
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
+  opacity: 0.8;
+  max-width: 26rem;
+}
+
+.formPanel {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+}
+
+.formCard {
+  width: 100%;
+  max-width: 24rem;
+
+  /* DESIGN_SYSTEM.md §1: "Card padding is --space-4 on mobile, --space-5 on
+     desktop" — this card was hardcoded to --space-5 at every width, the
+     same responsive step Card.module.css itself applies, just missed here
+     since this card doesn't go through the shared Card component. */
+  padding: var(--space-4);
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+@media (width >= 640px) {
+  .formCard {
+    padding: var(--space-5);
+  }
+}
+
+.title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line);
+  font-weight: var(--text-h1-weight);
+  color: var(--text-primary);
+}
+
+.subtitle {
+  margin: 0 0 var(--space-5);
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
+  color: var(--text-secondary);
+}
+
+.subtitle code,
+.devNote code {
+  font-family: var(--font-mono);
+  background: var(--surface-sunken);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+}
+
+.offlineBanner {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--state-neutral-bg);
+  color: var(--text-primary);
+  font-size: var(--text-label-size);
+}
+
+.errorBanner {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--state-danger-bg);
+  color: var(--state-danger);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+}
+
+.devNote {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--state-warning-bg);
+  color: var(--state-warning);
+  font-size: var(--text-caption-size);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.label {
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  color: var(--text-primary);
+}
+
+.input {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-size);
+  width: 100%;
+}
+
+.passwordRow {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.passwordRow .input {
+  flex: 1;
+}
+
+.checkboxRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  cursor: pointer;
+}
+
+/* Wraps just the checkbox input, at the exact line-box height of
+   .checkboxLabel's first line (--text-label-size * --text-label-line),
+   flex-centered within it. This replaces what used to be a hardcoded
+   `margin-top: 3px` on .checkbox — a magic number that (a) isn't a spacing
+   token or a multiple of 4px, and (b) was eyeballed to *approximate*
+   centering against the first line of a two-line label, rather than
+   actually deriving from the label's own type-scale values the way this
+   does. */
+.checkboxInputRow {
+  display: flex;
+  align-items: center;
+  height: calc(var(--text-label-size) * var(--text-label-line));
+  flex-shrink: 0;
+}
+
+.checkbox {
+  width: var(--space-4);
+  height: var(--space-4);
+  flex-shrink: 0;
+  accent-color: var(--domain-booking);
+}
+
+.checkboxLabel {
+  display: block;
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  color: var(--text-primary);
+}
+
+.checkboxCaption {
+  display: block;
+  font-size: var(--text-caption-size);
+  color: var(--text-muted);
+}
+
+.submit {
+  width: 100%;
+  margin-top: var(--space-2);
+}
+
+.links {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+/* Was a bare text-only control with no min-height at all — its real
+   clickable area was just the text's own line box (~18px), well under
+   DESIGN_SYSTEM.md §1's "minimum 44×44px on any screen a housekeeper or
+   front-desk agent uses on a tablet or phone" (this screen is exactly that
+   surface — front-desk staff sign in from shared terminals and tablets).
+   Fixed with a real --control-h-touch min-height, text vertically centred
+   inside it via flex — the visible link still looks like plain text (no
+   border/background/padding change), it just has a taller invisible hit
+   box. A side effect worth naming rather than fighting: the gap between
+   stacked links now reads a bit more generous than a bare --space-3 would,
+   because part of each link's own 44px box is that centring space — that's
+   the honest consequence of a real touch target, not spacing left
+   unaudited. */
+.linkButton {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h-touch);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--domain-booking);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  cursor: pointer;
+}
+
+.linkButton:hover {
+  text-decoration: underline;
+}
