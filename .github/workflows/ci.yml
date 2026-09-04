@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (test + lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    # A real MySQL instance, not mocked: TESTING.md's suite exercises unique
+    # constraints, FK enforcement, transaction rollback, and row locking on the
+    # last-room race, which a mock cannot stand in for (same reason local dev
+    # runs MySQL via docker-compose rather than an in-memory substitute).
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: lodgekeep_dev
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: lodgekeep_dev
+      # Must contain "test" — knexfile.js and tests/helpers/global-setup.js
+      # both refuse to run otherwise (TESTING.md Part 1).
+      DB_NAME_TEST: lodgekeep_test
+      NODE_ENV: test
+      JWT_SECRET: ci-test-secret-do-not-use-in-prod
+      JWT_ACCESS_TTL: 15m
+      JWT_REFRESH_TTL: 30d
+      APP_DOMAIN: lodgekeep.app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create test database
+        run: mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "CREATE DATABASE IF NOT EXISTS lodgekeep_test CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
+
+      # Explicit step so a broken migration fails here with its own clear
+      # error, ahead of (and separate from) the same rebuild Jest's own
+      # globalSetup (tests/helpers/global-setup.js) performs before the suite.
+      - name: Run migrations against the test database
+        run: npx knex migrate:latest --env test
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+  frontend:
+    name: Frontend (test + lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
