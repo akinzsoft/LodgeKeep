@@ -49,6 +49,7 @@ export function FrontDeskTab() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     reloadBoard();
     setupApi.listRooms().then(setRooms).catch(() => setRooms([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadBoard is redefined every render and read here only for the mount-time fetch (board is still its initial value at that point); listing it as a dep would re-run this effect on every render since it's a new function reference each time. Board-change reloads already go through switchBoard, which calls reloadBoard(key) explicitly.
   }, []);
 
   function switchBoard(key) {

@@ -25,6 +25,7 @@ export function ReservationsListTab() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload is redefined every render and read here only for the mount-time fetch (status is still its initial value at that point); listing it as a dep would re-run this effect on every render since it's a new function reference each time. Status-change reloads already go through the select's onChange, which calls reload(event.target.value) explicitly.
   }, []);
 
   async function handleCancel(reason) {
