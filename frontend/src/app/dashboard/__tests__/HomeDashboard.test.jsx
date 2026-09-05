@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { HomeDashboard } from '../HomeDashboard.jsx';
 import { ApiError } from '../../../shared/api/index.js';
 
@@ -9,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   listDepartures: vi.fn(),
   listRooms: vi.fn(),
   listProperties: vi.fn(),
+  getSetupProgress: vi.fn(),
   listDiscrepancies: vi.fn(),
   getRevenueReport: vi.fn(),
   getOversoldRoomTypes: vi.fn(),
@@ -24,7 +26,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       listArrivals: mocks.listArrivals,
       listDepartures: mocks.listDepartures,
     },
-    setupApi: { listRooms: mocks.listRooms, listProperties: mocks.listProperties },
+    setupApi: { listRooms: mocks.listRooms, listProperties: mocks.listProperties, getSetupProgress: mocks.getSetupProgress },
     housekeepingApi: { listDiscrepancies: mocks.listDiscrepancies },
     reportingApi: { getRevenueReport: mocks.getRevenueReport, getOversoldRoomTypes: mocks.getOversoldRoomTypes },
     nightAuditApi: { listRuns: mocks.listRuns },
@@ -46,6 +48,7 @@ describe('<HomeDashboard>', () => {
     mocks.listDepartures.mockResolvedValue([]);
     mocks.listRooms.mockResolvedValue([]);
     mocks.listProperties.mockResolvedValue([]);
+    mocks.getSetupProgress.mockResolvedValue({ steps: [], operational: true });
     mocks.listDiscrepancies.mockResolvedValue([]);
     mocks.getRevenueReport.mockResolvedValue([]);
     mocks.getOversoldRoomTypes.mockResolvedValue([]);
@@ -123,5 +126,20 @@ describe('<HomeDashboard>', () => {
     render(<HomeDashboard greetingName="Emily" />);
     const discrepancyRow = (await screen.findByText('Housekeeping discrepancies')).closest('li');
     expect(discrepancyRow).toHaveTextContent('1');
+  });
+
+  it("shows a setup-incomplete banner with a way to finish setup when the property isn't operational yet", async () => {
+    mocks.getSetupProgress.mockResolvedValue({ steps: [], operational: false });
+    const onNavigateToSetup = vi.fn();
+    render(<HomeDashboard greetingName="Emily" onNavigateToSetup={onNavigateToSetup} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('fully set up yet');
+    await userEvent.click(await screen.findByRole('button', { name: 'Finish setup' }));
+    expect(onNavigateToSetup).toHaveBeenCalled();
+  });
+
+  it('shows no setup banner once the property is operational', () => {
+    render(<HomeDashboard greetingName="Emily" />);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

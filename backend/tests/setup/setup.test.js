@@ -115,6 +115,70 @@ describe('Setup module (PLAN.md Phase 1)', () => {
   });
 
   // ====================================================================
+  // Setup wizard progress — PLAN.md Phase 1 gap closure,
+  // PRODUCT_REQUIREMENTS.md §3.19's "show progress and allow resuming."
+  // Ungated, the same chicken-and-egg exception as /properties above.
+  // ====================================================================
+  describe('GET /api/v1/setup/progress', () => {
+    it('with no active property at all, reports every step incomplete rather than 403ing', async () => {
+      const token = tokenFor({ tenant: ctx.a, propertyId: null });
+      const res = await t.request.get('/api/v1/setup/progress').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.operational).toBe(false);
+      expect(res.body.data.steps.every((step) => step.complete === false)).toBe(true);
+    });
+
+    it("reports a fully-seeded property as operational", async () => {
+      const token = tokenFor({ tenant: ctx.a, propertyId: ctx.a.properties[0].id });
+      const res = await t.request.get('/api/v1/setup/progress').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.operational).toBe(true);
+      expect(res.body.data.steps.find((s) => s.key === 'property').complete).toBe(true);
+      expect(res.body.data.steps.find((s) => s.key === 'room-types').complete).toBe(true);
+    });
+
+    it('resumes correctly from a partial state: a brand-new property is not operational until each required step has real data', async () => {
+      const bootstrapToken = tokenFor({ tenant: ctx.a, propertyId: null });
+      const created = await t.request
+        .post('/api/v1/properties')
+        .set('Authorization', `Bearer ${bootstrapToken}`)
+        .send({ name: 'Wizard Test Property', slug: `${ctx.a.slug}-wizard-test`, timezone: 'Africa/Lagos', base_currency: 'NGN' });
+      const propertyId = created.body.data.id;
+      const token = tokenFor({ tenant: ctx.a, propertyId });
+
+      // A brand-new property (via the ungated bootstrap endpoint above)
+      // grants the creator no access at all — the same real, already-
+      // flagged Phase 1 gap `createProperty`'s own header documents ("real
+      // tenant/first-admin provisioning is Phase 5 territory"). Granted
+      // directly here, same as a real deployment would need some other
+      // provisioning step to do, so this test can reach the
+      // setup.manage-gated room-type endpoint below.
+      await t.trx('user_property_access').insert({
+        tenant_id: ctx.a.id,
+        property_id: propertyId,
+        user_id: ctx.a.users[0].id,
+        role: 'admin',
+      });
+
+      const initial = await t.request.get('/api/v1/setup/progress').set('Authorization', `Bearer ${token}`);
+      expect(initial.body.data.operational).toBe(false);
+      expect(initial.body.data.steps.find((s) => s.key === 'property').complete).toBe(true);
+      expect(initial.body.data.steps.find((s) => s.key === 'room-types').complete).toBe(false);
+
+      await t.request
+        .post('/api/v1/room-types')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ code: 'WIZ', name: 'Wizard', default_occupancy: 2, base_rate: '100.00' });
+
+      const afterRoomType = await t.request.get('/api/v1/setup/progress').set('Authorization', `Bearer ${token}`);
+      expect(afterRoomType.body.data.steps.find((s) => s.key === 'room-types').complete).toBe(true);
+      expect(afterRoomType.body.data.operational).toBe(false); // still no rooms/rate codes
+      // Taxes/users are optional — never block "operational" on their own.
+      expect(afterRoomType.body.data.steps.find((s) => s.key === 'taxes').optional).toBe(true);
+    });
+  });
+
+  // ====================================================================
   // RBAC gating — setup.view vs setup.manage, seeded for real (not fixture-only)
   // ====================================================================
   describe('setup.view / setup.manage gating', () => {

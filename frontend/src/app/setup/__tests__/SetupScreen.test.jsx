@@ -9,6 +9,15 @@ const mocks = vi.hoisted(() => ({
   listRooms: vi.fn(),
   listRateCodes: vi.fn(),
   listTaxes: vi.fn(),
+  listMarketSegments: vi.fn(),
+  listBookingSources: vi.fn(),
+  listCancellationPolicies: vi.fn(),
+  getSetupProgress: vi.fn(),
+}));
+
+const usersMocks = vi.hoisted(() => ({
+  listUsers: vi.fn(),
+  listPendingInvitations: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -21,6 +30,14 @@ vi.mock('../../../shared/api/index.js', async () => {
       listRooms: mocks.listRooms,
       listRateCodes: mocks.listRateCodes,
       listTaxes: mocks.listTaxes,
+      listMarketSegments: mocks.listMarketSegments,
+      listBookingSources: mocks.listBookingSources,
+      listCancellationPolicies: mocks.listCancellationPolicies,
+      getSetupProgress: mocks.getSetupProgress,
+    },
+    usersApi: {
+      listUsers: usersMocks.listUsers,
+      listPendingInvitations: usersMocks.listPendingInvitations,
     },
   };
 });
@@ -29,11 +46,27 @@ const PROPERTY = { id: '1', name: 'Alpha Hotels', slug: 'alpha', timezone: 'Afri
 
 describe('<SetupScreen>', () => {
   beforeEach(() => {
-    Object.values(mocks).forEach((fn) => fn.mockReset());
+    [...Object.values(mocks), ...Object.values(usersMocks)].forEach((fn) => fn.mockReset());
     mocks.listRoomTypes.mockResolvedValue([]);
     mocks.listRooms.mockResolvedValue([]);
     mocks.listRateCodes.mockResolvedValue([]);
     mocks.listTaxes.mockResolvedValue([]);
+    mocks.listMarketSegments.mockResolvedValue([]);
+    mocks.listBookingSources.mockResolvedValue([]);
+    mocks.listCancellationPolicies.mockResolvedValue([]);
+    mocks.getSetupProgress.mockResolvedValue({
+      steps: [
+        { key: 'property', label: 'Property', complete: true },
+        { key: 'room-types', label: 'Room Types', complete: false },
+        { key: 'rooms', label: 'Rooms', complete: false },
+        { key: 'rate-codes', label: 'Rate Codes & Calendar', complete: false },
+        { key: 'taxes', label: 'Taxes', complete: false, optional: true },
+        { key: 'users', label: 'Users', complete: false, optional: true },
+      ],
+      operational: false,
+    });
+    usersMocks.listUsers.mockResolvedValue([]);
+    usersMocks.listPendingInvitations.mockResolvedValue([]);
   });
 
   it('shows a loading state before properties resolve', () => {
@@ -42,11 +75,11 @@ describe('<SetupScreen>', () => {
     expect(screen.getByText(/loading setup/i)).toBeInTheDocument();
   });
 
-  it('renders all five tabs once properties load, defaulting to Property', async () => {
+  it('renders every tab once properties load, defaulting to Guided Setup', async () => {
     mocks.listProperties.mockResolvedValue([PROPERTY]);
     render(<SetupScreen activePropertyId="1" />);
-    expect(await screen.findByRole('tab', { name: 'Property' })).toHaveAttribute('aria-selected', 'true');
-    ['Room Types', 'Rooms', 'Rate Codes & Calendar', 'Taxes'].forEach((label) => {
+    expect(await screen.findByRole('tab', { name: 'Guided Setup' })).toHaveAttribute('aria-selected', 'true');
+    ['Property', 'Room Types', 'Rooms', 'Rate Codes & Calendar', 'Taxes', 'Reference Data', 'Users'].forEach((label) => {
       expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
     });
   });

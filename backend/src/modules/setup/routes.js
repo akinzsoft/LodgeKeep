@@ -17,6 +17,11 @@
  * tenant). See `service.js`'s `createProperty` for the full reasoning and
  * the flagged gap — real tenant/first-admin provisioning is Phase 5 (SaaS
  * platform) territory, not solved here.
+ *
+ * `/setup/progress` (PLAN.md Phase 1 gap closure, the setup wizard) carries
+ * the identical exception, for the identical reason: the wizard's own first
+ * step is "no property exists yet," which is exactly the case
+ * `requirePermission` cannot express either.
  */
 
 const { Router } = require('express');
@@ -30,6 +35,8 @@ function setupRouter() {
   router.get('/properties', controller.listProperties);
   router.get('/properties/:id', controller.getProperty);
   router.patch('/properties/:id', controller.updateProperty);
+
+  router.get('/setup/progress', controller.getSetupProgress);
 
   router.get('/room-types', requirePermission('setup.view'), controller.listRoomTypes);
   router.post('/room-types', requirePermission('setup.manage'), controller.createRoomType);

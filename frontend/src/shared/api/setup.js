@@ -23,6 +23,11 @@ export function updateProperty(id, body) {
   return request(`/properties/${id}`, { method: 'PATCH', body });
 }
 
+/** PLAN.md Phase 1 gap closure — the setup wizard's progress/resume state, computed fresh on every call. @returns {Promise<{steps: {key: string, label: string, complete: boolean, optional?: boolean}[], operational: boolean}>} */
+export function getSetupProgress() {
+  return request('/setup/progress');
+}
+
 // ---------------------------------------------------------------------
 // Room types
 // ---------------------------------------------------------------------

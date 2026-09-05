@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, KPICard, StatusPill } from '../../shared/components/index.js';
+import { Card, KPICard, StatusPill, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { reservationsApi, setupApi, housekeepingApi, reportingApi, nightAuditApi, ApiError } from '../../shared/api/index.js';
 import { STATUS_TONE as NIGHT_AUDIT_STATUS_TONE } from '../night-audit/NightAuditScreen.jsx';
@@ -35,8 +35,9 @@ import styles from './HomeDashboard.module.css';
  * @param {string} greetingName   Shown as "Hi, {name}!" — falls back to a generic greeting if empty.
  * @param {string} businessDate   'YYYY-MM-DD' — see `main.jsx`'s own `BUSINESS_DATE` header for why this is a prop, not derived here.
  * @param {string} [activePropertyId]   Fetched into a currency code for the Total Revenue KPI (ARCHITECTURE.md §1: "every money column carries its currency") — the same "no display name yet, only an id" gap `SetupScreen`/`BookingScreen` already work around by fetching properties themselves.
+ * @param {() => void} [onNavigateToSetup]   PLAN.md Phase 1 gap closure (the setup wizard): PRODUCT_REQUIREMENTS.md §3.19's "until the required steps are done, the rest of the app should make clear it isn't operational yet rather than failing with empty screens" — this dashboard is exactly the screen that spec line describes, so it's the one place (not every screen) that carries this banner.
  */
-export function HomeDashboard({ greetingName, businessDate, activePropertyId }) {
+export function HomeDashboard({ greetingName, businessDate, activePropertyId, onNavigateToSetup }) {
   const [totalBooking, setTotalBooking] = useState({ state: 'loading', value: null });
   const [roomsAvailable, setRoomsAvailable] = useState({ state: 'loading', value: null });
   const [totalRevenue, setTotalRevenue] = useState({ state: 'loading', value: null });
@@ -51,6 +52,7 @@ export function HomeDashboard({ greetingName, businessDate, activePropertyId }) 
   // value or null (no run yet for today's business date), `message` is set
   // only on a load failure.
   const [nightAudit, setNightAudit] = useState(null);
+  const [setupProgress, setSetupProgress] = useState(null);
 
   useEffect(() => {
     reservationsApi
@@ -125,6 +127,13 @@ export function HomeDashboard({ greetingName, businessDate, activePropertyId }) 
         if (active) setCurrencyCode(active.base_currency);
       })
       .catch(() => {});
+
+    // This can 200 with `operational: false` for a role with no setup grant
+    // at all (the endpoint is deliberately ungated — see its own route
+    // header) or fail outright for one with none whatsoever; either way, a
+    // failure here just means no banner shows rather than a scary error on
+    // the dashboard's own greeting row.
+    setupApi.getSetupProgress().then(setSetupProgress).catch(() => setSetupProgress(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch-on-mount for a fixed businessDate prop; a real business-date-advance mechanism (Night Audit) doesn't exist yet to re-trigger this.
   }, []);
 
@@ -146,6 +155,20 @@ export function HomeDashboard({ greetingName, businessDate, activePropertyId }) 
           />
         </div>
       </div>
+
+      {setupProgress?.operational === false && (
+        <div className={styles.setupBanner} role="alert">
+          <p className={styles.setupBannerText}>
+            This property isn&rsquo;t fully set up yet — some screens below won&rsquo;t show real data until setup is
+            complete.
+          </p>
+          {onNavigateToSetup && (
+            <Button variant="secondary" size="compact" onClick={onNavigateToSetup}>
+              Finish setup
+            </Button>
+          )}
+        </div>
+      )}
 
       <div className={styles.kpiGrid}>
         <KPICard

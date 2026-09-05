@@ -184,7 +184,12 @@ function Demo() {
       ) : activeItemKey === 'profiles' ? (
         <ProfilesScreen />
       ) : (
-        <HomeDashboard greetingName={user.email} businessDate={BUSINESS_DATE} activePropertyId={user.activePropertyId} />
+        <HomeDashboard
+          greetingName={user.email}
+          businessDate={BUSINESS_DATE}
+          activePropertyId={user.activePropertyId}
+          onNavigateToSetup={() => setActiveItemKey('setup')}
+        />
       )}
       {toast && (
         <div className={styles.toastLayer}>

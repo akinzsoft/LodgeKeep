@@ -150,3 +150,21 @@
   font-size: var(--text-body-size);
   color: var(--text-primary);
 }
+
+.setupBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--state-warning-bg);
+  color: var(--state-warning);
+}
+
+.setupBannerText {
+  margin: 0;
+  font-size: var(--text-body-size);
+  font-weight: var(--text-label-weight);
+}

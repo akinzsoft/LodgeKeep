@@ -447,6 +447,50 @@ async function listCancellationPolicies({ context }) {
   return db.table('cancellation_policies').where({ status: 'active' }).orderBy('code');
 }
 
+// ---------------------------------------------------------------------
+// Setup wizard progress — PLAN.md Phase 1 gap closure,
+// PRODUCT_REQUIREMENTS.md §3.19: "Show progress and allow resuming."
+//
+// Deliberately computed from the real data every time, never a stored
+// per-step "visited" flag — the same "read the real thing, don't invent a
+// shadow state" reasoning Reporting's own daily_reports snapshot follows.
+// A step is complete when the data it configures actually exists; nothing
+// here can drift out of sync with reality, and resuming after leaving
+// mid-wizard needs no persistence at all — the next load simply recomputes
+// the same answer.
+// ---------------------------------------------------------------------
+
+/** Taxes and users are shown as wizard steps but not required to reach "operational" — a real property may legitimately configure zero taxes, and the account performing setup already counts as a user. */
+const OPTIONAL_STEPS = new Set(['taxes', 'users']);
+
+async function getSetupProgress({ context }) {
+  const db = scopedDb().for(context);
+  const hasProperty = Boolean(context.propertyId) && Boolean(await db.table('properties').where({ id: context.propertyId }).first('id'));
+
+  const counts = hasProperty
+    ? await Promise.all([
+        db.table('room_types').where({ status: 'active' }).count(),
+        db.table('rooms').count(),
+        db.table('rate_codes').where({ status: 'active' }).count(),
+        db.table('taxes').count(),
+        db.table('user_property_access').count(),
+      ])
+    : [0, 0, 0, 0, 0];
+  const [roomTypeCount, roomCount, rateCodeCount, taxCount, userCount] = counts;
+
+  const steps = [
+    { key: 'property', label: 'Property', complete: hasProperty },
+    { key: 'room-types', label: 'Room Types', complete: hasProperty && roomTypeCount > 0 },
+    { key: 'rooms', label: 'Rooms', complete: hasProperty && roomCount > 0 },
+    { key: 'rate-codes', label: 'Rate Codes & Calendar', complete: hasProperty && rateCodeCount > 0 },
+    { key: 'taxes', label: 'Taxes', complete: hasProperty && taxCount > 0, optional: true },
+    { key: 'users', label: 'Users', complete: hasProperty && userCount > 1, optional: true },
+  ];
+
+  const operational = steps.filter((step) => !OPTIONAL_STEPS.has(step.key)).every((step) => step.complete);
+  return { steps, operational };
+}
+
 async function createTaxVersion({ context, taxCode, name, rate, effectiveFrom, isInclusive, calculationMethod, priority, isCompound, roundingMethod, jurisdiction, applies_to: appliesTo }) {
   const db = scopedDb().for(context);
 
@@ -572,4 +616,5 @@ module.exports = {
   archiveCancellationPolicy,
   getCancellationPolicy,
   listCancellationPolicies,
+  getSetupProgress,
 };

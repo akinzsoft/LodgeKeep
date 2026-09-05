@@ -7,6 +7,7 @@ import { RateCodesTab } from './RateCodesTab.jsx';
 import { TaxesTab } from './TaxesTab.jsx';
 import { ReferenceDataTab } from './ReferenceDataTab.jsx';
 import { UsersTab } from './UsersTab.jsx';
+import { SetupWizard } from './SetupWizard.jsx';
 import styles from './SetupScreen.module.css';
 
 /**
@@ -18,12 +19,14 @@ import styles from './SetupScreen.module.css';
  * one component under a single "Setup" nav item.
  *
  * Market segments, booking sources, and cancellation policies (the
- * "Reference Data" tab), and user management (the "Users" tab) both closed
- * gaps flagged here since the original Phase 1 pass — PLAN.md's Phase 1
- * bullet list named all of these from the start, but they were deliberately
- * deferred until later passes. Still not built, deliberately: the guided
- * first-run wizard with resumable progress — a real, separate piece of
- * work, tracked as its own gap rather than folded into this tab strip.
+ * "Reference Data" tab), user management (the "Users" tab), and the guided
+ * first-run wizard with resumable progress (the "Guided Setup" tab, the
+ * default one — PRODUCT_REQUIREMENTS.md §3.19: "public signup, then
+ * straight into the setup wizard") have all closed gaps flagged here since
+ * the original Phase 1 pass named exactly five of PLAN.md's Phase 1 bullets
+ * as built. The individual tabs after it stay reachable directly for
+ * editing after initial setup — the wizard is a guided path through the
+ * same tabs, not a separate set of forms (see `SetupWizard`'s own header).
  *
  * Fetches the tenant's properties itself, rather than trusting
  * `activeProperty` passed down from `main.jsx` (which — per
@@ -33,6 +36,7 @@ import styles from './SetupScreen.module.css';
  * values to show instead of a placeholder.
  */
 const TABS = [
+  { key: 'wizard', label: 'Guided Setup' },
   { key: 'property', label: 'Property' },
   { key: 'room-types', label: 'Room Types' },
   { key: 'rooms', label: 'Rooms' },
@@ -43,7 +47,7 @@ const TABS = [
 ];
 
 export function SetupScreen({ activePropertyId, isOffline = false }) {
-  const [tab, setTab] = useState('property');
+  const [tab, setTab] = useState('wizard');
   const [properties, setProperties] = useState(null);
   const [error, setError] = useState(null);
 
@@ -104,6 +108,14 @@ export function SetupScreen({ activePropertyId, isOffline = false }) {
       </div>
 
       <div className={styles.panel}>
+        {tab === 'wizard' && (
+          <SetupWizard
+            properties={properties}
+            activeProperty={activeProperty}
+            onPropertiesChanged={reloadProperties}
+            isOffline={isOffline}
+          />
+        )}
         {tab === 'property' && (
           <PropertyTab properties={properties} onPropertiesChanged={reloadProperties} />
         )}

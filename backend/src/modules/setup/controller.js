@@ -568,6 +568,14 @@ async function listCancellationPolicies(req, res, next) {
   }
 }
 
+async function getSetupProgress(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.getSetupProgress({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function resolveTax(req, res, next) {
   try {
     const taxCode = require_(req.query, 'tax_code');
@@ -616,4 +624,5 @@ module.exports = {
   updateCancellationPolicy,
   archiveCancellationPolicy,
   listCancellationPolicies,
+  getSetupProgress,
 };
