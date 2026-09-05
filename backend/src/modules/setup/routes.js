@@ -51,6 +51,21 @@ function setupRouter() {
   router.post('/rate-calendar', requirePermission('setup.manage'), controller.setRateOverride);
   router.delete('/rate-calendar/:id', requirePermission('setup.manage'), controller.deleteRateOverride);
 
+  router.get('/market-segments', requirePermission('setup.view'), controller.listMarketSegments);
+  router.post('/market-segments', requirePermission('setup.manage'), controller.createMarketSegment);
+  router.patch('/market-segments/:id', requirePermission('setup.manage'), controller.updateMarketSegment);
+  router.post('/market-segments/:id/archive', requirePermission('setup.manage'), controller.archiveMarketSegment);
+
+  router.get('/booking-sources', requirePermission('setup.view'), controller.listBookingSources);
+  router.post('/booking-sources', requirePermission('setup.manage'), controller.createBookingSource);
+  router.patch('/booking-sources/:id', requirePermission('setup.manage'), controller.updateBookingSource);
+  router.post('/booking-sources/:id/archive', requirePermission('setup.manage'), controller.archiveBookingSource);
+
+  router.get('/cancellation-policies', requirePermission('setup.view'), controller.listCancellationPolicies);
+  router.post('/cancellation-policies', requirePermission('setup.manage'), controller.createCancellationPolicy);
+  router.patch('/cancellation-policies/:id', requirePermission('setup.manage'), controller.updateCancellationPolicy);
+  router.post('/cancellation-policies/:id/archive', requirePermission('setup.manage'), controller.archiveCancellationPolicy);
+
   router.get('/taxes', requirePermission('setup.view'), controller.listTaxes);
   router.get('/taxes/resolve', requirePermission('setup.view'), controller.resolveTax);
   router.post('/taxes', requirePermission('setup.manage'), controller.createTaxVersion);

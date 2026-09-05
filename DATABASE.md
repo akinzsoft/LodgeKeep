@@ -45,8 +45,8 @@ Reference schema for every module. Column lists are indicative rather than exhau
 | `rate_calendar` | rate_code_id, room_type_id, stay_date, rate | Date-level overrides |
 | `packages` | code, name, inclusions (JSON), price_adjustment | |
 | `taxes` | tax_code, name, rate, applies_to, effective_from, effective_to, inclusive_or_exclusive, calculation_method, priority, is_compound, rounding_method, jurisdiction | Effective-dated — never rewrites historical folios. Full column set per ARCHITECTURE.md §12.1; a charge always calculates against the tax version effective on its `business_date`, not the current rate |
-| `market_segments` / `booking_sources` | code, name | Reference data; needed from day one or historical reporting can't be rebuilt |
-| `cancellation_policies` | name, cutoff_hours, fee_type, fee_amount | |
+| `market_segments` / `booking_sources` | code, name, status | Reference data; needed from day one or historical reporting can't be rebuilt. Built in the same Phase 1 gap-closure pass as `cancellation_policies` below — `reservations.market_segment_id`/`booking_source_id` now carry real composite FKs into these tables |
+| `cancellation_policies` | code, name, description, cutoff_hours, fee_type, fee_value, status | `fee_value` (not `fee_amount` as originally spec'd here) — one column whose meaning depends on `fee_type` (`none`/`flat_fee`/`first_night`/`percentage`), rather than a separate amount and percentage column, to avoid two columns where only one is ever meaningful for a given row. Fee computation/posting at cancellation time is **not** wired up — this table only stores the rule; see the migration's own header |
 
 **Guests & CRM (3.1)**
 

@@ -385,6 +385,189 @@ async function listTaxes(req, res, next) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Market segments
+// ---------------------------------------------------------------------
+
+async function createMarketSegment(req, res, next) {
+  try {
+    const code = require_(req.body, 'code');
+    const name = require_(req.body, 'name');
+    const marketSegment = await service.createMarketSegment({ context: req.context, code, name });
+    await req.audit({ entityType: 'market_segments', entityId: marketSegment.id, action: 'create', afterState: marketSegment });
+    res.status(201).json(ok(marketSegment));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateMarketSegment(req, res, next) {
+  try {
+    const { id } = req.params;
+    const before = await service.getMarketSegment({ context: req.context, id });
+    if (!before) return notFound(res);
+    const marketSegment = await service.updateMarketSegment({ context: req.context, id, changes: req.body ?? {} });
+    await req.audit({ entityType: 'market_segments', entityId: id, action: 'update', beforeState: before, afterState: marketSegment });
+    res.status(200).json(ok(marketSegment));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function archiveMarketSegment(req, res, next) {
+  try {
+    const { id } = req.params;
+    const before = await service.getMarketSegment({ context: req.context, id });
+    if (!before) return notFound(res);
+    const marketSegment = await service.archiveMarketSegment({ context: req.context, id });
+    await req.audit({ entityType: 'market_segments', entityId: id, action: 'archive', beforeState: before, afterState: marketSegment });
+    res.status(200).json(ok(marketSegment));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function listMarketSegments(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listMarketSegments({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Booking sources
+// ---------------------------------------------------------------------
+
+async function createBookingSource(req, res, next) {
+  try {
+    const code = require_(req.body, 'code');
+    const name = require_(req.body, 'name');
+    const bookingSource = await service.createBookingSource({ context: req.context, code, name });
+    await req.audit({ entityType: 'booking_sources', entityId: bookingSource.id, action: 'create', afterState: bookingSource });
+    res.status(201).json(ok(bookingSource));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateBookingSource(req, res, next) {
+  try {
+    const { id } = req.params;
+    const before = await service.getBookingSource({ context: req.context, id });
+    if (!before) return notFound(res);
+    const bookingSource = await service.updateBookingSource({ context: req.context, id, changes: req.body ?? {} });
+    await req.audit({ entityType: 'booking_sources', entityId: id, action: 'update', beforeState: before, afterState: bookingSource });
+    res.status(200).json(ok(bookingSource));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function archiveBookingSource(req, res, next) {
+  try {
+    const { id } = req.params;
+    const before = await service.getBookingSource({ context: req.context, id });
+    if (!before) return notFound(res);
+    const bookingSource = await service.archiveBookingSource({ context: req.context, id });
+    await req.audit({ entityType: 'booking_sources', entityId: id, action: 'archive', beforeState: before, afterState: bookingSource });
+    res.status(200).json(ok(bookingSource));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function listBookingSources(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listBookingSources({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Cancellation policies
+// ---------------------------------------------------------------------
+
+const FEE_TYPES = new Set(['none', 'flat_fee', 'first_night', 'percentage']);
+
+async function createCancellationPolicy(req, res, next) {
+  try {
+    const code = require_(req.body, 'code');
+    const name = require_(req.body, 'name');
+    const feeType = req.body?.fee_type;
+    if (feeType !== undefined && !FEE_TYPES.has(feeType)) {
+      throw new ValidationError('INVALID_FEE_TYPE', `"fee_type" must be one of ${[...FEE_TYPES].join(', ')}.`, [
+        { field: 'fee_type', issue: 'invalid' },
+      ]);
+    }
+    const cancellationPolicy = await service.createCancellationPolicy({
+      context: req.context,
+      code,
+      name,
+      description: req.body?.description,
+      cutoffHours: req.body?.cutoff_hours,
+      feeType,
+      feeValue: req.body?.fee_value,
+    });
+    await req.audit({
+      entityType: 'cancellation_policies',
+      entityId: cancellationPolicy.id,
+      action: 'create',
+      afterState: cancellationPolicy,
+    });
+    res.status(201).json(ok(cancellationPolicy));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateCancellationPolicy(req, res, next) {
+  try {
+    const { id } = req.params;
+    const before = await service.getCancellationPolicy({ context: req.context, id });
+    if (!before) return notFound(res);
+    const cancellationPolicy = await service.updateCancellationPolicy({ context: req.context, id, changes: req.body ?? {} });
+    await req.audit({
+      entityType: 'cancellation_policies',
+      entityId: id,
+      action: 'update',
+      beforeState: before,
+      afterState: cancellationPolicy,
+    });
+    res.status(200).json(ok(cancellationPolicy));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function archiveCancellationPolicy(req, res, next) {
+  try {
+    const { id } = req.params;
+    const before = await service.getCancellationPolicy({ context: req.context, id });
+    if (!before) return notFound(res);
+    const cancellationPolicy = await service.archiveCancellationPolicy({ context: req.context, id });
+    await req.audit({
+      entityType: 'cancellation_policies',
+      entityId: id,
+      action: 'archive',
+      beforeState: before,
+      afterState: cancellationPolicy,
+    });
+    res.status(200).json(ok(cancellationPolicy));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function listCancellationPolicies(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listCancellationPolicies({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function resolveTax(req, res, next) {
   try {
     const taxCode = require_(req.query, 'tax_code');
@@ -421,4 +604,16 @@ module.exports = {
   createTaxVersion,
   listTaxes,
   resolveTax,
+  createMarketSegment,
+  updateMarketSegment,
+  archiveMarketSegment,
+  listMarketSegments,
+  createBookingSource,
+  updateBookingSource,
+  archiveBookingSource,
+  listBookingSources,
+  createCancellationPolicy,
+  updateCancellationPolicy,
+  archiveCancellationPolicy,
+  listCancellationPolicies,
 };

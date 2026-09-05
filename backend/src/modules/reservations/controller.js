@@ -141,6 +141,9 @@ async function createReservation(req, res, next) {
           children: req.body?.children,
           asHold: req.body?.as_hold === true,
           allowWaitlist: req.body?.allow_waitlist === true,
+          marketSegmentId: req.body?.market_segment_id,
+          bookingSourceId: req.body?.booking_source_id,
+          cancellationPolicyId: req.body?.cancellation_policy_id,
         });
         return { status: 201, body: ok(reservation) };
       },

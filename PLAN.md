@@ -51,6 +51,8 @@ Nothing else functions until a property exists with rooms and rates in it.
 - User management, roles, market segments, booking sources
 - Setup wizard (PRODUCT_REQUIREMENTS.md, Setup & Configuration screens) with resumable progress
 
+**Scope note, corrected after implementation:** the original Phase 1 pass built exactly the five items its own commit named (property, room types, rooms, rate codes, taxes) and left user management, market segments, booking sources, cancellation policies, and the setup wizard unbuilt — flagged honestly at the time, not silently dropped. A later gap-closure pass (see CLAUDE.md's own status section) built **market segments, booking sources, and cancellation policies** as real PROPERTY_SCOPED reference-data tables with real CRUD endpoints, RBAC (reusing `setup.view`/`setup.manage`, no new permission keys needed), a Setup UI tab, and real composite FKs closing the forward references `reservations.market_segment_id`/`booking_source_id`/`cancellation_policy_id` had carried since Phase 2. **User management and the guided setup wizard remain unbuilt** — real, separate gaps, not yet picked up.
+
 **Tests required to close:**
 - Isolation tests for every setup entity (rooms, rate codes, taxes, users)
 - Tax effective-dating: changing a rate does not alter an existing folio's tax

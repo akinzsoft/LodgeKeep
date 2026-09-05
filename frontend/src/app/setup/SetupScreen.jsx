@@ -5,6 +5,7 @@ import { RoomTypesTab } from './RoomTypesTab.jsx';
 import { RoomsTab } from './RoomsTab.jsx';
 import { RateCodesTab } from './RateCodesTab.jsx';
 import { TaxesTab } from './TaxesTab.jsx';
+import { ReferenceDataTab } from './ReferenceDataTab.jsx';
 import styles from './SetupScreen.module.css';
 
 /**
@@ -15,14 +16,13 @@ import styles from './SetupScreen.module.css';
  * page each, since this app still has no router — `main.jsx` mounts this
  * one component under a single "Setup" nav item.
  *
- * NOT built here, deliberately (this session's confirmed scope decision):
- * user management, market segments, booking sources, cancellation
- * policies, and the guided first-run wizard with resumable progress —
- * PLAN.md's Phase 1 bullet list names all of these, but this pass built
- * exactly the five items requested: property setup, room types, room
- * inventory with bulk entry, rate codes and the rate calendar, and
- * effective-dated tax configuration. The tab strip below is deliberately
- * only those five, not PLAN.md's full list.
+ * Market segments, booking sources, and cancellation policies (the
+ * "Reference Data" tab) closed a gap flagged here since the original Phase
+ * 1 pass — PLAN.md's Phase 1 bullet list named them from the start, but
+ * they were deliberately deferred until this later pass. Still not built,
+ * deliberately: user management and the guided first-run wizard with
+ * resumable progress — both real, separate pieces of work, tracked as
+ * their own gaps rather than folded into this tab strip.
  *
  * Fetches the tenant's properties itself, rather than trusting
  * `activeProperty` passed down from `main.jsx` (which — per
@@ -37,6 +37,7 @@ const TABS = [
   { key: 'rooms', label: 'Rooms' },
   { key: 'rate-codes', label: 'Rate Codes & Calendar' },
   { key: 'taxes', label: 'Taxes' },
+  { key: 'reference-data', label: 'Reference Data' },
 ];
 
 export function SetupScreen({ activePropertyId, isOffline = false }) {
@@ -108,6 +109,7 @@ export function SetupScreen({ activePropertyId, isOffline = false }) {
         {tab === 'rooms' && <RoomsTab activeProperty={activeProperty} disabled={!activeProperty} />}
         {tab === 'rate-codes' && <RateCodesTab activeProperty={activeProperty} disabled={!activeProperty} />}
         {tab === 'taxes' && <TaxesTab activeProperty={activeProperty} disabled={!activeProperty} isOffline={isOffline} />}
+        {tab === 'reference-data' && <ReferenceDataTab disabled={!activeProperty} />}
       </div>
     </div>
   );

@@ -118,3 +118,58 @@ export function listTaxes() {
 export function createTaxVersion(body) {
   return request('/taxes', { method: 'POST', body });
 }
+
+// ---------------------------------------------------------------------
+// Market segments / booking sources / cancellation policies — PLAN.md
+// Phase 1 gap closure, PRODUCT_REQUIREMENTS.md §3.19. All three are the
+// identical "simple reference-data list, archive-not-delete" shape as
+// room types/rate codes above.
+// ---------------------------------------------------------------------
+
+export function listMarketSegments() {
+  return request('/market-segments');
+}
+
+export function createMarketSegment(body) {
+  return request('/market-segments', { method: 'POST', body });
+}
+
+export function updateMarketSegment(id, body) {
+  return request(`/market-segments/${id}`, { method: 'PATCH', body });
+}
+
+export function archiveMarketSegment(id) {
+  return request(`/market-segments/${id}/archive`, { method: 'POST' });
+}
+
+export function listBookingSources() {
+  return request('/booking-sources');
+}
+
+export function createBookingSource(body) {
+  return request('/booking-sources', { method: 'POST', body });
+}
+
+export function updateBookingSource(id, body) {
+  return request(`/booking-sources/${id}`, { method: 'PATCH', body });
+}
+
+export function archiveBookingSource(id) {
+  return request(`/booking-sources/${id}/archive`, { method: 'POST' });
+}
+
+export function listCancellationPolicies() {
+  return request('/cancellation-policies');
+}
+
+export function createCancellationPolicy(body) {
+  return request('/cancellation-policies', { method: 'POST', body });
+}
+
+export function updateCancellationPolicy(id, body) {
+  return request(`/cancellation-policies/${id}`, { method: 'PATCH', body });
+}
+
+export function archiveCancellationPolicy(id) {
+  return request(`/cancellation-policies/${id}/archive`, { method: 'POST' });
+}

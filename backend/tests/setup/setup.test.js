@@ -351,6 +351,108 @@ describe('Setup module (PLAN.md Phase 1)', () => {
   });
 
   // ====================================================================
+  // Market segments / booking sources / cancellation policies — PLAN.md
+  // Phase 1 gap closure, PRODUCT_REQUIREMENTS.md §3.19. Simple
+  // reference-data CRUD, the same shape as room_types above.
+  // ====================================================================
+  describe('market segments / booking sources / cancellation policies', () => {
+    const adminToken = () =>
+      signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id), // granted admin earlier in this file
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+    const viewToken = () => tokenFor({ tenant: ctx.a });
+
+    it('creates, lists, updates, and archives a market segment', async () => {
+      const create = await t.request
+        .post('/api/v1/market-segments')
+        .set('Authorization', `Bearer ${adminToken()}`)
+        .send({ code: 'CORP', name: 'Corporate' });
+      expect(create.status).toBe(201);
+      expect(create.body.data.status).toBe('active');
+
+      const list = await t.request.get('/api/v1/market-segments').set('Authorization', `Bearer ${viewToken()}`);
+      expect(list.status).toBe(200);
+      expect(list.body.data.some((row) => row.code === 'CORP')).toBe(true);
+
+      const update = await t.request
+        .patch(`/api/v1/market-segments/${create.body.data.id}`)
+        .set('Authorization', `Bearer ${adminToken()}`)
+        .send({ name: 'Corporate accounts' });
+      expect(update.status).toBe(200);
+      expect(update.body.data.name).toBe('Corporate accounts');
+
+      const archive = await t.request
+        .post(`/api/v1/market-segments/${create.body.data.id}/archive`)
+        .set('Authorization', `Bearer ${adminToken()}`);
+      expect(archive.status).toBe(200);
+      expect(archive.body.data.status).toBe('archived');
+
+      const listAfter = await t.request.get('/api/v1/market-segments').set('Authorization', `Bearer ${viewToken()}`);
+      expect(listAfter.body.data.some((row) => row.code === 'CORP')).toBe(false);
+    });
+
+    it('rejects a duplicate market segment code at the same property with a real 409', async () => {
+      const res = await t.request
+        .post('/api/v1/market-segments')
+        .set('Authorization', `Bearer ${adminToken()}`)
+        .send({ code: 'GOVT', name: 'Government' });
+      expect(res.status).toBe(201);
+      const dupe = await t.request
+        .post('/api/v1/market-segments')
+        .set('Authorization', `Bearer ${adminToken()}`)
+        .send({ code: 'GOVT', name: 'Clash' });
+      expect(dupe.status).toBe(409);
+      expect(dupe.body.error.code).toBe('CONFLICT_DUPLICATE_ENTRY');
+    });
+
+    it('view-only role cannot create a market segment', async () => {
+      const res = await t.request
+        .post('/api/v1/market-segments')
+        .set('Authorization', `Bearer ${viewToken()}`)
+        .send({ code: 'X', name: 'X' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+
+    it('creates, lists, updates, and archives a booking source', async () => {
+      const create = await t.request
+        .post('/api/v1/booking-sources')
+        .set('Authorization', `Bearer ${adminToken()}`)
+        .send({ code: 'DIRECT', name: 'Direct' });
+      expect(create.status).toBe(201);
+
+      const list = await t.request.get('/api/v1/booking-sources').set('Authorization', `Bearer ${viewToken()}`);
+      expect(list.body.data.some((row) => row.code === 'DIRECT')).toBe(true);
+
+      const archive = await t.request
+        .post(`/api/v1/booking-sources/${create.body.data.id}/archive`)
+        .set('Authorization', `Bearer ${adminToken()}`);
+      expect(archive.status).toBe(200);
+      expect(archive.body.data.status).toBe('archived');
+    });
+
+    it('creates a cancellation policy with a fee rule and rejects an invalid fee_type', async () => {
+      const create = await t.request
+        .post('/api/v1/cancellation-policies')
+        .set('Authorization', `Bearer ${adminToken()}`)
+        .send({ code: 'STRICT', name: 'Strict', cutoff_hours: 48, fee_type: 'first_night' });
+      expect(create.status).toBe(201);
+      expect(create.body.data.fee_type).toBe('first_night');
+      expect(create.body.data.cutoff_hours).toBe(48);
+
+      const invalid = await t.request
+        .post('/api/v1/cancellation-policies')
+        .set('Authorization', `Bearer ${adminToken()}`)
+        .send({ code: 'BAD', name: 'Bad', fee_type: 'not_a_real_type' });
+      expect(invalid.status).toBe(400);
+      expect(invalid.body.error.code).toBe('VALIDATION_INVALID_FEE_TYPE');
+    });
+  });
+
+  // ====================================================================
   // Isolation — representative HTTP-level check (DB-level coverage for
   // every Phase 1 table already comes free from tests/isolation's ISO-*
   // suite via tests/helpers/entities.js).

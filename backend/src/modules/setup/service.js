@@ -337,6 +337,116 @@ async function resolveRateForDate({ context, rateCodeId, roomTypeId, stayDate })
  * version (the one with no `effective_to` yet, or the latest one) gets its
  * `effective_to` set to the day before this new version starts.
  */
+// ---------------------------------------------------------------------
+// Market segments, booking sources, cancellation policies — PLAN.md
+// Phase 1 gap closure (PRODUCT_REQUIREMENTS.md §3.19). All three are the
+// identical "simple reference-data list, archive-not-delete" shape as
+// room_types/rate_codes above.
+// ---------------------------------------------------------------------
+
+async function createMarketSegment({ context, code, name }) {
+  const db = scopedDb().for(context);
+  return withDuplicateMapping(
+    'market_segments',
+    `A market segment with code "${code}" already exists at this property.`,
+    async () => {
+      const [id] = await db.table('market_segments').insert({ code, name });
+      return getMarketSegment({ context, id });
+    }
+  );
+}
+
+async function updateMarketSegment({ context, id, changes }) {
+  const db = scopedDb().for(context);
+  await db.table('market_segments').where({ id }).update(changes);
+  return getMarketSegment({ context, id });
+}
+
+async function archiveMarketSegment({ context, id }) {
+  return updateMarketSegment({ context, id, changes: { status: 'archived' } });
+}
+
+async function getMarketSegment({ context, id }) {
+  const db = scopedDb().for(context);
+  return db.table('market_segments').where({ id }).first();
+}
+
+async function listMarketSegments({ context }) {
+  const db = scopedDb().for(context);
+  return db.table('market_segments').where({ status: 'active' }).orderBy('code');
+}
+
+async function createBookingSource({ context, code, name }) {
+  const db = scopedDb().for(context);
+  return withDuplicateMapping(
+    'booking_sources',
+    `A booking source with code "${code}" already exists at this property.`,
+    async () => {
+      const [id] = await db.table('booking_sources').insert({ code, name });
+      return getBookingSource({ context, id });
+    }
+  );
+}
+
+async function updateBookingSource({ context, id, changes }) {
+  const db = scopedDb().for(context);
+  await db.table('booking_sources').where({ id }).update(changes);
+  return getBookingSource({ context, id });
+}
+
+async function archiveBookingSource({ context, id }) {
+  return updateBookingSource({ context, id, changes: { status: 'archived' } });
+}
+
+async function getBookingSource({ context, id }) {
+  const db = scopedDb().for(context);
+  return db.table('booking_sources').where({ id }).first();
+}
+
+async function listBookingSources({ context }) {
+  const db = scopedDb().for(context);
+  return db.table('booking_sources').where({ status: 'active' }).orderBy('code');
+}
+
+async function createCancellationPolicy({ context, code, name, description, cutoffHours, feeType, feeValue }) {
+  const db = scopedDb().for(context);
+  return withDuplicateMapping(
+    'cancellation_policies',
+    `A cancellation policy with code "${code}" already exists at this property.`,
+    async () => {
+      const [id] = await db.table('cancellation_policies').insert({
+        code,
+        name,
+        description: description ?? null,
+        cutoff_hours: cutoffHours ?? null,
+        fee_type: feeType ?? 'none',
+        fee_value: feeValue ?? null,
+      });
+      return getCancellationPolicy({ context, id });
+    }
+  );
+}
+
+async function updateCancellationPolicy({ context, id, changes }) {
+  const db = scopedDb().for(context);
+  await db.table('cancellation_policies').where({ id }).update(changes);
+  return getCancellationPolicy({ context, id });
+}
+
+async function archiveCancellationPolicy({ context, id }) {
+  return updateCancellationPolicy({ context, id, changes: { status: 'archived' } });
+}
+
+async function getCancellationPolicy({ context, id }) {
+  const db = scopedDb().for(context);
+  return db.table('cancellation_policies').where({ id }).first();
+}
+
+async function listCancellationPolicies({ context }) {
+  const db = scopedDb().for(context);
+  return db.table('cancellation_policies').where({ status: 'active' }).orderBy('code');
+}
+
 async function createTaxVersion({ context, taxCode, name, rate, effectiveFrom, isInclusive, calculationMethod, priority, isCompound, roundingMethod, jurisdiction, applies_to: appliesTo }) {
   const db = scopedDb().for(context);
 
@@ -447,4 +557,19 @@ module.exports = {
   listTaxes,
   resolveEffectiveTax,
   resolveTaxForDate,
+  createMarketSegment,
+  updateMarketSegment,
+  archiveMarketSegment,
+  getMarketSegment,
+  listMarketSegments,
+  createBookingSource,
+  updateBookingSource,
+  archiveBookingSource,
+  getBookingSource,
+  listBookingSources,
+  createCancellationPolicy,
+  updateCancellationPolicy,
+  archiveCancellationPolicy,
+  getCancellationPolicy,
+  listCancellationPolicies,
 };

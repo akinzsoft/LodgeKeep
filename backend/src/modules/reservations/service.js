@@ -306,6 +306,9 @@ async function createReservation({
   children,
   asHold,
   allowWaitlist,
+  marketSegmentId,
+  bookingSourceId,
+  cancellationPolicyId,
 }) {
   if (!(departureDate > arrivalDate)) {
     throw new ArrivalAfterDepartureError();
@@ -315,6 +318,25 @@ async function createReservation({
   const rateCode = await trx.table('rate_codes').where({ id: rateCodeId }).first();
   if (!rateCode) {
     throw new ValidationError('RATE_CODE_NOT_FOUND', 'The specified rate code does not exist at this property.');
+  }
+
+  // All three are optional (PLAN.md Phase 1 gap closure, PRODUCT_REQUIREMENTS.md
+  // §3.19) — a friendly existence check here, same reasoning as rate_code_id
+  // above, rather than surfacing a raw FK-violation error to the caller.
+  if (marketSegmentId != null && !(await trx.table('market_segments').where({ id: marketSegmentId }).first())) {
+    throw new ValidationError('MARKET_SEGMENT_NOT_FOUND', 'The specified market segment does not exist at this property.');
+  }
+  if (bookingSourceId != null && !(await trx.table('booking_sources').where({ id: bookingSourceId }).first())) {
+    throw new ValidationError('BOOKING_SOURCE_NOT_FOUND', 'The specified booking source does not exist at this property.');
+  }
+  if (
+    cancellationPolicyId != null &&
+    !(await trx.table('cancellation_policies').where({ id: cancellationPolicyId }).first())
+  ) {
+    throw new ValidationError(
+      'CANCELLATION_POLICY_NOT_FOUND',
+      'The specified cancellation policy does not exist at this property.'
+    );
   }
 
   let status = asHold ? 'tentative' : 'confirmed';
@@ -338,6 +360,9 @@ async function createReservation({
     children: children ?? 0,
     status,
     confirmation_number: generateUlid(),
+    market_segment_id: marketSegmentId ?? null,
+    booking_source_id: bookingSourceId ?? null,
+    cancellation_policy_id: cancellationPolicyId ?? null,
   });
 
   // TESTING.md RES-7/RES-8: resolve and snapshot the rate for every night

@@ -137,6 +137,9 @@ async function seedTwoTenants(trx) {
     payments: [],
     nightAuditRuns: [],
     dailyReports: [],
+    marketSegments: [],
+    bookingSources: [],
+    cancellationPolicies: [],
   });
 
   // Two symmetric example hotels, not one reference customer
@@ -273,6 +276,50 @@ async function seedTwoTenants(trx) {
         effective_from: '2026-01-01',
         is_inclusive: false,
         calculation_method: 'percentage',
+      }),
+      property_id: property.id,
+    });
+  }
+
+  for (const t of both) {
+    const property = t.properties[0];
+
+    t.marketSegments.push({
+      id: await insertReturningId(trx, 'market_segments', {
+        tenant_id: t.id,
+        property_id: property.id,
+        code: 'LEISURE',
+        name: 'Leisure',
+      }),
+      property_id: property.id,
+    });
+  }
+
+  for (const t of both) {
+    const property = t.properties[0];
+
+    t.bookingSources.push({
+      id: await insertReturningId(trx, 'booking_sources', {
+        tenant_id: t.id,
+        property_id: property.id,
+        code: 'OTA',
+        name: 'OTA',
+      }),
+      property_id: property.id,
+    });
+  }
+
+  for (const t of both) {
+    const property = t.properties[0];
+
+    t.cancellationPolicies.push({
+      id: await insertReturningId(trx, 'cancellation_policies', {
+        tenant_id: t.id,
+        property_id: property.id,
+        code: 'STANDARD',
+        name: 'Standard',
+        fee_type: 'first_night',
+        cutoff_hours: 24,
       }),
       property_id: property.id,
     });

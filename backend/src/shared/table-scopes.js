@@ -122,6 +122,14 @@ const TABLE_SCOPES = Object.freeze({
   rate_calendar: { scope: SCOPES.PROPERTY },
   taxes: { scope: SCOPES.PROPERTY },
 
+  // Setup reference data — PLAN.md Phase 1 gap closure,
+  // 20260910090000_create_market_segments.js through
+  // 20260910092000_create_cancellation_policies.js. Same PROPERTY_SCOPED
+  // reasoning as room_types/rate_codes above.
+  market_segments: { scope: SCOPES.PROPERTY },
+  booking_sources: { scope: SCOPES.PROPERTY },
+  cancellation_policies: { scope: SCOPES.PROPERTY },
+
   // Idempotency infra — PLAN.md Phase 2, 20260906090000_create_idempotency_keys.
   //
   // TENANT_SCOPED, not PROPERTY_SCOPED: ARCHITECTURE.md §7 scopes a key to

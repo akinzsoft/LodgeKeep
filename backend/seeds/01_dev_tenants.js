@@ -240,6 +240,41 @@ exports.seed = async function seed(knex) {
     }
   }
 
+  /**
+   * PLAN.md Phase 1 gap closure: market segments, booking sources, and a
+   * cancellation policy, all previously deferred (see the migrations that
+   * created these three tables). Insert-if-missing by `code`, the same
+   * idempotent shape as every other `ensure*` helper in this file — a
+   * second `npm run seed` run must not duplicate these rows either.
+   */
+  async function ensureReferenceData(tenantId, propertyId) {
+    const referenceRows = [
+      { table: 'market_segments', code: 'LEISURE', name: 'Leisure' },
+      { table: 'market_segments', code: 'CORP', name: 'Corporate' },
+      { table: 'booking_sources', code: 'DIRECT', name: 'Direct' },
+      { table: 'booking_sources', code: 'OTA', name: 'OTA' },
+    ];
+    for (const row of referenceRows) {
+      const existing = await knex(row.table).where({ tenant_id: tenantId, property_id: propertyId, code: row.code }).first('id');
+      if (!existing) {
+        await knex(row.table).insert({ tenant_id: tenantId, property_id: propertyId, code: row.code, name: row.name });
+      }
+    }
+    const existingPolicy = await knex('cancellation_policies')
+      .where({ tenant_id: tenantId, property_id: propertyId, code: 'STANDARD' })
+      .first('id');
+    if (!existingPolicy) {
+      await knex('cancellation_policies').insert({
+        tenant_id: tenantId,
+        property_id: propertyId,
+        code: 'STANDARD',
+        name: 'Standard',
+        cutoff_hours: 24,
+        fee_type: 'first_night',
+      });
+    }
+  }
+
   for (const spec of TENANTS) {
     const existingTenant = await knex('tenants').where({ slug: spec.slug }).first('id');
     if (existingTenant) {
@@ -257,7 +292,10 @@ exports.seed = async function seed(knex) {
       // reasoning as the manager grants above.
       await ensureAdminSuperAdminFullAccess(existingTenant.id);
       const existingProperty = await knex('properties').where({ tenant_id: existingTenant.id }).first('id');
-      if (existingProperty) await ensureAdminAccount(existingTenant.id, existingProperty.id, spec);
+      if (existingProperty) {
+        await ensureAdminAccount(existingTenant.id, existingProperty.id, spec);
+        await ensureReferenceData(existingTenant.id, existingProperty.id);
+      }
       ready.push({ slug: spec.slug, email: spec.staffUser.email, alreadyExisted: true });
       continue;
     }
@@ -326,6 +364,9 @@ exports.seed = async function seed(knex) {
 
     // PLAN.md Phase 2.5's Cashiering/Night Audit modules.
     await ensureManagerPhase25Access(tenantId);
+
+    // PLAN.md Phase 1 gap closure — see `ensureReferenceData`'s own header.
+    await ensureReferenceData(tenantId, propertyId);
 
     ready.push({ slug: spec.slug, email: spec.staffUser.email, alreadyExisted: false });
   }

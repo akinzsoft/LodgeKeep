@@ -71,6 +71,37 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
     return id;
   }
 
+  async function createMarketSegment(tenant, { code }) {
+    const [id] = await t.trx('market_segments').insert({
+      tenant_id: tenant.id,
+      property_id: tenant.properties[0].id,
+      code,
+      name: code,
+    });
+    return id;
+  }
+
+  async function createBookingSource(tenant, { code }) {
+    const [id] = await t.trx('booking_sources').insert({
+      tenant_id: tenant.id,
+      property_id: tenant.properties[0].id,
+      code,
+      name: code,
+    });
+    return id;
+  }
+
+  async function createCancellationPolicy(tenant, { code }) {
+    const [id] = await t.trx('cancellation_policies').insert({
+      tenant_id: tenant.id,
+      property_id: tenant.properties[0].id,
+      code,
+      name: code,
+      fee_type: 'none',
+    });
+    return id;
+  }
+
   let idemCounter = 0;
   function idemKey() {
     idemCounter += 1;
@@ -302,6 +333,85 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
         .send({});
       expect(promoted.status).toBe(200);
       expect(promoted.body.data.status).toBe('confirmed');
+    });
+  });
+
+  // ====================================================================
+  // Market segment / booking source / cancellation policy on a reservation
+  // — PLAN.md Phase 1 gap closure, PRODUCT_REQUIREMENTS.md §3.19 ("needed
+  // for meaningful revenue reporting later ... referenced at reservation
+  // time"). All three are optional.
+  // ====================================================================
+  describe('market segment / booking source / cancellation policy', () => {
+    let roomTypeId;
+    let rateCodeId;
+    let marketSegmentId;
+    let bookingSourceId;
+    let cancellationPolicyId;
+
+    beforeAll(async () => {
+      roomTypeId = await createRoomType(ctx.a, { code: 'REFDATA' });
+      await createRoom(ctx.a, { roomTypeId, roomNumber: 'RD1' });
+      rateCodeId = await createRateCode(ctx.a, { code: 'REFDATARATE' });
+      marketSegmentId = await createMarketSegment(ctx.a, { code: 'REFCORP' });
+      bookingSourceId = await createBookingSource(ctx.a, { code: 'REFDIRECT' });
+      cancellationPolicyId = await createCancellationPolicy(ctx.a, { code: 'REFFLEX' });
+    });
+
+    it('books a reservation carrying all three reference-data ids', async () => {
+      const res = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-06-01',
+          departure_date: '2027-06-02',
+          market_segment_id: String(marketSegmentId),
+          booking_source_id: String(bookingSourceId),
+          cancellation_policy_id: String(cancellationPolicyId),
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.data.market_segment_id).toBe(String(marketSegmentId));
+      expect(res.body.data.booking_source_id).toBe(String(bookingSourceId));
+      expect(res.body.data.cancellation_policy_id).toBe(String(cancellationPolicyId));
+    });
+
+    it('rejects a market_segment_id that does not exist at this property', async () => {
+      const res = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-06-03',
+          departure_date: '2027-06-04',
+          market_segment_id: '999999999',
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_MARKET_SEGMENT_NOT_FOUND');
+    });
+
+    it("rejects another tenant's cancellation policy id — proves the composite FK is scoped, not just existence", async () => {
+      const otherCancellationPolicyId = await createCancellationPolicy(ctx.b, { code: 'OTHERFLEX' });
+      const res = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-06-05',
+          departure_date: '2027-06-06',
+          cancellation_policy_id: String(otherCancellationPolicyId),
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_CANCELLATION_POLICY_NOT_FOUND');
     });
   });
 

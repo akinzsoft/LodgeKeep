@@ -666,6 +666,93 @@ const ENTITIES = [
   },
 
   {
+    table: 'market_segments',
+    uniqueKeys: [['property_id', 'code']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      code: 'CORP',
+      name: 'Corporate',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      code: t.marketSegments[0].code ?? 'LEISURE', // matches seedTwoTenants' own fixture row
+      name: 'Clashing code',
+    }),
+    crossTenant: [
+      {
+        name: "creates a market segment on another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          code: 'CROSS',
+          name: 'Crossing',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'booking_sources',
+    uniqueKeys: [['property_id', 'code']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      code: 'DIRECT',
+      name: 'Direct',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      code: t.bookingSources[0].code ?? 'OTA', // matches seedTwoTenants' own fixture row
+      name: 'Clashing code',
+    }),
+    crossTenant: [
+      {
+        name: "creates a booking source on another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          code: 'CROSS',
+          name: 'Crossing',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'cancellation_policies',
+    uniqueKeys: [['property_id', 'code']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      code: 'FLEX',
+      name: 'Flexible',
+      fee_type: 'none',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      code: t.cancellationPolicies[0].code ?? 'STANDARD', // matches seedTwoTenants' own fixture row
+      name: 'Clashing code',
+      fee_type: 'first_night',
+    }),
+    crossTenant: [
+      {
+        name: "creates a cancellation policy on another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          code: 'CROSS',
+          name: 'Crossing',
+          fee_type: 'none',
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'taxes',
     // Effective-dated: uniqueness is (property, code, start-date), not
     // (property, code) — multiple versions of one tax_code legitimately
