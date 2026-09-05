@@ -14,6 +14,7 @@ import { HousekeepingScreen } from './app/housekeeping/HousekeepingScreen.jsx';
 import { ReportingScreen } from './app/reporting/ReportingScreen.jsx';
 import { CashieringScreen } from './app/cashiering/CashieringScreen.jsx';
 import { NightAuditScreen } from './app/night-audit/NightAuditScreen.jsx';
+import { ProfilesScreen } from './app/profiles/ProfilesScreen.jsx';
 import { Toast } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { notificationsApi } from './shared/api/index.js';
@@ -180,6 +181,8 @@ function Demo() {
         <CashieringScreen isOffline={!isOnline} />
       ) : activeItemKey === 'night_audit' ? (
         <NightAuditScreen isOffline={!isOnline} />
+      ) : activeItemKey === 'profiles' ? (
+        <ProfilesScreen />
       ) : (
         <HomeDashboard greetingName={user.email} businessDate={BUSINESS_DATE} activePropertyId={user.activePropertyId} />
       )}

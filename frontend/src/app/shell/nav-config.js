@@ -37,6 +37,15 @@ export const DEFAULT_NAV_GROUPS = [
     items: [
       { key: 'home', label: 'Home' },
       { key: 'booking', label: 'Booking', requiredPermission: 'reservations.view' },
+      // PLAN.md Phase 2 gap closure: "Profiles" is one of the ten
+      // OPERA-standard modules this spec's own §3 module list names, but —
+      // like Front Desk/Housekeeping/Cashiering before it — has no separate
+      // top-level slot in the literal App-shell nav list either. Filed under
+      // MAIN, next to Booking, since a guest profile is reached from a
+      // reservation as often as it's searched for directly. Reuses
+      // `reservations.view` — the same permission the `guests` endpoints
+      // this screen calls are already gated on.
+      { key: 'profiles', label: 'Profiles', requiredPermission: 'reservations.view' },
       { key: 'rooms', label: 'Rooms' },
       // PLAN.md Phase 3: no separate top-level "Housekeeping" slot exists in
       // PRODUCT_REQUIREMENTS.md's literal App-shell nav list either (the

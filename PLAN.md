@@ -74,7 +74,7 @@ The heart of the product. Everything here is needed before a hotel can run a sin
 - **Front desk (3.3)** — arrivals/departures/in-house boards, check-in, room assignment, check-out, room moves — ✅ **shipped**
 - **Rooms (3.6)** — room grid with live status — ✅ **shipped**
 - **Cashiering (3.4)** — folios, line items, charges, payments, void-with-reason — ✅ **shipped in Phase 2.5** (real ledger, not the original stub)
-- **Guest profiles (3.1)** — create, search, stay history — 🔲 **still minimal stub table only (Phase 2's guests table), no real Profiles module/UI**
+- **Guest profiles (3.1)** — create, search, stay history — ✅ **shipped** (a later gap-closure pass built a real `src/modules/profiles` module and UI screen on top of Phase 2's `guests` table; see CLAUDE.md's own status section). VIP flags, loyalty, and company/travel-agent profiles remain correctly deferred (Phase 6 / Phase 4)
 - **Night audit (3.9)** — room charge posting, business-date rollover, idempotency guards — ✅ **shipped in Phase 2.5**
 - Payment integration: one gateway end to end (cards/digital), tokenised — ✅ **shipped in Phase 2.5** (cash + Paystack; Flutterwave not wired)
 

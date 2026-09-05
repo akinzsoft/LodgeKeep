@@ -39,6 +39,7 @@ const { notificationsRouter } = require('./modules/notifications');
 const { reportingRouter } = require('./modules/reporting');
 const { cashieringRouter, paystackWebhookRouter } = require('./modules/cashiering');
 const { nightAuditRouter } = require('./modules/night-audit');
+const { profilesRouter } = require('./modules/profiles');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -55,6 +56,7 @@ function buildStaffRouter() {
   router.use(setupRouter());
   router.use(usersRouter());
   router.use(reservationsRouter());
+  router.use(profilesRouter());
   router.use(housekeepingRouter());
   router.use(notificationsRouter());
   router.use(reportingRouter());
