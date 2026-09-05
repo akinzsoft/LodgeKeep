@@ -90,7 +90,7 @@ The exit criteria above were never actually met — this phase is what closes th
 
 **Tests required to close** (the most important suite in the project — these are the ones that cost real money when wrong):
 - **Night audit idempotency**: run twice for the same business date → no double-posted charges — ✅ covered (`tests/night-audit/night-audit.test.js`); kill mid-run and re-trigger → same result — ✅ covered (`tests/night-audit/concurrency.test.js`, NA-3)
-- **Business-date boundaries**: check-ins at 23:59 and 00:01 post to the correct business date in a property whose timezone differs from the server's — not separately tested this pass
+- **Business-date boundaries**: check-ins at 23:59 and 00:01 post to the correct business date in a property whose timezone differs from the server's — ✅ covered by a later gap-closure pass (`tests/night-audit/business-date-timezone.test.js`; see CLAUDE.md's own status section for why proving "business_date is never derived from wall-clock time" is the real substance of this gate, regardless of what moment the suite itself runs at)
 - **Money arithmetic on exact DECIMAL**: folio totals, tax, split billing with an odd remainder, partial refunds, rounding boundaries — never float comparison with tolerance — ✅ covered (`tests/cashiering/cashiering.test.js`, `tax-engine.test.js`, `src/shared/money.js`)
 - **Concurrency**: two simultaneous bookings for the last available room — one succeeds, one fails cleanly — ✅ covered in Phase 2 already (`tests/reservations/concurrency.test.js`); night audit's own equivalent (two simultaneous triggers) — ✅ covered (NA-2)
 - **Overbooking threshold**: booking at, on, and past the sellable limit behaves as configured — ✅ covered in Phase 3

@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Gap closure: Phase 2.5's business-date timezone-boundary test
+
+**Fourth gap closed in the same audit-and-close pass.** PLAN.md's Phase 2.5 "Tests required to close" list named this explicitly and flagged it honestly as never written: "check-ins at 23:59 and 00:01 post to the correct business date in a property whose timezone differs from the server's."
+
+**What was actually true, confirmed by reading every call site, not assumed**: `properties.timezone` is written by Setup but never once *read* anywhere in the application code — a genuine, previously-unflagged finding, not a bug. Every `business_date` this codebase posts (`src/modules/cashiering/service.js`'s charge posting, `src/modules/reservations/service.js`'s check-in out-of-order-period check) already comes from one place: the stored `properties.current_business_date` column, never `new Date()` or any wall-clock/timezone computation at request time. So the literal scenario the gate names — a check-in at 23:59 versus 00:01 — cannot actually diverge in this codebase, because nothing on that path ever looks at the clock at all.
+
+**What the new test actually proves**, since "run this at 23:59 and 00:01" doesn't mean anything for code with no time-of-day branch to trip: `tests/night-audit/business-date-timezone.test.js` sets a property's `timezone` to `Pacific/Kiritimati` (UTC+14, about as far from a real CI server's own zone as an IANA zone gets) and its `current_business_date` to a fixed date years away from whatever "today" the suite happens to run on, then (1) posts a real charge and asserts the resulting `folio_line_items.business_date` is exactly that stored date, never wall-clock "today" in any timezone, and (2) places an out-of-order period covering only that stored date and confirms check-in is correctly blocked against it — proving the comparison reads the stored column, not the clock. Both pass regardless of when or in what timezone the suite itself executes, which is the actual proof the gate was asking for.
+
+**Tests**: 2 new backend tests. Backend 1087/1089 passing (2 skipped, same pre-existing Paystack gate — up from 1085/1087). No migration, no application code change — this gap was a missing test against already-correct behavior, not a bug fix.
+
 ## Gap closure: Phase 2's Guest Profiles module (search, get, stay history)
 
 **Third gap closed in the same audit-and-close pass.** PLAN.md's own Phase 2 line for this had a 🔲: "Guest profiles (3.1) — create, search, stay history — still minimal stub table only, no real Profiles module/UI." `createGuest`/`listGuests` (Phase 2's own confirmed minimal stub) stayed exactly where they were, in `src/modules/reservations` — moving them would touch booking flows this pass had no reason to touch. What was missing was search, a real get-by-id route (the service function already existed, unrouted), and stay history — and a real module, matching PRODUCT_REQUIREMENTS.md §3's own "Profiles" module list entry.
@@ -44,7 +54,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Live-verified against the real dev database and a running backend**: logged in as the seeded `admin@alpha-hotels` account (through the real MFA dev-bypass flow), listed/created/archived a market segment through the real HTTP endpoints, confirmed a `setup.view`-only manager gets a real `403 FORBIDDEN_PERMISSION` attempting to create a booking source, then booked a real reservation carrying all three reference-data ids end to end and confirmed they're stored and returned — cancelled afterward through the real API to leave the dev database in its documented seeded state. `npm run seed` re-run confirmed idempotent and seeded two market segments, two booking sources, and one cancellation policy per dev tenant.
 
-**Still open** (tracked, not yet picked up): the guided resumable setup wizard, and the Phase 2.5 business-date timezone-boundary test. User management and Guest Profiles — both flagged open here at the time — were closed in same-day follow-ups; see this file's own sections above.
+**Still open** (tracked, not yet picked up): the guided resumable setup wizard. User management, Guest Profiles, and the Phase 2.5 business-date timezone-boundary test — all flagged open here at the time — were closed in same-day follow-ups; see this file's own sections above.
 
 ## Cross-cutting fix: MFA dev-only bypass — admin/super_admin login now actually completable
 
