@@ -114,3 +114,46 @@ export async function request(path, { method = 'GET', body, auth = true, headers
     throw error;
   }
 }
+
+/**
+ * A non-JSON GET — PLAN.md Phase 3's report CSV exports (PRODUCT_REQUIREMENTS.md
+ * §3.11's "every report exportable to ... Excel/CSV"). `request()` always
+ * parses the `{data,meta,error}` envelope, which a CSV body does not have,
+ * so this is a second, parallel path through the same auth-header and
+ * refresh-on-expiry handling rather than a raw `fetch` at the call site —
+ * "the one place ... auth headers ... are applied" (CLAUDE.md) still holds.
+ * Returns a `Blob`; the caller is responsible for turning it into a
+ * download (an object URL + a synthetic click, since a plain `<a href>` has
+ * no way to attach an Authorization header).
+ */
+async function doFetchBlob(path, token) {
+  let response;
+  try {
+    response = await fetch(`${BASE_URL}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  } catch {
+    throw new ApiError({ code: 'NETWORK_ERROR', message: 'Could not reach the server. Check your connection.' });
+  }
+  if (!response.ok) {
+    let envelope;
+    try {
+      envelope = await response.json();
+    } catch {
+      throw new ApiError({ code: 'NETWORK_ERROR', message: 'The server returned an unreadable response.', status: response.status });
+    }
+    throw new ApiError({ ...envelope.error, status: response.status });
+  }
+  return response.blob();
+}
+
+export async function requestBlob(path) {
+  const token = getAccessToken();
+  try {
+    return await doFetchBlob(path, token);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === 'AUTH_TOKEN_EXPIRED' && onAccessTokenExpired) {
+      const refreshedToken = await onAccessTokenExpired();
+      return doFetchBlob(path, refreshedToken);
+    }
+    throw error;
+  }
+}

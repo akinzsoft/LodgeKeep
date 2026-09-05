@@ -123,9 +123,18 @@ const ENTITIES = [
   {
     table: 'role_permissions',
     uniqueKeys: [['role_id', 'permission_id']],
+    // `newRow` uses `housekeeping`, not `manager`: PLAN.md Phase 2.5 granted
+    // `manager` BOTH cashiering keys for real (SECURITY.md §5's matrix
+    // gives manager full Cashiering access), so `manager` + either
+    // cashiering key now already exists and would collide before ever
+    // reaching the insert this case exists to prove valid. `housekeeping`
+    // never holds either cashiering key (✗ in the matrix), so this
+    // combination is guaranteed unused. `duplicateRow` deliberately keeps
+    // the original `manager` + `cashiering.void_line` pairing — it is
+    // SUPPOSED to already exist (that is what makes it a duplicate).
     newRow: (ctx, t) => ({
       tenant_id: t.id,
-      role_id: t.roles.manager,
+      role_id: t.roles.housekeeping,
       permission_id: ctx.permissions['cashiering.post_charge'],
     }),
     duplicateRow: (ctx, t) => ({
@@ -136,10 +145,18 @@ const ENTITIES = [
     crossTenant: [
       {
         name: "grants a permission through another tenant's role",
+        // `setup.manage`, not `reports.view_financial`: PLAN.md Phase 3
+        // granted `manager` role_id `reports.view_financial` too (SECURITY.md
+        // §5's matrix gives manager full Reports access), so that combination
+        // now already exists for `other`'s own manager role and would collide
+        // on UNIQUE(role_id, permission_id) before ever reaching the FK check
+        // this case exists to prove. `setup.manage` stays admin/super_admin
+        // only — manager never holds it — so this combination is guaranteed
+        // not to already exist.
         row: (ctx, own, other) => ({
           tenant_id: own.id,
           role_id: other.roles.manager,
-          permission_id: ctx.permissions['reports.view_financial'],
+          permission_id: ctx.permissions['setup.manage'],
         }),
       },
     ],
@@ -1014,6 +1031,416 @@ const ENTITIES = [
           status: 'open',
           balance: '0.00',
           currency: 'NGN',
+        }),
+      },
+    ],
+  },
+
+  // -----------------------------------------------------------------------
+  // Housekeeping — PLAN.md Phase 3
+  // -----------------------------------------------------------------------
+
+  {
+    table: 'out_of_order_periods',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      room_id: t.rooms[0].id,
+      type: 'ooo',
+      reason: 'Plumbing repair',
+      start_date: '2026-12-01',
+      end_date: '2026-12-03',
+      created_by_user_id: t.users[0].id,
+    }),
+    crossTenant: [
+      {
+        name: "schedules an OOO period against another tenant's room",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          room_id: other.rooms[0].id,
+          type: 'ooo',
+          reason: 'Cross-tenant attempt',
+          start_date: '2026-12-01',
+          end_date: '2026-12-03',
+          created_by_user_id: own.users[0].id,
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'housekeeping_assignments',
+    uniqueKeys: [['property_id', 'room_id', 'business_date']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      room_id: t.rooms[0].id,
+      attendant_user_id: t.users[0].id,
+      business_date: '2026-12-05',
+      status: 'assigned',
+    }),
+    // Collides with the fixture row seeded in seedTwoTenants (same
+    // property/room/business_date).
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      room_id: t.rooms[0].id,
+      attendant_user_id: t.users[0].id,
+      business_date: '2026-12-24',
+      status: 'assigned',
+    }),
+    crossTenant: [
+      {
+        name: "assigns another tenant's room for cleaning",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          room_id: other.rooms[0].id,
+          attendant_user_id: own.users[0].id,
+          business_date: '2026-12-07',
+          status: 'assigned',
+        }),
+      },
+      {
+        name: "assigns a room to another tenant's user",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          room_id: own.rooms[0].id,
+          attendant_user_id: other.users[0].id,
+          business_date: '2026-12-08',
+          status: 'assigned',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'housekeeping_discrepancies',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      room_id: t.rooms[0].id,
+      business_date: '2026-12-05',
+      front_desk_status: 'vacant',
+      housekeeping_status: 'occupied',
+    }),
+    crossTenant: [
+      {
+        name: "raises a discrepancy against another tenant's room",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          room_id: other.rooms[0].id,
+          business_date: '2026-12-05',
+          front_desk_status: 'vacant',
+          housekeeping_status: 'occupied',
+        }),
+      },
+    ],
+  },
+
+  // -----------------------------------------------------------------------
+  // Notifications — PLAN.md Phase 3
+  // -----------------------------------------------------------------------
+
+  {
+    table: 'outbox_events',
+    // TENANT_SCOPED (see table-scopes.js's own header on this table) — no
+    // per-property uniqueness or FK to assert; coverage here is the
+    // TENANT_SCOPED read/write isolation the generic ISO-* suite already
+    // exercises for `idempotency_keys` the same way.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      event_type: 'reservation.confirmed',
+      aggregate_type: 'reservations',
+      aggregate_id: t.reservations[0].id,
+      payload: JSON.stringify({ reservationId: t.reservations[0].id }),
+      status: 'pending',
+    }),
+  },
+
+  {
+    table: 'email_templates',
+    uniqueKeys: [['property_id', 'template_key', 'locale']],
+    // A different template_key than the fixture-seeded row (which already
+    // holds 'reservation_confirmed'/'en' for this property) — a genuinely
+    // new, non-colliding row.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      template_key: 'reservation_cancelled',
+      locale: 'en',
+      subject: 'Your booking is cancelled',
+      body_html: '<p>Your booking was cancelled.</p>',
+    }),
+    // Collides with the fixture row seeded in seedTwoTenants.
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      template_key: 'reservation_confirmed',
+      locale: 'en',
+      subject: 'Clash',
+      body_html: '<p>Clash</p>',
+    }),
+    crossTenant: [
+      {
+        name: "creates a template for another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          template_key: 'reservation_cancelled',
+          locale: 'en',
+          subject: 'Cross-tenant attempt',
+          body_html: '<p>Cross-tenant attempt</p>',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'notification_log',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      recipient_email: 'guest@example.com',
+      template_key: 'reservation_confirmed',
+      channel: 'email',
+      status: 'sent',
+      reservation_id: t.reservations[0].id,
+      sent_at: hoursFromNow(-1),
+    }),
+    crossTenant: [
+      {
+        name: "logs a send against another tenant's reservation",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          recipient_email: 'guest@example.com',
+          template_key: 'reservation_confirmed',
+          channel: 'email',
+          status: 'sent',
+          reservation_id: other.reservations[0].id,
+          sent_at: hoursFromNow(-1),
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'in_app_notifications',
+    // TENANT_SCOPED, following `users` — coverage is the FK-based
+    // cross-tenant case only, the same shape `sessions`/`mfa_devices` use.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      user_id: t.users[0].id,
+      type: 'housekeeping.discrepancy_raised',
+      payload: JSON.stringify({ roomId: t.rooms[0].id }),
+    }),
+    crossTenant: [
+      {
+        name: "creates a notification for another tenant's user",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          user_id: other.users[0].id,
+          type: 'housekeeping.discrepancy_raised',
+          payload: JSON.stringify({ roomId: own.rooms[0].id }),
+        }),
+      },
+    ],
+  },
+
+  // -----------------------------------------------------------------------
+  // Cashiering — PLAN.md Phase 2.5
+  // -----------------------------------------------------------------------
+
+  {
+    table: 'folio_line_items',
+    // No natural business unique key — a folio can legitimately carry two
+    // charges of the same type/amount/date (a manual charge posted twice on
+    // purpose is still two real lines, not a collision), the same reasoning
+    // `auth_events`/`audit_log` declare none.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      folio_id: t.folios[0].id,
+      type: 'room_charge',
+      description: 'New fixture charge',
+      amount: '25.00',
+      currency: 'NGN',
+      business_date: '2026-12-24',
+    }),
+    crossTenant: [
+      {
+        name: "posts a line item against another tenant's folio",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          folio_id: other.folios[0].id,
+          type: 'room_charge',
+          description: 'Cross-tenant charge',
+          amount: '25.00',
+          currency: 'NGN',
+          business_date: '2026-12-24',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'payments',
+    uniqueKeys: [['tenant_id', 'idempotency_key'], ['provider', 'provider_reference']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      folio_id: t.folios[0].id,
+      idempotency_key: `NEWPAY-${t.slug}`,
+      provider: 'cash',
+      provider_reference: `NEWPAYREF-${t.slug}`,
+      amount: '25.00',
+      currency: 'NGN',
+      status: 'INITIATED',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      folio_id: t.folios[0].id,
+      idempotency_key: `OTHER-${t.slug}`,
+      provider: 'cash',
+      provider_reference: `FIXTUREPAYREF-${t.slug}`, // Matches seedTwoTenants' own fixture payment — collides on UNIQUE(provider, provider_reference).
+      amount: '25.00',
+      currency: 'NGN',
+      status: 'INITIATED',
+    }),
+    crossTenant: [
+      {
+        name: "captures a payment against another tenant's folio",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          folio_id: other.folios[0].id,
+          idempotency_key: `CROSSPAY-${own.slug}`,
+          provider: 'cash',
+          provider_reference: `CROSSPAYREF-${own.slug}`,
+          amount: '25.00',
+          currency: 'NGN',
+          status: 'INITIATED',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'payment_webhook_events',
+    // PLATFORM_SCOPED with nullable tenant_id/property_id attribution
+    // (`auth_events`' own precedent) — no crossTenant shape applies here for
+    // the same reason it does not for auth_events: the accessor never
+    // injects a tenant filter on this table at all.
+    uniqueKeys: [['provider', 'provider_event_id']],
+    newRow: () => ({
+      provider: 'paystack',
+      provider_event_id: `evt_new_${Date.now()}_${Math.random()}`,
+      payload: JSON.stringify({ event: 'charge.success' }),
+      verified: true,
+    }),
+    duplicateRow: () => ({
+      provider: 'paystack',
+      provider_event_id: 'FIXTURE_DUPLICATE_EVENT_ID',
+      payload: JSON.stringify({ event: 'charge.success' }),
+      verified: true,
+    }),
+  },
+
+  // -----------------------------------------------------------------------
+  // Night Audit — PLAN.md Phase 2.5
+  // -----------------------------------------------------------------------
+
+  {
+    table: 'night_audit_runs',
+    uniqueKeys: [['property_id', 'business_date']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      business_date: '2027-01-05',
+      status: 'RUNNING',
+      worker_id: 'test-worker',
+      heartbeat_at: hoursFromNow(0),
+      started_at: hoursFromNow(0),
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      business_date: '2026-12-01', // Matches seedTwoTenants' own fixture run.
+      status: 'RUNNING',
+      worker_id: 'test-worker',
+      heartbeat_at: hoursFromNow(0),
+      started_at: hoursFromNow(0),
+    }),
+    crossTenant: [
+      {
+        name: "starts a night audit run against another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          business_date: '2027-01-06',
+          status: 'RUNNING',
+          worker_id: 'test-worker',
+          heartbeat_at: hoursFromNow(0),
+          started_at: hoursFromNow(0),
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'daily_reports',
+    uniqueKeys: [['property_id', 'business_date']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      night_audit_run_id: t.nightAuditRuns[0].id,
+      business_date: '2027-01-05',
+      room_revenue: '0.00',
+      pos_revenue: '0.00',
+      payments_collected: '0.00',
+      occupancy_pct: '0.00',
+      adr: '0.00',
+      revpar: '0.00',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      night_audit_run_id: t.nightAuditRuns[0].id,
+      business_date: '2026-12-01', // Matches seedTwoTenants' own fixture snapshot.
+      room_revenue: '0.00',
+      pos_revenue: '0.00',
+      payments_collected: '0.00',
+      occupancy_pct: '0.00',
+      adr: '0.00',
+      revpar: '0.00',
+    }),
+    crossTenant: [
+      {
+        name: "generates a snapshot against another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          night_audit_run_id: own.nightAuditRuns[0].id,
+          business_date: '2027-01-07',
+          room_revenue: '0.00',
+          pos_revenue: '0.00',
+          payments_collected: '0.00',
+          occupancy_pct: '0.00',
+          adr: '0.00',
+          revpar: '0.00',
         }),
       },
     ],

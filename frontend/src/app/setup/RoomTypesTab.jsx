@@ -16,6 +16,11 @@ export function RoomTypesTab({ activeProperty, disabled }) {
     try {
       setRoomTypes(await setupApi.listRoomTypes());
     } catch (caught) {
+      // DESIGN_SYSTEM.md §2's error state, not empty — but the visible error
+      // banner below is what actually says so; `[]` is what stops this
+      // table showing a loading skeleton forever (the same bug class
+      // `SetupScreen`'s own `reloadProperties` comment already documents).
+      setRoomTypes([]);
       setError(caught instanceof ApiError ? caught.message : 'Could not load room types.');
     }
   }

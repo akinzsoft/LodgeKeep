@@ -18,7 +18,7 @@ import formStyles from './SetupForm.module.css';
  * property should be able to see for itself that changing a rate created a
  * new version rather than rewriting history (ARCHITECTURE.md §12.1).
  */
-export function TaxesTab({ disabled }) {
+export function TaxesTab({ disabled, isOffline = false }) {
   const [taxes, setTaxes] = useState(null);
   const [form, setForm] = useState({
     tax_code: '',
@@ -36,6 +36,9 @@ export function TaxesTab({ disabled }) {
     try {
       setTaxes(await setupApi.listTaxes());
     } catch (caught) {
+      // Stops the table showing a loading skeleton forever — the visible
+      // error banner below is what actually explains what happened.
+      setTaxes([]);
       setError(caught instanceof ApiError ? caught.message : 'Could not load taxes.');
     }
   }
@@ -191,8 +194,16 @@ export function TaxesTab({ disabled }) {
             </label>
           </div>
 
+          {/* DESIGN_SYSTEM.md §2 names "change a tax rate" directly as a financial action to disable while offline. */}
+          {isOffline && (
+            <p role="alert" className={formStyles.errorBanner}>
+              You&rsquo;re offline — changing a tax rate is disabled until the connection returns.
+            </p>
+          )}
           <div className={formStyles.actionsRow}>
-            <Button type="submit">Save tax version</Button>
+            <Button type="submit" disabled={isOffline}>
+              Save tax version
+            </Button>
           </div>
         </form>
       </Card>

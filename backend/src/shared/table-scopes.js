@@ -146,6 +146,50 @@ const TABLE_SCOPES = Object.freeze({
   reservation_daily_rates: { scope: SCOPES.PROPERTY },
   reservation_notes: { scope: SCOPES.PROPERTY },
   folios: { scope: SCOPES.PROPERTY },
+
+  // Housekeeping — PLAN.md Phase 3, 20260907091000_create_out_of_order_periods
+  // through 20260907094000_create_housekeeping_discrepancies. All
+  // PROPERTY_SCOPED, following `rooms` for the same reason every other
+  // rooms-adjacent table has since Phase 1: two properties in the same
+  // tenant have entirely different rooms, attendants, and discrepancies.
+  out_of_order_periods: { scope: SCOPES.PROPERTY },
+  housekeeping_assignments: { scope: SCOPES.PROPERTY },
+  housekeeping_discrepancies: { scope: SCOPES.PROPERTY },
+
+  // Notifications — PLAN.md Phase 3, 20260907096000_create_outbox_events
+  // through 20260907099000_create_in_app_notifications.
+  //
+  // `outbox_events` is TENANT_SCOPED, not PROPERTY_SCOPED, following
+  // `idempotency_keys`' own precedent rather than every other Phase 2/3
+  // table — see that migration's own header for why. `property_id` is real,
+  // meaningful data (every event this pass emits carries one) but not a
+  // column the accessor requires or injects, the same attribution-vs-scope
+  // distinction `audit_log` already draws.
+  outbox_events: { scope: SCOPES.TENANT, attributionColumns: ['property_id'] },
+  email_templates: { scope: SCOPES.PROPERTY },
+  notification_log: { scope: SCOPES.PROPERTY },
+  // TENANT_SCOPED, following `users` — a notification belongs to one staff
+  // member, not one property (see that migration's own header).
+  in_app_notifications: { scope: SCOPES.TENANT },
+
+  // Cashiering — PLAN.md Phase 2.5, 20260909091000_create_payments through
+  // 20260909093000_create_folio_line_items. PROPERTY_SCOPED, following
+  // `folios` (their parent) for the same reason every folio-adjacent table
+  // has since Phase 2: two properties in the same tenant have entirely
+  // different guests, folios, and payments.
+  payments: { scope: SCOPES.PROPERTY },
+  folio_line_items: { scope: SCOPES.PROPERTY },
+  // PLATFORM_SCOPED with nullable tenant/property ATTRIBUTION, following
+  // `auth_events`' own precedent exactly: a gateway webhook arrives with no
+  // session and no tenant context to scope by — see that migration's own
+  // header for the full reasoning.
+  payment_webhook_events: { scope: SCOPES.PLATFORM, attributionColumns: ['tenant_id', 'property_id'] },
+
+  // Night Audit — PLAN.md Phase 2.5, 20260909094000_create_night_audit_runs
+  // and 20260909095000_create_daily_reports. PROPERTY_SCOPED, following
+  // `properties` for the same reason every property-level artifact has.
+  night_audit_runs: { scope: SCOPES.PROPERTY },
+  daily_reports: { scope: SCOPES.PROPERTY },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

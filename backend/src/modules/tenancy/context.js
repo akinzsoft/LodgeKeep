@@ -218,11 +218,40 @@ function systemContext() {
   });
 }
 
+/**
+ * A background-job context — PLAN.md Phase 3's outbox dispatcher
+ * (`src/jobs/outbox-dispatcher.js`), ARCHITECTURE.md §14: "every job carries
+ * `tenant_id`" in its own payload, not derived from a request. Unlike
+ * `systemContext()`, this DOES carry a real tenant/property — the whole
+ * reason a job needs one at all is to write to TENANT_SCOPED/PROPERTY_SCOPED
+ * tables (`notification_log`, `in_app_notifications`, ...) on no human's
+ * behalf, which `systemContext()`'s always-null ids cannot reach
+ * (`scopeRequirements` in `scoped-db.js` requires a real `tenantId` for
+ * either scope). Still SYSTEM audience, not STAFF: there is no session, no
+ * authenticated user, and no active-property verification against
+ * `user_property_access` to have performed — the ids come from the outbox
+ * event row itself (already a committed, trusted fact, not request input),
+ * never from an external caller, so SECURITY.md §2's "tenant_id never comes
+ * from the request" is not in tension with this constructor.
+ */
+function workerContext({ tenantId, propertyId }) {
+  const normalizedTenantId = normalizeId(tenantId, 'tenantId');
+  if (!normalizedTenantId) {
+    throw new ScopeContextError('A worker context requires a tenant_id from the job payload.');
+  }
+  return freezeContext({
+    audience: AUDIENCES.SYSTEM,
+    tenantId: normalizedTenantId,
+    propertyId: normalizeId(propertyId ?? null, 'propertyId'),
+  });
+}
+
 module.exports = {
   AUDIENCES,
   contextFromSession,
   guestContextFromSession,
   platformContext,
   systemContext,
+  workerContext,
   withActiveProperty,
 };

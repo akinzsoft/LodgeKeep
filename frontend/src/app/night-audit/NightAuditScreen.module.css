@@ -1,0 +1,58 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line);
+  font-weight: var(--text-h1-weight);
+  color: var(--text-primary);
+}
+
+.errorBanner {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--state-danger-bg);
+  color: var(--state-danger);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+}
+
+.disabledNotice {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--state-neutral-bg);
+  color: var(--text-primary);
+  font-size: var(--text-label-size);
+}
+
+.actionsRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.resultGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+}
+
+.resultGrid dt {
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
+.resultGrid dd {
+  margin: 0;
+  font-size: var(--text-h3-size);
+  font-weight: var(--text-h3-weight);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}

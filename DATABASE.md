@@ -36,11 +36,11 @@ Reference schema for every module. Column lists are indicative rather than exhau
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `properties` | tenant_id, name, address, timezone, base_currency, current_business_date, logo_url, theme (JSON) | `current_business_date` drives night audit (3.10) |
+| `properties` | tenant_id, name, address, timezone, base_currency, current_business_date, logo_url, theme (JSON), scheduled_checkout_time, early_checkout_cutoff_time, early_departure_fee, late_checkout_fee | `current_business_date` drives night audit (3.10). The four checkout-policy columns are PLAN.md Phase 3 additions — Phase 2's `computeEarlyLateFee` (3.3) had no property-level configuration source and required every check-out request to supply its own cutoffs/fees explicitly; check-out now defaults to these when the caller does not override them. All four are set through the same `PATCH /properties/:id` Phase 1 already built (it passes the request body through as arbitrary column updates), no new endpoint needed. |
 | `tenant_domains` | tenant_id, domain, verified_at | Custom-domain login resolution (PRODUCT_REQUIREMENTS.md §3.16) — a second hop off the same `Host`-header resolution used for subdomains. `domain` is globally unique (bootstrap-lookup exception, ARCHITECTURE.md §3), since two tenants cannot register the same domain |
 | `room_types` | code, name, description, default_occupancy, base_rate, photos (JSON) | |
-| `rooms` | room_number, floor, room_type_id, front_desk_status, housekeeping_reported_status, has_discrepancy, connecting_room_id | Two status columns by design (3.6) |
-| `room_type_inventory` | room_type_id, stay_date, rooms_sold, overbooking_threshold_pct | Sellable ≠ physical (3.2). No stored `physical_rooms` column (PLAN.md Phase 2 built this table) — physical availability is computed live as `COUNT(rooms WHERE room_type_id = X AND status = 'active')` at lock time, never cached, so a room going out of service is reflected in every future date immediately with nothing to keep in sync. The real gap this leaves: no way yet to schedule a *future* out-of-service window in advance — that needs date-ranged `out_of_order_periods` (Rooms/Housekeeping, §3.6), not built. `rooms_sold` is the row this table actually owns: an atomic counter under `SELECT ... FOR UPDATE` (ARCHITECTURE.md §5's last-room race). |
+| `rooms` | room_number, floor, room_type_id, front_desk_status, housekeeping_reported_status, housekeeping_occupancy_observed, has_discrepancy, connecting_room_id | Two status columns by design (3.6) — `front_desk_status`/`housekeeping_reported_status` were written by Phase 1 with a "Phase 2 territory" note but never actually updated by Phase 2's check-in/check-out; PLAN.md Phase 3 fixed that (both now transition on check-in/check-out/room-move) and added `housekeeping_occupancy_observed`, the housekeeper's own occupancy reading compared against `front_desk_status` to raise a `housekeeping_discrepancies` row. |
+| `room_type_inventory` | room_type_id, stay_date, rooms_sold, overbooking_threshold_pct | Sellable ≠ physical (3.2). No stored `physical_rooms` column (PLAN.md Phase 2 built this table) — physical availability is computed live via `src/shared/room-availability.js` (`COUNT(rooms WHERE room_type_id = X AND status = 'active')`, minus out-of-order and discrepant rooms) at lock time, never cached, so a room's status change is reflected in every future date immediately with nothing to keep in sync. PLAN.md Phase 2's own flagged gap here — no way to schedule a *future* out-of-service window — was closed in Phase 3 by `out_of_order_periods` below. `rooms_sold` is the row this table actually owns: an atomic counter under `SELECT ... FOR UPDATE` (ARCHITECTURE.md §5's last-room race). `PUT /room-types/:roomTypeId/inventory/:stayDate` (Phase 3) is the endpoint that actually sets `overbooking_threshold_pct` — Phase 2 built the column with only its 100% schema default and no way to change it. |
 | `rate_codes` | code, description, base_rate, currency, valid_from, valid_to | |
 | `rate_calendar` | rate_code_id, room_type_id, stay_date, rate | Date-level overrides |
 | `packages` | code, name, inclusions (JSON), price_adjustment | |
@@ -71,49 +71,50 @@ Reference schema for every module. Column lists are indicative rather than exhau
 | `waitlist_entries` | guest_id, room_type_id, requested_dates, status | |
 | `registration_cards` | reservation_id, signature_ref, signed_at | Digital reg card |
 
-**Cashiering & AR (3.5, 3.9)**
+**Cashiering & AR (3.5, 3.9)** — PLAN.md Phase 2.5 built the real ledger and gateway rows below (`folios` through `currency_rates`); Accounts Receivable (`ar_accounts` through `ar_payments`) is real §3.9 scope but correctly deferred to Phase 4, per PLAN.md's own phase list, and remains unbuilt.
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `folios` | reservation_id, folio_number, billed_to, company_profile_id, currency, status | Multiple folios per reservation for split billing |
-| `folio_line_items` | folio_id, type, description, amount, currency, tax_amount, payment_method, business_date, posted_by_user_id, voided_at, voided_by_user_id, void_reason | **Void, never delete.** type: room_charge/tax/pos_charge/payment/refund/adjustment |
-| `payments` | tenant_id, property_id, folio_id, idempotency_key, provider, provider_payment_id, provider_reference, amount, currency, status, failure_code, failure_reason, authorized_at, captured_at, failed_at, expired_at, parent_payment_id | Gateway-agnostic (3.15). `status` follows the state machine in ARCHITECTURE.md §7. `parent_payment_id` links a refund back to what it refunds. `idempotency_key` unique per tenant+operation (DATABASE.md §2) |
-| `payment_webhook_events` | provider, provider_event_id, payload (JSON), verified, processed_at, related_payment_id | Persisted separately from `payments` — the record of what the provider actually sent, independent of what the payment row currently says (ARCHITECTURE.md §7). Unique on (provider, provider_event_id) for dedupe |
-| `idempotency_keys` | tenant_id, operation_type, key_value, request_hash, response_snapshot (JSON), created_at, expires_at | Generic idempotency store used by every financial-mutation endpoint (ARCHITECTURE.md §7), not just payments. `request_hash` catches same-key-different-parameters misuse |
-| `currency_rates` | from_currency, to_currency, rate, source (`automated`/`manual`), entered_by_user_id, locked_at | For multi-currency folios. Locked at booking confirmation or payment capture, not recalculated later (ARCHITECTURE.md §12.2) — `locked_at` is when it stopped being live |
-| `ar_accounts` | company_profile_id, credit_limit, current_balance | The hotel's receivables — not Planmsys' billing |
-| `ar_invoices` | ar_account_id, invoice_number, amount, currency, issued_at, due_at, status | |
-| `ar_invoice_lines` | ar_invoice_id, folio_id, amount | Links invoices back to folios |
-| `ar_payments` | ar_account_id, amount, received_at, applied_to_invoice_id | |
+| `folios` | reservation_id, folio_number, billed_to, company_profile_id, currency, status | Built. `billed_to` is a free-text label this pass, not yet a `company_profile_id` FK — no company-profile concept exists until AR (Phase 4) lands. Multiple folios per reservation for split billing (`openAdditionalFolio`) |
+| `folio_line_items` | folio_id, type, description, amount, currency, tax_amount, payment_method, business_date, posted_by_user_id, voided_at, voided_by_user_id, void_reason | Built. **Void, never delete**, verified live in this pass. type: room_charge/tax/pos_charge/payment/refund/adjustment. `folios.balance` is never written directly — always `recomputeFolioBalance`, the sum of every non-voided line |
+| `payments` | tenant_id, property_id, folio_id, idempotency_key, provider, provider_payment_id, provider_reference, amount, currency, status, failure_code, failure_reason, authorized_at, captured_at, failed_at, expired_at, parent_payment_id | Built for `cash` (synchronous) and `paystack` (real sandbox adapter — HMAC-SHA512 webhook verification, refunds); `flutterwave` deliberately not wired (no sandbox credentials), `provider` is a free string so adding it needs no schema change. `status` follows the state machine in ARCHITECTURE.md §7. `parent_payment_id` links a refund back to what it refunds, confirmed live in this pass. `idempotency_key` unique per tenant+operation (DATABASE.md §2) |
+| `payment_webhook_events` | provider, provider_event_id, payload (JSON), verified, processed_at, related_payment_id | Built. PLATFORM_SCOPED with nullable tenant/property attribution, resolved via a raw post-persist lookup — the same "arrives before any tenant is known" shape `auth_events`/`idempotency_keys` already established. Persisted separately from `payments` — the record of what the provider actually sent, independent of what the payment row currently says (ARCHITECTURE.md §7). Unique on (provider, provider_event_id) for dedupe |
+| `idempotency_keys` | tenant_id, operation_type, key_value, request_hash, response_snapshot (JSON), created_at, expires_at | Generic idempotency store used by every financial-mutation endpoint (ARCHITECTURE.md §7), not just payments. `request_hash` catches same-key-different-parameters misuse — confirmed live this pass (a reused key with different charge amounts correctly returns `409 CONFLICT_IDEMPOTENCY_KEY_REUSE`) |
+| `currency_rates` | from_currency, to_currency, rate, source (`automated`/`manual`), entered_by_user_id, locked_at | Not built — no multi-currency folio exists yet to lock a rate for; every folio this pass is single-currency, matching its reservation |
+| `ar_accounts` | company_profile_id, credit_limit, current_balance | Not built — Accounts Receivable (§3.9) is Phase 4 scope |
+| `ar_invoices` | ar_account_id, invoice_number, amount, currency, issued_at, due_at, status | Not built — same reasoning |
+| `ar_invoice_lines` | ar_invoice_id, folio_id, amount | Not built — same reasoning |
+| `ar_payments` | ar_account_id, amount, received_at, applied_to_invoice_id | Not built — same reasoning |
 
-**Housekeeping (3.6)**
-
-| Table | Key columns | Notes |
-|---|---|---|
-| `housekeeping_assignments` | room_id, attendant_user_id, business_date, status, started_at, completed_at | |
-| `room_status_history` | room_id, from_status, to_status, source (front_desk/housekeeping), user_id, occurred_at | Feeds discrepancy detection |
-| `room_inspections` | room_id, inspector_user_id, passed, notes, inspected_at | |
-| `maintenance_requests` | room_id, description, priority, status, raised_by, resolved_at | |
-| `out_of_order_periods` | room_id, reason, type (ooo/oos), start_date, end_date | Must remove the room from sellable inventory |
-| `lost_and_found` | property_id, description, found_in_room_id, found_at, status, guest_id | |
-| `minibar_items` / `minibar_consumption` | item, price / reservation_id, item_id, quantity, business_date | Posts to folio |
-
-**Night audit & reporting (3.10, 3.11)**
+**Housekeeping (3.6)** — PLAN.md Phase 3 built exactly the tables its own bullet list and test gate name (attendant assignments, mobile status board, discrepancy detection/report, and the out-of-order mechanism its test gate requires); `room_inspections`, `maintenance_requests`, `lost_and_found`, and `minibar_items`/`minibar_consumption` are real §3.6 scope but not named in that bullet list, so they remain unbuilt rows here, not silently dropped.
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `night_audit_runs` | property_id, business_date, status, worker_id, heartbeat_at, started_at, completed_at, failed_at, error, run_by_user_id | `status`: READY/RUNNING/COMPLETED/FAILED/STALE/RECOVERABLE (ARCHITECTURE.md §6). Idempotency guard — one completed run per business date. `worker_id` + `heartbeat_at` are what let a monitor detect a dead worker |
-| `daily_reports` | property_id, business_date, room_revenue, pos_revenue, payments_collected, occupancy_pct, adr, revpar | Snapshot, not recomputed |
-| `outbox_events` | tenant_id, property_id, event_type, aggregate_type, aggregate_id, payload (JSON), status (`pending`/`processing`/`sent`/`failed`), attempt_count, last_error, created_at, processed_at | Written in the same transaction as the business change it describes (ARCHITECTURE.md §13); dispatched afterwards by a separate worker so a slow email/webhook call never sits inside a financial transaction |
-| `report_schedules` | report_key, cron, recipients (JSON), format, last_run_at | Scheduled delivery (3.11) |
+| `housekeeping_assignments` | tenant_id, property_id, room_id, attendant_user_id, business_date, status, started_at, completed_at | Built. UNIQUE(property_id, room_id, business_date) — one attendant per room per day; reassignment is an UPDATE, not a second row. |
+| `housekeeping_discrepancies` | tenant_id, property_id, room_id, business_date, front_desk_status, housekeeping_status, raised_at, resolved_at, resolved_by_user_id, resolution_note | Built in place of a generic `room_status_history` log — a first-class RECORD per PRODUCT_REQUIREMENTS.md's own "dedicated screen ... resolve action" language, not an append-only feed a screen would have to summarise. `rooms.has_discrepancy` (Phase 1) stays the fast live flag, kept in sync by the same write. |
+| `rooms.housekeeping_occupancy_observed` | (column, not a table) | Built — added to `rooms` in this pass. The housekeeper's own physical occupancy observation, compared against `rooms.front_desk_status` to detect a discrepancy; the two Phase 1 status columns (`front_desk_status` occupancy, `housekeeping_reported_status` cleanliness) answer different questions and were never directly comparable. |
+| `out_of_order_periods` | tenant_id, property_id, room_id, type (ooo/oos), reason, start_date, end_date, created_by_user_id | Built — the date-ranged scheduling mechanism `room_type_inventory`'s own Phase 2 migration header flagged as missing; PLAN.md Phase 3's own test gate ("out-of-order room excluded from sellable inventory") is written against this table via `src/shared/room-availability.js`. |
+| `room_inspections` | room_id, inspector_user_id, passed, notes, inspected_at | Not built — real §3.6 scope, not in PLAN.md Phase 3's bullet list. |
+| `maintenance_requests` | room_id, description, priority, status, raised_by, resolved_at | Not built — same reasoning. |
+| `lost_and_found` | property_id, description, found_in_room_id, found_at, status, guest_id | Not built — same reasoning. |
+| `minibar_items` / `minibar_consumption` | item, price / reservation_id, item_id, quantity, business_date | Not built — real §3.6 scope, not in PLAN.md Phase 3's bullet list. `folio_line_items` (Cashiering, Phase 2.5) now exists to post against, but the minibar module itself still doesn't. |
 
-**Notifications (3.21)**
+**Night audit & reporting (3.10, 3.11)** — PLAN.md Phase 2.5 built Night Audit for real, closing the gap Phase 3's Reporting pass had flagged: `night_audit_runs` and `daily_reports` are both built, computed from the real `folio_line_items` ledger Phase 2.5 also built. Reporting (`src/modules/reporting/index.js`) now reads the real `daily_reports` snapshot for any business date Night Audit has already closed, falling back to the original LIVE computation (`room_type_inventory`/`reservation_daily_rates`) only for a date with no snapshot yet — each returned figure carries `audited: true/false` so a caller can tell which one it's looking at. `report_schedules` remains unbuilt — scheduled delivery needs a notification-settings screen and a maturer report catalogue neither of which exists yet.
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `email_templates` | tenant_id, template_key, subject, body_html, locale | Editable without deploy |
-| `notification_log` | recipient, template_key, channel, status, provider_ref, sent_at, delivered_at, failed_reason, reservation_id | The answer to "the guest never got it" (3.21) |
-| `in_app_notifications` | user_id, type, payload (JSON), read_at | The top-bar bell |
+| `night_audit_runs` | property_id, business_date, status, worker_id, heartbeat_at, started_at, completed_at, failed_at, error, run_by_user_id | Built. `status`: READY/RUNNING/COMPLETED/FAILED/STALE/RECOVERABLE (ARCHITECTURE.md §6). A run row is claimed via `UPDATE ... WHERE status='FAILED'` with an affected-row check, never a fresh insert, under UNIQUE(property_id, business_date); a stale RUNNING row is recovered by checking reality (does a `daily_reports` row and an advanced business date already exist), not by trusting the row's own status. No background heartbeat-sweeping monitor — recovery is evaluated lazily on the next trigger, a deliberate, flagged reduction. |
+| `daily_reports` | property_id, business_date, room_revenue, pos_revenue, payments_collected, occupancy_pct, adr, revpar | Built, computed from the real `folio_line_items` ledger. Reporting reads this snapshot for any closed business date and falls back to the original live computation only for the current, still-open date. |
+| `outbox_events` | id, tenant_id, property_id, event_type, aggregate_type, aggregate_id, payload (JSON), status (`pending`/`processing`/`sent`/`failed`), attempt_count, last_error, created_at, processed_at | Built. TENANT_SCOPED (not PROPERTY_SCOPED — `property_id` is attribution, following `idempotency_keys`' own precedent; see that table's own migration header). Written in the same transaction as the business change it describes (ARCHITECTURE.md §13); dispatched afterwards by `src/jobs/outbox-dispatcher.js`. |
+| `report_schedules` | report_key, cron, recipients (JSON), format, last_run_at | Not built — needs a notification-settings screen and Reporting's own catalogue to mature first. |
+
+**Notifications (3.21)** — built: the outbox pipeline above, a pluggable email adapter (a `console` adapter is the default this pass — no provider credentials exist in this environment), the admin template editor, the delivery log with a resend action, and the in-app bell. Wired to four events this pass (`reservation.confirmed`, `reservation.cancelled`, `guest.checked_in`, `guest.checked_out`) — the only real guest-facing lifecycle events any module emits yet.
+
+| Table | Key columns | Notes |
+|---|---|---|
+| `email_templates` | tenant_id, property_id, template_key, locale, subject, body_html | Built. PROPERTY_SCOPED — two properties in the same tenant can want different branding for the same key. UNIQUE(property_id, template_key, locale). A key with no configured row falls back to a built-in default body rather than silently dropping the send. |
+| `notification_log` | tenant_id, property_id, recipient_email, template_key, channel, status, provider_ref, failed_reason, reservation_id, sent_at, delivered_at | Built. The answer to "the guest never got it" (3.21) — indexed on recipient per this file's own indexing note. |
+| `in_app_notifications` | tenant_id, user_id, type, payload (JSON), read_at | Built. TENANT_SCOPED (not PROPERTY_SCOPED — a notification belongs to a staff member, not a property; see that table's own migration header). Written directly inside the triggering transaction, NOT through the outbox — an internal DB row is not the external-call latency problem §13's pattern exists to decouple. |
 
 **POS & integrations (3.15)**
 

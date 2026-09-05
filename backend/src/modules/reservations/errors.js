@@ -67,6 +67,20 @@ class RoomNotCleanError extends AppError {
   }
 }
 
+/**
+ * PLAN.md Phase 3: a room currently out-of-order/out-of-service
+ * (`out_of_order_periods`) or carrying an unresolved housekeeping
+ * discrepancy (`rooms.has_discrepancy`) cannot be checked into —
+ * PRODUCT_REQUIREMENTS.md §3.6's "requiring front-desk follow-up before the
+ * room can be sold again" applies to check-in, the one action that actually
+ * puts a guest in the room, not only to the room-type-level inventory count.
+ */
+class RoomOutOfOrderError extends AppError {
+  constructor(roomId) {
+    super('BUSINESS_RULE_ROOM_OUT_OF_ORDER', `Room ${roomId} is out of order or has an unresolved discrepancy.`, 422, { roomId });
+  }
+}
+
 /** ARCHITECTURE.md §11: check-out requires the folio balance to be zero (no AR-owing checkout supported in this pass). */
 class FolioBalanceOwingError extends AppError {
   constructor(balance) {
@@ -78,6 +92,7 @@ module.exports = {
   OverbookingThresholdExceededError,
   RoomUnavailableError,
   RoomNotCleanError,
+  RoomOutOfOrderError,
   InvalidReservationTransitionError,
   ArrivalAfterDepartureError,
   FolioBalanceOwingError,

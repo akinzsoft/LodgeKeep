@@ -20,14 +20,18 @@
  * Phase 1's pattern, unchanged, since a read needs no transaction.
  */
 
-const crypto = require('crypto');
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
+const { writeOutboxEvent } = require('../../shared/outbox');
+const { livePhysicalCount: sharedLivePhysicalCount } = require('../../shared/room-availability');
+const { generateUlid } = require('../../shared/ulid');
 const { resolveRate } = require('../setup/service');
+const { postAdjustment: postFolioAdjustment } = require('../cashiering/service');
 const {
   OverbookingThresholdExceededError,
   RoomUnavailableError,
   RoomNotCleanError,
+  RoomOutOfOrderError,
   InvalidReservationTransitionError,
   ArrivalAfterDepartureError,
   FolioBalanceOwingError,
@@ -36,35 +40,6 @@ const {
 // ---------------------------------------------------------------------
 // Pure functions — exported for direct unit testing, no database.
 // ---------------------------------------------------------------------
-
-const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-
-/**
- * A ULID (ARCHITECTURE.md §10: "UUID/ULID ... safe to expose without
- * revealing sequence/volume information") — 48-bit millisecond timestamp
- * (10 base32 chars) + 80 bits of randomness (16 base32 chars), Crockford's
- * alphabet. No package dependency added for this: the algorithm is a dozen
- * lines, and `reservations.confirmation_number`/`folios.folio_number` are
- * both sized `varchar(26)` for exactly this format.
- */
-function generateUlid(now = Date.now(), randomBytes = crypto.randomBytes) {
-  let time = BigInt(now);
-  let timePart = '';
-  for (let i = 0; i < 10; i += 1) {
-    timePart = ULID_ALPHABET[Number(time % 32n)] + timePart;
-    time /= 32n;
-  }
-
-  let random = 0n;
-  for (const byte of randomBytes(10)) random = (random << 8n) | BigInt(byte);
-  let randomPart = '';
-  for (let i = 0; i < 16; i += 1) {
-    randomPart = ULID_ALPHABET[Number(random % 32n)] + randomPart;
-    random /= 32n;
-  }
-
-  return timePart + randomPart;
-}
 
 /**
  * Every night of a stay as 'YYYY-MM-DD' strings, arrival inclusive,
@@ -132,6 +107,44 @@ function computeEarlyLateFee({
 }
 
 // ---------------------------------------------------------------------
+// Outbox events (PLAN.md Phase 3, ARCHITECTURE.md §13) — the notifications
+// module's own dispatcher reads these; this module only ever writes them,
+// in the same transaction as the state change they describe.
+// ---------------------------------------------------------------------
+
+/**
+ * One helper for all four wired events (`reservation.confirmed`,
+ * `reservation.cancelled`, `guest.checked_in`, `guest.checked_out`) — same
+ * guest/reservation payload shape every time, since
+ * `src/modules/notifications/service.js`'s template substitution reads the
+ * same variable names regardless of which event fired. A reservation with
+ * no email on file (the `guests` stub's `email` column is nullable) simply
+ * produces no dispatchable event — the notifications dispatcher's own
+ * `dispatchOne` already treats a missing `guestEmail` as "nothing to send,"
+ * so this never blocks the reservation mutation itself on the guest having
+ * an email address.
+ */
+async function emitReservationEvent({ trx, eventType, reservation, extra }) {
+  const guest = await trx.table('guests').where({ id: reservation.guest_id }).first();
+  await writeOutboxEvent({
+    trx,
+    eventType,
+    aggregateType: 'reservations',
+    aggregateId: reservation.id,
+    propertyId: reservation.property_id,
+    payload: {
+      reservationId: reservation.id,
+      guestEmail: guest?.email ?? null,
+      guestName: guest ? `${guest.first_name} ${guest.last_name}` : null,
+      confirmationNumber: reservation.confirmation_number,
+      arrivalDate: reservation.arrival_date,
+      departureDate: reservation.departure_date,
+      ...extra,
+    },
+  });
+}
+
+// ---------------------------------------------------------------------
 // Guests — minimal stub (this session's confirmed decision; see the
 // `guests` migration's own header for full scope reasoning).
 // ---------------------------------------------------------------------
@@ -162,12 +175,16 @@ async function listGuests({ context }) {
 // ---------------------------------------------------------------------
 
 /**
- * Live physical count — see `room_type_inventory` migration's own header
- * for why this is computed here rather than cached: `rooms.status` is the
- * one live source of truth, no separate column to keep in sync.
+ * Live physical count for one room type on one stay date — PLAN.md Phase 3
+ * moved this into `src/shared/room-availability.js` so the reporting
+ * module's occupancy figures use the exact same live exclusions
+ * (out-of-order periods, discrepant rooms) rather than a second
+ * reimplementation drifting from this one. See that file's own header for
+ * the full reasoning; this is a thin re-export so every existing call site
+ * in this file (`roomTypeId` always supplied here) keeps working unchanged.
  */
-async function livePhysicalCount({ db, roomTypeId }) {
-  return db.table('rooms').where({ room_type_id: roomTypeId, status: 'active' }).count();
+async function livePhysicalCount({ db, roomTypeId, stayDate }) {
+  return sharedLivePhysicalCount({ db, roomTypeId, stayDate });
 }
 
 async function ensureInventoryRow({ trx, roomTypeId, stayDate }) {
@@ -191,7 +208,7 @@ async function reserveInventoryForDates({ trx, roomTypeId, stayDates }) {
 
     const row = await trx.table('room_type_inventory').where({ room_type_id: roomTypeId, stay_date: stayDate }).forUpdate().first();
 
-    const physicalCount = await livePhysicalCount({ db: trx, roomTypeId });
+    const physicalCount = await livePhysicalCount({ db: trx, roomTypeId, stayDate });
     const threshold = Math.floor((physicalCount * Number(row.overbooking_threshold_pct)) / 100);
     if (row.rooms_sold + 1 > threshold) {
       throw new OverbookingThresholdExceededError(roomTypeId, stayDate);
@@ -212,11 +229,17 @@ async function releaseInventoryForDates({ trx, roomTypeId, stayDates }) {
   }
 }
 
-/** Read-only availability search (PRODUCT_REQUIREMENTS.md §3.2) — no lock, a point-in-time answer that createReservation re-verifies for real under lock. */
+/**
+ * Read-only availability search (PRODUCT_REQUIREMENTS.md §3.2) — no lock, a
+ * point-in-time answer that createReservation re-verifies for real under
+ * lock. Physical count is computed per NIGHT, not once for the whole stay
+ * (PLAN.md Phase 3): a room can be out-of-order for only part of a
+ * requested range, so a stay spanning an OOO window must see fewer sellable
+ * rooms on those specific nights, not the whole range.
+ */
 async function checkAvailability({ context, roomTypeId, arrivalDate, departureDate }) {
   const db = scopedDb().for(context);
   const stayDates = expandStayDates(arrivalDate, departureDate);
-  const physicalCount = await livePhysicalCount({ db, roomTypeId });
 
   const rows = await db
     .table('room_type_inventory')
@@ -224,15 +247,38 @@ async function checkAvailability({ context, roomTypeId, arrivalDate, departureDa
     .whereIn('stay_date', stayDates);
   const rowByDate = new Map(rows.map((r) => [String(r.stay_date), r]));
 
-  const nights = stayDates.map((stayDate) => {
+  const nights = [];
+  for (const stayDate of stayDates) {
+    const physicalCount = await livePhysicalCount({ db, roomTypeId, stayDate });
     const row = rowByDate.get(stayDate);
     const thresholdPct = row ? Number(row.overbooking_threshold_pct) : 100;
     const roomsSold = row ? row.rooms_sold : 0;
     const threshold = Math.floor((physicalCount * thresholdPct) / 100);
-    return { stayDate, physicalCount, roomsSold, threshold, sellable: Math.max(0, threshold - roomsSold) };
-  });
+    nights.push({ stayDate, physicalCount, roomsSold, threshold, sellable: Math.max(0, threshold - roomsSold) });
+  }
 
-  return { roomTypeId, physicalCount, nights, minSellable: Math.min(...nights.map((n) => n.sellable)) };
+  return { roomTypeId, nights, minSellable: Math.min(...nights.map((n) => n.sellable)) };
+}
+
+/**
+ * PLAN.md Phase 3: the one real gap left in an otherwise fully-wired
+ * overbooking mechanism — `overbooking_threshold_pct` (Phase 2) had no
+ * endpoint to actually set it, only ever taking its `100.00` schema default.
+ * PRODUCT_REQUIREMENTS.md §3.2's own example ("sell up to 102% of physical
+ * inventory") is meaningless without a way to configure the 102. Lazily
+ * creates the (room_type, date) row exactly like `ensureInventoryRow` does,
+ * since a manager may want to raise the threshold for a date with no
+ * bookings against it yet.
+ */
+async function configureOverbookingThreshold({ context, roomTypeId, stayDate, overbookingThresholdPct }) {
+  const db = scopedDb().for(context);
+  try {
+    await db.table('room_type_inventory').insert({ room_type_id: roomTypeId, stay_date: stayDate, rooms_sold: 0, overbooking_threshold_pct: overbookingThresholdPct });
+  } catch (error) {
+    if (!(error && error.code === 'ER_DUP_ENTRY')) throw error;
+    await db.table('room_type_inventory').where({ room_type_id: roomTypeId, stay_date: stayDate }).update({ overbooking_threshold_pct: overbookingThresholdPct });
+  }
+  return db.table('room_type_inventory').where({ room_type_id: roomTypeId, stay_date: stayDate }).first();
 }
 
 // ---------------------------------------------------------------------
@@ -311,7 +357,16 @@ async function createReservation({
     }))
   );
 
-  return trx.table('reservations').where({ id }).first();
+  const created = await trx.table('reservations').where({ id }).first();
+  // PLAN.md Phase 3: only a reservation that actually LANDS on `confirmed`
+  // (the default, non-hold, non-waitlisted path) emits the confirmation
+  // email — a tentative hold or a waitlisted booking has nothing to confirm
+  // yet (`confirmReservation`/`promoteWaitlist` emit it themselves when
+  // those DO transition to confirmed).
+  if (created.status === 'confirmed') {
+    await emitReservationEvent({ trx, eventType: 'reservation.confirmed', reservation: created });
+  }
+  return created;
 }
 
 /** `tentative` -> `confirmed`. No inventory change: a tentative hold already counts against sellable inventory (§11). */
@@ -322,7 +377,9 @@ async function confirmReservation({ trx, id }) {
     throw new InvalidReservationTransitionError(reservation.status, 'confirmed');
   }
   await trx.table('reservations').where({ id }).update({ status: 'confirmed' });
-  return trx.table('reservations').where({ id }).first();
+  const updated = await trx.table('reservations').where({ id }).first();
+  await emitReservationEvent({ trx, eventType: 'reservation.confirmed', reservation: updated });
+  return updated;
 }
 
 /** `waitlisted` -> `confirmed`, acquiring the inventory a waitlisted reservation never held. Throws `OverbookingThresholdExceededError` again if still nothing free — the reservation stays waitlisted. */
@@ -335,7 +392,9 @@ async function promoteWaitlist({ trx, id }) {
   const stayDates = expandStayDates(reservation.arrival_date, reservation.departure_date);
   await reserveInventoryForDates({ trx, roomTypeId: reservation.room_type_id, stayDates });
   await trx.table('reservations').where({ id }).update({ status: 'confirmed' });
-  return trx.table('reservations').where({ id }).first();
+  const updated = await trx.table('reservations').where({ id }).first();
+  await emitReservationEvent({ trx, eventType: 'reservation.confirmed', reservation: updated });
+  return updated;
 }
 
 /** TESTING.md RES-10. Releases inventory unless the reservation was `waitlisted` (which never held any). */
@@ -354,7 +413,9 @@ async function cancelReservation({ trx, id, reason }) {
     cancelled_at: new Date(),
     cancellation_reason: reason ?? null,
   });
-  return trx.table('reservations').where({ id }).first();
+  const updated = await trx.table('reservations').where({ id }).first();
+  await emitReservationEvent({ trx, eventType: 'reservation.cancelled', reservation: updated });
+  return updated;
 }
 
 /**
@@ -409,6 +470,28 @@ async function checkIn({ trx, id, roomId, overrideDirty }) {
     throw new RoomNotCleanError(roomId);
   }
 
+  // PLAN.md Phase 3: a room out-of-order/out-of-service or carrying an
+  // unresolved discrepancy cannot be checked into, and — unlike the dirty
+  // check above — has no override: it needs the OOO period closed or the
+  // discrepancy resolved first (housekeeping's own action), not a front-desk
+  // checkbox at the moment of check-in.
+  if (room.has_discrepancy) {
+    throw new RoomOutOfOrderError(roomId);
+  }
+  const property = await trx.table('properties').where({ id: reservation.property_id }).first();
+  const businessDate = property?.current_business_date;
+  if (businessDate) {
+    const activeOoo = await trx
+      .table('out_of_order_periods')
+      .where({ room_id: roomId })
+      .where('start_date', '<=', businessDate)
+      .where('end_date', '>=', businessDate)
+      .first();
+    if (activeOoo) {
+      throw new RoomOutOfOrderError(roomId);
+    }
+  }
+
   const occupied = await trx.table('reservation_rooms').where({ room_id: roomId, effective_to: null }).first();
   if (occupied) {
     throw new RoomUnavailableError(roomId);
@@ -426,21 +509,42 @@ async function checkIn({ trx, id, roomId, overrideDirty }) {
     currency: dailyRate.currency,
   });
 
+  // PLAN.md Phase 3: check-in now actually maintains `rooms.front_desk_status`
+  // (Phase 2 never wrote to this column at all — see the housekeeping
+  // module's own notes for why that mattered).
+  await trx.table('rooms').where({ id: roomId }).update({ front_desk_status: 'occupied' });
+
   await trx.table('reservations').where({ id }).update({ status: 'checked_in', checked_in_at: now });
-  return trx.table('reservations').where({ id }).first();
+  const updated = await trx.table('reservations').where({ id }).first();
+  await emitReservationEvent({ trx, eventType: 'guest.checked_in', reservation: updated, extra: { roomNumber: room.room_number } });
+  return updated;
 }
 
 /**
  * TESTING.md FD-4/FD-5/FD-6. The folio balance must be zero going INTO
  * checkout (§11's literal precondition) — always true in this pass since
- * nothing can post a charge yet, except a test fixture that sets one
- * directly to exercise FD-4's guard. Any early/late fee is computed and
- * recorded on the folio's `balance` AS PART OF this same checkout, not
- * blocked on: this pass has no payment-capture mechanism to collect it
- * (Cashiering), so the fee is recorded for visibility, and checkout still
- * completes — flagged rather than silently pretended away.
+ * nothing posts a charge outside a test fixture setting the balance
+ * directly to exercise FD-4's guard. Any early/late fee is now a REAL
+ * `folio_line_items` adjustment (PLAN.md Phase 2.5's real ledger,
+ * `src/modules/cashiering/service.js`'s `postAdjustment` — a cross-module
+ * service call, per CLAUDE.md's module-boundary rule), posted as part of
+ * THIS same checkout — not blocked on: Cashiering can capture a payment
+ * for it separately, but checkout itself still completes with the fee
+ * left owing, exactly as Phase 2/3 already flagged, now backed by a real,
+ * voidable, auditable ledger line instead of an opaque overwritten number.
+ *
+
+ * PLAN.md Phase 3: `scheduledCheckoutTime`/`earlyCutoffTime`/the two fee
+ * amounts now default to the property's own configured checkout policy
+ * (`properties.scheduled_checkout_time` etc., this pass's migration) when
+ * the caller does not supply them explicitly — closing the gap
+ * `computeEarlyLateFee`'s own comment has flagged since Phase 2. A caller
+ * that still passes them explicitly (e.g. a one-off manager exception)
+ * overrides the property default, never the other way round.
+ * `actualCheckoutTime` has no property-level default by definition — it is
+ * always the caller's own report of when checkout actually happened.
  */
-async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, earlyCutoffTime, earlyDepartureFee, lateCheckoutFee }) {
+async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, earlyCutoffTime, earlyDepartureFee, lateCheckoutFee, userId }) {
   const reservation = await trx.table('reservations').where({ id }).first();
   if (!reservation) return null;
   if (!isValidTransition(reservation.status, 'checked_out')) {
@@ -455,21 +559,84 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
     throw new FolioBalanceOwingError(folio.balance);
   }
 
+  const property = await trx.table('properties').where({ id: reservation.property_id }).first();
+  // MySQL's TIME columns come back as 'HH:MM:SS' — truncated to 'HH:MM' so
+  // they compare consistently against `actualCheckoutTime`'s own 'HH:MM'
+  // format (`computeEarlyLateFee`'s own doc: "valid for zero-padded 24h
+  // time", which assumes one consistent width on both sides).
+  const toHHMM = (value) => (typeof value === 'string' ? value.slice(0, 5) : value);
+  const effectiveScheduled = scheduledCheckoutTime ?? toHHMM(property?.scheduled_checkout_time) ?? undefined;
+  const effectiveEarlyCutoff = earlyCutoffTime ?? toHHMM(property?.early_checkout_cutoff_time) ?? undefined;
+  const effectiveEarlyFee = earlyDepartureFee ?? property?.early_departure_fee ?? '0.00';
+  const effectiveLateFee = lateCheckoutFee ?? property?.late_checkout_fee ?? '0.00';
+
   let fee = null;
-  if (scheduledCheckoutTime && actualCheckoutTime) {
-    fee = computeEarlyLateFee({ scheduledCheckoutTime, actualCheckoutTime, earlyCutoffTime, earlyDepartureFee, lateCheckoutFee });
+  if (effectiveScheduled && actualCheckoutTime) {
+    fee = computeEarlyLateFee({
+      scheduledCheckoutTime: effectiveScheduled,
+      actualCheckoutTime,
+      earlyCutoffTime: effectiveEarlyCutoff,
+      earlyDepartureFee: effectiveEarlyFee,
+      lateCheckoutFee: effectiveLateFee,
+    });
   }
-  const finalBalance = fee ? Number(fee.amount).toFixed(2) : '0.00';
+  if (fee && Number(fee.amount) !== 0) {
+    await postFolioAdjustment({
+      trx,
+      folioId: folio.id,
+      description: fee.type === 'early_departure' ? 'Early departure fee' : 'Late checkout fee',
+      amount: fee.amount,
+      // Falls back to the reservation's own departure_date when the
+      // property has no current_business_date set yet (Phase 1's own
+      // "not every fixture/property needs one" reasoning) — a checkout fee
+      // always has a real calendar day it happened on regardless of
+      // whether business-date rollover (Night Audit) has been exercised.
+      businessDate: property?.current_business_date ?? reservation.departure_date,
+      userId: userId ?? null,
+      reason: fee.type === 'early_departure' ? 'Early departure fee applied at checkout.' : 'Late checkout fee applied at checkout.',
+    });
+  }
 
   const now = new Date();
-  await trx.table('folios').where({ id: folio.id }).update({ balance: finalBalance, status: 'closed', closed_at: now });
-  await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).update({ effective_to: now });
-  await trx.table('reservations').where({ id }).update({ status: 'checked_out', checked_out_at: now });
+  await trx.table('folios').where({ id: folio.id }).update({ status: 'closed', closed_at: now });
+  const finalBalance = (await trx.table('folios').where({ id: folio.id }).first()).balance;
 
-  return { reservation: await trx.table('reservations').where({ id }).first(), fee };
+  const assignment = await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).first();
+  await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).update({ effective_to: now });
+
+  // PLAN.md Phase 3: check-out now actually maintains `rooms.front_desk_status`
+  // (Phase 2 never wrote to this column — see `checkIn`'s own comment).
+  // The room also needs a fresh housekeeping pass — marked `dirty` and its
+  // last occupancy observation cleared, since the housekeeper has not yet
+  // physically inspected it since this guest left (PRODUCT_REQUIREMENTS.md
+  // section 3.6's discrepancy check compares against a CURRENT observation,
+  // not a stale one from before this stay).
+  if (assignment) {
+    await trx.table('rooms').where({ id: assignment.room_id }).update({
+      front_desk_status: 'vacant',
+      housekeeping_reported_status: 'dirty',
+      housekeeping_occupancy_observed: null,
+    });
+  }
+
+  await trx.table('reservations').where({ id }).update({ status: 'checked_out', checked_out_at: now });
+  const updated = await trx.table('reservations').where({ id }).first();
+  await emitReservationEvent({ trx, eventType: 'guest.checked_out', reservation: updated, extra: { folioBalance: finalBalance } });
+
+  return { reservation: updated, fee };
 }
 
-/** TESTING.md FD-3. Closes the current assignment and opens a new one — `reservation_rooms` keeps both rows, never overwritten. */
+/**
+ * TESTING.md FD-3. Closes the current assignment and opens a new one —
+ * `reservation_rooms` keeps both rows, never overwritten.
+ *
+ * PLAN.md Phase 3: the destination room gets the same out-of-order/
+ * discrepancy guard `checkIn` does — a move is, from the room's point of
+ * view, a fresh check-in. Both rooms' `front_desk_status` are now actually
+ * maintained (Phase 2 never wrote to this column at all): the vacated room
+ * goes back to `vacant` and, since it now needs cleaning before it can be
+ * sold again, `dirty` — the same state check-out itself leaves a room in.
+ */
 async function roomMove({ trx, id, newRoomId, reason }) {
   const reservation = await trx.table('reservations').where({ id }).first();
   if (!reservation) return null;
@@ -477,14 +644,34 @@ async function roomMove({ trx, id, newRoomId, reason }) {
     throw new ValidationError('NOT_CHECKED_IN', 'A room move requires the reservation to be checked in.');
   }
 
+  const newRoom = await trx.table('rooms').where({ id: newRoomId }).first();
+  if (!newRoom) {
+    throw new ValidationError('ROOM_NOT_FOUND', 'The specified room does not exist at this property.');
+  }
+  if (newRoom.has_discrepancy) {
+    throw new RoomOutOfOrderError(newRoomId);
+  }
+
   const occupied = await trx.table('reservation_rooms').where({ room_id: newRoomId, effective_to: null }).first();
   if (occupied) {
     throw new RoomUnavailableError(newRoomId);
   }
 
+  const currentAssignment = await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).first();
+
   const now = new Date();
   await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).update({ effective_to: now });
   await trx.table('reservation_rooms').insert({ reservation_id: id, room_id: newRoomId, effective_from: now, effective_to: null, reason: reason ?? null });
+
+  if (currentAssignment) {
+    await trx.table('rooms').where({ id: currentAssignment.room_id }).update({
+      front_desk_status: 'vacant',
+      housekeeping_reported_status: 'dirty',
+      housekeeping_occupancy_observed: null,
+    });
+  }
+  await trx.table('rooms').where({ id: newRoomId }).update({ front_desk_status: 'occupied' });
+
   return trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).first();
 }
 
@@ -558,6 +745,7 @@ module.exports = {
   checkAvailability,
   reserveInventoryForDates,
   releaseInventoryForDates,
+  configureOverbookingThreshold,
   createReservation,
   confirmReservation,
   promoteWaitlist,

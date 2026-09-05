@@ -1,66 +1,49 @@
 # LodgeKeep
 
-LodgeKeep is a multi-tenant SaaS hotel Property Management System (PMS). It covers the full operational lifecycle of running a property — reservations, front desk, cashiering, guest profiles, night audit, housekeeping, rates and inventory, reporting, and a guest-facing booking portal — built for one or many independently-configured hotel tenants on shared infrastructure.
+[![CI](https://github.com/akinzsoft/LodgeKeep/actions/workflows/ci.yml/badge.svg)](https://github.com/akinzsoft/LodgeKeep/actions)
 
-The full eventual scope is described in [`PRODUCT_REQUIREMENTS.md`](./PRODUCT_REQUIREMENTS.md) (23 modules). The current build is intentionally a subset of that — see **Status** below and [`PLAN.md`](./PLAN.md) for the phased build order.
+A multi-tenant SaaS Hotel Property Management System — a lighter, faster, cloud-native alternative to Oracle OPERA PMS, sold as a subscription to independent hotels and small chains. There's no single reference customer: any hotel name in these docs is illustrative only, and the architecture is region-neutral by design. ([`PRODUCT_REQUIREMENTS.md`](./PRODUCT_REQUIREMENTS.md) §1)
 
 ## Status
 
-**Phase 2 (Reservations & Front Desk) in progress.** Phase 0 (foundations: multi-tenant auth, RBAC, audit trail, app shell) and Phase 1 (property setup: room types, rooms, rate codes, taxes) are complete. Reservations and Front Desk are built; Cashiering, Guest Profiles, Night Audit, and payment integration are not yet built. See [`CLAUDE.md`](./CLAUDE.md) for the detailed, honest status of each pass, including what was deliberately deferred and why.
+| Phase | What it covers | Status |
+|---|---|---|
+| 0 — Foundations | Multi-tenant auth, RBAC, audit trail, app shell | ✅ Complete |
+| 1 — Property setup | Room types, rooms, rate codes & calendar, taxes | ✅ Built |
+| 2 — Core operational loop | Reservations, Front Desk, overbooking, availability | ✅ Built |
+| 2.5 — Cashiering, Payments, Night Audit | Real folio ledger, cash/Paystack payments, night audit | ✅ Built |
+| 3 — Daily-use hardening | Housekeeping, Notifications, Reporting | ✅ Built |
+| 4+ | Guest Profiles, Accounts Receivable, POS, guest portal | Not started |
 
-A user can today: log in, configure a property (room types, physical rooms, rate codes/calendar, effective-dated taxes), search availability, book/modify/cancel a reservation, manage a waitlist, and check a guest in and out through the front desk (with room assignment, room moves, and an early/late checkout fee posted to a stub folio).
+A user can today: log in, configure a property, search availability, book/modify/cancel a reservation, run a waitlist, check guests in and out (with room moves and early/late fees), assign housekeeping and track discrepancies, pull live and audited occupancy/revenue reports, post real folio charges and taxes, take a cash or Paystack payment, void or split a folio line, and run night audit to close a business date. Guest Profiles is still a minimal stub, and Accounts Receivable, POS, and the guest booking portal don't exist yet.
+
+Status is derived from [`PLAN.md`](./PLAN.md)'s phase sequencing; the honest, as-built detail for every pass — what shipped, what was deliberately stubbed, and every bug found along the way — lives in [`CLAUDE.md`](./CLAUDE.md).
 
 ## Tech stack
 
-- **Backend** — Node.js + Express 5, MySQL 8 via Knex (query builder, not an ORM), Redis 7 + BullMQ for background jobs (installed, not yet wired up beyond infra), Jest + Supertest against a real MySQL test schema.
-- **Frontend** — React 19 + Vite, no router yet (single status-driven shell), Vitest + React Testing Library, Stylelint-enforced design tokens.
-- **Infra** — Docker Compose (MySQL, Redis, Adminer, phpMyAdmin), migrations checked into the repo.
+([`ARCHITECTURE.md`](./ARCHITECTURE.md) §1)
 
-## Architecture at a glance
-
-- **Tenant isolation is architectural, not disciplinary.** Every table declares a scope (platform/tenant/property/global-reference) and is reachable only through a scoped data-access layer that injects the right `WHERE` clause — there is no unscoped query path. Cross-tenant access returns 404, never 403.
-- **Roles are per-property, not global** — the same user can be a manager at one property and front desk at another.
-- **Money is exact** — `DECIMAL` end to end, never floating point, every value carries its currency.
-- **Financial records are immutable** — corrections are offsetting entries, never edits; void, never delete.
-- **Every financial mutation is idempotent** via a required `Idempotency-Key` header, backed by `src/shared/idempotency.js`.
-- **Business date ≠ wall clock** — each property runs on its own accounting date, advanced only by night audit.
-- **Concurrency uses real database locks** — e.g. the last-room-availability race is closed with `SELECT ... FOR UPDATE` inside a transaction, proven with a genuine two-connection concurrency test, not `Promise.all` against a shared transaction.
-
-The full set of invariants (and the reasoning behind each) lives in [`ARCHITECTURE.md`](./ARCHITECTURE.md) and [`SECURITY.md`](./SECURITY.md).
-
-## Documentation map
-
-Read in this order before making changes — [`AGENT.md`](./AGENT.md) is the canonical router:
-
-| File | Read before |
-|---|---|
-| [`PLAN.md`](./PLAN.md) | writing any product code — current phase and what's deliberately out of scope |
-| [`PRODUCT_REQUIREMENTS.md`](./PRODUCT_REQUIREMENTS.md) | implementing a module |
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | anything touching money, availability, or the business date |
-| [`DATABASE.md`](./DATABASE.md) | any schema change |
-| [`API.md`](./API.md) | creating or modifying any endpoint |
-| [`SECURITY.md`](./SECURITY.md) | any auth, RBAC, or data-access change |
-| [`DESIGN_SYSTEM.md`](./DESIGN_SYSTEM.md) | any frontend work |
-| [`TESTING.md`](./TESTING.md) | marking any work complete |
-
-[`CLAUDE.md`](./CLAUDE.md) tracks the real, as-built status of each phase — what shipped, what was stubbed, and every bug found along the way.
+- **Backend** — Node.js + Express, MySQL via Knex (query builder, not an ORM), Redis + BullMQ for background jobs, JWT/session auth with per-property RBAC.
+- **Frontend** — React, responsive and mobile/tablet-first for front-desk and housekeeping screens.
+- **Payments** — pluggable gateway layer, wired to Cashiering for cash and Paystack (sandbox integration, no live credentials in this environment); Flutterwave not yet wired.
+- **Infra** — Docker Compose locally (MySQL, Redis, Adminer, phpMyAdmin); one modular monolith, not microservices, deliberately.
 
 ## Getting started
 
 Requires Docker, Node.js 20+ (backend) / 22.22+ (frontend), and npm.
 
 ```bash
-# 1. Start infra (MySQL, Redis, Adminer, phpMyAdmin) — from the repo root
+# 1. Start infra — from the repo root
 docker compose up -d --wait
 
 # 2. Backend
 cd backend
-cp .env.example .env        # then edit to match your local ports if needed
+cp .env.example .env        # edit to match your local ports if needed
 npm install
-npm run migrate             # dev schema
+npm run migrate                      # dev schema
 npx knex migrate:latest --env test   # test schema
-npm run seed                # seeds two dev tenants with a property and staff user each
-npm run dev                 # starts the API
+npm run seed                # two dev tenants, one property + staff user each
+npm run dev
 
 # 3. Frontend, in a separate shell
 cd frontend
@@ -69,39 +52,34 @@ npm install
 npm run dev
 ```
 
-Host ports are non-default in this repo's `docker-compose.yml` (MySQL `3310`, Redis `6379`, Adminer `8084`, phpMyAdmin `8085`) — `backend/.env` must match. `docker/mysql/init/` creates the `lodgekeep_dev` and `lodgekeep_test` databases, but only against a fresh volume; if they're missing, `docker compose down -v` and bring the stack back up.
+Host ports are non-default (MySQL `3310`, Redis `6379`, Adminer `8084`, phpMyAdmin `8085`) — `backend/.env` must match `docker-compose.yml`. If the databases are missing, `docker compose down -v` and bring the stack back up (init scripts only run against a fresh volume).
 
-Seeded logins (dev only): `manager@alpha-hotels.example.com` / `manager@beta-resorts.example.com`, password `LodgeKeepDev123!`, reached through `http://alpha-hotels.localhost:5173` / `http://beta-resorts.localhost:5173` (tenant is resolved from the subdomain).
+Seeded logins (dev only): `manager@alpha-hotels.example.com` / `manager@beta-resorts.example.com`, password `LodgeKeepDev123!`, at `http://alpha-hotels.localhost:5173` / `http://beta-resorts.localhost:5173` (tenant is resolved from the subdomain).
 
-## Commands
+## Running tests
 
 ```bash
-# Backend (from /backend)
-npm test                    # jest --runInBand — real MySQL test schema, no mocks
-npm run migrate:rollback    # migration reversibility is a release gate
-npm run lint
-
-# Frontend (from /frontend)
-npm test                    # vitest run
-npm run build
-npm run lint                # eslint + stylelint (design-token enforcement)
+cd backend && npm test    # jest --runInBand, against a real MySQL schema — no mocks
+cd frontend && npm test   # vitest run
 ```
 
-## Project layout
+Tenant isolation is this project's core guarantee, so it has its own dedicated suite: `cd backend && npm run test:isolation` runs the cross-tenant `ISO-*` tests — every tenant-owned table is checked table-by-table for a query path that could leak another tenant's rows. It's table-driven off `tests/helpers/entities.js`, so a new table is covered automatically the moment it's registered there.
 
-```
-backend/
-  src/modules/<module>/     # routes, controller, service, model — self-contained per module
-  src/modules/tenancy/      # the scoped data-access layer — the only DB query path
-  src/auth/                 # staff/guest/platform auth, RBAC, sessions
-  src/audit/                # audit trail write path
-  migrations/, seeds/
-  tests/                    # jest + supertest, incl. cross-tenant isolation and concurrency suites
-frontend/
-  src/app/                  # screens, mirrors backend module names
-  src/shared/api/           # the one place that calls fetch
-  src/shared/components/    # design-token-driven shared UI kit
-  src/styles/tokens.css     # the only source of design tokens
-```
+## Documentation
 
-Cross-module calls always go through service functions, never direct model access, on the backend; the guest booking portal ships from the same frontend app under a separate `/portal` route tree so admin styling can't leak into guest-facing pages.
+[`AGENT.md`](./AGENT.md) is the entry point and reading order for everything below:
+
+| File | Covers |
+|---|---|
+| [`PLAN.md`](./PLAN.md) | What phase the project is in, and what's deliberately out of scope right now |
+| [`PRODUCT_REQUIREMENTS.md`](./PRODUCT_REQUIREMENTS.md) | Full product scope — 23 modules, what each does, and its UI screens |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Tech stack, tenant/property scoping, transactions, concurrency, night audit, payment state |
+| [`DATABASE.md`](./DATABASE.md) | Reference schema, module by module, plus constraints and record lifecycles |
+| [`API.md`](./API.md) | The REST contract — envelope, error codes, resource conventions, pagination |
+| [`SECURITY.md`](./SECURITY.md) | Tenant isolation, authentication, the role/permission matrix |
+| [`DESIGN_SYSTEM.md`](./DESIGN_SYSTEM.md) | Design tokens and the six required UI states |
+| [`TESTING.md`](./TESTING.md) | Testing philosophy, definition of done, all enumerated test cases |
+
+## License
+
+No license file is currently checked into this repository — that's an open question, not a default. Until one is added, treat this code as all-rights-reserved.

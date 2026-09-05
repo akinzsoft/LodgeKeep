@@ -66,28 +66,40 @@ Nothing else functions until a property exists with rooms and rates in it.
 
 The heart of the product. Everything here is needed before a hotel can run a single day.
 
-- **Reservations (3.2)** — availability search against sellable inventory, create/modify/cancel, `reservation_daily_rates`, confirmation numbers
-- **Front desk (3.3)** — arrivals/departures/in-house boards, check-in, room assignment, check-out, room moves
-- **Rooms (3.6)** — room grid with live status
-- **Cashiering (3.4)** — folios, line items, charges, payments, void-with-reason
-- **Guest profiles (3.1)** — create, search, stay history
-- **Night audit (3.9)** — room charge posting, business-date rollover, idempotency guards
-- Payment integration: one gateway end to end (cards/digital), tokenised
+**Scope note, corrected after implementation:** what actually shipped as "Phase 2" was narrower than originally planned below — Reservations, Front Desk, and a **folio stub only** (open/closed/balance, no line items, no charges, no payments). Cashiering's real ledger, Night Audit, and payment integration were not built in this pass, and remained open work tracked as Phase 2.5 below — since shipped; see that section. Phase 3 (Housekeeping/Notifications/Reporting) was built against the interim reality — Reporting was live-computed with no `daily_reports` snapshot at the time, since that snapshot was a Night Audit output that didn't exist yet; Phase 2.5 later closed that gap too.
 
-**Exit:** a full day can be run — book, check in, post charges, take payment, check out, close the day, roll the date.
+- **Reservations (3.2)** — availability search against sellable inventory, create/modify/cancel, `reservation_daily_rates`, confirmation numbers — ✅ **shipped**
+- **Front desk (3.3)** — arrivals/departures/in-house boards, check-in, room assignment, check-out, room moves — ✅ **shipped**
+- **Rooms (3.6)** — room grid with live status — ✅ **shipped**
+- **Cashiering (3.4)** — folios, line items, charges, payments, void-with-reason — ✅ **shipped in Phase 2.5** (real ledger, not the original stub)
+- **Guest profiles (3.1)** — create, search, stay history — 🔲 **still minimal stub table only (Phase 2's guests table), no real Profiles module/UI**
+- **Night audit (3.9)** — room charge posting, business-date rollover, idempotency guards — ✅ **shipped in Phase 2.5**
+- Payment integration: one gateway end to end (cards/digital), tokenised — ✅ **shipped in Phase 2.5** (cash + Paystack; Flutterwave not wired)
+
+**Exit:** a full day can be run — book, check in, post charges, take payment, check out, close the day, roll the date. **Met — closed by Phase 2.5 below**, built after Phase 3 chronologically in this session even though it is numbered ahead of it here; see CLAUDE.md's own Phase 2.5 status section for the full detail.
+
+## Phase 2.5 — Cashiering, Night Audit, Payments (the deferred half of Phase 2) — ✅ shipped
+
+The exit criteria above were never actually met — this phase is what closes them. Built in this order, since each depended on the last:
+
+1. **Real folio ledger** — ✅ **shipped**: `folio_line_items`, charges, tax, adjustments, split billing, the void-never-delete rule from `ARCHITECTURE.md §8`
+2. **Payment integration** — ✅ **shipped for cash and Paystack**; Flutterwave not wired (no sandbox credentials) — the state machine and idempotency rules from `ARCHITECTURE.md §7`. A live Paystack sandbox round trip is not confirmed in this environment (no `PAYSTACK_SECRET_KEY` present); the integration code and its mocked/pure-function coverage are real
+3. **Night audit** — ✅ **shipped**: the full sequence and recovery model from `ARCHITECTURE.md §6`; Reporting now reads the real `daily_reports` snapshot for any closed business date, falling back to the live computation only for the current open one. Steps 5 (packages) and 7 (POS reconciliation) of the 13-step sequence are skipped outright — neither module exists
 
 **Tests required to close** (the most important suite in the project — these are the ones that cost real money when wrong):
-- **Night audit idempotency**: run twice for the same business date → no double-posted charges; kill mid-run and re-trigger → same result
-- **Business-date boundaries**: check-ins at 23:59 and 00:01 post to the correct business date in a property whose timezone differs from the server's
-- **Money arithmetic on exact DECIMAL**: folio totals, tax, split billing with an odd remainder, partial refunds, rounding boundaries — never float comparison with tolerance
-- **Concurrency**: two simultaneous bookings for the last available room — one succeeds, one fails cleanly
-- **Overbooking threshold**: booking at, on, and past the sellable limit behaves as configured
-- **Room moves**: `reservation_rooms` history preserved, no overwrite
-- **Void, never delete**: a voided folio line remains queryable with its reason and voider
-- Isolation tests for reservations, folios, guests, rooms
-- Payment gateway: success, decline, timeout, and duplicate-webhook handling against the provider's sandbox
+- **Night audit idempotency**: run twice for the same business date → no double-posted charges — ✅ covered (`tests/night-audit/night-audit.test.js`); kill mid-run and re-trigger → same result — ✅ covered (`tests/night-audit/concurrency.test.js`, NA-3)
+- **Business-date boundaries**: check-ins at 23:59 and 00:01 post to the correct business date in a property whose timezone differs from the server's — not separately tested this pass
+- **Money arithmetic on exact DECIMAL**: folio totals, tax, split billing with an odd remainder, partial refunds, rounding boundaries — never float comparison with tolerance — ✅ covered (`tests/cashiering/cashiering.test.js`, `tax-engine.test.js`, `src/shared/money.js`)
+- **Concurrency**: two simultaneous bookings for the last available room — one succeeds, one fails cleanly — ✅ covered in Phase 2 already (`tests/reservations/concurrency.test.js`); night audit's own equivalent (two simultaneous triggers) — ✅ covered (NA-2)
+- **Overbooking threshold**: booking at, on, and past the sellable limit behaves as configured — ✅ covered in Phase 3
+- **Room moves**: `reservation_rooms` history preserved, no overwrite — ✅ covered in Phase 2
+- **Void, never delete**: a voided folio line remains queryable with its reason and voider — ✅ covered (`tests/cashiering/cashiering.test.js`), and confirmed live end to end this pass
+- Isolation tests for reservations, folios, guests, rooms — ✅ covered; all five new Phase 2.5 tables are registered in `tests/helpers/entities.js` and inherit the generic `ISO-*` suite
+- Payment gateway: success, decline, timeout, and duplicate-webhook handling against the provider's sandbox — success/decline/webhook-signature paths covered against mocks; a live sandbox round trip is not confirmed (see above)
 
-**Pull forward deliberately:** night audit idempotency and the last-room race. Both fail silently in production if left until later.
+**Pulled forward deliberately, as planned:** night audit idempotency and the last-room race. Both would have failed silently in production if left until later.
+
+**Gaps flagged, not hidden**: SECURITY.md §5's matrix had no Night Audit column and no written-down definition of Cashiering's front-desk "Limited" cell until this pass closed both. `HomeDashboard.jsx`'s Night Audit alert row was not updated and still shows the pre-Phase-2.5 empty state. Accounts Receivable (§3.9) remains correctly deferred to Phase 4.
 
 ---
 

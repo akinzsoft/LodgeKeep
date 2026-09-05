@@ -16,7 +16,7 @@ const BOARDS = [
  * and "Room move/upgrade — side-by-side current vs target room, reason
  * field."
  */
-export function FrontDeskTab() {
+export function FrontDeskTab({ isOffline = false } = {}) {
   const [board, setBoard] = useState('arrivals');
   const [rows, setRows] = useState(null);
   const [rooms, setRooms] = useState(null);
@@ -144,7 +144,15 @@ export function FrontDeskTab() {
         rows={rows ?? []}
         rowKey={(row) => row.id}
         errorMessage={error}
-        toolbar={checkoutSuccess ? <p className={formStyles.disabledNotice}>{checkoutSuccess}</p> : undefined}
+        toolbar={
+          error ? (
+            <p role="alert" className={formStyles.errorBanner}>
+              {error}
+            </p>
+          ) : checkoutSuccess ? (
+            <p className={formStyles.disabledNotice}>{checkoutSuccess}</p>
+          ) : undefined
+        }
         actions={(row) => (
           <>
             {board === 'arrivals' && (
@@ -196,8 +204,13 @@ export function FrontDeskTab() {
               />
               <span className={formStyles.label}>Check in anyway if the room is not marked clean</span>
             </label>
+            {isOffline && (
+              <p role="alert" className={formStyles.errorBanner}>
+                You&rsquo;re offline — check-in is disabled until the connection returns.
+              </p>
+            )}
             <div className={formStyles.actionsRow}>
-              <Button type="submit" loading={submitting}>
+              <Button type="submit" loading={submitting} disabled={isOffline}>
                 Confirm check-in
               </Button>
               <Button type="button" variant="ghost" onClick={() => setCheckingIn(null)}>
@@ -254,8 +267,13 @@ export function FrontDeskTab() {
                 />
               </label>
             </div>
+            {isOffline && (
+              <p role="alert" className={formStyles.errorBanner}>
+                You&rsquo;re offline — check-out is disabled until the connection returns.
+              </p>
+            )}
             <div className={formStyles.actionsRow}>
-              <Button type="submit" loading={submitting}>
+              <Button type="submit" loading={submitting} disabled={isOffline}>
                 Confirm check-out
               </Button>
               <Button type="button" variant="ghost" onClick={() => setCheckingOut(null)}>
@@ -296,8 +314,13 @@ export function FrontDeskTab() {
                 required
               />
             </label>
+            {isOffline && (
+              <p role="alert" className={formStyles.errorBanner}>
+                You&rsquo;re offline — room moves are disabled until the connection returns.
+              </p>
+            )}
             <div className={formStyles.actionsRow}>
-              <Button type="submit" loading={submitting}>
+              <Button type="submit" loading={submitting} disabled={isOffline}>
                 Confirm move
               </Button>
               <Button type="button" variant="ghost" onClick={() => setMovingRoom(null)}>

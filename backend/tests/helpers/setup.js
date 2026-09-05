@@ -17,6 +17,8 @@
  */
 
 const { destroy } = require('./db');
+const { __closeQueuesForTesting } = require('../../src/jobs/queues');
+const { destroyRedisConnection } = require('../../src/jobs/redis-connection');
 
 // Schema work against a real MySQL instance is slower than the 5s default, and
 // a timeout here reads as a mysterious failure rather than a slow query.
@@ -24,4 +26,12 @@ jest.setTimeout(30000);
 
 afterAll(async () => {
   await destroy();
+  // PLAN.md Phase 3: the reservations controller's reactive outbox-dispatch
+  // trigger (`enqueueOutboxDispatch`) opens a real BullMQ Queue/Redis
+  // connection the moment any reservation-mutation test runs. Neither
+  // closes itself, so without this Jest hangs waiting for the event loop to
+  // drain instead of exiting — the same "close every real connection you
+  // open" discipline `destroy()` above already exists for MySQL.
+  await __closeQueuesForTesting();
+  await destroyRedisConnection();
 });

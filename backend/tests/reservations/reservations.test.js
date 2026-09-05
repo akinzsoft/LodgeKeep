@@ -175,8 +175,10 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
         .query({ room_type_id: String(oooRoomTypeId), arrival_date: '2027-08-01', departure_date: '2027-08-02' })
         .set('Authorization', `Bearer ${tokenFor()}`);
       // Two physical rooms exist, but only one is `active` — sellable must
-      // reflect the live count, not the raw row count.
-      expect(res.body.data.physicalCount).toBe(1);
+      // reflect the live count, not the raw row count. Physical count is now
+      // per-night (PLAN.md Phase 3), not a single top-level field, since an
+      // OOO window can cover only part of a requested range.
+      expect(res.body.data.nights[0].physicalCount).toBe(1);
       expect(res.body.data.nights[0].sellable).toBe(1);
     });
 
@@ -561,6 +563,69 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
         });
       expect(second.status).toBe(201);
       expect(second.body.data.id).not.toBe(first.body.data.id);
+    });
+  });
+
+  // ====================================================================
+  // PLAN.md Phase 3: the missing overbooking-threshold config endpoint
+  // ====================================================================
+  describe('overbooking threshold configuration', () => {
+    it('configures a higher threshold for a specific date, which raises what the last-room race allows', async () => {
+      const roomTypeId = await createRoomType(ctx.a, { code: 'OVERCONFIGTYPE' });
+      await createRoom(ctx.a, { roomTypeId, roomNumber: 'OC1' });
+
+      const configured = await t.request
+        .put(`/api/v1/room-types/${roomTypeId}/inventory/2027-09-10`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .send({ overbooking_threshold_pct: 200 });
+      expect(configured.status).toBe(200);
+      expect(configured.body.data.overbooking_threshold_pct).toBe('200.00');
+
+      const availability = await t.request
+        .get('/api/v1/availability')
+        .query({ room_type_id: String(roomTypeId), arrival_date: '2027-09-10', departure_date: '2027-09-11' })
+        .set('Authorization', `Bearer ${tokenFor()}`);
+      // One physical room at 200% threshold sells 2, not 1.
+      expect(availability.body.data.nights[0].threshold).toBe(2);
+    });
+
+    it('is idempotent-by-value: reconfiguring the same date updates rather than duplicating the row', async () => {
+      const roomTypeId = await createRoomType(ctx.a, { code: 'OVERCONFIGTYPE2' });
+      await t.request
+        .put(`/api/v1/room-types/${roomTypeId}/inventory/2027-09-15`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .send({ overbooking_threshold_pct: 110 });
+      const second = await t.request
+        .put(`/api/v1/room-types/${roomTypeId}/inventory/2027-09-15`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .send({ overbooking_threshold_pct: 120 });
+      expect(second.status).toBe(200);
+      expect(second.body.data.overbooking_threshold_pct).toBe('120.00');
+
+      const rows = await t.trx('room_type_inventory').where({ room_type_id: roomTypeId, stay_date: '2027-09-15' });
+      expect(rows.length).toBe(1);
+    });
+
+    it('requires reservations.manage, not just reservations.view', async () => {
+      const roomTypeId = await createRoomType(ctx.a, { code: 'OVERCONFIGTYPE3' });
+      // users[1] at properties[0] already holds `housekeeping` per fixtures.js's
+      // own grant plan — reassigned to `cashier` here (view-only on
+      // reservations, per SECURITY.md §5) rather than inserted fresh, since a
+      // second row for the same (user, property) would collide on that
+      // table's own UNIQUE constraint.
+      const existingAccess = await t.trx('user_property_access').where({ user_id: ctx.a.users[1].id, property_id: ctx.a.properties[0].id }).first('id');
+      await t.trx('user_property_access').where({ id: existingAccess.id }).update({ role: 'cashier' });
+      const cashierToken = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+      const res = await t.request
+        .put(`/api/v1/room-types/${roomTypeId}/inventory/2027-09-20`)
+        .set('Authorization', `Bearer ${cashierToken}`)
+        .send({ overbooking_threshold_pct: 150 });
+      expect(res.status).toBe(403);
     });
   });
 

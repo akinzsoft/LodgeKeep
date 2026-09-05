@@ -28,6 +28,9 @@ export function RoomsTab({ disabled }) {
       setRooms(roomsResult);
       setRoomTypes(roomTypesResult);
     } catch (caught) {
+      // Stops the table showing a loading skeleton forever — the visible
+      // error banner below is what actually explains what happened.
+      setRooms([]);
       setError(caught instanceof ApiError ? caught.message : 'Could not load rooms.');
     }
   }

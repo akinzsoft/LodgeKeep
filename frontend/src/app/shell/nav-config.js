@@ -38,6 +38,20 @@ export const DEFAULT_NAV_GROUPS = [
       { key: 'home', label: 'Home' },
       { key: 'booking', label: 'Booking', requiredPermission: 'reservations.view' },
       { key: 'rooms', label: 'Rooms' },
+      // PLAN.md Phase 3: no separate top-level "Housekeeping" slot exists in
+      // PRODUCT_REQUIREMENTS.md's literal App-shell nav list either (the
+      // same gap Front Desk had in Phase 2 — see BookingScreen's own header)
+      // — filed under MAIN, next to Rooms, since housekeeping is a
+      // rooms-adjacent operational module, not an admin one.
+      { key: 'housekeeping', label: 'Housekeeping', requiredPermission: 'housekeeping.view' },
+      // PLAN.md Phase 2.5: same "no separate top-level slot in the literal
+      // spec" gap Front Desk/Housekeeping already had — filed under MAIN,
+      // next to Booking, since a folio is reached starting from a
+      // reservation. Gated on `cashiering.post_charge`, the broader of the
+      // two Cashiering keys (SECURITY.md §5: front_desk holds only this
+      // one, "Limited" — the screen itself further gates payment/refund/
+      // void actions on `cashiering.void_line` via the API's own checks).
+      { key: 'cashiering', label: 'Cashiering', requiredPermission: 'cashiering.post_charge' },
       { key: 'departments', label: 'Departments' },
       { key: 'staff', label: 'Staff' },
     ],
@@ -51,6 +65,15 @@ export const DEFAULT_NAV_GROUPS = [
   },
   {
     label: 'SETUP',
-    items: [{ key: 'setup', label: 'Setup', requiredPermission: 'setup.view' }],
+    items: [
+      { key: 'setup', label: 'Setup', requiredPermission: 'setup.view' },
+      { key: 'reports', label: 'Reporting', requiredPermission: 'reports.view' },
+      // PLAN.md Phase 2.5: SECURITY.md §5 has no Night Audit row at all
+      // (confirmed by reading that file directly); this session's confirmed
+      // decision files it under SETUP, alongside Reporting, since closing a
+      // business date is a manager/admin action, not an operational one —
+      // gated on `night_audit.view`.
+      { key: 'night_audit', label: 'Night Audit', requiredPermission: 'night_audit.view' },
+    ],
   },
 ];

@@ -13,9 +13,20 @@
 require('dotenv').config();
 
 const { createApp } = require('./app');
+const { startOutboxWorker, scheduleOutboxSweep } = require('./jobs/outbox-dispatcher');
 
 const port = Number(process.env.PORT || 3000);
 
 createApp().listen(port, () => {
   console.log(`Lodgekeep backend listening on :${port}`);
+});
+
+// PLAN.md Phase 3: the outbox dispatcher's worker and its durable periodic
+// sweep (`src/jobs/outbox-dispatcher.js`'s own header explains both
+// triggers). Started alongside the HTTP server, not gated behind a flag —
+// Redis is already required infrastructure for this stack
+// (docker-compose.yml), the same way the app already assumes MySQL is up.
+startOutboxWorker();
+scheduleOutboxSweep().catch((error) => {
+  console.error('Failed to schedule the outbox dispatch sweep:', error);
 });

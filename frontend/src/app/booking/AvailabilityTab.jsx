@@ -15,7 +15,7 @@ import styles from './BookingScreen.module.css';
  * stub has no search endpoint (see the `guests` migration's own scope
  * note), so every tenant guest is listed and a new one can be added inline.
  */
-export function AvailabilityTab() {
+export function AvailabilityTab({ isOffline = false } = {}) {
   const [roomTypes, setRoomTypes] = useState(null);
   const [rateCodes, setRateCodes] = useState(null);
   const [guests, setGuests] = useState(null);
@@ -319,8 +319,14 @@ export function AvailabilityTab() {
               </label>
             </div>
 
+            {/* DESIGN_SYSTEM.md §2: "disable actions that would post financial transactions" while offline. */}
+            {isOffline && (
+              <p role="alert" className={formStyles.errorBanner}>
+                You&rsquo;re offline — booking is disabled until the connection returns.
+              </p>
+            )}
             <div className={formStyles.actionsRow}>
-              <Button type="submit" loading={submitting} disabled={!booking.guest_id || !booking.rate_code_id}>
+              <Button type="submit" loading={submitting} disabled={isOffline || !booking.guest_id || !booking.rate_code_id}>
                 Book
               </Button>
             </div>
