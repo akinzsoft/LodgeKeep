@@ -4,6 +4,27 @@ import { BusinessDateIndicator } from './BusinessDateIndicator.jsx';
 import styles from './TopBar.module.css';
 
 /**
+ * Plain-language text for one bell notification — PLAN.md Phase 3 wires
+ * exactly one type (`housekeeping.discrepancy_raised`, PRODUCT_REQUIREMENTS.md
+ * §3.21's own named bell event); anything else falls back to its raw type
+ * string rather than crashing on an unrecognised shape, since new event
+ * types "arrive one at a time" the same way permission keys do (`src/auth/rbac.js`'s
+ * own header) and this bell should not need a deploy just to render one.
+ */
+function describeNotification(notification) {
+  // MySQL JSON columns can come back already-parsed or as a raw string
+  // depending on driver config — the same ambiguity
+  // `src/shared/idempotency.js`'s `parseStoredBody` documents on the
+  // backend; handled here too rather than assumed.
+  const payload = typeof notification.payload === 'string' ? JSON.parse(notification.payload) : notification.payload ?? {};
+  if (notification.type === 'housekeeping.discrepancy_raised') {
+    const roomNumber = payload.roomNumber ?? payload.roomId ?? 'a room';
+    return `Housekeeping discrepancy raised for room ${roomNumber}.`;
+  }
+  return notification.type;
+}
+
+/**
  * TopBar — PRODUCT_REQUIREMENTS.md's App shell, Top bar: "Hamburger (sidebar
  * collapse) on the left. Fullscreen toggle, notifications bell (with unread
  * count), user name + avatar on the right. Property switcher on the right
@@ -17,6 +38,8 @@ import styles from './TopBar.module.css';
  * @param {() => void} onToggleSidebar
  * @param {() => void} [onToggleFullscreen]
  * @param {number} [notificationCount]
+ * @param {Array<{id: string, type: string, payload: object, read_at: string|null, created_at: string}>} [notifications]   PLAN.md Phase 3's in-app bell — omit to keep the badge non-interactive (a screen with no bell data wired up yet).
+ * @param {(id: string) => void} [onMarkNotificationRead]
  * @param {{name: string, avatarUrl?: string}} user
  * @param {{id: string, name: string}} activeProperty
  * @param {Array<{id: string, name: string}>} properties
@@ -28,6 +51,8 @@ export function TopBar({
   onToggleSidebar,
   onToggleFullscreen,
   notificationCount = 0,
+  notifications,
+  onMarkNotificationRead,
   user,
   activeProperty,
   properties,
@@ -36,7 +61,9 @@ export function TopBar({
   onLogout,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
   const menuRef = useRef(null);
+  const notifRef = useRef(null);
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -53,6 +80,22 @@ export function TopBar({
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!notifOpen) return undefined;
+    function onPointerDown(event) {
+      if (!notifRef.current?.contains(event.target)) setNotifOpen(false);
+    }
+    function onKeyDown(event) {
+      if (event.key === 'Escape') setNotifOpen(false);
+    }
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [notifOpen]);
 
   const avatar = user.avatarUrl ? (
     <img className={styles.avatar} src={user.avatarUrl} alt="" />
@@ -90,14 +133,44 @@ export function TopBar({
         </button>
       )}
 
-      <button type="button" className={styles.iconButton} aria-label={`Notifications${notificationCount ? `, ${notificationCount} unread` : ''}`}>
-        🔔
-        {notificationCount > 0 && (
-          <span className={styles.badge} aria-hidden="true">
-            {notificationCount > 99 ? '99+' : notificationCount}
-          </span>
+      <div className={styles.notifWrapper} ref={notifRef}>
+        <button
+          type="button"
+          className={styles.iconButton}
+          aria-label={`Notifications${notificationCount ? `, ${notificationCount} unread` : ''}`}
+          aria-haspopup="menu"
+          aria-expanded={notifOpen}
+          onClick={() => setNotifOpen((open) => !open)}
+        >
+          🔔
+          {notificationCount > 0 && (
+            <span className={styles.badge} aria-hidden="true">
+              {notificationCount > 99 ? '99+' : notificationCount}
+            </span>
+          )}
+        </button>
+        {notifOpen && (
+          <div className={styles.notifPanel} role="menu" aria-label="Notifications">
+            {!notifications || notifications.length === 0 ? (
+              <p className={styles.notifEmpty}>No notifications yet.</p>
+            ) : (
+              notifications.map((notification) => (
+                <div
+                  key={notification.id}
+                  className={`${styles.notifItem} ${!notification.read_at ? styles.notifItemUnread : ''}`.trim()}
+                >
+                  <p className={styles.notifText}>{describeNotification(notification)}</p>
+                  {!notification.read_at && onMarkNotificationRead && (
+                    <button type="button" className={styles.notifMarkRead} onClick={() => onMarkNotificationRead(notification.id)}>
+                      Mark read
+                    </button>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
         )}
-      </button>
+      </div>
 
       <div className={styles.user} ref={menuRef}>
         {onLogout ? (

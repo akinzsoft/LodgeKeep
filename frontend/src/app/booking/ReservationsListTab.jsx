@@ -7,7 +7,7 @@ import formStyles from './BookingForm.module.css';
 const STATUS_FILTERS = ['', 'confirmed', 'tentative', 'checked_in', 'checked_out', 'cancelled', 'no_show', 'waitlisted'];
 
 /** PRODUCT_REQUIREMENTS.md §3.2: "Reservation list — filter by status ... date range, source." Source (market segment/booking source) has no data to filter by yet — those columns are nullable/deferred (see the reservations migration's own header). */
-export function ReservationsListTab() {
+export function ReservationsListTab({ isOffline = false } = {}) {
   const [reservations, setReservations] = useState(null);
   const [status, setStatus] = useState('');
   const [error, setError] = useState(null);
@@ -41,29 +41,38 @@ export function ReservationsListTab() {
 
   return (
     <>
+      {error && (
+        <p role="alert" className={formStyles.errorBanner}>
+          {error}
+        </p>
+      )}
+      {/* Outside DataTable's own toolbar slot, deliberately: Card only
+          renders `children` — toolbar included — while `state ===
+          'success'`. Filtering to a status with zero matches (e.g.
+          "no_show") is a real, unremarkable case, not an edge case — a
+          filter control that vanishes exactly then would trap the user on
+          that filter with no way back. */}
+      <label className={formStyles.field}>
+        <span className={formStyles.label}>Status</span>
+        <select
+          className={formStyles.select}
+          value={status}
+          onChange={(event) => {
+            setStatus(event.target.value);
+            reload(event.target.value);
+          }}
+        >
+          {STATUS_FILTERS.map((s) => (
+            <option key={s || 'all'} value={s}>
+              {s ? statusLabel(s) : 'All statuses'}
+            </option>
+          ))}
+        </select>
+      </label>
       <DataTable
         title="Reservations"
         state={reservations === null ? 'loading' : reservations.length === 0 ? 'empty' : 'success'}
         emptyMessage="No reservations match this filter."
-        toolbar={
-          <label className={formStyles.field}>
-            <span className={formStyles.label}>Status</span>
-            <select
-              className={formStyles.select}
-              value={status}
-              onChange={(event) => {
-                setStatus(event.target.value);
-                reload(event.target.value);
-              }}
-            >
-              {STATUS_FILTERS.map((s) => (
-                <option key={s || 'all'} value={s}>
-                  {s ? statusLabel(s) : 'All statuses'}
-                </option>
-              ))}
-            </select>
-          </label>
-        }
         columns={[
           { key: 'confirmation_number', label: 'Confirmation' },
           { key: 'arrival_date', label: 'Arrival' },
@@ -79,7 +88,10 @@ export function ReservationsListTab() {
         rowKey={(row) => row.id}
         actions={(row) =>
           ['confirmed', 'tentative', 'waitlisted'].includes(row.status) && (
-            <Button variant="danger" size="compact" onClick={() => setCancelling(row)}>
+            // DESIGN_SYSTEM.md §2: cancellation releases inventory and is
+            // consequential enough to disable while offline, same as the
+            // financial-adjacent actions elsewhere in this module.
+            <Button variant="danger" size="compact" disabled={isOffline} onClick={() => setCancelling(row)}>
               Cancel
             </Button>
           )

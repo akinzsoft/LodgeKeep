@@ -1,4 +1,4 @@
-import { StrictMode, useState } from 'react';
+import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/tokens.css';
 import styles from './main.module.css';
@@ -9,8 +9,22 @@ import { AppShell } from './app/shell/index.js';
 import { HomeDashboard } from './app/dashboard/HomeDashboard.jsx';
 import { SetupScreen } from './app/setup/SetupScreen.jsx';
 import { BookingScreen } from './app/booking/BookingScreen.jsx';
+import { HousekeepingScreen } from './app/housekeeping/HousekeepingScreen.jsx';
+import { ReportingScreen } from './app/reporting/ReportingScreen.jsx';
+import { CashieringScreen } from './app/cashiering/CashieringScreen.jsx';
+import { NightAuditScreen } from './app/night-audit/NightAuditScreen.jsx';
 import { Toast } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
+import { notificationsApi } from './shared/api/index.js';
+
+/**
+ * No backend endpoint returns a property's current business date yet
+ * (that's Setup/Property-module territory) — this single constant is what
+ * both `AppShell`'s indicator and `HomeDashboard`'s report-driven KPIs/alert
+ * strip use, so the two stay consistent with each other rather than two
+ * independent hardcoded literals drifting apart.
+ */
+const BUSINESS_DATE = '2026-09-04';
 
 /**
  * Dev entry point — real `AuthProvider` + `shared/api` wiring against a real
@@ -41,7 +55,8 @@ import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
  *
  * PLAN.md Phase 2 adds the same unconditional-optimistic set for
  * `reservations.*`/`front_desk.*` — identical reasoning, identical gap,
- * still pending the same real permissions-read endpoint.
+ * still pending the same real permissions-read endpoint. PLAN.md Phase 3
+ * adds the same for `housekeeping.*`/`notifications.*`/`reports.*`.
  */
 function Demo() {
   const isOnline = useOnlineStatus();
@@ -49,6 +64,32 @@ function Demo() {
   const [toast, setToast] = useState(null);
   const [switchError, setSwitchError] = useState(null);
   const [activeItemKey, setActiveItemKey] = useState('home');
+  const [notifications, setNotifications] = useState([]);
+
+  async function reloadNotifications() {
+    try {
+      setNotifications(await notificationsApi.listBellNotifications());
+    } catch {
+      // The bell is a convenience, not a critical path — a failed fetch
+      // just leaves it at its last-known (or empty) state rather than
+      // surfacing a banner over the whole app shell.
+    }
+  }
+
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-authentication; no data-fetching library exists yet to own this, same pattern every other screen's mount-time fetch already uses.
+    reloadNotifications();
+  }, [status]);
+
+  async function handleMarkNotificationRead(id) {
+    try {
+      await notificationsApi.markNotificationRead(id);
+      await reloadNotifications();
+    } catch {
+      // Same convenience-not-critical reasoning as the initial load above.
+    }
+  }
 
   if (status === 'mfa_required') {
     return <MfaChallengeScreen />;
@@ -76,7 +117,24 @@ function Demo() {
     <AppShell
       user={{ name: user.email, role: user.role }}
       permissions={
-        new Set(['setup.view', 'setup.manage', 'reservations.view', 'reservations.manage', 'front_desk.view', 'front_desk.manage'])
+        new Set([
+          'setup.view',
+          'setup.manage',
+          'reservations.view',
+          'reservations.manage',
+          'front_desk.view',
+          'front_desk.manage',
+          'housekeeping.view',
+          'housekeeping.manage',
+          'notifications.view',
+          'notifications.manage',
+          'reports.view',
+          'reports.view_financial',
+          'cashiering.post_charge',
+          'cashiering.void_line',
+          'night_audit.view',
+          'night_audit.run',
+        ])
       }
       activeItemKey={activeItemKey}
       onNavigate={setActiveItemKey}
@@ -88,8 +146,10 @@ function Demo() {
         name: `Property ${property.propertyId}`,
       }))}
       onSwitchProperty={handleSwitchProperty}
-      businessDate="2026-09-04"
-      notificationCount={0}
+      businessDate={BUSINESS_DATE}
+      notificationCount={notifications.filter((n) => !n.read_at).length}
+      notifications={notifications}
+      onMarkNotificationRead={handleMarkNotificationRead}
       isOffline={!isOnline}
       onLogout={logout}
     >
@@ -99,11 +159,19 @@ function Demo() {
         </p>
       )}
       {activeItemKey === 'setup' ? (
-        <SetupScreen activePropertyId={user.activePropertyId} />
+        <SetupScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} />
       ) : activeItemKey === 'booking' ? (
-        <BookingScreen activePropertyId={user.activePropertyId} />
+        <BookingScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} />
+      ) : activeItemKey === 'housekeeping' ? (
+        <HousekeepingScreen isOffline={!isOnline} />
+      ) : activeItemKey === 'reports' ? (
+        <ReportingScreen activePropertyId={user.activePropertyId} />
+      ) : activeItemKey === 'cashiering' ? (
+        <CashieringScreen isOffline={!isOnline} />
+      ) : activeItemKey === 'night_audit' ? (
+        <NightAuditScreen isOffline={!isOnline} />
       ) : (
-        <HomeDashboard greetingName={user.email} />
+        <HomeDashboard greetingName={user.email} businessDate={BUSINESS_DATE} activePropertyId={user.activePropertyId} />
       )}
       {toast && (
         <div className={styles.toastLayer}>

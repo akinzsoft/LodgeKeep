@@ -127,19 +127,30 @@ describe('RBAC middleware (SECURITY.md §5)', () => {
     ctx = await seedTwoTenants(t.trx);
     request = require('supertest')(buildRbacTestApp());
 
-    // seedTwoTenants already seeds three of these keys as its own GLOBAL_REFERENCE
-    // fixture data (cashiering.post_charge, cashiering.void_line,
-    // reports.view_financial) and already grants tenant.roles.manager ->
-    // cashiering.void_line for both tenants — reused rather than re-inserted,
-    // since `permissions.permission_key` and `role_permissions(role_id,
-    // permission_id)` are both globally/per-tenant unique and a second insert
-    // of the same row is exactly the collision those constraints exist to
-    // catch.
+    // seedTwoTenants already seeds several of these keys as its own
+    // GLOBAL_REFERENCE fixture data (cashiering.post_charge,
+    // cashiering.void_line, reports.view_financial) and already grants
+    // tenant.roles.manager -> cashiering.void_line for both tenants — reused
+    // rather than re-inserted, since `permissions.permission_key` and
+    // `role_permissions(role_id, permission_id)` are both globally/per-tenant
+    // unique and a second insert of the same row is exactly the collision
+    // those constraints exist to catch.
+    //
+    // `ctx.permissions` alone is not a reliable "already exists" check,
+    // though: `housekeeping.manage` is neither a fixtures.js lookup key nor
+    // this test's own prior insert, but a REAL migration
+    // (20260907095000_seed_housekeeping_permissions.js) now seeds it
+    // globally before this test ever runs — the exact class of collision
+    // `20260905095000_seed_setup_permissions.js`'s own header already
+    // describes fixing for `setup.view`/`.manage`. Select-or-insert against
+    // the database directly, not just against the fixture's own return
+    // value, so this composes with any permission key a real module's
+    // migration seeds, present or future.
     const permissionIds = { ...ctx.permissions };
     for (const { key, domain } of PERMISSIONS) {
       if (permissionIds[key]) continue;
-      const [id] = await t.trx('permissions').insert({ permission_key: key, name: key, domain });
-      permissionIds[key] = id;
+      const existing = await t.trx('permissions').where({ permission_key: key }).first('id');
+      permissionIds[key] = existing ? existing.id : (await t.trx('permissions').insert({ permission_key: key, name: key, domain }))[0];
     }
     ctx.rbacPermissionIds = permissionIds;
 

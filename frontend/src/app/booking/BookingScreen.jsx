@@ -27,7 +27,7 @@ const TABS = [
   { key: 'front-desk', label: 'Front Desk' },
 ];
 
-export function BookingScreen({ activePropertyId }) {
+export function BookingScreen({ activePropertyId, isOffline = false }) {
   const [tab, setTab] = useState('availability');
   const [properties, setProperties] = useState(null);
   const [error, setError] = useState(null);
@@ -86,11 +86,11 @@ export function BookingScreen({ activePropertyId }) {
           </div>
 
           <div className={styles.panel}>
-            {tab === 'availability' && <AvailabilityTab activeProperty={activeProperty} />}
+            {tab === 'availability' && <AvailabilityTab activeProperty={activeProperty} isOffline={isOffline} />}
             {tab === 'tape-chart' && <TapeChartTab activeProperty={activeProperty} />}
-            {tab === 'reservations' && <ReservationsListTab activeProperty={activeProperty} />}
+            {tab === 'reservations' && <ReservationsListTab activeProperty={activeProperty} isOffline={isOffline} />}
             {tab === 'waitlist' && <WaitlistTab activeProperty={activeProperty} />}
-            {tab === 'front-desk' && <FrontDeskTab activeProperty={activeProperty} />}
+            {tab === 'front-desk' && <FrontDeskTab activeProperty={activeProperty} isOffline={isOffline} />}
           </div>
         </>
       )}

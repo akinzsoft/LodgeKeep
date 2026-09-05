@@ -37,6 +37,9 @@ export function RateCodesTab({ activeProperty, disabled }) {
       setRateCodes(rateCodesResult);
       setRoomTypes(roomTypesResult);
     } catch (caught) {
+      // Stops the table showing a loading skeleton forever — the visible
+      // error banner below is what actually explains what happened.
+      setRateCodes([]);
       setRateCodeError(caught instanceof ApiError ? caught.message : 'Could not load rate codes.');
     }
   }

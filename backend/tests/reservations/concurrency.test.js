@@ -95,6 +95,11 @@ describe('RES-5: the last-room race under real concurrent connections', () => {
   afterAll(async () => {
     // Committed rows, not a rolled-back transaction — clean up child-to-parent.
     await db()('audit_log').where({ tenant_id: tenantId }).delete();
+    // PLAN.md Phase 3: booking through the real HTTP layer now also commits
+    // an outbox_events row (ARCHITECTURE.md section 13) — a child of
+    // `properties` via its own (tenant_id, property_id) FK, so it must be
+    // cleaned up before `properties` below.
+    await db()('outbox_events').where({ tenant_id: tenantId }).delete();
     await db()('idempotency_keys').where({ tenant_id: tenantId }).delete();
     await db()('reservation_daily_rates').where({ tenant_id: tenantId }).delete();
     await db()('room_type_inventory').where({ tenant_id: tenantId }).delete();

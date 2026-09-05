@@ -89,17 +89,24 @@ This is what prevents an agent from writing `if (user.role === 'manager')` as a 
 
 Every endpoint is checked against this matrix, not against role name alone — a role check without a matrix behind it tends to drift as endpoints are added. `✓` full access, `Limited` scoped/read-mostly access (defined per endpoint), `Read` view-only, `✗` no access.
 
-| Role | Reservations | Front Desk | Cashiering | Housekeeping | POS | Reports | Setup |
-|---|---|---|---|---|---|---|---|
-| Front desk | ✓ | ✓ | Limited | Read | ✗ | Limited | ✗ |
-| Cashier | Read | ✗ | ✓ | ✗ | ✗ | Limited | ✗ |
-| Housekeeping | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
-| POS operator | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
-| Manager | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Read |
-| Admin | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Super-admin (tenant) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (+ billing, cross-property) |
+| Role | Reservations | Front Desk | Cashiering | Housekeeping | POS | Reports | Setup | Notifications | Night Audit |
+|---|---|---|---|---|---|---|---|---|---|
+| Front desk | ✓ | ✓ | Limited | Read | ✗ | Limited | ✗ | ✗ | ✗ |
+| Cashier | Read | ✗ | ✓ | ✗ | ✗ | Limited | ✗ | ✗ | ✗ |
+| Housekeeping | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| POS operator | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Manager | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Read | Read | ✓ |
+| Admin | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Super-admin (tenant) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (+ billing, cross-property) | ✓ | ✓ |
+
+**Night Audit** (PLAN.md Phase 2.5), the column this matrix did not have until that pass: manager/admin/super_admin only, `night_audit.view`/`night_audit.run` — closing a business date is a manager-level action, not an operational front-desk/cashier one, this session's confirmed decision recorded here rather than left implicit in route code alone. **Cashiering's "Limited" cell** (front desk), also left undefined until that pass: `cashiering.post_charge` only — view a folio, post a charge — never `cashiering.void_line` (payments, refunds, voids, split billing), which cashier/manager/admin/super_admin hold in addition.
 
 "Limited" is defined per endpoint at implementation time (e.g. front desk's cashiering access is post-a-charge, not void-a-line), but must be written down in that module's own doc, not left implicit. Manager's Setup access is resolved as `Read`, not `Limited` — the UI-screens spec restricting Setup & Configuration screens to Admin/super-admin only made "Limited" undefined and contradictory; a manager can view configuration for context but cannot change it, matching the UI restriction exactly rather than inventing a partial-write shape nothing else in the spec called for. **Every API endpoint is tested against this matrix** — TESTING.md's AUTH suite and the isolation suite together, not a single role-name assertion.
+
+**PLAN.md Phase 3 additions, both this session's confirmed decisions, not literal spec text:**
+
+- **Reports' "Limited" cell**, now real (`src/modules/reporting`): `reports.view` — occupancy and housekeeping figures only, no revenue. `reports.view_financial` (manager/admin/super_admin only) additionally unlocks the revenue/ADR/RevPAR report. Front desk and cashier hold `reports.view` alone, matching their "Limited" cell above.
+- **Notifications has no equivalent row in the original matrix** — confirmed by reading this file directly before adding one. Resolved the same way Setup's own manager-vs-admin split already works, rather than inventing an unrelated shape: manager gets read-only (`notifications.view` — the delivery log, "the guest never got it" lookup), admin/super_admin get full access (`notifications.manage` — template editing, resend). The in-app bell itself needs no permission at all: every authenticated staff member reads only their own `in_app_notifications` rows regardless of role, the same way any user reads their own session.
 
 ## 6. Audit log — full field set
 

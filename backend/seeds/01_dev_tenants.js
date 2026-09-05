@@ -117,6 +117,63 @@ exports.seed = async function seed(knex) {
     }
   }
 
+  /**
+   * PLAN.md Phase 3: Housekeeping, Notifications, and Reports each grant
+   * `manager` full/near-full access per SECURITY.md §5's matrix (Reports:
+   * full; Housekeeping: full; Notifications: read-only, matching Setup's
+   * own admin-configuration shape — see the notifications permissions
+   * migration's own header). Same idempotent-backfill shape as the two
+   * functions above, one call covering all five keys at once.
+   */
+  async function ensureManagerPhase3Access(tenantId) {
+    const keys = ['housekeeping.view', 'housekeeping.manage', 'notifications.view', 'reports.view', 'reports.view_financial'];
+    const permissions = await knex('permissions').whereIn('permission_key', keys).select('id', 'permission_key');
+    if (permissions.length !== keys.length) return; // migrations not yet run — nothing to grant
+    const managerRole = await knex('roles').where({ tenant_id: tenantId, code: 'manager' }).first('id');
+    if (!managerRole) return;
+
+    const existingGrants = await knex('role_permissions')
+      .where({ tenant_id: tenantId, role_id: managerRole.id })
+      .whereIn('permission_id', permissions.map((p) => p.id))
+      .select('permission_id');
+    const alreadyGranted = new Set(existingGrants.map((g) => String(g.permission_id)));
+
+    const toGrant = permissions.filter((p) => !alreadyGranted.has(String(p.id)));
+    if (toGrant.length) {
+      await knex('role_permissions').insert(
+        toGrant.map((p) => ({ tenant_id: tenantId, role_id: managerRole.id, permission_id: p.id }))
+      );
+    }
+  }
+
+  /**
+   * PLAN.md Phase 2.5: Cashiering and Night Audit. `manager` gets full
+   * Cashiering access (`cashiering.post_charge` + `.void_line`, SECURITY.md
+   * §5's matrix) and both Night Audit keys (this session's confirmed
+   * decision — closing a business date is manager-level). Same idempotent-
+   * backfill shape as the functions above.
+   */
+  async function ensureManagerPhase25Access(tenantId) {
+    const keys = ['cashiering.post_charge', 'cashiering.void_line', 'night_audit.view', 'night_audit.run'];
+    const permissions = await knex('permissions').whereIn('permission_key', keys).select('id', 'permission_key');
+    if (permissions.length !== keys.length) return; // migrations not yet run — nothing to grant
+    const managerRole = await knex('roles').where({ tenant_id: tenantId, code: 'manager' }).first('id');
+    if (!managerRole) return;
+
+    const existingGrants = await knex('role_permissions')
+      .where({ tenant_id: tenantId, role_id: managerRole.id })
+      .whereIn('permission_id', permissions.map((p) => p.id))
+      .select('permission_id');
+    const alreadyGranted = new Set(existingGrants.map((g) => String(g.permission_id)));
+
+    const toGrant = permissions.filter((p) => !alreadyGranted.has(String(p.id)));
+    if (toGrant.length) {
+      await knex('role_permissions').insert(
+        toGrant.map((p) => ({ tenant_id: tenantId, role_id: managerRole.id, permission_id: p.id }))
+      );
+    }
+  }
+
   for (const spec of TENANTS) {
     const existingTenant = await knex('tenants').where({ slug: spec.slug }).first('id');
     if (existingTenant) {
@@ -127,6 +184,8 @@ exports.seed = async function seed(knex) {
       // script follows, just for one row instead of the whole tenant.
       await ensureManagerSetupView(existingTenant.id);
       await ensureManagerReservationsAccess(existingTenant.id);
+      await ensureManagerPhase3Access(existingTenant.id);
+      await ensureManagerPhase25Access(existingTenant.id);
       ready.push({ slug: spec.slug, email: spec.staffUser.email, alreadyExisted: true });
       continue;
     }
@@ -184,6 +243,12 @@ exports.seed = async function seed(knex) {
     // differs from Setup's view-only grant), so the dev-seeded account can
     // exercise Reservations and Front Desk live too.
     await ensureManagerReservationsAccess(tenantId);
+
+    // PLAN.md Phase 3's Housekeeping/Notifications/Reports modules.
+    await ensureManagerPhase3Access(tenantId);
+
+    // PLAN.md Phase 2.5's Cashiering/Night Audit modules.
+    await ensureManagerPhase25Access(tenantId);
 
     ready.push({ slug: spec.slug, email: spec.staffUser.email, alreadyExisted: false });
   }

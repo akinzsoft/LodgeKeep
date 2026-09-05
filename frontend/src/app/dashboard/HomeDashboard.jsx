@@ -1,4 +1,7 @@
-import { Card, IconBadge, StatusPill } from '../../shared/components/index.js';
+import { useEffect, useState } from 'react';
+import { Card, KPICard, StatusPill } from '../../shared/components/index.js';
+import { Money } from '../../shared/format/money.jsx';
+import { reservationsApi, setupApi, housekeepingApi, reportingApi, ApiError } from '../../shared/api/index.js';
 import styles from './HomeDashboard.module.css';
 
 /**
@@ -6,25 +9,95 @@ import styles from './HomeDashboard.module.css';
  * layout: greeting, summary widgets, a 4-card KPI row, a 2-widget chart row,
  * and an operational alert strip.
  *
- * Every number on the real version of this screen is explicit about coming
- * from a module: "Total Booking → Reservations", "Rooms Available → Rooms
- * Management", "New Customers → Profiles", "Total Revenue → Cashiering/AR" —
- * and the spec says outright, "bound to real module data, never mock
- * values." None of those modules exists yet (PLAN.md Phase 1+), so this
- * renders the real layout with every data-bearing piece in its honest empty
- * state instead — DESIGN_SYSTEM.md §2: "Empty — explain what belongs here."
- * The moment a module ships, its card's `emptyMessage` becomes a real value
- * and nothing else about this file's structure needs to change.
+ * PLAN.md Phase 3 is what finally gives three of the four KPI cards and
+ * four of the five alert rows real data — Reservations, Rooms, Housekeeping,
+ * and Reporting all exist now. Each is fetched independently (not
+ * `Promise.all`) so one role's missing grant (e.g. `reports.view_financial`
+ * for a front-desk account) degrades only its own card to an honest error
+ * state rather than blanking the whole dashboard.
  *
- * This also happens to be the first real screen where all four domain
- * accents (`--domain-booking/rooms/guest/money`) appear as actual icon
- * badges — DESIGN_SYSTEM.md §1's "colour by domain, reused across every
- * screen" needs a screen with domain-shaped content to reuse them *on*, and
- * the shell chrome itself never had one.
+ * Two pieces still render their original honest-empty state, both flagged
+ * rather than approximated: "New Customers" has no way to filter guests by
+ * creation date yet (no endpoint for it — `src/modules/reservations`'s
+ * guest stub is create/list only), and "Night audit" status has nothing to
+ * read at all (Night Audit is not built — PLAN.md Phase 3's own scope
+ * decision, see `src/modules/reporting/index.js`'s backend header). The two
+ * chart-row widgets also stay empty: no chart library is installed in this
+ * codebase yet, and building trend/donut charts from scratch was out of
+ * scope for this pass.
  *
  * @param {string} greetingName   Shown as "Hi, {name}!" — falls back to a generic greeting if empty.
+ * @param {string} businessDate   'YYYY-MM-DD' — see `main.jsx`'s own `BUSINESS_DATE` header for why this is a prop, not derived here.
+ * @param {string} [activePropertyId]   Fetched into a currency code for the Total Revenue KPI (ARCHITECTURE.md §1: "every money column carries its currency") — the same "no display name yet, only an id" gap `SetupScreen`/`BookingScreen` already work around by fetching properties themselves.
  */
-export function HomeDashboard({ greetingName }) {
+export function HomeDashboard({ greetingName, businessDate, activePropertyId }) {
+  const [totalBooking, setTotalBooking] = useState({ state: 'loading', value: null });
+  const [roomsAvailable, setRoomsAvailable] = useState({ state: 'loading', value: null });
+  const [totalRevenue, setTotalRevenue] = useState({ state: 'loading', value: null });
+  const [currencyCode, setCurrencyCode] = useState('USD');
+  const [arrivals, setArrivals] = useState(null);
+  const [departures, setDepartures] = useState(null);
+  const [discrepancies, setDiscrepancies] = useState(null);
+  const [oversold, setOversold] = useState(null);
+
+  useEffect(() => {
+    reservationsApi
+      .listReservations()
+      .then((rows) => setTotalBooking({ state: rows.length === 0 ? 'empty' : 'success', value: rows.length }))
+      .catch((caught) =>
+        setTotalBooking({ state: 'error', value: null, message: caught instanceof ApiError ? caught.message : 'Could not load.' })
+      );
+
+    setupApi
+      .listRooms()
+      .then((rows) => {
+        const active = rows.filter((room) => room.status === 'active').length;
+        setRoomsAvailable({ state: rows.length === 0 ? 'empty' : 'success', value: active });
+      })
+      .catch((caught) =>
+        setRoomsAvailable({ state: 'error', value: null, message: caught instanceof ApiError ? caught.message : 'Could not load.' })
+      );
+
+    reportingApi
+      .getRevenueReport({ dateFrom: businessDate, dateTo: businessDate })
+      .then((rows) => {
+        const today = rows[0];
+        setTotalRevenue({ state: !today || Number(today.roomRevenue) === 0 ? 'empty' : 'success', value: today?.roomRevenue });
+      })
+      .catch((caught) => {
+        // A front-desk/cashier/housekeeping account genuinely lacks
+        // `reports.view_financial` (SECURITY.md §5's matrix) — a 403 here is
+        // correct enforcement, not a bug, so it renders as this card's own
+        // honest empty state rather than a scary error banner.
+        const forbidden = caught instanceof ApiError && caught.code === 'FORBIDDEN_PERMISSION';
+        setTotalRevenue({
+          state: 'empty',
+          value: null,
+          message: forbidden ? 'Not available for your role.' : caught instanceof ApiError ? caught.message : 'Could not load.',
+        });
+      });
+
+    reservationsApi.listArrivals().then(setArrivals).catch(() => setArrivals(null));
+    reservationsApi.listDepartures().then(setDepartures).catch(() => setDepartures(null));
+    housekeepingApi
+      .listDiscrepancies({ resolved: false })
+      .then(setDiscrepancies)
+      .catch(() => setDiscrepancies(null));
+    reportingApi
+      .getOversoldRoomTypes(businessDate)
+      .then(setOversold)
+      .catch(() => setOversold(null));
+
+    setupApi
+      .listProperties()
+      .then((rows) => {
+        const active = rows.find((property) => String(property.id) === String(activePropertyId));
+        if (active) setCurrencyCode(active.base_currency);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch-on-mount for a fixed businessDate prop; a real business-date-advance mechanism (Night Audit) doesn't exist yet to re-trigger this.
+  }, []);
+
   return (
     <div className={styles.page}>
       <div className={styles.greetingRow}>
@@ -45,10 +118,39 @@ export function HomeDashboard({ greetingName }) {
       </div>
 
       <div className={styles.kpiGrid}>
-        <KpiPlaceholder domain="booking" icon="📅" label="Total Booking" source="Reservations" />
-        <KpiPlaceholder domain="rooms" icon="🛏️" label="Rooms Available" source="Rooms Management" />
-        <KpiPlaceholder domain="guest" icon="👤" label="New Customers" source="Guest Profiles" />
-        <KpiPlaceholder domain="money" icon="💰" label="Total Revenue" source="Cashiering" />
+        <KPICard
+          domain="booking"
+          icon="📅"
+          label="Total Booking"
+          state={totalBooking.state}
+          value={totalBooking.value}
+          emptyMessage="No reservations yet."
+          errorMessage={totalBooking.message}
+        />
+        <KPICard
+          domain="rooms"
+          icon="🛏️"
+          label="Rooms Available"
+          state={roomsAvailable.state}
+          value={roomsAvailable.value}
+          emptyMessage="No rooms configured yet."
+          errorMessage={roomsAvailable.message}
+        />
+        <KPICard
+          domain="guest"
+          icon="👤"
+          label="New Customers"
+          state="empty"
+          emptyMessage="Available once guest profiles can be filtered by date."
+        />
+        <KPICard
+          domain="money"
+          icon="💰"
+          label="Total Revenue (today)"
+          state={totalRevenue.state}
+          value={totalRevenue.value && <Money amount={totalRevenue.value} currencyCode={currencyCode} />}
+          emptyMessage={totalRevenue.message ?? 'No revenue posted for today yet.'}
+        />
       </div>
 
       <div className={styles.chartRow}>
@@ -68,10 +170,10 @@ export function HomeDashboard({ greetingName }) {
 
       <Card className={styles.alertCard} title="Today at a glance">
         <ul className={styles.alertList}>
-          <AlertRow label="Arrivals today" />
-          <AlertRow label="Departures today" />
-          <AlertRow label="Housekeeping discrepancies" />
-          <AlertRow label="Oversold room types tonight" />
+          <AlertRow label="Arrivals today" count={arrivals?.length} />
+          <AlertRow label="Departures today" count={departures?.length} />
+          <AlertRow label="Housekeeping discrepancies" count={discrepancies?.length} dangerIfNonZero />
+          <AlertRow label="Oversold room types tonight" count={oversold?.length} dangerIfNonZero />
           <AlertRow label="Night audit for today's business date" />
         </ul>
       </Card>
@@ -79,26 +181,18 @@ export function HomeDashboard({ greetingName }) {
   );
 }
 
-function KpiPlaceholder({ domain, icon, label, source }) {
-  return (
-    <Card className={styles.kpiCard}>
-      <div className={styles.kpiRow}>
-        <IconBadge domain={domain}>{icon}</IconBadge>
-        <div className={styles.kpiText}>
-          <p className={styles.kpiLabel}>{label}</p>
-          <p className={styles.kpiValue}>—</p>
-          <p className={styles.kpiCaption}>Available once {source} is set up</p>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-function AlertRow({ label }) {
+/** `count === undefined` (load failed or not fetched) keeps the original honest "Not available yet" pill; `count` present renders a real number, red when it's a discrepancy/oversell figure and non-zero. */
+function AlertRow({ label, count, dangerIfNonZero = false }) {
+  const pill =
+    count === undefined ? (
+      <StatusPill tone="neutral" label="Not available yet" />
+    ) : (
+      <StatusPill tone={dangerIfNonZero && count > 0 ? 'danger' : 'neutral'} label={String(count)} />
+    );
   return (
     <li className={styles.alertRow}>
       <span className={styles.alertLabel}>{label}</span>
-      <StatusPill tone="neutral" label="Not available yet" />
+      {pill}
     </li>
   );
 }

@@ -44,6 +44,13 @@ export function WaitlistTab() {
       title="Waitlist"
       state={entries === null ? 'loading' : entries.length === 0 ? 'empty' : 'success'}
       emptyMessage="No one is currently waitlisted."
+      toolbar={
+        error && (
+          <p role="alert" style={{ color: 'var(--state-danger)' }}>
+            {error}
+          </p>
+        )
+      }
       columns={[
         { key: 'confirmation_number', label: 'Confirmation' },
         { key: 'arrival_date', label: 'Arrival' },

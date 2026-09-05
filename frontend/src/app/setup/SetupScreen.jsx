@@ -39,7 +39,7 @@ const TABS = [
   { key: 'taxes', label: 'Taxes' },
 ];
 
-export function SetupScreen({ activePropertyId }) {
+export function SetupScreen({ activePropertyId, isOffline = false }) {
   const [tab, setTab] = useState('property');
   const [properties, setProperties] = useState(null);
   const [error, setError] = useState(null);
@@ -107,7 +107,7 @@ export function SetupScreen({ activePropertyId }) {
         {tab === 'room-types' && <RoomTypesTab activeProperty={activeProperty} disabled={!activeProperty} />}
         {tab === 'rooms' && <RoomsTab activeProperty={activeProperty} disabled={!activeProperty} />}
         {tab === 'rate-codes' && <RateCodesTab activeProperty={activeProperty} disabled={!activeProperty} />}
-        {tab === 'taxes' && <TaxesTab activeProperty={activeProperty} disabled={!activeProperty} />}
+        {tab === 'taxes' && <TaxesTab activeProperty={activeProperty} disabled={!activeProperty} isOffline={isOffline} />}
       </div>
     </div>
   );

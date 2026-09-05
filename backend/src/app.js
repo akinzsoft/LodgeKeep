@@ -33,19 +33,31 @@ const { staffAuthRouter, portalAuthRouter, platformAuthRouter, authenticate } = 
 const { attachAudit } = require('./audit');
 const { setupRouter } = require('./modules/setup');
 const { reservationsRouter } = require('./modules/reservations');
+const { housekeepingRouter } = require('./modules/housekeeping');
+const { notificationsRouter } = require('./modules/notifications');
+const { reportingRouter } = require('./modules/reporting');
+const { cashieringRouter, paystackWebhookRouter } = require('./modules/cashiering');
+const { nightAuditRouter } = require('./modules/night-audit');
 
 function buildStaffRouter() {
   const router = express.Router();
   const tenantMiddleware = resolveTenant({ db: scopedDb(), systemContext });
   router.use('/auth', staffAuthRouter({ resolveTenant: tenantMiddleware }));
+  // API.md §7: a webhook authenticates by signature, never a bearer token —
+  // mounted here, before authenticate('staff'), same as /auth above.
+  router.use(paystackWebhookRouter());
   router.use(authenticate('staff'));
   // req.audit(...) — PLAN.md Phase 0's audit trail (SECURITY.md §6). After
   // authenticate() specifically: it reads req.context for who/tenant/property.
   router.use(attachAudit());
-  // Business routers (cashiering, ...) mount here, ahead of the catch-all,
-  // as each module lands (PLAN.md Phase 1+).
+  // Business routers mount here, ahead of the catch-all, as each module lands.
   router.use(setupRouter());
   router.use(reservationsRouter());
+  router.use(housekeepingRouter());
+  router.use(notificationsRouter());
+  router.use(reportingRouter());
+  router.use(cashieringRouter());
+  router.use(nightAuditRouter());
   router.use((req, res) => notFound(res));
   return router;
 }
@@ -78,7 +90,13 @@ function createApp() {
   // client could otherwise forge.
   app.set('trust proxy', 1);
   app.use(requestId());
-  app.use(express.json());
+  // `verify` stashes the exact raw bytes onto `req.rawBody` — API.md §7's
+  // webhook signature check (`src/modules/cashiering/paystack-adapter.js`)
+  // must HMAC the raw body Paystack actually sent, not a re-serialized
+  // object that could differ in whitespace/key order. Applied globally
+  // (negligible cost) rather than only on the webhook route, since Express
+  // has no per-route way to swap body-parser configuration once mounted.
+  app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
   app.use('/api/v1/portal', buildPortalRouter());
   app.use('/api/v1/platform', buildPlatformRouter());

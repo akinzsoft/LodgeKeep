@@ -17,6 +17,7 @@ const {
   guestContextFromSession,
   platformContext,
   systemContext,
+  workerContext,
   withActiveProperty,
 } = require('./context');
 
@@ -27,5 +28,6 @@ module.exports = {
   guestContextFromSession,
   platformContext,
   systemContext,
+  workerContext,
   withActiveProperty,
 };

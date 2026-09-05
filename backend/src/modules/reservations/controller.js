@@ -5,10 +5,12 @@
  * request, calls the service, shapes the API.md §2 envelope. No business
  * logic here; see `service.js`.
  *
- * Every mutation goes through `withIdempotency` (`src/shared/idempotency.js`)
- * — ARCHITECTURE.md §11: "every transition endpoint accepts an idempotency
- * key". A missing `Idempotency-Key` header on one of these routes is a
- * `400 VALIDATION_MISSING_IDEMPOTENCY_KEY`, not a silently-processed request.
+ * Every mutation goes through `runIdempotentMutation`
+ * (`src/shared/mutation.js`, generic since PLAN.md Phase 2.5 — originally
+ * built inline here for Phase 2) — ARCHITECTURE.md §11: "every transition
+ * endpoint accepts an idempotency key". A missing `Idempotency-Key` header
+ * on one of these routes is a `400 VALIDATION_MISSING_IDEMPOTENCY_KEY`, not
+ * a silently-processed request.
  *
  * Existence is checked BEFORE opening the idempotency transaction (the same
  * `before` fetch-and-check-null Phase 1's setup controllers use) rather than
@@ -22,7 +24,7 @@
 
 const { ok, notFound } = require('../../shared/response');
 const { ValidationError } = require('../../shared/errors');
-const { withIdempotency } = require('../../shared/idempotency');
+const { runIdempotentMutation: runMutation } = require('../../shared/mutation');
 const service = require('./service');
 
 function require_(body, field) {
@@ -31,36 +33,6 @@ function require_(body, field) {
     throw new ValidationError('MISSING_FIELD', `"${field}" is required.`, [{ field, issue: 'missing' }]);
   }
   return value;
-}
-
-function requireIdempotencyKey(req) {
-  const key = req.get('Idempotency-Key');
-  if (!key) {
-    throw new ValidationError('MISSING_IDEMPOTENCY_KEY', 'The "Idempotency-Key" header is required for this action.');
-  }
-  return key;
-}
-
-/** Runs a mutation through `withIdempotency`, audits it only on a real (non-replayed) execution, and writes the response. */
-async function runMutation(req, res, { operationType, entityType, entityId, action, handler }) {
-  const key = requireIdempotencyKey(req);
-  const result = await withIdempotency({
-    context: req.context,
-    operationType,
-    key,
-    payload: req.body,
-    handler,
-  });
-  if (!result.replayed) {
-    await req.audit({
-      entityType,
-      entityId: entityId ?? result.body?.data?.id ?? null,
-      action,
-      afterState: result.body?.data,
-      reason: req.body?.reason,
-    });
-  }
-  res.status(result.status).json(result.body);
 }
 
 // ---------------------------------------------------------------------
@@ -104,6 +76,38 @@ async function checkAvailability(req, res, next) {
     const departureDate = require_(req.query, 'departure_date');
     const result = await service.checkAvailability({ context: req.context, roomTypeId, arrivalDate, departureDate });
     res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * PLAN.md Phase 3: the missing configuration endpoint for
+ * `room_type_inventory.overbooking_threshold_pct` — not a state-transition
+ * on a `reservations` row, so it does not go through `runMutation`'s
+ * idempotency wrapper the way check-in/check-out/etc. do (ARCHITECTURE.md
+ * §7's idempotency requirement is scoped to financial mutations and
+ * reservation transitions; a config value set to X is naturally idempotent
+ * on retry — setting it to X again has no different effect).
+ */
+async function configureOverbookingThreshold(req, res, next) {
+  try {
+    const { roomTypeId, stayDate } = req.params;
+    const rawPct = req.body?.overbooking_threshold_pct;
+    if (typeof rawPct !== 'number' && typeof rawPct !== 'string') {
+      throw new ValidationError('MISSING_FIELD', '"overbooking_threshold_pct" is required.', [
+        { field: 'overbooking_threshold_pct', issue: 'missing' },
+      ]);
+    }
+    const overbookingThresholdPct = String(rawPct);
+    const row = await service.configureOverbookingThreshold({
+      context: req.context,
+      roomTypeId,
+      stayDate,
+      overbookingThresholdPct,
+    });
+    await req.audit({ entityType: 'room_type_inventory', entityId: row.id, action: 'configure_overbooking_threshold', afterState: row });
+    res.status(200).json(ok(row));
   } catch (error) {
     next(error);
   }
@@ -306,6 +310,7 @@ async function checkOut(req, res, next) {
           earlyCutoffTime: req.body?.early_cutoff_time,
           earlyDepartureFee: req.body?.early_departure_fee,
           lateCheckoutFee: req.body?.late_checkout_fee,
+          userId: req.context.userId,
         });
         return { status: 200, body: ok(result.reservation, { fee: result.fee }) };
       },
@@ -342,6 +347,7 @@ module.exports = {
   createGuest,
   listGuests,
   checkAvailability,
+  configureOverbookingThreshold,
   createReservation,
   getReservation,
   listReservations,

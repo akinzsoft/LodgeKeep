@@ -126,6 +126,17 @@ async function seedTwoTenants(trx) {
     reservationNotes: [],
     folios: [],
     idempotencyKeys: [],
+    outOfOrderPeriods: [],
+    housekeepingAssignments: [],
+    housekeepingDiscrepancies: [],
+    outboxEvents: [],
+    emailTemplates: [],
+    notificationLog: [],
+    inAppNotifications: [],
+    folioLineItems: [],
+    payments: [],
+    nightAuditRuns: [],
+    dailyReports: [],
   });
 
   // Two symmetric example hotels, not one reference customer
@@ -410,6 +421,103 @@ async function seedTwoTenants(trx) {
     });
   }
 
+  // Cashiering (PLAN.md Phase 2.5) — one charge and one captured cash
+  // payment per tenant, on the property/folio already seeded above.
+  for (const t of both) {
+    const property = t.properties[0];
+    const folio = t.folios[0];
+
+    t.folioLineItems.push({
+      id: await insertReturningId(trx, 'folio_line_items', {
+        tenant_id: t.id,
+        property_id: property.id,
+        folio_id: folio.id,
+        type: 'room_charge',
+        description: 'Fixture room charge',
+        amount: '150.00',
+        currency: 'NGN',
+        business_date: '2026-12-24',
+      }),
+      property_id: property.id,
+      folio_id: folio.id,
+    });
+  }
+
+  for (const t of both) {
+    const property = t.properties[0];
+    const folio = t.folios[0];
+
+    t.payments.push({
+      id: await insertReturningId(trx, 'payments', {
+        tenant_id: t.id,
+        property_id: property.id,
+        folio_id: folio.id,
+        idempotency_key: `FIXTURE-PAYMENT-${t.slug}`,
+        provider: 'cash',
+        provider_reference: `FIXTUREPAYREF-${t.slug}`,
+        amount: '150.00',
+        currency: 'NGN',
+        status: 'CAPTURED',
+        captured_at: new Date(),
+      }),
+      property_id: property.id,
+      folio_id: folio.id,
+    });
+  }
+
+  // Night Audit (PLAN.md Phase 2.5) — one COMPLETED historical run and its
+  // daily_reports snapshot per tenant, dated well before the fixtures'
+  // reservation dates so it never collides with a real test's own run.
+  for (const t of both) {
+    const property = t.properties[0];
+
+    t.nightAuditRuns.push({
+      id: await insertReturningId(trx, 'night_audit_runs', {
+        tenant_id: t.id,
+        property_id: property.id,
+        business_date: '2026-12-01',
+        status: 'COMPLETED',
+        worker_id: 'fixture-worker',
+        heartbeat_at: new Date(),
+        started_at: new Date(),
+        completed_at: new Date(),
+      }),
+      property_id: property.id,
+    });
+  }
+
+  for (const t of both) {
+    const property = t.properties[0];
+    const run = t.nightAuditRuns[0];
+
+    t.dailyReports.push({
+      id: await insertReturningId(trx, 'daily_reports', {
+        tenant_id: t.id,
+        property_id: property.id,
+        night_audit_run_id: run.id,
+        business_date: '2026-12-01',
+        room_revenue: '150.00',
+        pos_revenue: '0.00',
+        payments_collected: '150.00',
+        occupancy_pct: '50.00',
+        adr: '150.00',
+        revpar: '75.00',
+      }),
+      property_id: property.id,
+    });
+  }
+
+  // PLATFORM_SCOPED (nullable tenant/property attribution, `auth_events`'
+  // own precedent) — a single, tenant-independent fixture row, not one per
+  // tenant, since this table has no tenant loop to interleave (matching
+  // `platform_users`' own shape).
+  await trx('payment_webhook_events').insert({
+    provider: 'paystack',
+    provider_event_id: 'FIXTURE_DUPLICATE_EVENT_ID',
+    payload: JSON.stringify({ event: 'charge.success' }),
+    verified: true,
+  });
+
   for (const code of SYSTEM_ROLES) {
     for (const t of both) {
       t.roles[code] = await insertReturningId(trx, 'roles', {
@@ -505,6 +613,115 @@ async function seedTwoTenants(trx) {
       }),
       property_id: property.id,
       reservation_id: reservation.id,
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Housekeeping (PLAN.md Phase 3) — needs real users/rooms, so it seeds
+  // here, same position reservation_notes' own comment explains.
+  // ------------------------------------------------------------------
+  for (const t of both) {
+    const property = t.properties[0];
+    const room = t.rooms[0];
+
+    t.outOfOrderPeriods.push({
+      id: await insertReturningId(trx, 'out_of_order_periods', {
+        tenant_id: t.id,
+        property_id: property.id,
+        room_id: room.id,
+        type: 'ooo',
+        reason: 'Fixture maintenance window.',
+        start_date: '2026-12-24',
+        end_date: '2026-12-26',
+        created_by_user_id: t.users[0].id,
+      }),
+      property_id: property.id,
+      room_id: room.id,
+    });
+
+    t.housekeepingAssignments.push({
+      id: await insertReturningId(trx, 'housekeeping_assignments', {
+        tenant_id: t.id,
+        property_id: property.id,
+        room_id: room.id,
+        attendant_user_id: t.users[0].id,
+        business_date: '2026-12-24',
+        status: 'assigned',
+      }),
+      property_id: property.id,
+      room_id: room.id,
+    });
+
+    t.housekeepingDiscrepancies.push({
+      id: await insertReturningId(trx, 'housekeeping_discrepancies', {
+        tenant_id: t.id,
+        property_id: property.id,
+        room_id: room.id,
+        business_date: '2026-12-24',
+        front_desk_status: 'vacant',
+        housekeeping_status: 'occupied',
+      }),
+      property_id: property.id,
+      room_id: room.id,
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Notifications (PLAN.md Phase 3) — needs real reservations/properties,
+  // so it seeds alongside Housekeeping above, same reasoning.
+  // ------------------------------------------------------------------
+  for (const t of both) {
+    const property = t.properties[0];
+    const reservation = t.reservations[0];
+
+    t.outboxEvents.push({
+      id: await insertReturningId(trx, 'outbox_events', {
+        tenant_id: t.id,
+        property_id: property.id,
+        event_type: 'reservation.confirmed',
+        aggregate_type: 'reservations',
+        aggregate_id: reservation.id,
+        payload: JSON.stringify({ reservationId: reservation.id }),
+        status: 'pending',
+      }),
+      property_id: property.id,
+    });
+
+    t.emailTemplates.push({
+      id: await insertReturningId(trx, 'email_templates', {
+        tenant_id: t.id,
+        property_id: property.id,
+        template_key: 'reservation_confirmed',
+        locale: 'en',
+        subject: 'Fixture subject',
+        body_html: '<p>Fixture body.</p>',
+      }),
+      property_id: property.id,
+    });
+
+    t.notificationLog.push({
+      id: await insertReturningId(trx, 'notification_log', {
+        tenant_id: t.id,
+        property_id: property.id,
+        recipient_email: 'guest@example.com',
+        template_key: 'reservation_confirmed',
+        channel: 'email',
+        status: 'sent',
+        reservation_id: reservation.id,
+        sent_at: hoursFromNow(-1),
+      }),
+      property_id: property.id,
+      reservation_id: reservation.id,
+    });
+
+    t.inAppNotifications.push({
+      id: await insertReturningId(trx, 'in_app_notifications', {
+        tenant_id: t.id,
+        user_id: t.users[0].id,
+        type: 'housekeeping.discrepancy_raised',
+        payload: JSON.stringify({ roomId: t.rooms[0].id }),
+      }),
+      user_id: t.users[0].id,
     });
   }
 
@@ -714,6 +931,13 @@ async function seedTwoTenants(trx) {
     ['reservations.manage', 'reservations'],
     ['front_desk.view', 'front_desk'],
     ['front_desk.manage', 'front_desk'],
+    ['housekeeping.view', 'housekeeping'],
+    ['housekeeping.manage', 'housekeeping'],
+    ['notifications.view', 'notifications'],
+    ['notifications.manage', 'notifications'],
+    ['reports.view', 'reports'],
+    ['night_audit.view', 'night_audit'],
+    ['night_audit.run', 'night_audit'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -721,12 +945,38 @@ async function seedTwoTenants(trx) {
       : await insertReturningId(trx, 'permissions', { permission_key: key, name: key, domain });
   }
 
+  // Cashiering (PLAN.md Phase 2.5) — SECURITY.md §5's matrix, "Limited"
+  // defined per that section's own example ("post-a-charge, not
+  // void-a-line"): front_desk gets `cashiering.post_charge` only;
+  // cashier/manager/admin/super_admin get both keys; housekeeping/
+  // pos_operator get neither.
   for (const t of both) {
-    await trx('role_permissions').insert({
-      tenant_id: t.id,
-      role_id: t.roles.manager,
-      permission_id: permissions['cashiering.void_line'],
-    });
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.front_desk, permission_id: permissions['cashiering.post_charge'] },
+      { tenant_id: t.id, role_id: t.roles.cashier, permission_id: permissions['cashiering.post_charge'] },
+      { tenant_id: t.id, role_id: t.roles.cashier, permission_id: permissions['cashiering.void_line'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['cashiering.post_charge'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['cashiering.void_line'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['cashiering.post_charge'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['cashiering.void_line'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['cashiering.post_charge'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['cashiering.void_line'] },
+    ]);
+  }
+
+  // Night Audit (PLAN.md Phase 2.5) — SECURITY.md §5 has no Night Audit row
+  // at all (confirmed by reading that file directly); this session's
+  // confirmed decision: closing a business date is manager-level, not
+  // operational — manager/admin/super_admin only.
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['night_audit.view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['night_audit.run'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['night_audit.view'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['night_audit.run'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['night_audit.view'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['night_audit.run'] },
+    ]);
   }
 
   // Setup domain (PLAN.md Phase 1) — this session's confirmed decision:
@@ -767,6 +1017,58 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['reservations.manage'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['front_desk.view'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['front_desk.manage'] },
+    ]);
+  }
+
+  // Housekeeping (PLAN.md Phase 3) — SECURITY.md §5's matrix: the
+  // `housekeeping` role gets full access, `front_desk` gets Read only,
+  // manager/admin/super_admin get full access, cashier/pos_operator get
+  // neither key.
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.housekeeping, permission_id: permissions['housekeeping.view'] },
+      { tenant_id: t.id, role_id: t.roles.housekeeping, permission_id: permissions['housekeeping.manage'] },
+      { tenant_id: t.id, role_id: t.roles.front_desk, permission_id: permissions['housekeeping.view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['housekeeping.view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['housekeeping.manage'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['housekeeping.view'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['housekeeping.manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['housekeeping.view'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['housekeeping.manage'] },
+    ]);
+  }
+
+  // Notifications (PLAN.md Phase 3) — SECURITY.md §5's matrix has no
+  // Notifications column at all (confirmed by reading that file directly);
+  // this session's confirmed decision follows Setup's own shape instead —
+  // an admin-configuration surface, not an operational one. Manager gets
+  // read-only (the delivery log); admin/super_admin get full access
+  // (template editing, resend). Every other role gets neither key.
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['notifications.view'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['notifications.view'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['notifications.manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['notifications.view'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['notifications.manage'] },
+    ]);
+  }
+
+  // Reports (PLAN.md Phase 3) — SECURITY.md §5's matrix: front_desk and
+  // cashier get "Limited" (defined here, per that section's own rule, as
+  // `reports.view` only — occupancy/housekeeping, no financial figures);
+  // housekeeping/pos_operator get none; manager/admin/super_admin get full
+  // access (`reports.view` + `reports.view_financial`).
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.front_desk, permission_id: permissions['reports.view'] },
+      { tenant_id: t.id, role_id: t.roles.cashier, permission_id: permissions['reports.view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['reports.view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['reports.view_financial'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['reports.view'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['reports.view_financial'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['reports.view'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['reports.view_financial'] },
     ]);
   }
 

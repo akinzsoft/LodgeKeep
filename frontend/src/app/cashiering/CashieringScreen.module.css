@@ -1,0 +1,42 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line);
+  font-weight: var(--text-h1-weight);
+  color: var(--text-primary);
+}
+
+.folioHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.balance {
+  font-size: var(--text-h3-size);
+  font-weight: var(--text-h3-weight);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.voided {
+  text-decoration: line-through;
+  color: var(--text-secondary);
+}
+
+.moveDialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}

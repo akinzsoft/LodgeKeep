@@ -1,5 +1,10 @@
-export { request, configureApiClient, _resetApiClientForTesting } from './client.js';
+export { request, requestBlob, configureApiClient, _resetApiClientForTesting } from './client.js';
 export { ApiError } from './ApiError.js';
 export * as authApi from './auth.js';
 export * as setupApi from './setup.js';
 export * as reservationsApi from './reservations.js';
+export * as housekeepingApi from './housekeeping.js';
+export * as notificationsApi from './notifications.js';
+export * as reportingApi from './reporting.js';
+export * as cashieringApi from './cashiering.js';
+export * as nightAuditApi from './night-audit.js';

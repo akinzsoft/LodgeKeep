@@ -70,6 +70,7 @@ export default [
         navigator: 'readonly',
         Event: 'readonly',
         URLSearchParams: 'readonly',
+        URL: 'readonly',
         crypto: 'readonly',
       },
     },

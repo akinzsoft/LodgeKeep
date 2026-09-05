@@ -46,6 +46,15 @@ function reservationsRouter() {
 
   router.get('/availability', requirePermission('reservations.view'), controller.checkAvailability);
 
+  // PLAN.md Phase 3: the missing overbooking-threshold config endpoint —
+  // static path components either side of the two path params, no
+  // collision risk with `/reservations/:id`-style routes below.
+  router.put(
+    '/room-types/:roomTypeId/inventory/:stayDate',
+    requirePermission('reservations.manage'),
+    controller.configureOverbookingThreshold
+  );
+
   router.get('/reservations/waitlist', requirePermission('reservations.view'), controller.listWaitlist);
   router.get('/reservations', requirePermission('reservations.view'), controller.listReservations);
   router.post('/reservations', requirePermission('reservations.manage'), controller.createReservation);

@@ -48,6 +48,8 @@ import styles from './AppShell.module.css';
  * @param {(propertyId: string) => void} onSwitchProperty
  * @param {string} businessDate
  * @param {number} [notificationCount]
+ * @param {Array<object>} [notifications]                                PLAN.md Phase 3's in-app bell — see TopBar's own header.
+ * @param {(id: string) => void} [onMarkNotificationRead]
  * @param {{tenantName: string, onExit: () => void}} [impersonation]     Present only while a platform-staff impersonation grant is active (SECURITY.md §2).
  * @param {boolean} [isOffline]                                          DESIGN_SYSTEM.md §2's sixth state — typically fed by `src/shared/hooks/useOnlineStatus.js`.
  * @param {() => void} [onLogout]                                       Renders the top bar's user chip as a menu with a "Log out" item — see TopBar's own header.
@@ -65,6 +67,8 @@ export function AppShell({
   onSwitchProperty,
   businessDate,
   notificationCount,
+  notifications,
+  onMarkNotificationRead,
   impersonation,
   isOffline = false,
   onLogout,
@@ -103,6 +107,8 @@ export function AppShell({
           <TopBar
             onToggleSidebar={() => setSidebarOpen((open) => !open)}
             notificationCount={notificationCount}
+            notifications={notifications}
+            onMarkNotificationRead={onMarkNotificationRead}
             user={user}
             activeProperty={activeProperty}
             properties={properties}
