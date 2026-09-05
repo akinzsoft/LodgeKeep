@@ -99,7 +99,7 @@ The exit criteria above were never actually met — this phase is what closes th
 
 **Pulled forward deliberately, as planned:** night audit idempotency and the last-room race. Both would have failed silently in production if left until later.
 
-**Gaps flagged, not hidden**: SECURITY.md §5's matrix had no Night Audit column and no written-down definition of Cashiering's front-desk "Limited" cell until this pass closed both. `HomeDashboard.jsx`'s Night Audit alert row was not updated and still shows the pre-Phase-2.5 empty state. Accounts Receivable (§3.9) remains correctly deferred to Phase 4.
+**Gaps flagged, not hidden**: SECURITY.md §5's matrix had no Night Audit column and no written-down definition of Cashiering's front-desk "Limited" cell until this pass closed both. `HomeDashboard.jsx`'s Night Audit alert row was not updated in the original pass — closed in a same-day follow-up; see CLAUDE.md's Phase 2.5 section. Accounts Receivable (§3.9) remains correctly deferred to Phase 4.
 
 ---
 

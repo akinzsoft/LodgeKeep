@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   listDiscrepancies: vi.fn(),
   getRevenueReport: vi.fn(),
   getOversoldRoomTypes: vi.fn(),
+  listRuns: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -26,6 +27,7 @@ vi.mock('../../../shared/api/index.js', async () => {
     setupApi: { listRooms: mocks.listRooms, listProperties: mocks.listProperties },
     housekeepingApi: { listDiscrepancies: mocks.listDiscrepancies },
     reportingApi: { getRevenueReport: mocks.getRevenueReport, getOversoldRoomTypes: mocks.getOversoldRoomTypes },
+    nightAuditApi: { listRuns: mocks.listRuns },
   };
 });
 
@@ -47,6 +49,7 @@ describe('<HomeDashboard>', () => {
     mocks.listDiscrepancies.mockResolvedValue([]);
     mocks.getRevenueReport.mockResolvedValue([]);
     mocks.getOversoldRoomTypes.mockResolvedValue([]);
+    mocks.listRuns.mockResolvedValue([]);
   });
 
   it('greets the signed-in user by name', () => {
@@ -82,10 +85,30 @@ describe('<HomeDashboard>', () => {
     expect(await screen.findByText('Not available for your role.')).toBeInTheDocument();
   });
 
-  it('still shows the honest empty state for New Customers and Night audit — neither has a real data source yet', async () => {
+  it('still shows the honest empty state for New Customers — no real data source yet', async () => {
     render(<HomeDashboard greetingName="Emily" />);
     expect(await screen.findByText(/Available once guest profiles can be filtered by date/)).toBeInTheDocument();
-    expect(screen.getByText('Not available yet')).toBeInTheDocument();
+  });
+
+  it('shows "Not yet run" for Night audit when no run exists for today\'s business date', async () => {
+    mocks.listRuns.mockResolvedValue([]);
+    render(<HomeDashboard greetingName="Emily" businessDate="2026-09-05" />);
+    const row = (await screen.findByText("Night audit for today's business date")).closest('li');
+    expect(row).toHaveTextContent('Not yet run');
+  });
+
+  it("renders the real status once today's business date has a night-audit run", async () => {
+    mocks.listRuns.mockResolvedValue([{ id: '1', business_date: '2026-09-05', status: 'COMPLETED' }]);
+    render(<HomeDashboard greetingName="Emily" businessDate="2026-09-05" />);
+    const row = (await screen.findByText("Night audit for today's business date")).closest('li');
+    expect(row).toHaveTextContent('COMPLETED');
+  });
+
+  it('degrades the Night audit row to an honest "not available" message on a 403, not an error banner', async () => {
+    mocks.listRuns.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'Forbidden' }));
+    render(<HomeDashboard greetingName="Emily" />);
+    const row = (await screen.findByText("Night audit for today's business date")).closest('li');
+    expect(row).toHaveTextContent('Not available for your role.');
   });
 
   it('renders the chart row as named, honest empty states', () => {

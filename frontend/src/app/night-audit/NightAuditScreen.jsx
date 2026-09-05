@@ -4,7 +4,12 @@ import { Money } from '../../shared/format/money.jsx';
 import { nightAuditApi, ApiError } from '../../shared/api/index.js';
 import styles from './NightAuditScreen.module.css';
 
-const STATUS_TONE = { COMPLETED: 'success', FAILED: 'danger', RUNNING: 'warning', STALE: 'warning', RECOVERABLE: 'warning' };
+// Exported so HomeDashboard's "Night audit for today's business date" alert
+// row maps the same status strings to the same tones, rather than a second,
+// possibly-drifting copy of this vocabulary (DESIGN_SYSTEM.md §1: a status
+// word's tone mapping is owned by the module that defines the status, not
+// invented again by a consumer).
+export const STATUS_TONE = { COMPLETED: 'success', FAILED: 'danger', RUNNING: 'warning', STALE: 'warning', RECOVERABLE: 'warning' };
 
 /**
  * NightAuditScreen — PLAN.md Phase 2.5, PRODUCT_REQUIREMENTS.md §3.10.

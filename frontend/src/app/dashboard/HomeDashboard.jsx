@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Card, KPICard, StatusPill } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
-import { reservationsApi, setupApi, housekeepingApi, reportingApi, ApiError } from '../../shared/api/index.js';
+import { reservationsApi, setupApi, housekeepingApi, reportingApi, nightAuditApi, ApiError } from '../../shared/api/index.js';
+import { STATUS_TONE as NIGHT_AUDIT_STATUS_TONE } from '../night-audit/NightAuditScreen.jsx';
 import styles from './HomeDashboard.module.css';
 
 /**
@@ -16,15 +17,20 @@ import styles from './HomeDashboard.module.css';
  * for a front-desk account) degrades only its own card to an honest error
  * state rather than blanking the whole dashboard.
  *
- * Two pieces still render their original honest-empty state, both flagged
- * rather than approximated: "New Customers" has no way to filter guests by
+ * "Night audit for today's business date" (PLAN.md Phase 2.5) reads the real
+ * `GET /night-audit/runs` list and reports whichever run, if any, matches
+ * the `businessDate` prop — a manager/admin account sees the real status
+ * (or "Not yet run", the expected state for the current, still-open
+ * business date); a role without `night_audit.view` gets the same honest
+ * "Not available for your role" treatment the Total Revenue KPI already
+ * uses for its own permission gap, not a scary error banner.
+ *
+ * One piece still renders its original honest-empty state, flagged rather
+ * than approximated: "New Customers" has no way to filter guests by
  * creation date yet (no endpoint for it — `src/modules/reservations`'s
- * guest stub is create/list only), and "Night audit" status has nothing to
- * read at all (Night Audit is not built — PLAN.md Phase 3's own scope
- * decision, see `src/modules/reporting/index.js`'s backend header). The two
- * chart-row widgets also stay empty: no chart library is installed in this
- * codebase yet, and building trend/donut charts from scratch was out of
- * scope for this pass.
+ * guest stub is create/list only). The two chart-row widgets also stay
+ * empty: no chart library is installed in this codebase yet, and building
+ * trend/donut charts from scratch was out of scope for this pass.
  *
  * @param {string} greetingName   Shown as "Hi, {name}!" — falls back to a generic greeting if empty.
  * @param {string} businessDate   'YYYY-MM-DD' — see `main.jsx`'s own `BUSINESS_DATE` header for why this is a prop, not derived here.
@@ -39,6 +45,12 @@ export function HomeDashboard({ greetingName, businessDate, activePropertyId }) 
   const [departures, setDepartures] = useState(null);
   const [discrepancies, setDiscrepancies] = useState(null);
   const [oversold, setOversold] = useState(null);
+  // null until the first fetch settles (renders the same "Not available yet"
+  // pill as arrivals/departures/discrepancies/oversold do while loading);
+  // { status, message } after — `status` is a real night_audit_runs.status
+  // value or null (no run yet for today's business date), `message` is set
+  // only on a load failure.
+  const [nightAudit, setNightAudit] = useState(null);
 
   useEffect(() => {
     reservationsApi
@@ -87,6 +99,24 @@ export function HomeDashboard({ greetingName, businessDate, activePropertyId }) 
       .getOversoldRoomTypes(businessDate)
       .then(setOversold)
       .catch(() => setOversold(null));
+
+    nightAuditApi
+      .listRuns()
+      .then((runs) => {
+        const todayRun = runs.find((run) => run.business_date === businessDate);
+        setNightAudit({ status: todayRun?.status ?? null, message: null });
+      })
+      .catch((caught) => {
+        // Same treatment as the Total Revenue KPI's own `reports.view_financial`
+        // gap: a role without `night_audit.view` (SECURITY.md §5) gets a
+        // correct 403 here, rendered as an honest "not for your role" pill
+        // rather than an alarming error state.
+        const forbidden = caught instanceof ApiError && caught.code === 'FORBIDDEN_PERMISSION';
+        setNightAudit({
+          status: null,
+          message: forbidden ? 'Not available for your role.' : caught instanceof ApiError ? caught.message : 'Could not load.',
+        });
+      });
 
     setupApi
       .listProperties()
@@ -174,25 +204,40 @@ export function HomeDashboard({ greetingName, businessDate, activePropertyId }) 
           <AlertRow label="Departures today" count={departures?.length} />
           <AlertRow label="Housekeeping discrepancies" count={discrepancies?.length} dangerIfNonZero />
           <AlertRow label="Oversold room types tonight" count={oversold?.length} dangerIfNonZero />
-          <AlertRow label="Night audit for today's business date" />
+          <AlertRow label="Night audit for today's business date" pill={nightAuditPill(nightAudit)} />
         </ul>
       </Card>
     </div>
   );
 }
 
-/** `count === undefined` (load failed or not fetched) keeps the original honest "Not available yet" pill; `count` present renders a real number, red when it's a discrepancy/oversell figure and non-zero. */
-function AlertRow({ label, count, dangerIfNonZero = false }) {
-  const pill =
-    count === undefined ? (
+/**
+ * `count === undefined` (load failed or not fetched) keeps the original
+ * honest "Not available yet" pill; `count` present renders a real number,
+ * red when it's a discrepancy/oversell figure and non-zero. A caller with a
+ * status that isn't a plain count (Night audit) supplies a pre-built `pill`
+ * instead, which takes priority over `count`.
+ */
+function AlertRow({ label, count, dangerIfNonZero = false, pill }) {
+  const resolvedPill =
+    pill ??
+    (count === undefined ? (
       <StatusPill tone="neutral" label="Not available yet" />
     ) : (
       <StatusPill tone={dangerIfNonZero && count > 0 ? 'danger' : 'neutral'} label={String(count)} />
-    );
+    ));
   return (
     <li className={styles.alertRow}>
       <span className={styles.alertLabel}>{label}</span>
-      {pill}
+      {resolvedPill}
     </li>
   );
+}
+
+/** Maps the real `GET /night-audit/runs` result (or its load failure) onto a status pill, reusing `NightAuditScreen`'s own status→tone vocabulary rather than a second copy of it. */
+function nightAuditPill(nightAudit) {
+  if (!nightAudit) return <StatusPill tone="neutral" label="Not available yet" />;
+  if (nightAudit.message) return <StatusPill tone="neutral" label={nightAudit.message} />;
+  if (!nightAudit.status) return <StatusPill tone="neutral" label="Not yet run" />;
+  return <StatusPill tone={NIGHT_AUDIT_STATUS_TONE[nightAudit.status] ?? 'neutral'} label={nightAudit.status} />;
 }
