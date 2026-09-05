@@ -439,9 +439,73 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
       expect(res.body.data.status).toBe('mfa_challenge_required');
       expect(res.body.data.accessToken).toBeUndefined();
       expect(res.body.data.refreshToken).toBeUndefined();
+      expect(typeof res.body.data.challengeToken).toBe('string');
 
       const events = await authEventsFor(adminNoMfa.id);
       expect(events.some((e) => e.event_type === 'mfa_challenge_issued')).toBe(true);
+    });
+  });
+
+  // ==================================================================
+  // MFA dev bypass — src/auth/mfa.js. Not a TESTING.md-numbered case (no
+  // real MFA verification exists to number), but the only path today by
+  // which an admin/super_admin account can complete a real HTTP login, so
+  // its one production-safety property (never outside NODE_ENV!=='production')
+  // gets its own explicit failing-path coverage per CLAUDE.md's "auth needs
+  // every branch including failure paths" rule.
+  // ==================================================================
+  describe('MFA dev bypass (src/auth/mfa.js)', () => {
+    async function challenge() {
+      const res = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+        email: adminNoMfa.email,
+        password: STRONG_PASSWORD,
+      });
+      return res.body.data.challengeToken;
+    }
+
+    it('completes the login with the dev bypass code outside production', async () => {
+      const challengeToken = await challenge();
+      const res = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: '000000' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('ok');
+      expect(typeof res.body.data.accessToken).toBe('string');
+      expect(typeof res.body.data.refreshToken).toBe('string');
+      expect(res.body.data.role).toBe('admin');
+
+      const events = await authEventsFor(adminNoMfa.id);
+      expect(events.some((e) => e.event_type === 'mfa_verified')).toBe(true);
+    });
+
+    it('rejects the wrong code with the standard 501, and audits it as mfa_failed', async () => {
+      const challengeToken = await challenge();
+      const res = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: '123456' });
+
+      expect(res.status).toBe(501);
+      expect(res.body.error.code).toBe('AUTH_MFA_NOT_IMPLEMENTED');
+
+      const events = await authEventsFor(adminNoMfa.id);
+      expect(events.some((e) => e.event_type === 'mfa_failed')).toBe(true);
+    });
+
+    it('rejects an invalid or garbage challenge token with the standard 501', async () => {
+      const res = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: 'not-a-real-token', code: '000000' });
+
+      expect(res.status).toBe(501);
+      expect(res.body.error.code).toBe('AUTH_MFA_NOT_IMPLEMENTED');
+    });
+
+    it('never accepts the bypass code when NODE_ENV is production, even with a valid challenge token', async () => {
+      const challengeToken = await challenge();
+      const originalNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      try {
+        const res = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: '000000' });
+        expect(res.status).toBe(501);
+        expect(res.body.error.code).toBe('AUTH_MFA_NOT_IMPLEMENTED');
+      } finally {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
     });
   });
 

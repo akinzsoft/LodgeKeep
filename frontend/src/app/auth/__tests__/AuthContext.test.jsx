@@ -5,6 +5,7 @@ import { ApiError } from '../../../shared/api/ApiError.js';
 
 const mocks = vi.hoisted(() => ({
   login: vi.fn(),
+  verifyMfa: vi.fn(),
   logout: vi.fn(),
   switchProperty: vi.fn(),
   refresh: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock('../../../shared/api/index.js', async () => {
     ...actual,
     authApi: {
       login: mocks.login,
+      verifyMfa: mocks.verifyMfa,
       logout: mocks.logout,
       switchProperty: mocks.switchProperty,
       refresh: mocks.refresh,
@@ -83,6 +85,62 @@ describe('AuthProvider / useAuth', () => {
     expect(result.current.status).toBe('mfa_required');
     expect(result.current.isAuthenticated).toBe(false);
     expect(result.current.user).toBeNull();
+  });
+
+  it('verifyMfa() completes the paused login and reaches authenticated on success', async () => {
+    mocks.login.mockResolvedValue({ status: 'mfa_challenge_required', challengeToken: 'challenge-abc' });
+    mocks.verifyMfa.mockResolvedValue({
+      status: 'ok',
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+      tenantId: '1',
+      userId: '2',
+      activePropertyId: '3',
+      role: 'admin',
+      properties: [{ propertyId: '3', role: 'admin' }],
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await act(async () => {
+      await result.current.login({ email: 'admin@example.com', password: 'x' });
+    });
+    expect(result.current.status).toBe('mfa_required');
+
+    await act(async () => {
+      await result.current.verifyMfa('000000');
+    });
+
+    expect(mocks.verifyMfa).toHaveBeenCalledWith({ challengeToken: 'challenge-abc', code: '000000' });
+    expect(result.current.status).toBe('authenticated');
+    expect(result.current.isAuthenticated).toBe(true);
+    expect(result.current.user).toMatchObject({ userId: '2', role: 'admin', email: 'admin@example.com' });
+  });
+
+  it('verifyMfa() with the wrong code returns to mfa_required (not idle) with the real 501 as the error', async () => {
+    mocks.login.mockResolvedValue({ status: 'mfa_challenge_required', challengeToken: 'challenge-abc' });
+    mocks.verifyMfa.mockRejectedValue(
+      new ApiError({ code: 'AUTH_MFA_NOT_IMPLEMENTED', message: 'MFA verification is not yet available.' })
+    );
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await act(async () => {
+      await result.current.login({ email: 'admin@example.com', password: 'x' });
+    });
+
+    await act(async () => {
+      await expect(result.current.verifyMfa('123456')).rejects.toBeDefined();
+    });
+
+    expect(result.current.status).toBe('mfa_required');
+    expect(result.current.isAuthenticated).toBe(false);
+    expect(result.current.error).toEqual({ code: 'AUTH_MFA_NOT_IMPLEMENTED', message: 'MFA verification is not yet available.' });
+  });
+
+  it('verifyMfa() rejects immediately with no pending challenge, and never calls the API', async () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await expect(result.current.verifyMfa('000000')).rejects.toThrow('No pending MFA challenge to verify.');
+    expect(mocks.verifyMfa).not.toHaveBeenCalled();
   });
 
   it('login() failure surfaces a plain-sentence error, never a raw exception (DESIGN_SYSTEM.md §2)', async () => {

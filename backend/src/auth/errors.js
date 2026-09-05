@@ -78,10 +78,13 @@ class SessionInvalidError extends AppError {
 /**
  * `POST /auth/mfa/verify` exists so the shape is fixed, but real TOTP
  * verification — and the `mfa_devices.secret` / `platform_users.mfa_secret`
- * encryption-at-rest story it depends on — is deferred past this pass (see
- * `service.js`'s login functions: every account that requires MFA gets a
- * challenge and stops there). 501, not 500: this is a known, temporary gap in
- * what the API offers, not a server fault.
+ * encryption-at-rest story it depends on — is deferred past this pass. Every
+ * account that requires MFA still gets a challenge and stops there, with one
+ * documented exception: `src/auth/mfa.js`'s dev-only bypass code lets a
+ * staff login resume outside production, since without it no admin/
+ * super_admin account could ever complete login at all, even in
+ * development. 501, not 500: this is a known, temporary gap in what the API
+ * offers, not a server fault.
  */
 class MfaNotImplementedError extends AppError {
   constructor() {

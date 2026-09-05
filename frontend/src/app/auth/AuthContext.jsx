@@ -57,6 +57,11 @@ export function AuthProvider({ children }) {
   const [status, setStatus] = useState(IDLE);
   const [user, setUser] = useState(null);
   const [error, setError] = useState(null);
+  // Set only while status === MFA_REQUIRED — the challenge token
+  // `verifyMfa` below resumes login with, plus the email `login()` was
+  // called with (the response itself carries neither, same "no display
+  // name yet" gap this file's own header already notes for a real login).
+  const [mfaChallenge, setMfaChallenge] = useState(null);
 
   // Refs, not state: `configureApiClient`'s callbacks close over these once,
   // on mount, and must always see the LATEST token — a state closure from
@@ -75,6 +80,7 @@ export function AuthProvider({ children }) {
     refreshTokenRef.current = null;
     activePropertyIdRef.current = null;
     setUser(null);
+    setMfaChallenge(null);
   }, []);
 
   const applySession = useCallback((result) => {
@@ -100,9 +106,12 @@ export function AuthProvider({ children }) {
 
         if (result.status === 'mfa_challenge_required') {
           // TESTING.md AUTH-9's frontend counterpart: a challenge, not full
-          // access. There is nowhere further to go yet — real TOTP
-          // verification is a 501 stub on the backend
-          // (`src/auth/errors.js`'s MfaNotImplementedError).
+          // access yet. Real TOTP verification is still a 501 stub
+          // (`src/auth/errors.js`'s MfaNotImplementedError) — the one thing
+          // `verifyMfa` below can actually complete is `src/auth/mfa.js`'s
+          // dev-only bypass code, never valid outside a non-production
+          // backend.
+          setMfaChallenge({ challengeToken: result.challengeToken, email });
           setStatus(MFA_REQUIRED);
           return result;
         }
@@ -118,6 +127,38 @@ export function AuthProvider({ children }) {
       }
     },
     [applySession]
+  );
+
+  /**
+   * Resumes the login `mfa_challenge_required` above paused. On a wrong
+   * code — or any submission against a production backend, where
+   * `isDevBypassCode` always returns false — the backend's real
+   * `AUTH_MFA_NOT_IMPLEMENTED` 501 lands in `error` and status returns to
+   * `MFA_REQUIRED` (not `idle`) so the pending challenge, and the screen
+   * showing it, both survive a retry rather than bouncing back to the
+   * email/password form.
+   */
+  const verifyMfa = useCallback(
+    async (code) => {
+      if (!mfaChallenge?.challengeToken) {
+        throw new Error('No pending MFA challenge to verify.');
+      }
+      setStatus(AUTHENTICATING);
+      setError(null);
+      try {
+        const result = await authApi.verifyMfa({ challengeToken: mfaChallenge.challengeToken, code });
+        applySession(result);
+        setUser((previous) => ({ ...previous, email: mfaChallenge.email }));
+        setMfaChallenge(null);
+        setStatus(AUTHENTICATED);
+        return result;
+      } catch (caught) {
+        setStatus(MFA_REQUIRED);
+        setError(toDisplayError(caught));
+        throw caught;
+      }
+    },
+    [applySession, mfaChallenge]
   );
 
   const logout = useCallback(async () => {
@@ -188,6 +229,7 @@ export function AuthProvider({ children }) {
     user,
     error,
     login,
+    verifyMfa,
     logout,
     switchProperty,
     requestPasswordReset: authApi.requestPasswordReset,

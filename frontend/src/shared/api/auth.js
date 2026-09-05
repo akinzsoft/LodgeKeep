@@ -13,9 +13,22 @@ import { request } from './client.js';
  * calls them and decides what to do with the result.
  */
 
-/** @returns {Promise<{status: 'ok', accessToken, refreshToken, tenantId, userId, activePropertyId, role, properties} | {status: 'mfa_challenge_required'}>} */
+/** @returns {Promise<{status: 'ok', accessToken, refreshToken, tenantId, userId, activePropertyId, role, properties} | {status: 'mfa_challenge_required', challengeToken: string}>} */
 export function login({ email, password }) {
   return request('/auth/login', { method: 'POST', body: { email, password }, auth: false });
+}
+
+/**
+ * Resumes a login `mfa_challenge_required` paused. The only code this can
+ * ever succeed with is `src/auth/mfa.js`'s dev-only bypass value, and only
+ * outside a production backend — see that file's own header. Any other
+ * input returns the same `AUTH_MFA_NOT_IMPLEMENTED` 501 this endpoint has
+ * always returned.
+ *
+ * @returns {Promise<{status: 'ok', accessToken, refreshToken, tenantId, userId, activePropertyId, role, properties}>}
+ */
+export function verifyMfa({ challengeToken, code }) {
+  return request('/auth/mfa/verify', { method: 'POST', body: { challenge_token: challengeToken, code }, auth: false });
 }
 
 /**

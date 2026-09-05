@@ -19,11 +19,13 @@ const { hashPassword, verifyPassword, validatePassword } = require('./password')
 const { writeAuthEvent } = require('./events');
 const { checkStaffLockout } = require('./lockout');
 const { listPropertyAccess, roleAtProperty, roleRequiresMfa } = require('./roles');
+const { signMfaChallengeToken, verifyMfaChallengeToken, isDevBypassCode } = require('./mfa');
 const {
   InvalidCredentialsError,
   AccountLockedError,
   TokenInvalidError,
   ValidationError,
+  MfaNotImplementedError,
 } = require('./errors');
 
 function hoursFromNow(hours) {
@@ -108,8 +110,9 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
   // TESTING.md AUTH-9: a role that mandates MFA (PRODUCT_REQUIREMENTS.md
   // §3.16 — admin/super_admin, unconditionally) or a user who has opted in
   // gets a challenge, not tokens. Full TOTP verification is deferred (see
-  // `src/auth/mfa.js`'s header) — this is the "challenge issued" half of
-  // AUTH-9, on purpose the whole of it for this pass.
+  // `src/auth/mfa.js`'s header); `challengeToken` is what `verifyStaffMfa`
+  // below resumes this specific login with, once a code — today, only ever
+  // the dev bypass code — is submitted for it.
   const mfaRequired = user.mfa_enabled || access.some((grant) => roleRequiresMfa(grant.role));
   if (mfaRequired) {
     await writeAuthEvent({
@@ -121,9 +124,20 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
       userAgent,
       requestId,
     });
-    return { status: 'mfa_challenge_required' };
+    return { status: 'mfa_challenge_required', challengeToken: signMfaChallengeToken({ userId: user.id, tenantId }) };
   }
 
+  return issueStaffSession({ scoped, tenantId, user, access, activePropertyId, role, ip, userAgent, requestId });
+}
+
+/**
+ * The "authenticated, MFA satisfied (or not required), issue real tokens"
+ * tail shared by `staffLogin` (the no-MFA-required path) and
+ * `verifyStaffMfa` (the MFA-challenge-resumed path) — extracted so the two
+ * routes into a real staff session share one implementation rather than two
+ * copies of the same token/session-row/audit-event logic drifting apart.
+ */
+async function issueStaffSession({ scoped, tenantId, user, access, activePropertyId, role, ip, userAgent, requestId }) {
   const accessToken = signAccessToken({
     aud: 'staff',
     sub: String(user.id),
@@ -163,6 +177,56 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
     role,
     properties: access.map((grant) => ({ propertyId: String(grant.property_id), role: grant.role })),
   };
+}
+
+/**
+ * Completes a challenge `staffLogin` issued above. The only real
+ * verification this performs is `isDevBypassCode` — outside production,
+ * with the fixed dev bypass code, this resumes the login exactly as if MFA
+ * had been satisfied for real. Any other input (production, a wrong code,
+ * an expired/invalid/wrong-audience token) throws `MfaNotImplementedError`,
+ * the exact `501` this endpoint has always returned — a real client, and any
+ * production deployment, sees no change in behaviour at all.
+ */
+async function verifyStaffMfa({ challengeToken, code, ip, userAgent, requestId }) {
+  let payload;
+  try {
+    payload = verifyMfaChallengeToken(challengeToken);
+  } catch {
+    throw new MfaNotImplementedError();
+  }
+
+  const tenantId = Number(payload.tenant_id);
+  const userId = Number(payload.sub);
+
+  if (!isDevBypassCode(code)) {
+    await writeAuthEvent({ audience: 'staff', eventType: 'mfa_failed', tenantId, userId, ip, userAgent, requestId });
+    throw new MfaNotImplementedError();
+  }
+
+  const db = scopedDb();
+  const context = contextFromSession({ tenantId, userId });
+  const scoped = db.for(context);
+
+  const user = await scoped.table('users').where({ id: userId }).first();
+  if (!user || user.status !== 'active') throw new MfaNotImplementedError();
+
+  const access = await listPropertyAccess(scoped, context, userId);
+  const activePropertyId = defaultActiveProperty(access);
+  const role = activePropertyId ? await roleAtProperty(scoped, context, userId, activePropertyId) : null;
+
+  await writeAuthEvent({
+    audience: 'staff',
+    eventType: 'mfa_verified',
+    tenantId,
+    userId,
+    propertyId: activePropertyId,
+    ip,
+    userAgent,
+    requestId,
+  });
+
+  return issueStaffSession({ scoped, tenantId, user, access, activePropertyId, role, ip, userAgent, requestId });
 }
 
 /**
@@ -532,4 +596,5 @@ module.exports = {
   completePasswordReset,
   guestLogin,
   platformLogin,
+  verifyStaffMfa,
 };

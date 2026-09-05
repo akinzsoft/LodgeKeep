@@ -7,7 +7,7 @@
 
 const { ok } = require('../shared/response');
 const service = require('./service');
-const { ValidationError, MfaNotImplementedError } = require('./errors');
+const { ValidationError } = require('./errors');
 
 function require_(body, field) {
   const value = body?.[field];
@@ -140,14 +140,20 @@ async function guestLogin(req, res, next) {
 }
 
 /**
- * POST /auth/mfa/verify — staff and platform both. Fixed shape, not yet
- * implemented; see `MfaNotImplementedError`.
+ * POST /auth/mfa/verify — staff and platform both. The only real
+ * verification performed is `src/auth/mfa.js`'s dev-only bypass code,
+ * checked strictly outside production — see that file's own header. A
+ * platform challenge token is never issued (`platformLogin` has no
+ * token-issuance path to resume into yet), so a platform caller always
+ * falls through to `MfaNotImplementedError`, this endpoint's original and
+ * still-default behaviour for everyone else.
  */
 async function verifyMfa(req, res, next) {
   try {
-    require_(req.body, 'challenge_token');
-    require_(req.body, 'code');
-    throw new MfaNotImplementedError();
+    const challengeToken = require_(req.body, 'challenge_token');
+    const code = require_(req.body, 'code');
+    const result = await service.verifyStaffMfa({ challengeToken, code, ...requestMeta(req) });
+    res.status(200).json(ok(result));
   } catch (error) {
     next(error);
   }
