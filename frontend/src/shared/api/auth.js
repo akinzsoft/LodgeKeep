@@ -70,3 +70,12 @@ export function completePasswordReset({ token, newPassword }) {
     auth: false,
   });
 }
+
+/** PLAN.md Phase 1 gap closure — PRODUCT_REQUIREMENTS.md §3.16's staff invitation flow. @returns {Promise<{status: 'ok'}>} */
+export function acceptInvitation({ token, firstName, lastName, password }) {
+  return request('/auth/invitations/accept', {
+    method: 'POST',
+    body: { token, first_name: firstName, last_name: lastName, password },
+    auth: false,
+  });
+}

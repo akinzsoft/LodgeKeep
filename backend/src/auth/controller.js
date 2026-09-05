@@ -120,6 +120,27 @@ async function completePasswordReset(req, res, next) {
   }
 }
 
+/** POST /api/v1/auth/invitations/accept */
+async function acceptInvitation(req, res, next) {
+  try {
+    const token = require_(req.body, 'token');
+    const firstName = require_(req.body, 'first_name');
+    const lastName = require_(req.body, 'last_name');
+    const password = require_(req.body, 'password');
+    const result = await service.acceptInvitation({
+      tenantId: req.tenantId,
+      token,
+      firstName,
+      lastName,
+      password,
+      ...requestMeta(req),
+    });
+    res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
 /** POST /api/v1/portal/auth/login */
 async function guestLogin(req, res, next) {
   try {
@@ -178,6 +199,7 @@ module.exports = {
   switchProperty,
   requestPasswordReset,
   completePasswordReset,
+  acceptInvitation,
   guestLogin,
   platformLogin,
   verifyMfa,

@@ -27,6 +27,10 @@ const EVENT_TEMPLATE_KEYS = {
   'reservation.cancelled': 'reservation_cancelled',
   'guest.checked_in': 'checked_in',
   'guest.checked_out': 'checked_out',
+  // PLAN.md Phase 1 gap closure (src/modules/users) — the recipient here is
+  // a staff invitee, not a guest, but the payload still carries the address
+  // under `guestEmail` (see that module's own `inviteUser` note on why).
+  'staff.invited': 'staff_invitation',
 };
 
 /**
@@ -51,6 +55,10 @@ const DEFAULT_TEMPLATES = {
   checked_out: {
     subject: 'Thank you for staying with us',
     body_html: '<p>Hi {{guestName}},</p><p>You have been checked out. Your final folio balance was {{folioBalance}}.</p>',
+  },
+  staff_invitation: {
+    subject: "You're invited to join {{propertyName}} on LodgeKeep",
+    body_html: '<p>You have been invited to join {{propertyName}} as {{role}}.</p><p><a href="{{invitationUrl}}">Set up your account</a></p>',
   },
 };
 

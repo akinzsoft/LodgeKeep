@@ -486,6 +486,88 @@ async function completePasswordReset({ tenantId, token, newPassword, ip, userAge
 }
 
 /**
+ * PLAN.md Phase 1 gap closure — PRODUCT_REQUIREMENTS.md §3.16's staff
+ * invitation flow: "the invitee sets their own password... admins never set
+ * a password on someone's behalf." `invitation_accepted` (this pass's own
+ * migration, 20260910094000) is reused for both the success and every
+ * rejection branch, distinguished by `failureReason` — the exact shape
+ * `completePasswordReset` above already established.
+ *
+ * Scoped to the common case only (this session's confirmed simplification):
+ * accepting always creates a brand-new user. An email that already belongs
+ * to a user in this tenant — being invited to a SECOND property — is a
+ * real, separate case (granting an existing user another property's access,
+ * rather than onboarding a new person) this pass does not handle; flagged
+ * here rather than silently mishandled.
+ */
+async function acceptInvitation({ tenantId, token, firstName, lastName, password, ip, userAgent, requestId }) {
+  const validationIssue = validatePassword(password);
+  if (validationIssue) throw new ValidationError('PASSWORD_TOO_SHORT', validationIssue);
+
+  const db = scopedDb();
+  const context = contextFromSession({ tenantId });
+  const scoped = db.for(context);
+
+  const hash = crypto.createHash('sha256').update(token).digest('hex');
+  // acrossProperties(): this caller holds no session at all yet, so there is
+  // no active property to scope by — the same reasoning `roleAtProperty`
+  // (src/auth/roles.js) already documents for the identical shape.
+  const invitation = await scoped.acrossProperties().table('user_invitations').where({ token_hash: hash }).first();
+
+  const reject = async (failureReason) => {
+    await writeAuthEvent({
+      audience: 'staff',
+      eventType: 'invitation_accepted',
+      failureReason,
+      tenantId,
+      ip,
+      userAgent,
+      requestId,
+    });
+    throw new TokenInvalidError();
+  };
+
+  if (!invitation) return reject('token_unknown');
+  if (invitation.expires_at && new Date(invitation.expires_at) <= new Date()) return reject('token_expired');
+  if (invitation.accepted_at) return reject('token_already_used');
+
+  const existingUser = await scoped.table('users').where({ email: invitation.email }).first();
+  if (existingUser) return reject('token_already_used');
+
+  // Single-use claim (ARCHITECTURE.md §5) — same conditional-UPDATE-with-
+  // affected-row-check shape `completePasswordReset` above already uses.
+  const claimed = await scoped
+    .acrossProperties()
+    .table('user_invitations')
+    .where({ id: invitation.id })
+    .whereNull('accepted_at')
+    .update({ accepted_at: new Date() });
+  if (claimed === 0) return reject('token_already_used');
+
+  const [userId] = await scoped.table('users').insert({
+    email: invitation.email,
+    password_hash: await hashPassword(password),
+    first_name: firstName,
+    last_name: lastName,
+  });
+
+  const propertyScoped = db.for(contextFromSession({ tenantId, propertyId: invitation.property_id }));
+  await propertyScoped.table('user_property_access').insert({ user_id: userId, role: invitation.role });
+
+  await writeAuthEvent({
+    audience: 'staff',
+    eventType: 'invitation_accepted',
+    tenantId,
+    userId,
+    ip,
+    userAgent,
+    requestId,
+  });
+
+  return { status: 'ok' };
+}
+
+/**
  * Guest portal login — TESTING.md AUTH-12's counterpart on the minting side.
  * The portal is reached through the same tenant Host resolution as staff
  * (`resolveTenant`); `propertySlug` narrows to the one property this portal
@@ -594,6 +676,7 @@ module.exports = {
   switchProperty,
   requestPasswordReset,
   completePasswordReset,
+  acceptInvitation,
   guestLogin,
   platformLogin,
   verifyStaffMfa,

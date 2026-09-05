@@ -27,6 +27,9 @@ function staffAuthRouter({ resolveTenant }) {
   router.post('/refresh', resolveTenant, controller.staffRefresh);
   router.post('/password/forgot', resolveTenant, controller.requestPasswordReset);
   router.post('/password/reset', resolveTenant, controller.completePasswordReset);
+  // Public, same reasoning as the password-reset pair above — an invitee
+  // holds a token, not a session, so this must run before authenticate().
+  router.post('/invitations/accept', resolveTenant, controller.acceptInvitation);
   // Part of the login flow itself — a caller holds a short-lived challenge
   // token from staffLogin, not a full access token yet, so this cannot sit
   // behind authenticate('staff'), and needs no tenant resolution either (the

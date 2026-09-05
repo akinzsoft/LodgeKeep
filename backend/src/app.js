@@ -32,6 +32,7 @@ const { resolveTenant } = require('./auth/tenant-resolution');
 const { staffAuthRouter, portalAuthRouter, platformAuthRouter, authenticate } = require('./auth');
 const { attachAudit } = require('./audit');
 const { setupRouter } = require('./modules/setup');
+const { usersRouter } = require('./modules/users');
 const { reservationsRouter } = require('./modules/reservations');
 const { housekeepingRouter } = require('./modules/housekeeping');
 const { notificationsRouter } = require('./modules/notifications');
@@ -52,6 +53,7 @@ function buildStaffRouter() {
   router.use(attachAudit());
   // Business routers mount here, ahead of the catch-all, as each module lands.
   router.use(setupRouter());
+  router.use(usersRouter());
   router.use(reservationsRouter());
   router.use(housekeepingRouter());
   router.use(notificationsRouter());

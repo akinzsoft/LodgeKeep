@@ -6,6 +6,7 @@ import { RoomsTab } from './RoomsTab.jsx';
 import { RateCodesTab } from './RateCodesTab.jsx';
 import { TaxesTab } from './TaxesTab.jsx';
 import { ReferenceDataTab } from './ReferenceDataTab.jsx';
+import { UsersTab } from './UsersTab.jsx';
 import styles from './SetupScreen.module.css';
 
 /**
@@ -17,12 +18,12 @@ import styles from './SetupScreen.module.css';
  * one component under a single "Setup" nav item.
  *
  * Market segments, booking sources, and cancellation policies (the
- * "Reference Data" tab) closed a gap flagged here since the original Phase
- * 1 pass — PLAN.md's Phase 1 bullet list named them from the start, but
- * they were deliberately deferred until this later pass. Still not built,
- * deliberately: user management and the guided first-run wizard with
- * resumable progress — both real, separate pieces of work, tracked as
- * their own gaps rather than folded into this tab strip.
+ * "Reference Data" tab), and user management (the "Users" tab) both closed
+ * gaps flagged here since the original Phase 1 pass — PLAN.md's Phase 1
+ * bullet list named all of these from the start, but they were deliberately
+ * deferred until later passes. Still not built, deliberately: the guided
+ * first-run wizard with resumable progress — a real, separate piece of
+ * work, tracked as its own gap rather than folded into this tab strip.
  *
  * Fetches the tenant's properties itself, rather than trusting
  * `activeProperty` passed down from `main.jsx` (which — per
@@ -38,6 +39,7 @@ const TABS = [
   { key: 'rate-codes', label: 'Rate Codes & Calendar' },
   { key: 'taxes', label: 'Taxes' },
   { key: 'reference-data', label: 'Reference Data' },
+  { key: 'users', label: 'Users' },
 ];
 
 export function SetupScreen({ activePropertyId, isOffline = false }) {
@@ -110,6 +112,7 @@ export function SetupScreen({ activePropertyId, isOffline = false }) {
         {tab === 'rate-codes' && <RateCodesTab activeProperty={activeProperty} disabled={!activeProperty} />}
         {tab === 'taxes' && <TaxesTab activeProperty={activeProperty} disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'reference-data' && <ReferenceDataTab disabled={!activeProperty} />}
+        {tab === 'users' && <UsersTab disabled={!activeProperty} isOffline={isOffline} />}
       </div>
     </div>
   );

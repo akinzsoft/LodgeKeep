@@ -2,6 +2,7 @@ export { request, requestBlob, configureApiClient, _resetApiClientForTesting } f
 export { ApiError } from './ApiError.js';
 export * as authApi from './auth.js';
 export * as setupApi from './setup.js';
+export * as usersApi from './users.js';
 export * as reservationsApi from './reservations.js';
 export * as housekeepingApi from './housekeeping.js';
 export * as notificationsApi from './notifications.js';

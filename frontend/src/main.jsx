@@ -5,6 +5,7 @@ import styles from './main.module.css';
 import { AuthProvider, useAuth } from './app/auth/index.js';
 import { StaffLoginScreen } from './app/auth/screens/StaffLoginScreen.jsx';
 import { MfaChallengeScreen } from './app/auth/screens/MfaChallengeScreen.jsx';
+import { AcceptInvitationScreen } from './app/auth/screens/AcceptInvitationScreen.jsx';
 import { AppShell } from './app/shell/index.js';
 import { HomeDashboard } from './app/dashboard/HomeDashboard.jsx';
 import { SetupScreen } from './app/setup/SetupScreen.jsx';
@@ -89,6 +90,15 @@ function Demo() {
     } catch {
       // Same convenience-not-critical reasoning as the initial load above.
     }
+  }
+
+  // No router exists in this app yet — an invitation link's `?invite_token=`
+  // query parameter is this screen's only "route," checked ahead of the
+  // normal auth flow so a signed-in browser (a shared front-desk terminal,
+  // say) still reaches it rather than the dashboard underneath.
+  const inviteToken = new URLSearchParams(window.location.search).get('invite_token');
+  if (inviteToken) {
+    return <AcceptInvitationScreen token={inviteToken} isOffline={!isOnline} />;
   }
 
   if (status === 'mfa_required') {
