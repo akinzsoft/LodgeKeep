@@ -18,6 +18,7 @@ import { ProfilesScreen } from './app/profiles/ProfilesScreen.jsx';
 import { Toast } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { notificationsApi } from './shared/api/index.js';
+import { PortalApp } from './portal/PortalApp.jsx';
 
 /**
  * No backend endpoint returns a property's current business date yet
@@ -200,10 +201,23 @@ function Demo() {
   );
 }
 
+/**
+ * The guest portal and the staff app are two separate trees, never mounted
+ * together in one page load (`PortalApp.jsx`'s own header explains why this
+ * matters beyond routing: it's what makes reusing `shared/api/client.js`'s
+ * single token/refresh-handler registration safe for both). A pathname
+ * check here, ahead of `<AuthProvider>`, is this app's only "router" at the
+ * top level — `PortalApp` owns real `react-router-dom` routing underneath
+ * its own `/portal/*` subtree, but nothing above it needs to know that.
+ */
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <AuthProvider>
-      <Demo />
-    </AuthProvider>
+    {window.location.pathname.startsWith('/portal') ? (
+      <PortalApp />
+    ) : (
+      <AuthProvider>
+        <Demo />
+      </AuthProvider>
+    )}
   </StrictMode>
 );
