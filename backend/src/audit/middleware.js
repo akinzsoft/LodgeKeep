@@ -36,12 +36,19 @@ function attachAudit() {
       const context = req.context;
       const accessor = accessorOverride || scopedDb().for(context);
 
-      // Only the staff HTTP path is wired up yet — SECURITY.md §2's guest and
-      // platform mutation flows (impersonation in particular) don't exist
-      // yet, so there is nothing correct to default their source to. A
-      // caller on those paths must pass `source` explicitly, and the service
-      // layer's required-field check is what catches it if they don't.
-      const defaultSource = context.audience === AUDIENCES.STAFF ? 'web' : undefined;
+      // PLAN.md Phase 4 (the guest booking portal) is the first guest
+      // mutation flow to exist — its own audit_log rows use the same
+      // 'api' source every other machine-to-machine caller already uses
+      // (SOURCES in the audit_log migration), which is what lets
+      // `runIdempotentMutation` (src/shared/mutation.js) work completely
+      // unmodified for a guest-audience controller: it never passes its own
+      // `source`, so this default is the only thing that has to know the
+      // difference. Platform's own mutation flow (impersonation) still has
+      // nothing correct to default to and must pass `source` explicitly —
+      // the service layer's required-field check is what catches it if it
+      // doesn't.
+      const defaultSource =
+        context.audience === AUDIENCES.STAFF ? 'web' : context.audience === AUDIENCES.GUEST ? 'api' : undefined;
 
       return recordAuditEntry(accessor, {
         source: defaultSource,

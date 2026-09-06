@@ -20,6 +20,7 @@ const {
   workerContext,
   withActiveProperty,
 } = require('./context');
+const { resolvePropertyBySlug } = require('./property-resolution');
 
 module.exports = {
   createScopedDb,
@@ -30,4 +31,5 @@ module.exports = {
   systemContext,
   workerContext,
   withActiveProperty,
+  resolvePropertyBySlug,
 };

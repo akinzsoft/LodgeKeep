@@ -40,6 +40,7 @@ const { reportingRouter } = require('./modules/reporting');
 const { cashieringRouter, paystackWebhookRouter } = require('./modules/cashiering');
 const { nightAuditRouter } = require('./modules/night-audit');
 const { profilesRouter } = require('./modules/profiles');
+const { portalPublicRouter, portalAccountRouter } = require('./modules/portal');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -70,7 +71,23 @@ function buildPortalRouter() {
   const router = express.Router();
   const tenantMiddleware = resolveTenant({ db: scopedDb(), systemContext });
   router.use('/auth', portalAuthRouter({ resolveTenant: tenantMiddleware }));
+  // PLAN.md Phase 4: attachAudit() is mounted on THIS outer router, before
+  // either sub-router below, not inside one of them — a nested router's own
+  // route handler responds directly and never falls through to a
+  // middleware registered after `router.use(thatSubRouter)`, so mounting it
+  // any later would leave `req.audit` undefined for every request
+  // portalPublicRouter()'s own routes actually handle. It only needs
+  // `req.context` to exist once a handler calls `req.audit(...)`, not at
+  // mount time — portalPublicRouter()'s own `resolvePortalProperty`
+  // middleware sets an anonymous one; authenticate('guest') below replaces
+  // it with a real, account-bound one for everything after it.
+  router.use(attachAudit());
+  // portalPublicRouter() applies `tenantMiddleware` itself, per-route (see
+  // its own header) — never router-wide, since the authenticated tier
+  // below needs no Host-header resolution at all.
+  router.use(portalPublicRouter({ resolveTenant: tenantMiddleware }));
   router.use(authenticate('guest'));
+  router.use(portalAccountRouter());
   router.use((req, res) => notFound(res));
   return router;
 }

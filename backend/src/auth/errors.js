@@ -6,7 +6,7 @@
  * rather than duplicating its shape.
  */
 
-const { AppError, ValidationError } = require('../shared/errors');
+const { AppError, ValidationError, DuplicateEntryError } = require('../shared/errors');
 
 /**
  * Wrong password, or an email that resolved to no account. TESTING.md AUTH-2
@@ -137,4 +137,5 @@ module.exports = {
   NoActivePropertyError,
   PermissionDeniedError,
   ValidationError,
+  DuplicateEntryError,
 };

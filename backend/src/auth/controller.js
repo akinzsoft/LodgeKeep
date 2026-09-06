@@ -142,6 +142,30 @@ async function acceptInvitation(req, res, next) {
 }
 
 /** POST /api/v1/portal/auth/login */
+/** POST /api/v1/portal/auth/register */
+async function guestRegister(req, res, next) {
+  try {
+    const propertySlug = require_(req.body, 'property_slug');
+    const email = require_(req.body, 'email');
+    const password = require_(req.body, 'password');
+    const firstName = require_(req.body, 'first_name');
+    const lastName = require_(req.body, 'last_name');
+    const result = await service.guestRegister({
+      tenantId: req.tenantId,
+      propertySlug,
+      email,
+      password,
+      firstName,
+      lastName,
+      phone: req.body?.phone,
+      ...requestMeta(req),
+    });
+    res.status(201).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function guestLogin(req, res, next) {
   try {
     const propertySlug = require_(req.body, 'property_slug');
@@ -200,6 +224,7 @@ module.exports = {
   requestPasswordReset,
   completePasswordReset,
   acceptInvitation,
+  guestRegister,
   guestLogin,
   platformLogin,
   verifyMfa,

@@ -471,6 +471,49 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       expect(folio.balance).toBe('0.00');
     });
 
+    it('PLAN.md Phase 4 regression: check-in reuses a folio already opened before arrival, never a second one', async () => {
+      const roomTypeId = await createRoomType(ctx.a, { code: 'PREPAIDTYPE' });
+      const preOpenedRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'PREPAID1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'PREPAIDRATE' });
+
+      const created = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-12-05',
+          departure_date: '2027-12-06',
+        });
+      const preReservationId = created.body.data.id;
+
+      // Simulates a portal booking already opening this reservation's
+      // primary folio (and posting a paid room charge to it) before the
+      // guest ever walks up to the front desk.
+      const [preOpenedFolioId] = await t.trx('folios').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        reservation_id: preReservationId,
+        folio_number: 'PRE-OPENED-1',
+        status: 'open',
+        balance: '0.00',
+        currency: 'NGN',
+      });
+
+      const res = await t.request
+        .post(`/api/v1/reservations/${preReservationId}/check-in`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ room_id: String(preOpenedRoomId) });
+      expect(res.status).toBe(200);
+
+      const folios = await t.trx('folios').where({ reservation_id: preReservationId });
+      expect(folios.length).toBe(1);
+      expect(String(folios[0].id)).toBe(String(preOpenedFolioId));
+    });
+
     it('FD-3: a room move closes the old assignment and opens a new one, preserving history', async () => {
       const roomTypeId = (await t.trx('rooms').where({ id: roomId }).first()).room_type_id;
       const newRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'FD2' });

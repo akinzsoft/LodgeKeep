@@ -136,7 +136,7 @@ describe('audit trail (SECURITY.md §6)', () => {
       expect(row.source).toBe('web');
     });
 
-    it("does not default a source for a guest context — SECURITY.md §2's mutation flows for that audience are not built yet", async () => {
+    it("defaults a guest context's audit source to 'api' — PLAN.md Phase 4's guest booking portal is that audience's first real mutation flow", async () => {
       const middleware = attachAudit();
       const req = {
         context: guestContextFromSession({
@@ -145,6 +145,22 @@ describe('audit trail (SECURITY.md §6)', () => {
           guestAccountId: ctx.a.guestAccounts[0].id,
         }),
         requestId: 'req_unit_2',
+        ip: '127.0.0.1',
+        get: () => 'jest',
+      };
+      await new Promise((resolve) => middleware(req, {}, resolve));
+
+      await req.audit({ entityType: 'reservations', entityId: 1, action: 'create' });
+      const row = await t.trx('audit_log').where({ request_id: 'req_unit_2' }).first();
+      expect(row.source).toBe('api');
+      expect(row.user_id).toBeNull();
+    });
+
+    it("still does not default a source for platform audience — SECURITY.md §2's impersonation mutation flow is not built yet", async () => {
+      const middleware = attachAudit();
+      const req = {
+        context: { audience: 'platform', tenantId: ctx.a.id, propertyId: ctx.a.properties[0].id },
+        requestId: 'req_unit_3',
         ip: '127.0.0.1',
         get: () => 'jest',
       };

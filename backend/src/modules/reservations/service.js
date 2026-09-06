@@ -26,7 +26,7 @@ const { writeOutboxEvent } = require('../../shared/outbox');
 const { livePhysicalCount: sharedLivePhysicalCount } = require('../../shared/room-availability');
 const { generateUlid } = require('../../shared/ulid');
 const { resolveRate } = require('../setup/service');
-const { postAdjustment: postFolioAdjustment } = require('../cashiering/service');
+const { postAdjustment: postFolioAdjustment, ensurePrimaryFolio } = require('../cashiering/service');
 const {
   OverbookingThresholdExceededError,
   RoomUnavailableError,
@@ -525,14 +525,13 @@ async function checkIn({ trx, id, roomId, overrideDirty }) {
   const now = new Date();
   await trx.table('reservation_rooms').insert({ reservation_id: id, room_id: roomId, effective_from: now, effective_to: null });
 
-  const dailyRate = await trx.table('reservation_daily_rates').where({ reservation_id: id }).first();
-  await trx.table('folios').insert({
-    reservation_id: id,
-    folio_number: generateUlid(),
-    status: 'open',
-    balance: '0.00',
-    currency: dailyRate.currency,
-  });
+  // PLAN.md Phase 4: reused rather than inserted directly — a portal
+  // booking (src/modules/portal) can already have opened this reservation's
+  // primary folio before arrival, and this must reuse that one, never
+  // create a silent second folio the same reservation's own payment and
+  // charges are then split across (cashiering/service.js's own header on
+  // `ensurePrimaryFolio` has the full reasoning).
+  await ensurePrimaryFolio({ trx, reservationId: id });
 
   // PLAN.md Phase 3: check-in now actually maintains `rooms.front_desk_status`
   // (Phase 2 never wrote to this column at all — see the housekeeping

@@ -13,7 +13,13 @@
 
 const crypto = require('crypto');
 const { scopedDb } = require('../db');
-const { contextFromSession, guestContextFromSession, systemContext, withActiveProperty } = require('../modules/tenancy');
+const {
+  contextFromSession,
+  guestContextFromSession,
+  systemContext,
+  withActiveProperty,
+  resolvePropertyBySlug,
+} = require('../modules/tenancy');
 const { signAccessToken, issueRefreshToken, hashRefreshToken, REFRESH_TTL_HOURS } = require('./tokens');
 const { hashPassword, verifyPassword, validatePassword } = require('./password');
 const { writeAuthEvent } = require('./events');
@@ -26,6 +32,7 @@ const {
   TokenInvalidError,
   ValidationError,
   MfaNotImplementedError,
+  DuplicateEntryError,
 } = require('./errors');
 
 function hoursFromNow(hours) {
@@ -568,6 +575,78 @@ async function acceptInvitation({ tenantId, token, firstName, lastName, password
 }
 
 /**
+ * PLAN.md Phase 4 (the guest booking portal), PRODUCT_REQUIREMENTS.md
+ * §3.14/§3.16's "guest account registration/login." Mirrors `guestLogin`'s
+ * own property-by-slug resolution exactly. Unlike `acceptInvitation` (this
+ * codebase's other "create an account" flow, for staff), this signs the
+ * caller in immediately on success — a guest mid-booking shouldn't have to
+ * log in a second time right after registering, and there's no
+ * privileged-inviter/invitee split here to keep separate.
+ *
+ * Always creates a NEW `guests` row — no dedup/merge against an existing
+ * guest identity that might share this email from an earlier anonymous
+ * booking. `guests.status`'s `merged` lifecycle exists in the schema for
+ * exactly that case but is real, deferred scope, the same simplification
+ * `acceptInvitation`'s own header already accepts for staff invitations.
+ */
+async function guestRegister({ tenantId, propertySlug, email, password, firstName, lastName, phone, ip, userAgent, requestId }) {
+  const validationIssue = validatePassword(password);
+  if (validationIssue) throw new ValidationError('PASSWORD_TOO_SHORT', validationIssue);
+
+  const db = scopedDb();
+  const property = await resolvePropertyBySlug({ db, tenantId, propertySlug });
+  if (!property) throw new ValidationError('PROPERTY_NOT_FOUND', 'The specified property does not exist.');
+
+  const guestContext = guestContextFromSession({ tenantId, propertyId: property.id });
+  const scoped = db.for(guestContext);
+
+  let result;
+  try {
+    result = await scoped.transaction(async (trx) => {
+      const [guestId] = await trx.table('guests').insert({
+        first_name: firstName,
+        last_name: lastName,
+        email,
+        phone: phone ?? null,
+      });
+      const [guestAccountId] = await trx.table('guest_accounts').insert({
+        guest_id: guestId,
+        email,
+        password_hash: await hashPassword(password),
+      });
+      return { guestAccountId };
+    });
+  } catch (error) {
+    if (error && error.code === 'ER_DUP_ENTRY') {
+      throw new DuplicateEntryError('guest_accounts', `An account with email "${email}" already exists at this property.`);
+    }
+    throw error;
+  }
+
+  const accessToken = signAccessToken({
+    aud: 'guest',
+    sub: String(result.guestAccountId),
+    tenant_id: String(tenantId),
+    property_id: String(property.id),
+  });
+
+  await writeAuthEvent({
+    audience: 'guest',
+    eventType: 'registration',
+    tenantId,
+    propertyId: property.id,
+    guestAccountId: result.guestAccountId,
+    ip,
+    userAgent,
+    requestId,
+  });
+
+  // Same access-token-only shape as guestLogin — see that function's own
+  // comment for why (no guest_sessions table exists in this pass).
+  return { status: 'ok', accessToken };
+}
+
+/**
  * Guest portal login — TESTING.md AUTH-12's counterpart on the minting side.
  * The portal is reached through the same tenant Host resolution as staff
  * (`resolveTenant`); `propertySlug` narrows to the one property this portal
@@ -575,12 +654,7 @@ async function acceptInvitation({ tenantId, token, firstName, lastName, password
  */
 async function guestLogin({ tenantId, propertySlug, email, password, ip, userAgent, requestId }) {
   const db = scopedDb();
-  const tenantOnlyContext = contextFromSession({ tenantId });
-  const property = await db
-    .for(tenantOnlyContext)
-    .table('properties')
-    .where({ slug: propertySlug })
-    .first();
+  const property = await resolvePropertyBySlug({ db, tenantId, propertySlug });
 
   if (!property) throw new InvalidCredentialsError();
 
@@ -677,6 +751,7 @@ module.exports = {
   requestPasswordReset,
   completePasswordReset,
   acceptInvitation,
+  guestRegister,
   guestLogin,
   platformLogin,
   verifyStaffMfa,

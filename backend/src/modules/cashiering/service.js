@@ -95,6 +95,32 @@ async function propertyBusinessDate({ trx, propertyId }) {
 // ---------------------------------------------------------------------
 
 /**
+ * The reservation's primary folio — created once, reused forever after.
+ * Idempotent: returns the existing folio, however it was opened, rather
+ * than ever inserting a second one. Extracted from `checkIn`'s own inline
+ * insert (`src/modules/reservations/service.js`) so a second real caller —
+ * PLAN.md Phase 4's guest portal, which opens a folio and takes payment
+ * *before* arrival, with no check-in to hang it off yet — cannot silently
+ * create a duplicate primary folio the day that same reservation is walked
+ * up and checked in. `openAdditionalFolio` below still requires a primary
+ * folio to already exist; this is the one function that ever creates it.
+ */
+async function ensurePrimaryFolio({ trx, reservationId }) {
+  const existing = await trx.table('folios').where({ reservation_id: reservationId }).first();
+  if (existing) return existing;
+
+  const dailyRate = await trx.table('reservation_daily_rates').where({ reservation_id: reservationId }).first();
+  const [id] = await trx.table('folios').insert({
+    reservation_id: reservationId,
+    folio_number: generateUlid(),
+    status: 'open',
+    balance: '0.00',
+    currency: dailyRate.currency,
+  });
+  return trx.table('folios').where({ id }).first();
+}
+
+/**
  * Opens an additional folio on a reservation that already has one (opened
  * at check-in — `src/modules/reservations/service.js`'s `checkIn`) —
  * PRODUCT_REQUIREMENTS.md §3.5's "multiple folios per reservation, split
@@ -617,6 +643,7 @@ module.exports = {
   listLineItems,
   listPaymentsForFolio,
   getPayment,
+  ensurePrimaryFolio,
   openAdditionalFolio,
   moveLineItem,
   postCharge,

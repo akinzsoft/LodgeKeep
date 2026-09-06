@@ -45,6 +45,7 @@ function staffAuthRouter({ resolveTenant }) {
 
 function portalAuthRouter({ resolveTenant }) {
   const router = Router();
+  router.post('/register', resolveTenant, controller.guestRegister);
   router.post('/login', resolveTenant, controller.guestLogin);
   return router;
 }
