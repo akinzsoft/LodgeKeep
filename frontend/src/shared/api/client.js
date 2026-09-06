@@ -90,7 +90,7 @@ async function doFetch(path, { method = 'GET', body, token, headers } = {}) {
     throw new ApiError({ ...envelope.error, status: response.status });
   }
 
-  return envelope.data;
+  return envelope;
 }
 
 /**
@@ -101,7 +101,25 @@ async function doFetch(path, { method = 'GET', body, token, headers } = {}) {
  * @param {boolean} [options.auth]   Attach the current access token. Defaults to true — most endpoints need one; the few that don't (login, refresh, password reset) opt out explicitly, so a missing token is a deliberate choice at the call site, not an oversight.
  * @param {object} [options.headers]  Extra headers — e.g. `Idempotency-Key` (ARCHITECTURE.md §7/§11), required on every reservation/front-desk mutation.
  */
-export async function request(path, { method = 'GET', body, auth = true, headers } = {}) {
+export async function request(path, options) {
+  const { data } = await requestEnvelope(path, options);
+  return data;
+}
+
+/**
+ * Same request/retry-on-expiry mechanics as `request()`, but returns the
+ * envelope's `meta` alongside `data` instead of discarding it. Most
+ * endpoints have no reason to read `meta` — `request()` stays the default —
+ * but a few (e.g. `portal.js`'s booking-checkout calls, which carry
+ * `authorizationUrl` in `meta` since it isn't a property of the created
+ * resource itself) genuinely need it.
+ */
+export async function requestWithMeta(path, options) {
+  const { data, meta } = await requestEnvelope(path, options);
+  return { data, meta };
+}
+
+async function requestEnvelope(path, { method = 'GET', body, auth = true, headers } = {}) {
   const token = auth ? getAccessToken() : undefined;
 
   try {

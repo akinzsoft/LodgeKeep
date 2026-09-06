@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { request, configureApiClient, _resetApiClientForTesting } from '../client.js';
+import { request, requestWithMeta, configureApiClient, _resetApiClientForTesting } from '../client.js';
 import { ApiError } from '../ApiError.js';
 
 function mockResponse(status, envelope) {
@@ -104,5 +104,36 @@ describe('request()', () => {
 
     await expect(request('/reservations')).rejects.toMatchObject({ code: 'AUTH_TOKEN_INVALID' });
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('requestWithMeta()', () => {
+  beforeEach(() => {
+    _resetApiClientForTesting();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns both data and meta, unlike request()', async () => {
+    fetch.mockResolvedValueOnce(mockResponse(201, { data: { id: '1' }, meta: { authorizationUrl: 'https://paystack.test/pay/abc' }, error: null }));
+    const result = await requestWithMeta('/portal/bookings', { method: 'POST', auth: false });
+    expect(result).toEqual({ data: { id: '1' }, meta: { authorizationUrl: 'https://paystack.test/pay/abc' } });
+  });
+
+  it('still refreshes once and retries on AUTH_TOKEN_EXPIRED, same as request()', async () => {
+    configureApiClient({
+      accessTokenGetter: () => 'expired-token',
+      accessTokenExpiredHandler: async () => 'fresh-token',
+    });
+    fetch
+      .mockResolvedValueOnce(mockResponse(401, fail('AUTH_TOKEN_EXPIRED', 'expired')))
+      .mockResolvedValueOnce(mockResponse(200, ok({ id: '1' })));
+
+    const result = await requestWithMeta('/portal/account/bookings');
+    expect(result).toEqual({ data: { id: '1' }, meta: {} });
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
