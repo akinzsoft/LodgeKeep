@@ -283,6 +283,16 @@ Host ports are non-default because this machine runs other MySQL instances: **My
 - **Tests**: Jest + Supertest against a **real MySQL test schema**, not mocks — the behaviours worth testing (unique constraints, FK enforcement, transaction rollback, `SELECT ... FOR UPDATE` on the last-room race) are database behaviours. Run with `--runInBand`: the suite shares one schema and the concurrency tests need real connection-level contention. `tests/helpers/global-setup.js` must rebuild the schema from migrations and **refuse to run unless the DB name contains `test`** — `knexfile.js` enforces the same guard at config time.
 - **Frontend**: React, responsive, mobile/tablet-first for front-desk and housekeeping screens.
 
+## Git workflow
+
+**Confirmed decision**: every phase-sized (or gap-closure-sized) unit of work goes through a feature branch and a pull request, not a direct push to `main`. Phase 2.5's `phase-2.5-cashiering-night-audit` branch/PR#1 is the pattern to repeat, not a one-off — everything else in this repo's history (Phase 0/1/2/3, every gap-closure pass, the MFA cross-cutting fix, and Phase 4's guest booking portal) was pushed straight to `main`, and that was the inconsistency, not the PR.
+
+Reasoning, checked against this repo's own history rather than assumed: `akinzsoft` is the sole collaborator (confirmed via the GitHub API) and CI (`.github/workflows/ci.yml`) already triggers on both `push: [main]` and `pull_request: [main]`, so a PR-based flow needs zero new setup and there is no second reviewer to wait on — "review" here means one clean diff to look at before it lands, not a second opinion. The concrete cost of skipping it already happened once: CI run #1 (`fe91f5a384`, "Ignore macOS .DS_Store files") failed directly on `main` because the frontend job was still pinned to Node 20, which jsdom 30 doesn't support — a real red mark on `main`'s own CI history, fixed 35 minutes later by run #2. On a branch, that failure would have stayed on the branch and never touched `main` at all.
+
+**What counts as "phase-sized"**: anything that earns its own `## Status: Phase N` or `## Gap closure: ...` section in this file — multi-file, its own test coverage, its own live-verification pass. Branch name follows the existing `phase-2.5-cashiering-night-audit` convention (`phase-<n>-<short-slug>` or `gap-<short-slug>`), PR into `main`, merge only once CI is green on the branch.
+
+**What does not need a branch**: a single narrowly-scoped hotfix with no ambiguity in the fix itself — the same shape as run #2's own Node-version fix, or the dev-only MFA bypass's own cross-cutting fix, both of which were correct to land immediately rather than wait on branch/PR ceremony. When in doubt, prefer the branch — the cost of one extra PR is small; the cost of a broken `main` (even briefly) is a red CI badge on the one branch everything else is judged against.
+
 ## Architecture invariants
 
 These are the rules most likely to be violated by code that otherwise looks correct. Each has a fuller treatment in the file cited.
