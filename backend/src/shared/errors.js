@@ -115,6 +115,25 @@ class DuplicateEntryError extends AppError {
   }
 }
 
+/**
+ * Wraps a write that can hit a UNIQUE constraint, mapping MySQL's raw
+ * `ER_DUP_ENTRY` to a real `DuplicateEntryError` — originally built inline
+ * in `setup/service.js` (Phase 1); promoted here once `pos/service.js`
+ * became a second module needing the identical shape, the same "promote a
+ * one-off once a second caller needs it" pattern this codebase already
+ * followed for `runIdempotentMutation`/`money.js`/`ulid.js`.
+ */
+async function withDuplicateMapping(resource, message, fn) {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error && error.code === 'ER_DUP_ENTRY') {
+      throw new DuplicateEntryError(resource, message);
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   AppError,
   ScopeDeclarationError,
@@ -122,4 +141,5 @@ module.exports = {
   ScopeViolationError,
   ValidationError,
   DuplicateEntryError,
+  withDuplicateMapping,
 };
