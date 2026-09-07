@@ -16,6 +16,7 @@ const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants, seedPlatformUser, PASSWORD_HASH } = require('../helpers/fixtures');
 const { hashPassword } = require('../../src/auth/password');
 const { issueRefreshToken, hashRefreshToken } = require('../../src/auth/tokens');
+const { COOKIE_NAME: REFRESH_COOKIE_NAME } = require('../../src/auth/refresh-cookie');
 const {
   ACCOUNT_THRESHOLD,
   IP_THRESHOLD,
@@ -74,6 +75,20 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
   const authEventsFor = async (userId) =>
     t.trx('auth_events').where({ user_id: userId }).orderBy('id', 'asc');
 
+  /**
+   * Gap closure: the refresh token now travels only as an HttpOnly cookie
+   * (`src/auth/refresh-cookie.js`), never in the response body — supertest
+   * has no browser-style cookie jar, so a test that needs to carry a
+   * previous response's cookie into its next request must extract and
+   * resend it explicitly, exactly what a real browser does invisibly.
+   */
+  function refreshCookieHeader(res) {
+    const setCookie = res.headers['set-cookie'] || [];
+    const raw = setCookie.find((c) => c.startsWith(`${REFRESH_COOKIE_NAME}=`));
+    if (!raw) throw new Error('Response did not set a refresh-token cookie.');
+    return raw.split(';')[0];
+  }
+
   // ==================================================================
   // AUTH-1 — valid credentials
   // ==================================================================
@@ -87,10 +102,22 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
       expect(res.status).toBe(200);
       expect(res.body.error).toBeNull();
       expect(typeof res.body.data.accessToken).toBe('string');
-      expect(typeof res.body.data.refreshToken).toBe('string');
+      // Gap closure: the refresh token travels ONLY as an HttpOnly cookie now
+      // — never in the JSON body, not even once, so it's never JS-readable.
+      expect(res.body.data.refreshToken).toBeUndefined();
       expect(res.body.data.tenantId).toBe(String(ctx.a.id));
       expect(res.body.data.activePropertyId).toBe(String(loginable.propertyId));
       expect(res.body.data.role).toBe('manager');
+
+      const setCookie = res.headers['set-cookie'] || [];
+      const refreshCookie = setCookie.find((c) => c.startsWith(`${REFRESH_COOKIE_NAME}=`));
+      expect(refreshCookie).toBeDefined();
+      expect(refreshCookie).toMatch(/HttpOnly/i);
+      expect(refreshCookie).toMatch(/SameSite=Lax/i);
+      expect(refreshCookie).toMatch(/Path=\/api\/v1\/auth/i);
+      // Not Secure outside production — see refresh-cookie.js's own header;
+      // a plain-HTTP dev/test origin would silently drop a Secure cookie.
+      expect(refreshCookie).not.toMatch(/Secure/i);
 
       const claims = jwt.decode(res.body.data.accessToken);
       expect(claims.aud).toBe('staff');
@@ -250,8 +277,14 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
         revoked_reason: 'admin_revoked',
       });
 
-      const res = await asTenantA(t.request.post('/api/v1/auth/refresh')).send({ refresh_token: token });
+      const res = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', `${REFRESH_COOKIE_NAME}=${token}`);
 
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('AUTH_TOKEN_INVALID');
+    });
+
+    it('rejects a refresh with no cookie at all — the new endpoint reads no body field any more', async () => {
+      const res = await asTenantA(t.request.post('/api/v1/auth/refresh'));
       expect(res.status).toBe(401);
       expect(res.body.error.code).toBe('AUTH_TOKEN_INVALID');
     });
@@ -261,20 +294,38 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
         email: loginable.email,
         password: STRONG_PASSWORD,
       });
-      const firstRefresh = login.body.data.refreshToken;
+      const firstRefreshCookie = refreshCookieHeader(login);
 
-      const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh')).send({
-        refresh_token: firstRefresh,
-      });
+      const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', firstRefreshCookie);
       expect(rotated.status).toBe(200);
       expect(typeof rotated.body.data.accessToken).toBe('string');
-      expect(rotated.body.data.refreshToken).not.toBe(firstRefresh);
+      expect(rotated.body.data.refreshToken).toBeUndefined();
+      const rotatedCookie = refreshCookieHeader(rotated);
+      expect(rotatedCookie).not.toBe(firstRefreshCookie);
 
-      const replay = await asTenantA(t.request.post('/api/v1/auth/refresh')).send({
-        refresh_token: firstRefresh,
-      });
+      const replay = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', firstRefreshCookie);
       expect(replay.status).toBe(401);
       expect(replay.body.error.code).toBe('AUTH_TOKEN_INVALID');
+    });
+
+    it('returns the same tenantId/userId/role/properties shape login does — a page reload restores its session through THIS endpoint, with nothing else to read them from', async () => {
+      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+        email: loginable.email,
+        password: STRONG_PASSWORD,
+      });
+
+      const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh'))
+        .set('Cookie', refreshCookieHeader(login))
+        .send({ property_id: String(loginable.propertyId) });
+
+      expect(rotated.status).toBe(200);
+      expect(rotated.body.data.tenantId).toBe(String(ctx.a.id));
+      expect(rotated.body.data.userId).toBe(String(loginable.id));
+      expect(rotated.body.data.activePropertyId).toBe(String(loginable.propertyId));
+      expect(rotated.body.data.role).toBe('manager');
+      expect(rotated.body.data.properties).toEqual(
+        expect.arrayContaining([{ propertyId: String(loginable.propertyId), role: 'manager' }])
+      );
     });
 
     it('restores the active property across a refresh when the caller supplies it, re-verified rather than trusted', async () => {
@@ -283,27 +334,50 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
         password: STRONG_PASSWORD,
       });
 
-      const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh')).send({
-        refresh_token: login.body.data.refreshToken,
-        property_id: String(loginable.propertyId),
-      });
+      const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh'))
+        .set('Cookie', refreshCookieHeader(login))
+        .send({ property_id: String(loginable.propertyId) });
       expect(rotated.status).toBe(200);
       const claims = jwt.decode(rotated.body.data.accessToken);
       expect(claims.property_id).toBe(String(loginable.propertyId));
     });
 
-    it('drops the active property across a refresh when the caller supplies none — never invents one', async () => {
+    it('defaults the active property across a refresh when the caller supplies none and holds exactly one — same default staffLogin itself uses, so a page-reload bootstrap resumes where it left off', async () => {
       const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
         email: loginable.email,
         password: STRONG_PASSWORD,
       });
 
-      const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh')).send({
-        refresh_token: login.body.data.refreshToken,
+      const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', refreshCookieHeader(login));
+      expect(rotated.status).toBe(200);
+      const claims = jwt.decode(rotated.body.data.accessToken);
+      expect(claims.property_id).toBe(String(loginable.propertyId));
+      expect(rotated.body.data.activePropertyId).toBe(String(loginable.propertyId));
+    });
+
+    it('still drops the active property when the caller supplies none AND holds more than one — genuinely ambiguous, never guessed', async () => {
+      const email = 'multi-property@example.com';
+      const [userId] = await t.trx('users').insert({
+        tenant_id: ctx.a.id,
+        email,
+        password_hash: await hashPassword(STRONG_PASSWORD),
+        first_name: 'Multi',
+        last_name: 'Property',
+        status: 'active',
       });
+      await t.trx('user_property_access').insert([
+        { tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, user_id: userId, role: 'manager' },
+        { tenant_id: ctx.a.id, property_id: ctx.a.properties[1].id, user_id: userId, role: 'manager' },
+      ]);
+
+      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({ email, password: STRONG_PASSWORD });
+      expect(jwt.decode(login.body.data.accessToken).property_id).toBeNull(); // login's own ambiguous case
+
+      const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', refreshCookieHeader(login));
       expect(rotated.status).toBe(200);
       const claims = jwt.decode(rotated.body.data.accessToken);
       expect(claims.property_id).toBeNull();
+      expect(rotated.body.data.activePropertyId).toBeNull();
     });
 
     it('refuses to restore a property the caller no longer holds — re-verified, not trusted (SECURITY.md §3)', async () => {
@@ -312,13 +386,56 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
         password: STRONG_PASSWORD,
       });
 
-      const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh')).send({
-        refresh_token: login.body.data.refreshToken,
-        property_id: String(ctx.a.properties[1].id), // loginable has no grant here
-      });
+      const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh'))
+        .set('Cookie', refreshCookieHeader(login))
+        .send({ property_id: String(ctx.a.properties[1].id) }); // loginable has no grant here
       expect(rotated.status).toBe(200);
       const claims = jwt.decode(rotated.body.data.accessToken);
       expect(claims.property_id).toBeNull();
+    });
+  });
+
+  // ==================================================================
+  // Gap closure: HttpOnly refresh-token cookie (src/auth/refresh-cookie.js)
+  // — no TESTING.md-numbered case exists for logout itself; grouped here
+  // since it exercises the same cookie mechanism AUTH-6 does.
+  // ==================================================================
+  describe('staff logout — cookie-based', () => {
+    it('revokes the session behind the cookie and clears the cookie', async () => {
+      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+        email: loginable.email,
+        password: STRONG_PASSWORD,
+      });
+      const accessToken = login.body.data.accessToken;
+      const loginCookie = refreshCookieHeader(login);
+
+      const res = await t.request
+        .post('/api/v1/auth/logout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Cookie', loginCookie);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.revoked).toBe(true);
+      const cleared = (res.headers['set-cookie'] || []).find((c) => c.startsWith(`${REFRESH_COOKIE_NAME}=`));
+      expect(cleared).toBeDefined();
+      expect(cleared).toMatch(/Expires=Thu, 01 Jan 1970/i);
+
+      const refreshAfterLogout = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', loginCookie);
+      expect(refreshAfterLogout.status).toBe(401);
+      expect(refreshAfterLogout.body.error.code).toBe('AUTH_TOKEN_INVALID');
+    });
+
+    it('is a no-op (200, revoked: false) rather than an error when no cookie is present', async () => {
+      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+        email: loginable.email,
+        password: STRONG_PASSWORD,
+      });
+      const accessToken = login.body.data.accessToken;
+
+      const res = await t.request.post('/api/v1/auth/logout').set('Authorization', `Bearer ${accessToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.revoked).toBe(false);
     });
   });
 
@@ -405,7 +522,7 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
         password: STRONG_PASSWORD,
       });
       expect(login.status).toBe(200);
-      const liveRefreshToken = login.body.data.refreshToken;
+      const liveRefreshCookie = refreshCookieHeader(login);
 
       const forgot = await asTenantA(t.request.post('/api/v1/auth/password/forgot')).send({ email });
       const resetToken = forgot.body.data.dev_only_token;
@@ -415,9 +532,7 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
       });
       expect(completed.status).toBe(200);
 
-      const refreshAfterReset = await asTenantA(t.request.post('/api/v1/auth/refresh')).send({
-        refresh_token: liveRefreshToken,
-      });
+      const refreshAfterReset = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', liveRefreshCookie);
       expect(refreshAfterReset.status).toBe(401);
 
       const session = await t.trx('sessions').where({ user_id: userId }).first();
@@ -470,7 +585,10 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.status).toBe('ok');
       expect(typeof res.body.data.accessToken).toBe('string');
-      expect(typeof res.body.data.refreshToken).toBe('string');
+      // Same gap closure as AUTH-1 — the refresh token never touches the body.
+      expect(res.body.data.refreshToken).toBeUndefined();
+      const setCookie = res.headers['set-cookie'] || [];
+      expect(setCookie.some((c) => c.startsWith(`${REFRESH_COOKIE_NAME}=`))).toBe(true);
       expect(res.body.data.role).toBe('admin');
 
       const events = await authEventsFor(adminNoMfa.id);

@@ -13,7 +13,14 @@ import { request } from './client.js';
  * calls them and decides what to do with the result.
  */
 
-/** @returns {Promise<{status: 'ok', accessToken, refreshToken, tenantId, userId, activePropertyId, role, properties} | {status: 'mfa_challenge_required', challengeToken: string}>} */
+/**
+ * @returns {Promise<{status: 'ok', accessToken, tenantId, userId, activePropertyId, role, properties} | {status: 'mfa_challenge_required', challengeToken: string}>}
+ *
+ * Gap closure: the refresh token no longer travels in this response at all
+ * — the backend sets it as an HttpOnly cookie instead (`Set-Cookie`,
+ * `src/auth/refresh-cookie.js`), never JS-readable even transiently. That
+ * cookie is what survives a page reload; nothing here needs to hold it.
+ */
 export function login({ email, password }) {
   return request('/auth/login', { method: 'POST', body: { email, password }, auth: false });
 }
@@ -25,7 +32,7 @@ export function login({ email, password }) {
  * input returns the same `AUTH_MFA_NOT_IMPLEMENTED` 501 this endpoint has
  * always returned.
  *
- * @returns {Promise<{status: 'ok', accessToken, refreshToken, tenantId, userId, activePropertyId, role, properties}>}
+ * @returns {Promise<{status: 'ok', accessToken, tenantId, userId, activePropertyId, role, properties}>}
  */
 export function verifyMfa({ challengeToken, code }) {
   return request('/auth/mfa/verify', { method: 'POST', body: { challenge_token: challengeToken, code }, auth: false });
@@ -37,19 +44,26 @@ export function verifyMfa({ challengeToken, code }) {
  * property is restored (after server-side re-verification, never trusted
  * outright) only if the caller states what it currently has active.
  *
- * @returns {Promise<{accessToken: string, refreshToken: string}>}
+ * The refresh token itself is never passed here — it travels as the
+ * HttpOnly cookie the browser attaches automatically (same-origin, via the
+ * dev proxy or in production). This is also how a page reload restores a
+ * session: nothing survives in memory, but the cookie does, so calling this
+ * with no arguments at all is a valid "is there still a session?" probe —
+ * see `AuthContext.jsx`'s mount-time bootstrap.
+ *
+ * @returns {Promise<{accessToken: string, tenantId: string, userId: string, activePropertyId: string|null, role: string|null, properties: Array<{propertyId: string, role: string}>}>}
  */
-export function refresh({ refreshToken, propertyId }) {
+export function refresh({ propertyId } = {}) {
   return request('/auth/refresh', {
     method: 'POST',
-    body: { refresh_token: refreshToken, ...(propertyId ? { property_id: propertyId } : {}) },
+    body: propertyId ? { property_id: propertyId } : {},
     auth: false,
   });
 }
 
 /** @returns {Promise<{revoked: boolean}>} */
-export function logout({ refreshToken }) {
-  return request('/auth/logout', { method: 'POST', body: { refresh_token: refreshToken } });
+export function logout() {
+  return request('/auth/logout', { method: 'POST', body: {} });
 }
 
 /** @returns {Promise<{accessToken: string, activePropertyId: string, role: string}>} */

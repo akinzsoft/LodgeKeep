@@ -49,6 +49,13 @@ describe('request()', () => {
     expect(init.headers.Authorization).toBe('Bearer the-token');
   });
 
+  it('sends credentials same-origin on every call — gap closure: the staff refresh token now travels as an HttpOnly cookie, which fetch must be told to send/accept', async () => {
+    fetch.mockResolvedValueOnce(mockResponse(200, ok({})));
+    await request('/auth/login', { auth: false });
+    const [, init] = fetch.mock.calls[0];
+    expect(init.credentials).toBe('same-origin');
+  });
+
   it('attaches no Authorization header for an endpoint that opts out (login, refresh, ...)', async () => {
     configureApiClient({ accessTokenGetter: () => 'the-token', accessTokenExpiredHandler: null });
     fetch.mockResolvedValueOnce(mockResponse(200, ok({})));

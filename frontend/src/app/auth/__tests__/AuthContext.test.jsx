@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, renderHook, act } from '@testing-library/react';
+import { render, renderHook, act, waitFor } from '@testing-library/react';
 import { AuthProvider, useAuth } from '../AuthContext.jsx';
 import { ApiError } from '../../../shared/api/ApiError.js';
 
@@ -35,22 +35,40 @@ function wrapper({ children }) {
   return <AuthProvider>{children}</AuthProvider>;
 }
 
+/**
+ * Gap closure: `AuthProvider` now spends its first render in `bootstrapping`
+ * while it probes the (mocked) refresh cookie — see `AuthContext.jsx`'s own
+ * header. Every test below needs that settled before exercising `login()`
+ * etc., the same way a real browser's render-gating (`main.jsx` shows
+ * `BootstrappingScreen`, never the login form, until this resolves) means a
+ * real user could never submit a login while it's in flight either.
+ * `mocks.refresh` defaults to "no session" so bootstrap settles to `idle`,
+ * matching this file's old starting point, unless a test overrides it.
+ */
+async function renderSettledAuth() {
+  const view = renderHook(() => useAuth(), { wrapper });
+  await waitFor(() => expect(view.result.current.status).not.toBe('bootstrapping'));
+  return view;
+}
+
 describe('AuthProvider / useAuth', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
+    mocks.refresh.mockRejectedValue(new ApiError({ code: 'AUTH_TOKEN_INVALID', message: 'No session to refresh.' }));
   });
 
-  it('starts idle with no user', () => {
+  it('bootstraps by probing the refresh cookie, then settles to idle with no user when none exists', async () => {
     const { result } = renderHook(() => useAuth(), { wrapper });
-    expect(result.current.status).toBe('idle');
+    expect(result.current.status).toBe('bootstrapping');
+
+    await waitFor(() => expect(result.current.status).toBe('idle'));
     expect(result.current.user).toBeNull();
+    expect(mocks.refresh).toHaveBeenCalledWith({});
   });
 
-  it('login() stores the session and moves to authenticated', async () => {
-    mocks.login.mockResolvedValue({
-      status: 'ok',
-      accessToken: 'access-1',
-      refreshToken: 'refresh-1',
+  it('bootstraps straight to authenticated when a valid refresh cookie already restores a session', async () => {
+    mocks.refresh.mockResolvedValue({
+      accessToken: 'restored-access',
       tenantId: '1',
       userId: '2',
       activePropertyId: '3',
@@ -59,6 +77,31 @@ describe('AuthProvider / useAuth', () => {
     });
 
     const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe('authenticated'));
+
+    expect(result.current.user).toMatchObject({ userId: '2', tenantId: '1', activePropertyId: '3', role: 'manager' });
+    // No login() was ever called this page load — there is no email to show.
+    expect(result.current.user.email).toBeUndefined();
+  });
+
+  it('starts idle with no user', async () => {
+    const { result } = await renderSettledAuth();
+    expect(result.current.status).toBe('idle');
+    expect(result.current.user).toBeNull();
+  });
+
+  it('login() stores the session and moves to authenticated', async () => {
+    mocks.login.mockResolvedValue({
+      status: 'ok',
+      accessToken: 'access-1',
+      tenantId: '1',
+      userId: '2',
+      activePropertyId: '3',
+      role: 'manager',
+      properties: [{ propertyId: '3', role: 'manager' }],
+    });
+
+    const { result } = await renderSettledAuth();
     await act(async () => {
       await result.current.login({ email: 'sam@example.com', password: 'x' });
     });
@@ -77,7 +120,7 @@ describe('AuthProvider / useAuth', () => {
   it('login() with an MFA challenge does not authenticate (TESTING.md AUTH-9)', async () => {
     mocks.login.mockResolvedValue({ status: 'mfa_challenge_required' });
 
-    const { result } = renderHook(() => useAuth(), { wrapper });
+    const { result } = await renderSettledAuth();
     await act(async () => {
       await result.current.login({ email: 'admin@example.com', password: 'x' });
     });
@@ -92,7 +135,6 @@ describe('AuthProvider / useAuth', () => {
     mocks.verifyMfa.mockResolvedValue({
       status: 'ok',
       accessToken: 'access-1',
-      refreshToken: 'refresh-1',
       tenantId: '1',
       userId: '2',
       activePropertyId: '3',
@@ -100,7 +142,7 @@ describe('AuthProvider / useAuth', () => {
       properties: [{ propertyId: '3', role: 'admin' }],
     });
 
-    const { result } = renderHook(() => useAuth(), { wrapper });
+    const { result } = await renderSettledAuth();
     await act(async () => {
       await result.current.login({ email: 'admin@example.com', password: 'x' });
     });
@@ -122,7 +164,7 @@ describe('AuthProvider / useAuth', () => {
       new ApiError({ code: 'AUTH_MFA_NOT_IMPLEMENTED', message: 'MFA verification is not yet available.' })
     );
 
-    const { result } = renderHook(() => useAuth(), { wrapper });
+    const { result } = await renderSettledAuth();
     await act(async () => {
       await result.current.login({ email: 'admin@example.com', password: 'x' });
     });
@@ -137,16 +179,35 @@ describe('AuthProvider / useAuth', () => {
   });
 
   it('verifyMfa() rejects immediately with no pending challenge, and never calls the API', async () => {
-    const { result } = renderHook(() => useAuth(), { wrapper });
+    const { result } = await renderSettledAuth();
 
     await expect(result.current.verifyMfa('000000')).rejects.toThrow('No pending MFA challenge to verify.');
     expect(mocks.verifyMfa).not.toHaveBeenCalled();
   });
 
+  it('cancelMfaChallenge() clears the pending challenge and returns to idle WITHOUT calling logout — no session exists yet at this stage to revoke', async () => {
+    mocks.login.mockResolvedValue({ status: 'mfa_challenge_required', challengeToken: 'challenge-abc' });
+
+    const { result } = await renderSettledAuth();
+    await act(async () => {
+      await result.current.login({ email: 'admin@example.com', password: 'x' });
+    });
+    expect(result.current.status).toBe('mfa_required');
+
+    act(() => {
+      result.current.cancelMfaChallenge();
+    });
+
+    expect(result.current.status).toBe('idle');
+    expect(mocks.logout).not.toHaveBeenCalled();
+
+    await expect(result.current.verifyMfa('000000')).rejects.toThrow('No pending MFA challenge to verify.');
+  });
+
   it('login() failure surfaces a plain-sentence error, never a raw exception (DESIGN_SYSTEM.md §2)', async () => {
     mocks.login.mockRejectedValue(new ApiError({ code: 'AUTH_INVALID_CREDENTIALS', message: 'Email or password is incorrect.' }));
 
-    const { result } = renderHook(() => useAuth(), { wrapper });
+    const { result } = await renderSettledAuth();
     await act(async () => {
       await expect(result.current.login({ email: 'x@example.com', password: 'wrong' })).rejects.toBeDefined();
     });
@@ -155,13 +216,13 @@ describe('AuthProvider / useAuth', () => {
     expect(result.current.error).toEqual({ code: 'AUTH_INVALID_CREDENTIALS', message: 'Email or password is incorrect.' });
   });
 
-  it('logout() clears the session even when the network call fails (best-effort)', async () => {
+  it('logout() clears the session even when the network call fails (best-effort), and sends no refresh token — the cookie travels itself', async () => {
     mocks.login.mockResolvedValue({
-      status: 'ok', accessToken: 'a', refreshToken: 'r', tenantId: '1', userId: '2', activePropertyId: null, role: 'manager', properties: [],
+      status: 'ok', accessToken: 'a', tenantId: '1', userId: '2', activePropertyId: null, role: 'manager', properties: [],
     });
     mocks.logout.mockRejectedValue(new Error('network down'));
 
-    const { result } = renderHook(() => useAuth(), { wrapper });
+    const { result } = await renderSettledAuth();
     await act(async () => {
       await result.current.login({ email: 'sam@example.com', password: 'x' });
     });
@@ -171,17 +232,17 @@ describe('AuthProvider / useAuth', () => {
 
     expect(result.current.status).toBe('idle');
     expect(result.current.user).toBeNull();
-    expect(mocks.logout).toHaveBeenCalledWith({ refreshToken: 'r' });
+    expect(mocks.logout).toHaveBeenCalledWith();
   });
 
   it('switchProperty() updates the active property and role from the response', async () => {
     mocks.login.mockResolvedValue({
-      status: 'ok', accessToken: 'a', refreshToken: 'r', tenantId: '1', userId: '2', activePropertyId: '3', role: 'manager',
+      status: 'ok', accessToken: 'a', tenantId: '1', userId: '2', activePropertyId: '3', role: 'manager',
       properties: [{ propertyId: '3', role: 'manager' }, { propertyId: '4', role: 'front_desk' }],
     });
     mocks.switchProperty.mockResolvedValue({ accessToken: 'a2', activePropertyId: '4', role: 'front_desk' });
 
-    const { result } = renderHook(() => useAuth(), { wrapper });
+    const { result } = await renderSettledAuth();
     await act(async () => {
       await result.current.login({ email: 'sam@example.com', password: 'x' });
     });
@@ -196,11 +257,10 @@ describe('AuthProvider / useAuth', () => {
 
   it('registers a refresh handler with configureApiClient that moves to session_expired on a failed refresh (TESTING.md FE-6)', async () => {
     mocks.login.mockResolvedValue({
-      status: 'ok', accessToken: 'a', refreshToken: 'r', tenantId: '1', userId: '2', activePropertyId: null, role: 'manager', properties: [],
+      status: 'ok', accessToken: 'a', tenantId: '1', userId: '2', activePropertyId: null, role: 'manager', properties: [],
     });
-    mocks.refresh.mockRejectedValue(new ApiError({ code: 'AUTH_TOKEN_INVALID', message: 'This session has expired. Please log in again.' }));
 
-    const { result } = renderHook(() => useAuth(), { wrapper });
+    const { result } = await renderSettledAuth();
     await act(async () => {
       await result.current.login({ email: 'sam@example.com', password: 'x' });
     });
@@ -208,6 +268,7 @@ describe('AuthProvider / useAuth', () => {
     expect(mocks.configureApiClient).toHaveBeenCalled();
     const { accessTokenExpiredHandler } = mocks.configureApiClient.mock.calls.at(-1)[0];
 
+    mocks.refresh.mockRejectedValue(new ApiError({ code: 'AUTH_TOKEN_INVALID', message: 'This session has expired. Please log in again.' }));
     await act(async () => {
       await expect(accessTokenExpiredHandler()).rejects.toBeDefined();
     });
@@ -217,25 +278,25 @@ describe('AuthProvider / useAuth', () => {
     expect(result.current.error.message).toMatch(/session has expired/i);
   });
 
-  it('the refresh handler restores a new access token on success, without changing status', async () => {
+  it('the refresh handler restores a new access token on success, without changing status, and sends no refresh token itself', async () => {
     mocks.login.mockResolvedValue({
-      status: 'ok', accessToken: 'a', refreshToken: 'r', tenantId: '1', userId: '2', activePropertyId: '3', role: 'manager', properties: [],
+      status: 'ok', accessToken: 'a', tenantId: '1', userId: '2', activePropertyId: '3', role: 'manager', properties: [],
     });
-    mocks.refresh.mockResolvedValue({ accessToken: 'a2', refreshToken: 'r2' });
 
-    const { result } = renderHook(() => useAuth(), { wrapper });
+    const { result } = await renderSettledAuth();
     await act(async () => {
       await result.current.login({ email: 'sam@example.com', password: 'x' });
     });
 
     const { accessTokenExpiredHandler } = mocks.configureApiClient.mock.calls.at(-1)[0];
+    mocks.refresh.mockResolvedValue({ accessToken: 'a2' });
     let newToken;
     await act(async () => {
       newToken = await accessTokenExpiredHandler();
     });
 
     expect(newToken).toBe('a2');
-    expect(mocks.refresh).toHaveBeenCalledWith({ refreshToken: 'r', propertyId: '3' });
+    expect(mocks.refresh).toHaveBeenCalledWith({ propertyId: '3' });
     expect(result.current.status).toBe('authenticated');
   });
 

@@ -291,12 +291,40 @@ async function staffRefresh({ tenantId, refreshToken, propertyId, ip, userAgent,
     .where({ id: session.id })
     .update({ revoked_at: new Date(), revoked_reason: 'superseded' });
 
+  // Gap closure: a page reload now bootstraps its session through THIS
+  // endpoint (the HttpOnly refresh cookie survives a reload; nothing else
+  // in memory does — see `refresh-cookie.js`'s header) rather than only
+  // ever following a real login, so the response needs the same
+  // tenantId/userId/role/properties shape `issueStaffSession` returns, not
+  // just a bare access token — a frontend restoring a session this way has
+  // nothing else to read them from. Fetched once and reused for both the
+  // active-property re-verification below and the returned `properties`
+  // list, rather than a second `roleAtProperty` round trip for the same
+  // table `listPropertyAccess` already reads.
+  const access = await listPropertyAccess(authedScoped, authedContext, session.user_id);
+
   // Re-verify the active property survived (SECURITY.md §3) rather than
-  // trusting the caller's claim outright.
+  // trusting the caller's claim outright. When the caller supplies none at
+  // all — the very first refresh after a page reload, `AuthContext.jsx`'s
+  // bootstrap, has nothing in memory to send — fall back to the same
+  // "exactly one property, so it's unambiguous" default `staffLogin` itself
+  // uses, rather than always coming back with no active property for the
+  // common single-property tenant. A genuinely ambiguous (multi-property)
+  // user still gets `null` here, same as login, and must choose explicitly.
   let activePropertyId = null;
+  let role = null;
   if (propertyId) {
-    const role = await roleAtProperty(authedScoped, authedContext, session.user_id, propertyId);
-    activePropertyId = role ? propertyId : null;
+    const grant = access.find((g) => String(g.property_id) === String(propertyId));
+    if (grant) {
+      activePropertyId = propertyId;
+      role = grant.role;
+    }
+  } else {
+    const defaulted = defaultActiveProperty(access);
+    if (defaulted) {
+      activePropertyId = defaulted;
+      role = access.find((g) => String(g.property_id) === String(defaulted))?.role ?? null;
+    }
   }
 
   const accessToken = signAccessToken({
@@ -325,7 +353,15 @@ async function staffRefresh({ tenantId, refreshToken, propertyId, ip, userAgent,
     requestId,
   });
 
-  return { accessToken, refreshToken: newRefreshToken };
+  return {
+    accessToken,
+    refreshToken: newRefreshToken,
+    tenantId: String(tenantId),
+    userId: String(session.user_id),
+    activePropertyId: activePropertyId ? String(activePropertyId) : null,
+    role,
+    properties: access.map((grant) => ({ propertyId: String(grant.property_id), role: grant.role })),
+  };
 }
 
 /** Revokes the session behind one refresh token — the client's own "log out". */

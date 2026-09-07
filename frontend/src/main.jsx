@@ -15,7 +15,7 @@ import { ReportingScreen } from './app/reporting/ReportingScreen.jsx';
 import { CashieringScreen } from './app/cashiering/CashieringScreen.jsx';
 import { NightAuditScreen } from './app/night-audit/NightAuditScreen.jsx';
 import { ProfilesScreen } from './app/profiles/ProfilesScreen.jsx';
-import { Toast } from './shared/components/index.js';
+import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { notificationsApi } from './shared/api/index.js';
 import { PortalApp } from './portal/PortalApp.jsx';
@@ -28,6 +28,23 @@ import { PortalApp } from './portal/PortalApp.jsx';
  * independent hardcoded literals drifting apart.
  */
 const BUSINESS_DATE = '2026-09-04';
+
+/**
+ * Gap closure: shown only while `AuthContext.jsx` is probing the HttpOnly
+ * refresh cookie on first load — DESIGN_SYSTEM.md §2's "skeleton
+ * placeholders ... never a spinner over stale numbers," applied to the one
+ * screen that isn't really "loading data" so much as "not sure yet which
+ * screen to show." Brief by construction (one network round trip), so this
+ * stays a plain shape rather than a full second app-shell skeleton.
+ */
+function BootstrappingScreen() {
+  return (
+    <div className={styles.bootstrapping}>
+      <Skeleton variant="circle" height="3rem" />
+      <Skeleton variant="text" width="10rem" />
+    </div>
+  );
+}
 
 /**
  * Dev entry point — real `AuthProvider` + `shared/api` wiring against a real
@@ -103,6 +120,15 @@ function Demo() {
     return <AcceptInvitationScreen token={inviteToken} isOffline={!isOnline} />;
   }
 
+  // Gap closure: a page reload now probes the HttpOnly refresh cookie
+  // (`AuthContext.jsx`'s own header) before deciding whether to show the
+  // login screen or the app shell — this is that brief window, never the
+  // login form itself, so a session that IS about to restore doesn't flash
+  // it first.
+  if (status === 'bootstrapping') {
+    return <BootstrappingScreen />;
+  }
+
   if (status === 'mfa_required') {
     return <MfaChallengeScreen />;
   }
@@ -112,6 +138,11 @@ function Demo() {
   }
 
   const activeProperty = user.properties.find((property) => property.propertyId === user.activePropertyId);
+  // Gap closure: a session restored via the bootstrap refresh (AuthContext.jsx's
+  // own header) never submitted a login form this page load, so it carries
+  // no email at all — the same "Property {id}" labelled-placeholder
+  // precedent this file already uses for the missing property name.
+  const displayName = user.email ?? `User ${user.userId}`;
 
   async function handleSwitchProperty(propertyId) {
     setSwitchError(null);
@@ -127,7 +158,7 @@ function Demo() {
 
   return (
     <AppShell
-      user={{ name: user.email, role: user.role }}
+      user={{ name: displayName, role: user.role }}
       permissions={
         new Set([
           'setup.view',
@@ -186,7 +217,7 @@ function Demo() {
         <ProfilesScreen />
       ) : (
         <HomeDashboard
-          greetingName={user.email}
+          greetingName={displayName}
           businessDate={BUSINESS_DATE}
           activePropertyId={user.activePropertyId}
           onNavigateToSetup={() => setActiveItemKey('setup')}
