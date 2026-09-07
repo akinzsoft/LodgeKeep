@@ -73,6 +73,16 @@ function reservationsRouter() {
   router.get('/front-desk/departures', requirePermission('front_desk.view'), controller.listDepartures);
   router.get('/front-desk/in-house', requirePermission('front_desk.view'), controller.listInHouse);
 
+  // Gap closure: actual free room numbers as of the property's current
+  // business date — see `service.listFreeRoomsNow`'s own header. Gated on
+  // `front_desk.view` (not `reservations.view`) since "which rooms are
+  // physically free right now" is a front-desk-shaped question (walk-ins,
+  // check-in); the Availability screen's own permission fetches
+  // `reservations.view` for everything else and treats a 403 here as
+  // "hide this panel," the same per-widget degradation
+  // `HomeDashboard`'s own KPI cards already use.
+  router.get('/front-desk/free-rooms', requirePermission('front_desk.view'), controller.listFreeRooms);
+
   router.post('/reservations/:id/check-in', requirePermission('front_desk.manage'), controller.checkIn);
   router.post('/reservations/:id/check-out', requirePermission('front_desk.manage'), controller.checkOut);
   router.post('/reservations/:id/room-move', requirePermission('front_desk.manage'), controller.roomMove);

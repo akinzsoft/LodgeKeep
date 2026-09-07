@@ -108,6 +108,20 @@ export function listInHouse() {
   return request('/front-desk/in-house');
 }
 
+/**
+ * Gap closure: actual room numbers free as of the property's current
+ * business date — see `backend/src/modules/reservations/service.js`'s
+ * `listFreeRoomsNow` for why this is a distinct read from
+ * `checkAvailability`'s aggregate sellable count. `roomTypeId` is optional —
+ * omitted for check-in/room-move, which deliberately allow any room type
+ * (an upgrade); supplied by the availability search, scoped to one type.
+ * @param {string} [roomTypeId]
+ */
+export function listFreeRooms(roomTypeId) {
+  const query = roomTypeId ? `?${new URLSearchParams({ room_type_id: roomTypeId })}` : '';
+  return request(`/front-desk/free-rooms${query}`);
+}
+
 /** @param {string} id @param {{roomId: string, overrideDirty?: boolean}} params */
 export function checkIn(id, { roomId, overrideDirty }) {
   return request(`/reservations/${id}/check-in`, {

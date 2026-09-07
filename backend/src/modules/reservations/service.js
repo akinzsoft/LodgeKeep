@@ -23,7 +23,7 @@
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { writeOutboxEvent } = require('../../shared/outbox');
-const { livePhysicalCount: sharedLivePhysicalCount } = require('../../shared/room-availability');
+const { livePhysicalCount: sharedLivePhysicalCount, listFreeRoomsNow: sharedListFreeRoomsNow } = require('../../shared/room-availability');
 const { generateUlid } = require('../../shared/ulid');
 const { resolveRate } = require('../setup/service');
 const { postAdjustment: postFolioAdjustment, ensurePrimaryFolio } = require('../cashiering/service');
@@ -309,6 +309,7 @@ async function createReservation({
   marketSegmentId,
   bookingSourceId,
   cancellationPolicyId,
+  preferredRoomId,
 }) {
   if (!(departureDate > arrivalDate)) {
     throw new ArrivalAfterDepartureError();
@@ -339,6 +340,23 @@ async function createReservation({
     );
   }
 
+  // Gap closure: a guest-requested room number, stored as a REQUEST, never a
+  // lock — see `checkIn`, which still accepts any `roomId` unmodified.
+  // Validated the same friendly way as rate_code_id/market_segment_id above
+  // (existence, then a same-room-type sanity check) rather than surfacing a
+  // raw FK-violation error — but deliberately NOT checked against current
+  // occupancy: a preference for a future date can't be, and shouldn't be,
+  // gated on who happens to be in that room today.
+  if (preferredRoomId != null) {
+    const preferredRoom = await trx.table('rooms').where({ id: preferredRoomId }).first();
+    if (!preferredRoom) {
+      throw new ValidationError('PREFERRED_ROOM_NOT_FOUND', 'The specified preferred room does not exist at this property.');
+    }
+    if (String(preferredRoom.room_type_id) !== String(roomTypeId)) {
+      throw new ValidationError('PREFERRED_ROOM_TYPE_MISMATCH', 'The specified preferred room does not belong to the requested room type.');
+    }
+  }
+
   let status = asHold ? 'tentative' : 'confirmed';
   try {
     await reserveInventoryForDates({ trx, roomTypeId, stayDates });
@@ -363,6 +381,7 @@ async function createReservation({
     market_segment_id: marketSegmentId ?? null,
     booking_source_id: bookingSourceId ?? null,
     cancellation_policy_id: cancellationPolicyId ?? null,
+    preferred_room_id: preferredRoomId ?? null,
   });
 
   // TESTING.md RES-7/RES-8: resolve and snapshot the rate for every night
@@ -758,6 +777,21 @@ async function listInHouse({ context }) {
   return db.table('reservations').where({ status: 'checked_in' }).orderBy('id');
 }
 
+/**
+ * Gap closure: "which actual room numbers are free right now," for a room
+ * type — a genuinely different question from `checkAvailability`'s
+ * sellable-count-vs-threshold, and answerable only as of the property's
+ * CURRENT business date (see `room-availability.js`'s own header for why a
+ * future date can't be). Serves both the walk-in path (§3.3's "surface
+ * tonight's oversell position... before allowing the sale," shown alongside
+ * it) and the check-in room picker.
+ */
+async function listFreeRoomsNow({ context, roomTypeId }) {
+  const db = scopedDb().for(context);
+  const stayDate = await propertyBusinessDate({ context });
+  return sharedListFreeRoomsNow({ db, roomTypeId, stayDate });
+}
+
 module.exports = {
   generateUlid,
   expandStayDates,
@@ -786,4 +820,5 @@ module.exports = {
   listArrivals,
   listDepartures,
   listInHouse,
+  listFreeRoomsNow,
 };

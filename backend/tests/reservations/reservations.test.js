@@ -416,6 +416,226 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
   });
 
   // ====================================================================
+  // Gap closure: preferred room at booking time (a request, never a lock)
+  // and "which room numbers are free right now" (front-desk/free-rooms)
+  // ====================================================================
+  describe('preferred room (a request, not a lock)', () => {
+    let roomTypeId;
+    let otherRoomTypeId;
+    let preferredRoomId;
+    let wrongTypeRoomId;
+    let rateCodeId;
+
+    beforeAll(async () => {
+      roomTypeId = await createRoomType(ctx.a, { code: 'PREF' });
+      otherRoomTypeId = await createRoomType(ctx.a, { code: 'PREFOTHER' });
+      preferredRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'PREF1' });
+      wrongTypeRoomId = await createRoom(ctx.a, { roomTypeId: otherRoomTypeId, roomNumber: 'PREFOTHER1' });
+      rateCodeId = await createRateCode(ctx.a, { code: 'PREFRATE' });
+    });
+
+    it('books a reservation carrying a preferred_room_id that belongs to the requested room type', async () => {
+      const res = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-07-01',
+          departure_date: '2027-07-02',
+          preferred_room_id: String(preferredRoomId),
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.data.preferred_room_id).toBe(String(preferredRoomId));
+    });
+
+    it('does not require the preferred room to be currently free — it is a preference, never a lock', async () => {
+      // preferredRoomId was never checked in against; booking it twice as a
+      // preference for two different stays must not conflict with itself —
+      // there is no assignment, so nothing to conflict over.
+      const res = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-08-01',
+          departure_date: '2027-08-02',
+          preferred_room_id: String(preferredRoomId),
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.data.preferred_room_id).toBe(String(preferredRoomId));
+    });
+
+    it('rejects a preferred_room_id belonging to a different room type', async () => {
+      const res = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-07-03',
+          departure_date: '2027-07-04',
+          preferred_room_id: String(wrongTypeRoomId),
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_PREFERRED_ROOM_TYPE_MISMATCH');
+    });
+
+    it('rejects a preferred_room_id that does not exist at this property', async () => {
+      const res = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-07-05',
+          departure_date: '2027-07-06',
+          preferred_room_id: '999999999',
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_PREFERRED_ROOM_NOT_FOUND');
+    });
+
+    it("rejects another tenant's room id — proves the composite FK is scoped, not just existence", async () => {
+      const otherTenantRoomTypeId = await createRoomType(ctx.b, { code: 'PREFB' });
+      const otherTenantRoomId = await createRoom(ctx.b, { roomTypeId: otherTenantRoomTypeId, roomNumber: 'PREFB1' });
+      const res = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-07-07',
+          departure_date: '2027-07-08',
+          preferred_room_id: String(otherTenantRoomId),
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_PREFERRED_ROOM_NOT_FOUND');
+    });
+
+    it('checkIn is unaffected — still accepts any room_id regardless of the preference on file', async () => {
+      const differentFreeRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'PREF2' });
+      const bookRes = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-07-09',
+          departure_date: '2027-07-10',
+          preferred_room_id: String(preferredRoomId),
+        });
+      expect(bookRes.status).toBe(201);
+
+      const checkInRes = await t.request
+        .post(`/api/v1/reservations/${bookRes.body.data.id}/check-in`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ room_id: String(differentFreeRoomId) });
+      expect(checkInRes.status).toBe(200);
+      expect(checkInRes.body.data.status).toBe('checked_in');
+    });
+  });
+
+  describe('GET /front-desk/free-rooms — actual room numbers free right now', () => {
+    let roomTypeId;
+    let freeRoomId;
+    let occupiedRoomId;
+    let discrepantRoomId;
+
+    beforeAll(async () => {
+      roomTypeId = await createRoomType(ctx.a, { code: 'FREENOW' });
+      freeRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'FN1' });
+      occupiedRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'FN2' });
+      discrepantRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'FN3' });
+      await t.trx('rooms').where({ id: discrepantRoomId }).update({ has_discrepancy: true });
+
+      // Put occupiedRoomId into a live reservation_rooms assignment (no
+      // checkIn call needed — the query reads reservation_rooms directly).
+      const [reservationId] = await t.trx('reservations').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        guest_id: ctx.a.guests[0].id,
+        room_type_id: roomTypeId,
+        rate_code_id: await createRateCode(ctx.a, { code: 'FREENOWRATE' }),
+        arrival_date: '2027-01-01',
+        departure_date: '2027-01-02',
+        status: 'checked_in',
+        confirmation_number: 'FREENOWTEST0000000000001',
+      });
+      await t.trx('reservation_rooms').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        reservation_id: reservationId,
+        room_id: occupiedRoomId,
+        effective_from: new Date(),
+        effective_to: null,
+      });
+    });
+
+    it('lists only the unoccupied, non-discrepant room — excludes the occupied and discrepant rooms', async () => {
+      const res = await t.request
+        .get(`/api/v1/front-desk/free-rooms?room_type_id=${roomTypeId}`)
+        .set('Authorization', `Bearer ${tokenFor()}`);
+      expect(res.status).toBe(200);
+      const ids = res.body.data.map((room) => room.id);
+      expect(ids).toContain(String(freeRoomId));
+      expect(ids).not.toContain(String(occupiedRoomId));
+      expect(ids).not.toContain(String(discrepantRoomId));
+    });
+
+    it('omitting room_type_id returns free rooms across every type — the check-in/room-move upgrade path', async () => {
+      const otherTypeId = await createRoomType(ctx.a, { code: 'FREENOWOTHER' });
+      const otherTypeFreeRoomId = await createRoom(ctx.a, { roomTypeId: otherTypeId, roomNumber: 'FN-OTHER-1' });
+
+      const res = await t.request.get('/api/v1/front-desk/free-rooms').set('Authorization', `Bearer ${tokenFor()}`);
+      expect(res.status).toBe(200);
+      const ids = res.body.data.map((room) => room.id);
+      expect(ids).toContain(String(freeRoomId));
+      expect(ids).toContain(String(otherTypeFreeRoomId));
+      expect(ids).not.toContain(String(occupiedRoomId));
+      expect(ids).not.toContain(String(discrepantRoomId));
+    });
+
+    it('requires front_desk.view — a cashier (reservations.view only) gets a real 403', async () => {
+      // Reassigns ctx.a.users[1] to `cashier` at properties[0] — same
+      // reassign-not-insert pattern the "RBAC gating" describe block below
+      // uses (a second user_property_access row for the same user+property
+      // would collide on that table's own UNIQUE constraint).
+      const existingAccess = await t.trx('user_property_access').where({ user_id: ctx.a.users[1].id, property_id: ctx.a.properties[0].id }).first('id');
+      if (existingAccess) {
+        await t.trx('user_property_access').where({ id: existingAccess.id }).update({ role: 'cashier' });
+      } else {
+        await t.trx('user_property_access').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, user_id: ctx.a.users[1].id, role: 'cashier' });
+      }
+      const cashierToken = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+      const res = await t.request
+        .get(`/api/v1/front-desk/free-rooms?room_type_id=${roomTypeId}`)
+        .set('Authorization', `Bearer ${cashierToken}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+  });
+
+  // ====================================================================
   // Front desk — FD-1..FD-7
   // ====================================================================
   describe('front desk', () => {

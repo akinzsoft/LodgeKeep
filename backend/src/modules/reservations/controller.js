@@ -144,6 +144,7 @@ async function createReservation(req, res, next) {
           marketSegmentId: req.body?.market_segment_id,
           bookingSourceId: req.body?.booking_source_id,
           cancellationPolicyId: req.body?.cancellation_policy_id,
+          preferredRoomId: req.body?.preferred_room_id,
         });
         return { status: 201, body: ok(reservation) };
       },
@@ -271,6 +272,24 @@ async function listInHouse(req, res, next) {
   }
 }
 
+/**
+ * Gap closure: "which actual room numbers are free right now" — see
+ * `service.listFreeRoomsNow`'s own header for why this is a distinct read
+ * from `checkAvailability`, always as-of the property's current business
+ * date, never a caller-supplied one. `room_type_id` is OPTIONAL, unlike
+ * `checkAvailability`'s: the availability search always supplies it (one
+ * searched type), but check-in/room-move deliberately allow assigning any
+ * room type (an upgrade, `checkIn`'s own header) so must see every free
+ * room, not just the reservation's own type.
+ */
+async function listFreeRooms(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listFreeRoomsNow({ context: req.context, roomTypeId: req.query?.room_type_id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function checkIn(req, res, next) {
   try {
     const { id } = req.params;
@@ -364,6 +383,7 @@ module.exports = {
   listArrivals,
   listDepartures,
   listInHouse,
+  listFreeRooms,
   checkIn,
   checkOut,
   roomMove,

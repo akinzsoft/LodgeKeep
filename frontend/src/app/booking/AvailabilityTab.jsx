@@ -14,14 +14,32 @@ import styles from './BookingScreen.module.css';
  * Guest lookup is a plain dropdown, not a search box — this pass's guests
  * stub has no search endpoint (see the `guests` migration's own scope
  * note), so every tenant guest is listed and a new one can be added inline.
+ *
+ * Gap closure — two additions, deliberately answering different questions
+ * (see `backend/src/shared/room-availability.js`'s own header for the full
+ * reasoning):
+ * 1. "Rooms free right now" — actual room numbers, shown ONLY when the
+ *    searched arrival date is the property's own CURRENT business date
+ *    (never wall-clock "today"), since no data in this schema can name a
+ *    specific physical room for a future, not-yet-arrived stay — a room is
+ *    assigned only at check-in (Phase 2's confirmed decision, unchanged).
+ *    For every other search this stays exactly the aggregate sellable
+ *    table it always was.
+ * 2. "Preferred room" — an optional, non-binding request recorded on the
+ *    reservation (`preferred_room_id`), sourced from every room of the
+ *    searched type regardless of current occupancy, since a preference for
+ *    a future date can't honestly be checked against today's occupancy.
+ *    `checkIn` still accepts any room — this is never enforced.
  */
-export function AvailabilityTab({ isOffline = false } = {}) {
+export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const [roomTypes, setRoomTypes] = useState(null);
   const [rateCodes, setRateCodes] = useState(null);
   const [guests, setGuests] = useState(null);
+  const [rooms, setRooms] = useState(null);
 
   const [search, setSearch] = useState({ room_type_id: '', arrival_date: '', departure_date: '' });
   const [availability, setAvailability] = useState(null);
+  const [freeRoomsNow, setFreeRoomsNow] = useState(null);
   const [searchError, setSearchError] = useState(null);
   const [searching, setSearching] = useState(false);
 
@@ -32,6 +50,7 @@ export function AvailabilityTab({ isOffline = false } = {}) {
     children: '0',
     as_hold: false,
     allow_waitlist: false,
+    preferred_room_id: '',
   });
   const [newGuest, setNewGuest] = useState({ first_name: '', last_name: '', email: '', phone: '' });
   const [addingGuest, setAddingGuest] = useState(false);
@@ -41,14 +60,16 @@ export function AvailabilityTab({ isOffline = false } = {}) {
 
   async function reloadReferenceData() {
     try {
-      const [rt, rc, g] = await Promise.all([
+      const [rt, rc, g, r] = await Promise.all([
         setupApi.listRoomTypes(),
         setupApi.listRateCodes(),
         reservationsApi.listGuests(),
+        setupApi.listRooms(),
       ]);
       setRoomTypes(rt);
       setRateCodes(rc);
       setGuests(g);
+      setRooms(r);
     } catch (caught) {
       setSearchError(caught instanceof ApiError ? caught.message : 'Could not load room types, rate codes, or guests.');
     }
@@ -59,19 +80,34 @@ export function AvailabilityTab({ isOffline = false } = {}) {
     reloadReferenceData();
   }, []);
 
+  async function reloadFreeRoomsNow(roomTypeId) {
+    try {
+      setFreeRoomsNow(await reservationsApi.listFreeRooms(roomTypeId));
+    } catch {
+      // A 403 (no front_desk.view) or any other failure just hides this
+      // panel — it's a bonus alongside the aggregate table, never the
+      // reason the whole search fails. Same per-widget degradation
+      // HomeDashboard's own KPI cards already use.
+      setFreeRoomsNow(null);
+    }
+  }
+
   async function handleSearch(event) {
     event.preventDefault();
     setSearching(true);
     setSearchError(null);
     setBookSuccess(null);
+    setFreeRoomsNow(null);
     try {
-      setAvailability(
-        await reservationsApi.checkAvailability({
-          roomTypeId: search.room_type_id,
-          arrivalDate: search.arrival_date,
-          departureDate: search.departure_date,
-        })
-      );
+      const result = await reservationsApi.checkAvailability({
+        roomTypeId: search.room_type_id,
+        arrivalDate: search.arrival_date,
+        departureDate: search.departure_date,
+      });
+      setAvailability(result);
+      if (search.arrival_date === activeProperty?.current_business_date) {
+        await reloadFreeRoomsNow(search.room_type_id);
+      }
     } catch (caught) {
       setAvailability(null);
       setSearchError(caught instanceof ApiError ? caught.message : 'Could not check availability.');
@@ -112,6 +148,7 @@ export function AvailabilityTab({ isOffline = false } = {}) {
         children: Number(booking.children),
         as_hold: booking.as_hold,
         allow_waitlist: booking.allow_waitlist,
+        ...(booking.preferred_room_id ? { preferred_room_id: booking.preferred_room_id } : {}),
       });
       setBookSuccess(
         reservation.status === 'waitlisted'
@@ -124,6 +161,9 @@ export function AvailabilityTab({ isOffline = false } = {}) {
         departureDate: search.departure_date,
       });
       setAvailability(res);
+      if (search.arrival_date === activeProperty?.current_business_date) {
+        await reloadFreeRoomsNow(search.room_type_id);
+      }
     } catch (caught) {
       setBookError(caught instanceof ApiError ? caught.message : 'Could not create the reservation.');
     } finally {
@@ -226,6 +266,27 @@ export function AvailabilityTab({ isOffline = false } = {}) {
         </>
       )}
 
+      {/* Gap closure: actual room numbers, only meaningful for the property's
+          own current business date — every other search stays the aggregate
+          table above (see this file's own header). `freeRoomsNow` stays
+          `null` until that fetch resolves, and again on a 403/failure
+          (`reloadFreeRoomsNow`'s own comment) — either way this panel is
+          simply absent rather than showing a misleading empty state. */}
+      {availability && freeRoomsNow !== null && (
+        <DataTable
+          title="Rooms free right now"
+          state="success"
+          columns={[
+            { key: 'room_number', label: 'Room' },
+            { key: 'floor', label: 'Floor' },
+            { key: 'housekeeping_reported_status', label: 'Housekeeping' },
+          ]}
+          rows={freeRoomsNow}
+          rowKey={(row) => row.id}
+          emptyMessage="No rooms of this type are free right now."
+        />
+      )}
+
       {availability && (
         <Card title="Book this stay">
           {bookError && (
@@ -297,6 +358,32 @@ export function AvailabilityTab({ isOffline = false } = {}) {
                 />
               </label>
             </div>
+
+            <div className={formStyles.row}>
+              <label className={formStyles.field}>
+                <span className={formStyles.label}>Preferred room (optional)</span>
+                <select
+                  className={formStyles.select}
+                  value={booking.preferred_room_id}
+                  onChange={(event) => setBooking({ ...booking, preferred_room_id: event.target.value })}
+                >
+                  <option value="">No preference</option>
+                  {(rooms ?? [])
+                    .filter((room) => String(room.room_type_id) === String(search.room_type_id))
+                    .map((room) => (
+                      <option key={room.id} value={room.id}>
+                        {room.room_number}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            </div>
+            {/* A request recorded on the reservation, never a lock — the actual
+                room is still assigned at check-in, and this may not be free
+                by then. See this file's own header. */}
+            <p className={formStyles.disabledNotice}>
+              A preferred room is a request only — the actual room is still assigned at check-in and may differ.
+            </p>
 
             <div className={formStyles.row}>
               <label className={formStyles.checkboxField}>

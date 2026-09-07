@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, DataTable, Button } from '../../shared/components/index.js';
-import { setupApi, reservationsApi, ApiError } from '../../shared/api/index.js';
+import { reservationsApi, ApiError } from '../../shared/api/index.js';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
 
@@ -45,10 +45,27 @@ export function FrontDeskTab({ isOffline = false } = {}) {
     }
   }
 
+  /**
+   * Gap closure: was `setupApi.listRooms()` — every room in the property,
+   * including already-occupied ones, relying on the backend to reject a bad
+   * pick after submission. Now the actual free-right-now list
+   * (`reservationsApi.listFreeRooms`, no room-type filter — `checkIn`/
+   * `roomMove` deliberately allow any type, an upgrade, see their own
+   * headers), so the picker only ever offers a room genuinely available at
+   * this moment.
+   */
+  async function reloadFreeRooms() {
+    try {
+      setRooms(await reservationsApi.listFreeRooms());
+    } catch {
+      setRooms([]);
+    }
+  }
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     reloadBoard();
-    setupApi.listRooms().then(setRooms).catch(() => setRooms([]));
+    reloadFreeRooms();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadBoard is redefined every render and read here only for the mount-time fetch (board is still its initial value at that point); listing it as a dep would re-run this effect on every render since it's a new function reference each time. Board-change reloads already go through switchBoard, which calls reloadBoard(key) explicitly.
   }, []);
 
@@ -156,7 +173,13 @@ export function FrontDeskTab({ isOffline = false } = {}) {
         actions={(row) => (
           <>
             {board === 'arrivals' && (
-              <Button size="compact" onClick={() => setCheckingIn(row)}>
+              <Button
+                size="compact"
+                onClick={() => {
+                  setCheckingIn(row);
+                  reloadFreeRooms();
+                }}
+              >
                 Check In
               </Button>
             )}
@@ -167,7 +190,14 @@ export function FrontDeskTab({ isOffline = false } = {}) {
             )}
             {board === 'in-house' && (
               <>
-                <Button size="compact" variant="secondary" onClick={() => setMovingRoom(row)}>
+                <Button
+                  size="compact"
+                  variant="secondary"
+                  onClick={() => {
+                    setMovingRoom(row);
+                    reloadFreeRooms();
+                  }}
+                >
                   Move Room
                 </Button>
                 <Button size="compact" onClick={() => setCheckingOut(row)}>
