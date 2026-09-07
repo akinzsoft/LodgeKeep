@@ -810,6 +810,31 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       reservationId = created.body.data.id;
     });
 
+    it('gap closure (user-reported): the arrivals board includes the guest\'s name and phone, not just the reservation row', async () => {
+      const arrivalsBusinessDate = '2026-08-20';
+      await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: arrivalsBusinessDate });
+
+      const roomTypeId = await createRoomType(ctx.a, { code: 'ARRIVALGUEST' });
+      await createRoom(ctx.a, { roomTypeId, roomNumber: 'AG1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'ARRIVALGUESTRATE' });
+      await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: arrivalsBusinessDate,
+          departure_date: '2026-08-21',
+        });
+
+      const res = await t.request.get('/api/v1/front-desk/arrivals').set('Authorization', `Bearer ${tokenFor()}`);
+      expect(res.status).toBe(200);
+      const row = res.body.data.find((r) => String(r.guest_id) === String(ctx.a.guests[0].id));
+      expect(row).toMatchObject({ guest_first_name: 'Jordan', guest_last_name: 'Fixture', guest_phone: '+10000000000' });
+    });
+
     it('FD-2: check-in to a dirty room is blocked', async () => {
       await t.trx('rooms').where({ id: roomId }).update({ housekeeping_reported_status: 'dirty' });
       const res = await t.request

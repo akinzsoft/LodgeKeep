@@ -179,6 +179,12 @@ export function FrontDeskTab({ isOffline = false } = {}) {
         emptyMessage="Nothing on this board today."
         columns={[
           { key: 'confirmation_number', label: 'Confirmation' },
+          {
+            key: 'guest_name',
+            label: 'Guest',
+            render: (row) => `${row.guest_first_name ?? ''} ${row.guest_last_name ?? ''}`.trim() || '—',
+          },
+          { key: 'guest_phone', label: 'Phone', render: (row) => row.guest_phone ?? '—' },
           { key: 'arrival_date', label: 'Arrival' },
           { key: 'departure_date', label: 'Departure' },
           { key: 'adults', label: 'Adults', align: 'right' },

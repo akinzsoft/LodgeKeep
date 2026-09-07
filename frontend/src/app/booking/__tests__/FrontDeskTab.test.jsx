@@ -25,7 +25,15 @@ vi.mock('../../../shared/api/index.js', async () => {
   };
 });
 
-const RESERVATION = { id: '1', confirmation_number: 'ABC123', arrival_date: '2027-01-01', status: 'confirmed' };
+const RESERVATION = {
+  id: '1',
+  confirmation_number: 'ABC123',
+  arrival_date: '2027-01-01',
+  status: 'confirmed',
+  guest_first_name: 'Jordan',
+  guest_last_name: 'Fixture',
+  guest_phone: '+10000000000',
+};
 const FREE_ROOM = { id: '9', room_number: '101', floor: '1', housekeeping_reported_status: 'clean' };
 
 describe('<FrontDeskTab>', () => {
@@ -35,6 +43,27 @@ describe('<FrontDeskTab>', () => {
     mocks.listDepartures.mockResolvedValue([]);
     mocks.listInHouse.mockResolvedValue([]);
     mocks.listFreeRooms.mockResolvedValue([FREE_ROOM]);
+  });
+
+  /**
+   * Gap closure (user-reported): the board used to show only the
+   * reservation row itself — confirmation/dates/adults — with no guest
+   * name or phone at all, contradicting PRODUCT_REQUIREMENTS.md §3.3's own
+   * "guest name, room, rate, folio balance, status pill" spec for these
+   * boards. Backend now joins `guests`; this just renders it.
+   */
+  it("shows the guest's name and phone, not just the reservation row", async () => {
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    expect(screen.getByText('Jordan Fixture')).toBeInTheDocument();
+    expect(screen.getByText('+10000000000')).toBeInTheDocument();
+  });
+
+  it('shows a plain dash when guest name/phone are missing rather than blank cells', async () => {
+    mocks.listArrivals.mockResolvedValue([{ ...RESERVATION, guest_first_name: null, guest_last_name: null, guest_phone: null }]);
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2);
   });
 
   /**

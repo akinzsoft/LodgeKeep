@@ -764,21 +764,48 @@ async function propertyBusinessDate({ context }) {
   return property?.current_business_date ?? null;
 }
 
+/**
+ * Gap closure (user-reported): PRODUCT_REQUIREMENTS.md §3.3 names "guest
+ * name, room, rate, folio balance, status pill" for these three boards —
+ * this pass closes the guest-name/phone half of that gap (room/rate/folio
+ * balance remain a separate, not-yet-built follow-on). `guests` is
+ * TENANT_SCOPED (`table-scopes.js`), so the join goes through the scoped
+ * accessor's own `joinScoped`, not a bare `.join()` — the same mechanism
+ * `findInHouseForCharge` (PLAN.md Phase 4 POS) already established for a
+ * reservations→guests join.
+ */
+function selectReservationWithGuest(query) {
+  return query
+    .joinScoped('guests', (join) => join.on('guests.id', '=', 'reservations.guest_id'))
+    .select(
+      'reservations.*',
+      'guests.first_name as guest_first_name',
+      'guests.last_name as guest_last_name',
+      'guests.phone as guest_phone'
+    );
+}
+
 async function listArrivals({ context }) {
   const db = scopedDb().for(context);
   const businessDate = await propertyBusinessDate({ context });
-  return db.table('reservations').where({ arrival_date: businessDate, status: 'confirmed' }).orderBy('id');
+  return selectReservationWithGuest(
+    db.table('reservations').where({ 'reservations.arrival_date': businessDate, 'reservations.status': 'confirmed' })
+  ).orderBy('reservations.id');
 }
 
 async function listDepartures({ context }) {
   const db = scopedDb().for(context);
   const businessDate = await propertyBusinessDate({ context });
-  return db.table('reservations').where({ departure_date: businessDate, status: 'checked_in' }).orderBy('id');
+  return selectReservationWithGuest(
+    db.table('reservations').where({ 'reservations.departure_date': businessDate, 'reservations.status': 'checked_in' })
+  ).orderBy('reservations.id');
 }
 
 async function listInHouse({ context }) {
   const db = scopedDb().for(context);
-  return db.table('reservations').where({ status: 'checked_in' }).orderBy('id');
+  return selectReservationWithGuest(db.table('reservations').where({ 'reservations.status': 'checked_in' })).orderBy(
+    'reservations.id'
+  );
 }
 
 /**
