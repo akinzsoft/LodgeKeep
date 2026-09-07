@@ -59,6 +59,36 @@ describe('<FrontDeskTab>', () => {
     expect(screen.getByText('+10000000000')).toBeInTheDocument();
   });
 
+  /**
+   * Gap closure (user-reported follow-up): In-House/Departures now carry
+   * a real room number once checked in — Arrivals never does, since no
+   * room exists to show yet. Arrivals must not even show a "Room" column
+   * (a column of dashes would misleadingly imply otherwise).
+   */
+  it('does not show a Room column on Arrivals', async () => {
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    expect(screen.queryByRole('columnheader', { name: 'Room' })).not.toBeInTheDocument();
+  });
+
+  it('shows the actual room number on In-House', async () => {
+    mocks.listInHouse.mockResolvedValue([{ ...RESERVATION, status: 'checked_in', room_number: '204' }]);
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('tab', { name: 'In-House' }));
+    expect(await screen.findByRole('columnheader', { name: 'Room' })).toBeInTheDocument();
+    expect(await screen.findByText('204')).toBeInTheDocument();
+  });
+
+  it('shows the actual room number on Departures', async () => {
+    mocks.listDepartures.mockResolvedValue([{ ...RESERVATION, status: 'checked_in', room_number: '204' }]);
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('tab', { name: 'Departures' }));
+    expect(await screen.findByRole('columnheader', { name: 'Room' })).toBeInTheDocument();
+    expect(await screen.findByText('204')).toBeInTheDocument();
+  });
+
   it('shows a plain dash when guest name/phone are missing rather than blank cells', async () => {
     mocks.listArrivals.mockResolvedValue([{ ...RESERVATION, guest_first_name: null, guest_last_name: null, guest_phone: null }]);
     render(<FrontDeskTab />);

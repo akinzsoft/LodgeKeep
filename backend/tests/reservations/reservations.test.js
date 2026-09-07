@@ -835,6 +835,47 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       expect(row).toMatchObject({ guest_first_name: 'Jordan', guest_last_name: 'Fixture', guest_phone: '+10000000000' });
     });
 
+    it('gap closure (user-reported): In-House and Departures include the actual room number once checked in — Arrivals does not, since no room is assigned yet', async () => {
+      const arrivalDate = '2026-08-25';
+      const departureDate = '2026-08-26';
+      await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: arrivalDate });
+
+      const roomTypeId = await createRoomType(ctx.a, { code: 'ROOMCOL' });
+      const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'RC1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'ROOMCOLRATE' });
+      const created = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: arrivalDate,
+          departure_date: departureDate,
+        });
+
+      const arrivalsRes = await t.request.get('/api/v1/front-desk/arrivals').set('Authorization', `Bearer ${tokenFor()}`);
+      const arrivalRow = arrivalsRes.body.data.find((r) => String(r.id) === String(created.body.data.id));
+      expect(arrivalRow.room_number).toBeUndefined();
+
+      await t.request
+        .post(`/api/v1/reservations/${created.body.data.id}/check-in`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ room_id: String(roomId) });
+
+      const inHouseRes = await t.request.get('/api/v1/front-desk/in-house').set('Authorization', `Bearer ${tokenFor()}`);
+      const inHouseRow = inHouseRes.body.data.find((r) => String(r.id) === String(created.body.data.id));
+      expect(inHouseRow.room_number).toBe('RC1');
+
+      // Advance to the departure date so this same reservation shows on Departures too.
+      await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: departureDate });
+      const departuresRes = await t.request.get('/api/v1/front-desk/departures').set('Authorization', `Bearer ${tokenFor()}`);
+      const departureRow = departuresRes.body.data.find((r) => String(r.id) === String(created.body.data.id));
+      expect(departureRow.room_number).toBe('RC1');
+    });
+
     it('FD-2: check-in to a dirty room is blocked', async () => {
       await t.trx('rooms').where({ id: roomId }).update({ housekeeping_reported_status: 'dirty' });
       const res = await t.request

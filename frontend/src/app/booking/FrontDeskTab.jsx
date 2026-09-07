@@ -185,6 +185,13 @@ export function FrontDeskTab({ isOffline = false } = {}) {
             render: (row) => `${row.guest_first_name ?? ''} ${row.guest_last_name ?? ''}`.trim() || '—',
           },
           { key: 'guest_phone', label: 'Phone', render: (row) => row.guest_phone ?? '—' },
+          // Gap closure (user-reported): a real physical room only exists
+          // once checked in — Departures/In-House, never Arrivals (see
+          // `service.js`'s own `selectReservationWithGuestAndRoom` header).
+          // Omitted entirely for Arrivals rather than shown as a column of
+          // dashes, which would misleadingly imply a room is already
+          // assigned before check-in has happened.
+          ...(board !== 'arrivals' ? [{ key: 'room_number', label: 'Room', render: (row) => row.room_number ?? '—' }] : []),
           { key: 'arrival_date', label: 'Arrival' },
           { key: 'departure_date', label: 'Departure' },
           { key: 'adults', label: 'Adults', align: 'right' },

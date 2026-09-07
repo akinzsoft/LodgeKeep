@@ -785,6 +785,29 @@ function selectReservationWithGuest(query) {
     );
 }
 
+/**
+ * Gap closure (user-reported follow-up): Departures and In-House are both
+ * filtered to `status: 'checked_in'` — a real physical room DOES exist for
+ * every row on these two boards specifically (unlike Arrivals, still
+ * pre-check-in, which stays on `selectReservationWithGuest` alone — there
+ * is no room to show yet). LEFT JOIN, not inner: `reservation_rooms`'s own
+ * `effective_to IS NULL` condition is a real predicate that could
+ * legitimately match nothing for a row this query wasn't expecting (a
+ * defensive choice, not because it should ever actually happen for a
+ * checked_in reservation) — an inner join here would silently drop such a
+ * row off the board entirely rather than showing it with no room number.
+ */
+function selectReservationWithGuestAndRoom(query) {
+  return selectReservationWithGuest(query)
+    .joinScoped(
+      'reservation_rooms',
+      (join) => join.on('reservation_rooms.reservation_id', '=', 'reservations.id').onNull('reservation_rooms.effective_to'),
+      { type: 'left' }
+    )
+    .joinScoped('rooms', (join) => join.on('rooms.id', '=', 'reservation_rooms.room_id'), { type: 'left' })
+    .select('rooms.room_number as room_number');
+}
+
 async function listArrivals({ context }) {
   const db = scopedDb().for(context);
   const businessDate = await propertyBusinessDate({ context });
@@ -796,14 +819,14 @@ async function listArrivals({ context }) {
 async function listDepartures({ context }) {
   const db = scopedDb().for(context);
   const businessDate = await propertyBusinessDate({ context });
-  return selectReservationWithGuest(
+  return selectReservationWithGuestAndRoom(
     db.table('reservations').where({ 'reservations.departure_date': businessDate, 'reservations.status': 'checked_in' })
   ).orderBy('reservations.id');
 }
 
 async function listInHouse({ context }) {
   const db = scopedDb().for(context);
-  return selectReservationWithGuest(db.table('reservations').where({ 'reservations.status': 'checked_in' })).orderBy(
+  return selectReservationWithGuestAndRoom(db.table('reservations').where({ 'reservations.status': 'checked_in' })).orderBy(
     'reservations.id'
   );
 }
