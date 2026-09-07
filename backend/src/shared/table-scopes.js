@@ -198,6 +198,19 @@ const TABLE_SCOPES = Object.freeze({
   // `properties` for the same reason every property-level artifact has.
   night_audit_runs: { scope: SCOPES.PROPERTY },
   daily_reports: { scope: SCOPES.PROPERTY },
+
+  // POS core — PLAN.md Phase 4, 20260912090000_create_pos_outlets through
+  // 20260912096000_create_pos_shifts. PROPERTY_SCOPED throughout, following
+  // `pos_outlets` (the root of this family) for the same reason every
+  // outlet-adjacent table does: two properties in the same tenant run
+  // entirely separate bars/restaurants.
+  pos_outlets: { scope: SCOPES.PROPERTY },
+  pos_terminals: { scope: SCOPES.PROPERTY },
+  pos_menu_items: { scope: SCOPES.PROPERTY },
+  pos_orders: { scope: SCOPES.PROPERTY },
+  pos_order_items: { scope: SCOPES.PROPERTY },
+  pos_order_settlements: { scope: SCOPES.PROPERTY },
+  pos_shifts: { scope: SCOPES.PROPERTY },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

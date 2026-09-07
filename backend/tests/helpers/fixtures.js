@@ -140,6 +140,13 @@ async function seedTwoTenants(trx) {
     marketSegments: [],
     bookingSources: [],
     cancellationPolicies: [],
+    posOutlets: [],
+    posTerminals: [],
+    posMenuItems: [],
+    posOrders: [],
+    posOrderItems: [],
+    posOrderSettlements: [],
+    posShifts: [],
   });
 
   // Two symmetric example hotels, not one reference customer
@@ -554,6 +561,60 @@ async function seedTwoTenants(trx) {
     });
   }
 
+  // POS core (PLAN.md Phase 4) — outlet/terminal/menu item per tenant. No
+  // user-reference columns on any of these three, so no ordering
+  // dependency on the staff users created below. Orders/items/
+  // settlements/shifts (below, after staff exists) DO reference a user.
+  for (const t of both) {
+    const property = t.properties[0];
+
+    t.posOutlets.push({
+      id: await insertReturningId(trx, 'pos_outlets', {
+        tenant_id: t.id,
+        property_id: property.id,
+        code: 'BAR',
+        name: 'Fixture Bar',
+        type: 'bar',
+      }),
+      property_id: property.id,
+    });
+  }
+
+  for (const t of both) {
+    const property = t.properties[0];
+    const outlet = t.posOutlets[0];
+
+    t.posTerminals.push({
+      id: await insertReturningId(trx, 'pos_terminals', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: outlet.id,
+        device_ref: `FIXTURE-TERMINAL-${t.slug}`,
+        supports_contactless: true,
+      }),
+      property_id: property.id,
+      outlet_id: outlet.id,
+    });
+  }
+
+  for (const t of both) {
+    const property = t.properties[0];
+    const outlet = t.posOutlets[0];
+
+    t.posMenuItems.push({
+      id: await insertReturningId(trx, 'pos_menu_items', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: outlet.id,
+        name: 'Fixture Cocktail',
+        category: 'Cocktails',
+        price: '20.00',
+      }),
+      property_id: property.id,
+      outlet_id: outlet.id,
+    });
+  }
+
   // PLATFORM_SCOPED (nullable tenant/property attribution, `auth_events`'
   // own precedent) — a single, tenant-independent fixture row, not one per
   // tenant, since this table has no tenant loop to interleave (matching
@@ -710,6 +771,70 @@ async function seedTwoTenants(trx) {
       }),
       property_id: property.id,
       room_id: room.id,
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // POS core (PLAN.md Phase 4) — orders/items/settlements/shifts all
+  // reference a real staff user, so (like reservation_notes/housekeeping
+  // above) they seed here rather than alongside pos_outlets/pos_terminals/
+  // pos_menu_items further up (which have no such dependency).
+  // ------------------------------------------------------------------
+  for (const t of both) {
+    const property = t.properties[0];
+    const outlet = t.posOutlets[0];
+    const terminal = t.posTerminals[0];
+    const menuItem = t.posMenuItems[0];
+    const user = t.users[0];
+
+    const orderId = await insertReturningId(trx, 'pos_orders', {
+      tenant_id: t.id,
+      property_id: property.id,
+      outlet_id: outlet.id,
+      terminal_id: terminal.id,
+      opened_by_user_id: user.id,
+      table_label: 'T1',
+    });
+    t.posOrders.push({ id: orderId, property_id: property.id, outlet_id: outlet.id, terminal_id: terminal.id });
+
+    t.posOrderItems.push({
+      id: await insertReturningId(trx, 'pos_order_items', {
+        tenant_id: t.id,
+        property_id: property.id,
+        pos_order_id: orderId,
+        menu_item_id: menuItem.id,
+        quantity: 1,
+        unit_price: '20.00',
+      }),
+      property_id: property.id,
+      pos_order_id: orderId,
+    });
+
+    t.posOrderSettlements.push({
+      id: await insertReturningId(trx, 'pos_order_settlements', {
+        tenant_id: t.id,
+        property_id: property.id,
+        pos_order_id: orderId,
+        method: 'cash',
+        subtotal: '20.00',
+        currency: 'NGN',
+        settled_by_user_id: user.id,
+      }),
+      property_id: property.id,
+      pos_order_id: orderId,
+    });
+
+    t.posShifts.push({
+      id: await insertReturningId(trx, 'pos_shifts', {
+        tenant_id: t.id,
+        property_id: property.id,
+        terminal_id: terminal.id,
+        user_id: user.id,
+        opening_float: '50.00',
+        currency: 'NGN',
+      }),
+      property_id: property.id,
+      terminal_id: terminal.id,
     });
   }
 
@@ -985,6 +1110,8 @@ async function seedTwoTenants(trx) {
     ['reports.view', 'reports'],
     ['night_audit.view', 'night_audit'],
     ['night_audit.run', 'night_audit'],
+    ['pos.operate', 'pos'],
+    ['pos.manage', 'pos'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -1116,6 +1243,25 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['reports.view_financial'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['reports.view'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['reports.view_financial'] },
+    ]);
+  }
+
+  // POS (PLAN.md Phase 4) — SECURITY.md §5's matrix showed a plain "✓" for
+  // `pos_operator`; this session's confirmed decision splits it the same
+  // way Cashiering's own "Limited" cell already is: `pos.operate` (run the
+  // register) for pos_operator/manager/admin/super_admin; `pos.manage`
+  // (outlet/terminal/menu configuration, manager overrides, post-
+  // settlement voids) for manager/admin/super_admin only — never
+  // pos_operator. Front desk/cashier/housekeeping get neither key.
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.pos_operator, permission_id: permissions['pos.operate'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['pos.operate'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['pos.manage'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.operate'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.operate'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.manage'] },
     ]);
   }
 

@@ -1,0 +1,97 @@
+/**
+ * PRODUCT_REQUIREMENTS.md §3.4: "used standing up, at speed, often
+ * one-handed... Optimise for taps per order, not information density.
+ * This is the one place where the admin design language bends — bigger
+ * targets, fewer words, no dense tables." Every interactive element here
+ * uses --control-h-pos (64px), not --control-h-touch (44px).
+ */
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+}
+
+@media (width >= 900px) {
+  .layout {
+    grid-template-columns: 2fr 1fr;
+  }
+}
+
+.tabsBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.tabChip {
+  min-height: var(--control-h-pos);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-md);
+  border: 2px solid var(--border-strong);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-h3-size);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tabChipActive {
+  border-color: var(--domain-money);
+  background: var(--domain-money-tint);
+}
+
+.menuGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-3);
+}
+
+.menuTile {
+  min-height: var(--control-h-pos);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 2px solid var(--border-strong);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-h3-size);
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  text-align: center;
+}
+
+.menuTile:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tabLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--control-h-pos);
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-h3-size);
+}
+
+.tabLineVoided {
+  text-decoration: line-through;
+  color: var(--text-secondary);
+}
+
+.runningTotal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--control-h-pos);
+  font-size: var(--text-h1-size);
+  font-weight: 700;
+}
