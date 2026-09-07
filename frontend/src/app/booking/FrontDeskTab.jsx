@@ -192,6 +192,14 @@ export function FrontDeskTab({ isOffline = false } = {}) {
           // dashes, which would misleadingly imply a room is already
           // assigned before check-in has happened.
           ...(board !== 'arrivals' ? [{ key: 'room_number', label: 'Room', render: (row) => row.room_number ?? '—' }] : []),
+          // Gap closure (user-reported follow-up): Arrivals gets a
+          // DIFFERENT column instead — the guest's preferred room, a
+          // request, never an assignment (`service.js`'s own
+          // `selectReservationWithGuestAndPreferredRoom` header). Labelled
+          // distinctly from "Room" so it's never mistaken for one.
+          ...(board === 'arrivals'
+            ? [{ key: 'preferred_room_number', label: 'Preferred room', render: (row) => row.preferred_room_number ?? '—' }]
+            : []),
           { key: 'arrival_date', label: 'Arrival' },
           { key: 'departure_date', label: 'Departure' },
           { key: 'adults', label: 'Adults', align: 'right' },

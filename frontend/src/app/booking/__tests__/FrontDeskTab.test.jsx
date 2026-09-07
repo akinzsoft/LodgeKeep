@@ -89,6 +89,27 @@ describe('<FrontDeskTab>', () => {
     expect(await screen.findByText('204')).toBeInTheDocument();
   });
 
+  /**
+   * Gap closure (user-reported follow-up): Arrivals gets a "Preferred
+   * room" column instead of "Room" — a request, never an actual
+   * assignment, distinctly labelled so it's never mistaken for one.
+   */
+  it('shows the preferred room (not "Room") on Arrivals', async () => {
+    mocks.listArrivals.mockResolvedValue([{ ...RESERVATION, preferred_room_number: '305' }]);
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    expect(screen.getByRole('columnheader', { name: 'Preferred room' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Room' })).not.toBeInTheDocument();
+    expect(screen.getByText('305')).toBeInTheDocument();
+  });
+
+  it('shows a dash on Arrivals when there is no preferred room', async () => {
+    mocks.listArrivals.mockResolvedValue([{ ...RESERVATION, preferred_room_number: null }]);
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+  });
+
   it('shows a plain dash when guest name/phone are missing rather than blank cells', async () => {
     mocks.listArrivals.mockResolvedValue([{ ...RESERVATION, guest_first_name: null, guest_last_name: null, guest_phone: null }]);
     render(<FrontDeskTab />);

@@ -835,6 +835,47 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       expect(row).toMatchObject({ guest_first_name: 'Jordan', guest_last_name: 'Fixture', guest_phone: '+10000000000' });
     });
 
+    it('gap closure (user-reported): Arrivals includes the guest\'s preferred room number (a request, distinct from an actual assignment)', async () => {
+      const businessDate = '2026-08-22';
+      await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: businessDate });
+
+      const roomTypeId = await createRoomType(ctx.a, { code: 'ARRPREF' });
+      const preferredRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'AP1' });
+      await createRoom(ctx.a, { roomTypeId, roomNumber: 'AP2' }); // enough inventory for both bookings below
+      const rateCodeId = await createRateCode(ctx.a, { code: 'ARRPREFRATE' });
+      const withPref = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: businessDate,
+          departure_date: '2026-08-23',
+          preferred_room_id: String(preferredRoomId),
+        });
+      const withoutPref = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: businessDate,
+          departure_date: '2026-08-23',
+        });
+
+      const res = await t.request.get('/api/v1/front-desk/arrivals').set('Authorization', `Bearer ${tokenFor()}`);
+      const rowWithPref = res.body.data.find((r) => String(r.id) === String(withPref.body.data.id));
+      const rowWithoutPref = res.body.data.find((r) => String(r.id) === String(withoutPref.body.data.id));
+      expect(rowWithPref.preferred_room_number).toBe('AP1');
+      expect(rowWithoutPref.preferred_room_number).toBeNull();
+      // Distinct from an actual assignment — Arrivals still carries no `room_number` at all.
+      expect(rowWithPref.room_number).toBeUndefined();
+    });
+
     it('gap closure (user-reported): In-House and Departures include the actual room number once checked in — Arrivals does not, since no room is assigned yet', async () => {
       const arrivalDate = '2026-08-25';
       const departureDate = '2026-08-26';

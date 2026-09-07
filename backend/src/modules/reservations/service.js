@@ -808,10 +808,30 @@ function selectReservationWithGuestAndRoom(query) {
     .select('rooms.room_number as room_number');
 }
 
+/**
+ * Gap closure (user-reported follow-up): Arrivals has no ACTUAL room yet —
+ * that stays true, per every earlier note in this file — but a reservation
+ * may carry a `preferred_room_id` (a request, never a lock — see
+ * `createReservation`'s own header), which front desk genuinely wants to
+ * see before opening the check-in dialog. LEFT JOIN directly on
+ * `reservations.preferred_room_id = rooms.id`, not through
+ * `reservation_rooms` at all — there is no assignment row to join through
+ * pre-check-in; a preference is a plain column on the reservation itself.
+ * Selected under its own name (`preferred_room_number`), never
+ * `room_number`, so the frontend cannot conflate "requested" with
+ * "assigned" — the same distinction `FrontDeskTab`'s own check-in dialog
+ * already draws when it pre-fills from this same column.
+ */
+function selectReservationWithGuestAndPreferredRoom(query) {
+  return selectReservationWithGuest(query)
+    .joinScoped('rooms', (join) => join.on('rooms.id', '=', 'reservations.preferred_room_id'), { type: 'left' })
+    .select('rooms.room_number as preferred_room_number');
+}
+
 async function listArrivals({ context }) {
   const db = scopedDb().for(context);
   const businessDate = await propertyBusinessDate({ context });
-  return selectReservationWithGuest(
+  return selectReservationWithGuestAndPreferredRoom(
     db.table('reservations').where({ 'reservations.arrival_date': businessDate, 'reservations.status': 'confirmed' })
   ).orderBy('reservations.id');
 }
