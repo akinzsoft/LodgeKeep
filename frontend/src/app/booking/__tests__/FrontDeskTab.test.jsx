@@ -74,4 +74,55 @@ describe('<FrontDeskTab>', () => {
 
     expect(mocks.checkIn).toHaveBeenCalledWith('1', { roomId: '9', overrideDirty: false });
   });
+
+  /**
+   * Gap closure (user-reported): the check-in dialog used to always start
+   * on "Select a room," even for a reservation with a preferred room on
+   * file. Pre-fills it now, when that room is still free — but the picker
+   * stays fully changeable, per PRODUCT_REQUIREMENTS.md §3.3's "if the
+   * customer requests a different room" allowance.
+   */
+  it("pre-fills the check-in room picker with the reservation's preferred room when it's still free", async () => {
+    const reservationWithPreference = { ...RESERVATION, preferred_room_id: '9' };
+    mocks.listArrivals.mockResolvedValue([reservationWithPreference]);
+
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('button', { name: 'Check In' }));
+
+    expect(await screen.findByLabelText('Room')).toHaveValue('9');
+    expect(screen.getByText(/pre-filled with the guest.s preferred room/i)).toBeInTheDocument();
+  });
+
+  it('does not pre-fill a preferred room that is no longer free, leaving "Select a room"', async () => {
+    const reservationWithPreference = { ...RESERVATION, preferred_room_id: '999' };
+    mocks.listArrivals.mockResolvedValue([reservationWithPreference]);
+    mocks.listFreeRooms.mockResolvedValue([FREE_ROOM]); // '999' is not in the free list
+
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('button', { name: 'Check In' }));
+
+    await screen.findByRole('option', { name: /101/ });
+    expect(screen.getByLabelText('Room')).toHaveValue('');
+    expect(screen.queryByText(/pre-filled with the guest.s preferred room/i)).not.toBeInTheDocument();
+  });
+
+  it('still allows changing the pre-filled preferred room to a different one', async () => {
+    mocks.checkIn.mockResolvedValue({ ...RESERVATION, status: 'checked_in' });
+    const otherRoom = { id: '10', room_number: '102', floor: '1', housekeeping_reported_status: 'clean' };
+    const reservationWithPreference = { ...RESERVATION, preferred_room_id: '9' };
+    mocks.listArrivals.mockResolvedValueOnce([reservationWithPreference]).mockResolvedValueOnce([]);
+    mocks.listFreeRooms.mockResolvedValue([FREE_ROOM, otherRoom]);
+
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('button', { name: 'Check In' }));
+    expect(await screen.findByLabelText('Room')).toHaveValue('9');
+
+    await userEvent.selectOptions(screen.getByLabelText('Room'), '10');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm check-in' }));
+
+    expect(mocks.checkIn).toHaveBeenCalledWith('1', { roomId: '10', overrideDirty: false });
+  });
 });

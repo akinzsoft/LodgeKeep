@@ -52,14 +52,39 @@ export function FrontDeskTab({ isOffline = false } = {}) {
    * (`reservationsApi.listFreeRooms`, no room-type filter — `checkIn`/
    * `roomMove` deliberately allow any type, an upgrade, see their own
    * headers), so the picker only ever offers a room genuinely available at
-   * this moment.
+   * this moment. Returns the list (not just setting state) so a caller that
+   * needs it immediately — `startCheckIn` below, to decide whether the
+   * reservation's own preferred room is still offerable — doesn't race a
+   * stale `rooms` state value from before this reload resolved.
    */
   async function reloadFreeRooms() {
+    let list;
     try {
-      setRooms(await reservationsApi.listFreeRooms());
+      list = await reservationsApi.listFreeRooms();
     } catch {
-      setRooms([]);
+      list = [];
     }
+    setRooms(list);
+    return list;
+  }
+
+  /**
+   * Gap closure (user-reported): opening the check-in dialog used to always
+   * start with "Select a room," even when the guest had a preferred room on
+   * file. Pre-selects it now — but only when it is ALSO still in the
+   * just-reloaded free-now list, since a preference is a request, never a
+   * lock (`AvailabilityTab`'s own header), and may no longer be free by
+   * check-in time. Still fully changeable — this only sets the dropdown's
+   * starting value, per PRODUCT_REQUIREMENTS.md §3.3's own "if the customer
+   * requests a different room" allowance.
+   */
+  async function startCheckIn(row) {
+    setCheckingIn(row);
+    setOverrideDirty(false);
+    const freeRooms = await reloadFreeRooms();
+    const preferredStillFree =
+      row.preferred_room_id && freeRooms.some((room) => String(room.id) === String(row.preferred_room_id));
+    setRoomId(preferredStillFree ? String(row.preferred_room_id) : '');
   }
 
   useEffect(() => {
@@ -173,13 +198,7 @@ export function FrontDeskTab({ isOffline = false } = {}) {
         actions={(row) => (
           <>
             {board === 'arrivals' && (
-              <Button
-                size="compact"
-                onClick={() => {
-                  setCheckingIn(row);
-                  reloadFreeRooms();
-                }}
-              >
+              <Button size="compact" onClick={() => startCheckIn(row)}>
                 Check In
               </Button>
             )}
@@ -225,6 +244,11 @@ export function FrontDeskTab({ isOffline = false } = {}) {
                 ))}
               </select>
             </label>
+            {roomId && String(roomId) === String(checkingIn.preferred_room_id) && (
+              <p className={formStyles.disabledNotice}>
+                Pre-filled with the guest&rsquo;s preferred room — pick a different one if they&rsquo;d rather change.
+              </p>
+            )}
             <label className={formStyles.checkboxField}>
               <input
                 type="checkbox"
