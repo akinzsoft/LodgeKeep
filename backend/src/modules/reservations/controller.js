@@ -309,6 +309,16 @@ async function listFreeRooms(req, res, next) {
   }
 }
 
+/**
+ * Gap closure (user-reported): opens the reservation's folio and posts its
+ * room charges before check-in, so front desk can offer real payment right
+ * on the booking screen — see `service.openBookingFolio`'s own header for
+ * why this is deliberately not the guest portal's hold-and-cancel shape.
+ * A financial mutation (it posts real folio_line_items), so it goes
+ * through the same idempotency wrapper every other one here does.
+ */
+const openBookingFolio = transitionAction('open_folio', ({ trx, req }) => service.openBookingFolio({ trx, id: req.params.id }));
+
 async function checkIn(req, res, next) {
   try {
     const { id } = req.params;
@@ -391,6 +401,7 @@ module.exports = {
   listEligiblePreferredRooms,
   configureOverbookingThreshold,
   createReservation,
+  openBookingFolio,
   getReservation,
   listReservations,
   listWaitlist,

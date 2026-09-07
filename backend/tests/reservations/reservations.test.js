@@ -699,6 +699,149 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
     });
   });
 
+  // ====================================================================
+  // Gap closure (user-reported): "if the customer wants to pay at the point
+  // of booking" — opens the folio and posts room charges before check-in.
+  // ====================================================================
+  describe('POST /reservations/:id/open-folio — payment at the point of booking', () => {
+    let roomTypeId;
+    let rateCodeId;
+
+    beforeAll(async () => {
+      roomTypeId = await createRoomType(ctx.a, { code: 'OPENFOLIO' });
+      await createRoom(ctx.a, { roomTypeId, roomNumber: 'OF1' });
+      rateCodeId = await createRateCode(ctx.a, { code: 'OPENFOLIORATE', baseRate: '50.00' });
+    });
+
+    it('opens the folio and posts one room_charge per night, before check-in', async () => {
+      const created = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-09-01',
+          departure_date: '2027-09-03',
+        });
+      expect(created.status).toBe(201);
+      expect(created.body.data.status).toBe('confirmed');
+
+      const res = await t.request
+        .post(`/api/v1/reservations/${created.body.data.id}/open-folio`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey());
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('open');
+
+      const lines = await t.trx('folio_line_items')
+        .where({ folio_id: res.body.data.id, type: 'room_charge' })
+        .orderBy('business_date');
+      expect(lines.map((l) => l.business_date.toString())).toEqual(['2027-09-01', '2027-09-02']);
+      expect(lines.every((l) => Number(l.amount) === 50)).toBe(true);
+    });
+
+    it('is idempotent — calling it twice does not double-post charges', async () => {
+      const created = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-09-05',
+          departure_date: '2027-09-06',
+        });
+
+      const first = await t.request
+        .post(`/api/v1/reservations/${created.body.data.id}/open-folio`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey());
+      const second = await t.request
+        .post(`/api/v1/reservations/${created.body.data.id}/open-folio`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey());
+      expect(second.status).toBe(200);
+      expect(second.body.data.id).toBe(first.body.data.id);
+
+      const lines = await t.trx('folio_line_items').where({ folio_id: second.body.data.id, type: 'room_charge' });
+      expect(lines.length).toBe(1);
+    });
+
+    it('rejects opening a folio for a waitlisted reservation — no room to bill yet', async () => {
+      const holdingTheRoom = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-09-10',
+          departure_date: '2027-09-11',
+        });
+      expect(holdingTheRoom.status).toBe(201);
+
+      const waitlisted = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-09-10',
+          departure_date: '2027-09-11',
+          allow_waitlist: true,
+        });
+      expect(waitlisted.body.data.status).toBe('waitlisted');
+
+      const res = await t.request
+        .post(`/api/v1/reservations/${waitlisted.body.data.id}/open-folio`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey());
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_RESERVATION_NOT_CONFIRMED');
+    });
+
+    it('requires cashiering.post_charge — housekeeping (ctx.a.users[1]) gets a real 403', async () => {
+      const created = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-09-15',
+          departure_date: '2027-09-16',
+        });
+
+      const housekeepingToken = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+      const res = await t.request
+        .post(`/api/v1/reservations/${created.body.data.id}/open-folio`)
+        .set('Authorization', `Bearer ${housekeepingToken}`)
+        .set('Idempotency-Key', idemKey());
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+
+    it('returns 404 for a nonexistent reservation', async () => {
+      const res = await t.request
+        .post('/api/v1/reservations/999999999/open-folio')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey());
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('GET /front-desk/free-rooms — actual room numbers free right now', () => {
     let roomTypeId;
     let freeRoomId;

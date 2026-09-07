@@ -75,6 +75,15 @@ function reservationsRouter() {
   router.post('/reservations/:id/cancel', requirePermission('reservations.manage'), controller.cancelReservation);
   router.post('/reservations/:id/mark-no-show', requirePermission('reservations.manage'), controller.markNoShow);
 
+  // Gap closure (user-reported): opens a folio and posts room charges
+  // before check-in so payment can be taken at booking time — see
+  // `service.openBookingFolio`'s own header. Gated on `cashiering.post_charge`
+  // (not `reservations.manage`), matching SECURITY.md §5's own "post a
+  // charge" definition for that key — this action posts real
+  // folio_line_items, so the money-handling permission is the correct gate,
+  // not the reservation one.
+  router.post('/reservations/:id/open-folio', requirePermission('cashiering.post_charge'), controller.openBookingFolio);
+
   router.get('/reservations/:id/notes', requirePermission('reservations.view'), controller.listNotes);
   router.post('/reservations/:id/notes', requirePermission('reservations.manage'), controller.addNote);
 

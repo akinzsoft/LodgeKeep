@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, Button, DataTable, StatusPill } from '../../shared/components/index.js';
-import { setupApi, reservationsApi, ApiError } from '../../shared/api/index.js';
+import { setupApi, reservationsApi, cashieringApi, ApiError } from '../../shared/api/index.js';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
 
@@ -37,6 +37,18 @@ import styles from './BookingScreen.module.css';
  *    it is DATE-OVERLAP aware rather than "hide until the other stay ends
  *    entirely" — a room preferred for next week still appears for a
  *    December search.
+ *
+ * Gap closure (user-reported): "pay at the point of booking." A successful,
+ * CONFIRMED booking (never a hold or a waitlisted one — neither holds a
+ * real room to bill yet) immediately opens its folio and posts every
+ * night's room charge (`reservationsApi.openBookingFolio`), then offers
+ * real Cash/Card payment against it — the same `cashieringApi` endpoints
+ * the admin Cashiering screen already uses. Deliberately NOT the Guest
+ * Portal's own hold-and-cancel-if-unpaid shape (confirmed with the user
+ * before building this): the reservation stays confirmed whether or not
+ * payment happens now, and an unpaid balance is a normal, expected outcome
+ * here, settled later via Cashiering or at check-out — never a reason to
+ * roll the booking back.
  */
 export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const [roomTypes, setRoomTypes] = useState(null);
@@ -64,6 +76,14 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const [bookError, setBookError] = useState(null);
   const [bookSuccess, setBookSuccess] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Gap closure: "pay at the point of booking" — see this file's own header.
+  const [folio, setFolio] = useState(null);
+  const [cashAmount, setCashAmount] = useState('');
+  const [checkoutUrl, setCheckoutUrl] = useState(null);
+  const [paymentError, setPaymentError] = useState(null);
+  const [paymentSuccess, setPaymentSuccess] = useState(null);
+  const [capturingPayment, setCapturingPayment] = useState(false);
 
   async function reloadReferenceData() {
     try {
@@ -161,6 +181,10 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     setSubmitting(true);
     setBookError(null);
     setBookSuccess(null);
+    setFolio(null);
+    setCheckoutUrl(null);
+    setPaymentError(null);
+    setPaymentSuccess(null);
     try {
       const reservation = await reservationsApi.createReservation({
         guest_id: booking.guest_id,
@@ -179,6 +203,20 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
           ? `Added to the waitlist (confirmation ${reservation.confirmation_number}).`
           : `Booked — confirmation ${reservation.confirmation_number}.`
       );
+      // Gap closure: only a CONFIRMED reservation holds a real room to bill
+      // — a hold or a waitlisted booking has nothing to open a folio
+      // against yet (`openBookingFolio`'s own backend header). A failure
+      // here is shown alongside the payment section, never as a reason the
+      // booking itself failed — it already succeeded.
+      if (reservation.status === 'confirmed') {
+        try {
+          const openedFolio = await reservationsApi.openBookingFolio(reservation.id);
+          setFolio(openedFolio);
+          setCashAmount(openedFolio.balance);
+        } catch (caught) {
+          setPaymentError(caught instanceof ApiError ? caught.message : 'Could not open the folio for payment.');
+        }
+      }
       const res = await reservationsApi.checkAvailability({
         roomTypeId: search.room_type_id,
         arrivalDate: search.arrival_date,
@@ -194,6 +232,62 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
       setBookError(caught instanceof ApiError ? caught.message : 'Could not create the reservation.');
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  const selectedGuest = (guests ?? []).find((guest) => String(guest.id) === String(booking.guest_id));
+
+  async function handleCashPayment() {
+    setCapturingPayment(true);
+    setPaymentError(null);
+    setPaymentSuccess(null);
+    try {
+      await cashieringApi.captureCashPayment(folio.id, { amount: cashAmount, currency: folio.currency });
+      const refreshed = await cashieringApi.getFolio(folio.id);
+      setFolio(refreshed);
+      setCashAmount(refreshed.balance);
+      setPaymentSuccess('Cash payment captured.');
+    } catch (caught) {
+      setPaymentError(caught instanceof ApiError ? caught.message : 'Could not capture the cash payment.');
+    } finally {
+      setCapturingPayment(false);
+    }
+  }
+
+  /**
+   * Real Paystack, the same gateway integration Cashiering already uses —
+   * not a card terminal integration (none exists in this environment).
+   * Generates a real hosted checkout link; the guest (or staff, on their
+   * behalf if physically present with the card) completes it there. See
+   * `shared/api/cashiering.js`'s own header for the real `meta`-discarding
+   * bug this pass found and fixed while wiring this up — without that fix,
+   * `authorizationUrl` could never have reached this screen at all.
+   */
+  async function handleCardPayment() {
+    setCapturingPayment(true);
+    setPaymentError(null);
+    setPaymentSuccess(null);
+    setCheckoutUrl(null);
+    try {
+      const result = await cashieringApi.capturePaystackPayment(folio.id, {
+        amount: cashAmount,
+        currency: folio.currency,
+        guestEmail: selectedGuest?.email,
+      });
+      if (result?.authorizationUrl) {
+        setCheckoutUrl(result.authorizationUrl);
+      } else {
+        // The honest-202-partial-success path (`controller.js`'s own
+        // `capturePaystackPayment`) — the local intent is real and saved,
+        // only reaching the gateway failed (e.g. no sandbox credentials
+        // configured in this environment). Never presented as if the whole
+        // action failed — the payment attempt is real and retryable.
+        setPaymentError(result?.checkoutError ?? 'Could not start the card payment.');
+      }
+    } catch (caught) {
+      setPaymentError(caught instanceof ApiError ? caught.message : 'Could not start the card payment.');
+    } finally {
+      setCapturingPayment(false);
     }
   }
 
@@ -492,6 +586,70 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
               </div>
             </form>
           </details>
+        </Card>
+      )}
+
+      {/* Gap closure: "pay at the point of booking" — see this file's own
+          header. Only shown after a real folio has been opened for a
+          CONFIRMED booking; a hold or waitlisted reservation never reaches
+          this state, and there is nothing to show until then. */}
+      {folio && (
+        <Card title="Payment">
+          {paymentError && (
+            <p role="alert" className={formStyles.errorBanner}>
+              {paymentError}
+            </p>
+          )}
+          {paymentSuccess && <p className={formStyles.disabledNotice}>{paymentSuccess}</p>}
+          <p className={formStyles.disabledNotice}>
+            Balance due: {folio.balance} {folio.currency}
+          </p>
+
+          {checkoutUrl && (
+            <p className={formStyles.disabledNotice}>
+              <a href={checkoutUrl} target="_blank" rel="noreferrer">
+                Open the card payment page
+              </a>
+            </p>
+          )}
+
+          <div className={formStyles.row}>
+            <label className={formStyles.field}>
+              <span className={formStyles.label}>Amount</span>
+              <input
+                className={formStyles.input}
+                value={cashAmount}
+                onChange={(event) => setCashAmount(event.target.value)}
+              />
+            </label>
+          </div>
+
+          {isOffline && (
+            <p role="alert" className={formStyles.errorBanner}>
+              You&rsquo;re offline — payment is disabled until the connection returns.
+            </p>
+          )}
+
+          <div className={formStyles.actionsRow}>
+            <Button type="button" loading={capturingPayment} disabled={isOffline} onClick={handleCashPayment}>
+              Cash
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              loading={capturingPayment}
+              disabled={isOffline || !selectedGuest?.email}
+              onClick={handleCardPayment}
+            >
+              Card
+            </Button>
+          </div>
+          {!selectedGuest?.email && (
+            <p className={formStyles.disabledNotice}>Add an email to this guest to accept card payment.</p>
+          )}
+          <p className={formStyles.disabledNotice}>
+            Or leave it — the balance simply stays owing, to be settled later via Cashiering or at check-out.
+          </p>
         </Card>
       )}
     </div>

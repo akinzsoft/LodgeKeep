@@ -30,7 +30,7 @@ const {
 } = require('../../shared/room-availability');
 const { generateUlid } = require('../../shared/ulid');
 const { resolveRate } = require('../setup/service');
-const { postAdjustment: postFolioAdjustment, ensurePrimaryFolio } = require('../cashiering/service');
+const { postAdjustment: postFolioAdjustment, ensurePrimaryFolio, postRoomChargesForStay } = require('../cashiering/service');
 const {
   OverbookingThresholdExceededError,
   RoomUnavailableError,
@@ -415,6 +415,40 @@ async function createReservation({
     await emitReservationEvent({ trx, eventType: 'reservation.confirmed', reservation: created });
   }
   return created;
+}
+
+/**
+ * Gap closure (user-reported): "if the customer wants to pay at the point
+ * of booking" — opens the reservation's primary folio and posts every
+ * night's room charge immediately, WITHOUT waiting for check-in, so front
+ * desk can offer real cash/card payment right there on the booking screen.
+ * Deliberately NOT the guest portal's own `createBookingWithPayment` shape
+ * (`portal/service.js`) — that flow books as a `tentative` hold and
+ * cancels the whole reservation if payment is never completed; a staff
+ * booking made over the phone or in person stays `confirmed` regardless of
+ * whether payment happens now, later, or never (an unpaid balance is a
+ * normal, expected outcome here, not a failure to roll back — confirmed
+ * with the user before building this). Only a `confirmed` reservation may
+ * have its folio opened this way — a `waitlisted` reservation holds no
+ * room to bill, and a `tentative` hold's own fate is still undecided.
+ *
+ * Idempotent and safe to call more than once for the same reservation:
+ * `ensurePrimaryFolio` reuses an existing folio rather than opening a
+ * second one, and `postRoomChargesForStay`'s own per-business_date guard
+ * skips a night already posted — reopening the booking screen (or a
+ * network retry) never double-bills.
+ */
+async function openBookingFolio({ trx, id }) {
+  const reservation = await trx.table('reservations').where({ id }).first();
+  if (!reservation) return null;
+  if (reservation.status !== 'confirmed') {
+    throw new ValidationError(
+      'RESERVATION_NOT_CONFIRMED',
+      'Only a confirmed reservation can have its folio opened for payment.'
+    );
+  }
+  const folio = await ensurePrimaryFolio({ trx, reservationId: id });
+  return postRoomChargesForStay({ trx, reservationId: id, folioId: folio.id });
 }
 
 /** `tentative` -> `confirmed`. No inventory change: a tentative hold already counts against sellable inventory (§11). */
@@ -945,6 +979,7 @@ module.exports = {
   releaseInventoryForDates,
   configureOverbookingThreshold,
   createReservation,
+  openBookingFolio,
   confirmReservation,
   promoteWaitlist,
   cancelReservation,

@@ -62,6 +62,19 @@ export function createReservation(body) {
   return request('/reservations', { method: 'POST', body, headers: { 'Idempotency-Key': idempotencyKey() } });
 }
 
+/**
+ * Gap closure (user-reported): "pay at the point of booking" — opens the
+ * reservation's folio and posts its room charges before check-in, so
+ * `cashieringApi`'s real cash/card capture endpoints have a real folio to
+ * post against. See the backend's own `openBookingFolio` header for why
+ * this stays a request, never a hold — the reservation is already
+ * confirmed by the time this is called.
+ * @returns {Promise<{id: string, balance: string, currency: string, status: string}>}
+ */
+export function openBookingFolio(id) {
+  return request(`/reservations/${id}/open-folio`, { method: 'POST', body: {}, headers: { 'Idempotency-Key': idempotencyKey() } });
+}
+
 export function getReservation(id) {
   return request(`/reservations/${id}`);
 }

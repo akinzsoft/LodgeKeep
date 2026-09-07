@@ -152,20 +152,10 @@ async function createBookingWithPayment({ trx, guestId, roomTypeId, rateCodeId, 
   await cashieringService.ensurePrimaryFolio({ trx, reservationId: reservation.id });
   const folio = await trx.table('folios').where({ reservation_id: reservation.id }).first();
 
-  const dailyRates = await trx.table('reservation_daily_rates').where({ reservation_id: reservation.id });
-  for (const dailyRate of dailyRates) {
-    await cashieringService.postCharge({
-      trx,
-      folioId: folio.id,
-      type: 'room_charge',
-      description: `Room charge — ${dailyRate.stay_date}`,
-      amount: dailyRate.rate,
-      businessDate: dailyRate.stay_date,
-      userId: null,
-    });
-  }
-
-  const paidFolio = await trx.table('folios').where({ id: folio.id }).first();
+  // Gap closure: this per-night posting loop is now `cashiering/service.js`'s
+  // own `postRoomChargesForStay` — promoted there once the staff-side
+  // booking flow needed the identical shape (see that function's header).
+  const paidFolio = await cashieringService.postRoomChargesForStay({ trx, reservationId: reservation.id, folioId: folio.id });
   const payment = await cashieringService.initiatePaystackPaymentIntent({
     trx,
     folioId: folio.id,

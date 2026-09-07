@@ -240,6 +240,43 @@ async function postCharge({ trx, folioId, type, description, amount, businessDat
 }
 
 /**
+ * Gap closure (user-reported): posts one `room_charge` per night of a
+ * reservation's stay — the only shape that doesn't double-bill once Night
+ * Audit's own idempotency guard later walks the same nights (keyed on
+ * `folio_id` + `business_date`). Extracted from `portal/service.js`'s own
+ * inline loop (`createBookingWithPayment`) once the staff-side "let front
+ * desk open a folio and take payment before check-in" need arrived as a
+ * second, near-identical caller — the same "promote a one-off once a
+ * second caller needs it" pattern this codebase already uses elsewhere
+ * (`runIdempotentMutation`, `resolvePropertyBySlug`). Idempotent per
+ * (folioId, business_date) itself, on top of that — skips a night that
+ * already has a non-voided `room_charge` line, so calling this twice for
+ * the same reservation (a staff member reopening the booking screen, say)
+ * never double-posts.
+ */
+async function postRoomChargesForStay({ trx, reservationId, folioId, userId }) {
+  const dailyRates = await trx.table('reservation_daily_rates').where({ reservation_id: reservationId });
+  for (const dailyRate of dailyRates) {
+    const alreadyPosted = await trx
+      .table('folio_line_items')
+      .where({ folio_id: folioId, type: 'room_charge', business_date: dailyRate.stay_date })
+      .whereNull('voided_at')
+      .first();
+    if (alreadyPosted) continue;
+    await postCharge({
+      trx,
+      folioId,
+      type: 'room_charge',
+      description: `Room charge — ${dailyRate.stay_date}`,
+      amount: dailyRate.rate,
+      businessDate: dailyRate.stay_date,
+      userId: userId ?? null,
+    });
+  }
+  return trx.table('folios').where({ id: folioId }).first();
+}
+
+/**
  * A correction, discount, or comp — ARCHITECTURE.md §8's own worked
  * example ("ADJUSTMENT -£100.00 ... reverses it"). `amount` is signed and
  * posted EXACTLY as given, with no tax recomputation (a correction to a
@@ -647,6 +684,7 @@ module.exports = {
   openAdditionalFolio,
   moveLineItem,
   postCharge,
+  postRoomChargesForStay,
   postAdjustment,
   voidLineItem,
   captureCashPayment,
