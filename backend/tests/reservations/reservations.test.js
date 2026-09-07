@@ -550,6 +550,155 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
     });
   });
 
+  // ====================================================================
+  // Gap closure (user-reported): the preferred-room picker should not
+  // offer a room already committed to another overlapping-dates guest.
+  // ====================================================================
+  describe('GET /reservations/eligible-preferred-rooms — date-overlap-aware exclusion', () => {
+    let roomTypeId;
+    let rateCodeId;
+
+    beforeAll(async () => {
+      roomTypeId = await createRoomType(ctx.a, { code: 'ELIGIBLE' });
+      rateCodeId = await createRateCode(ctx.a, { code: 'ELIGIBLERATE' });
+    });
+
+    async function query({ arrivalDate, departureDate }) {
+      return t.request
+        .get('/api/v1/reservations/eligible-preferred-rooms')
+        .query({ room_type_id: String(roomTypeId), arrival_date: arrivalDate, departure_date: departureDate })
+        .set('Authorization', `Bearer ${tokenFor()}`);
+    }
+
+    it('excludes a room already preferred by another OPEN reservation with overlapping dates', async () => {
+      const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'ELIG1' });
+      await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-10-05',
+          departure_date: '2027-10-10',
+          preferred_room_id: String(roomId),
+        });
+
+      const overlapping = await query({ arrivalDate: '2027-10-07', departureDate: '2027-10-08' });
+      expect(overlapping.status).toBe(200);
+      expect(overlapping.body.data.map((r) => r.id)).not.toContain(String(roomId));
+    });
+
+    it('does NOT exclude the same room for genuinely non-overlapping dates — confirmed date-aware, not a blanket hide', async () => {
+      const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'ELIG2' });
+      await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-11-01',
+          departure_date: '2027-11-05',
+          preferred_room_id: String(roomId),
+        });
+
+      const farFuture = await query({ arrivalDate: '2027-12-01', departureDate: '2027-12-02' });
+      expect(farFuture.status).toBe(200);
+      expect(farFuture.body.data.map((r) => r.id)).toContain(String(roomId));
+    });
+
+    it('does not exclude a room whose committing reservation has been cancelled', async () => {
+      const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'ELIG3' });
+      const cancelRes = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-10-20',
+          departure_date: '2027-10-22',
+          preferred_room_id: String(roomId),
+        });
+      await t.request
+        .post(`/api/v1/reservations/${cancelRes.body.data.id}/cancel`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ reason: 'test cleanup' });
+
+      const overlapping = await query({ arrivalDate: '2027-10-21', departureDate: '2027-10-23' });
+      expect(overlapping.body.data.map((r) => r.id)).toContain(String(roomId));
+    });
+
+    it('excludes a room another guest is ACTUALLY checked into for overlapping dates, even with no preference set', async () => {
+      const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'ELIG4' });
+      const bookRes = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-10-25',
+          departure_date: '2027-10-28',
+        });
+      // Check in via a direct row insert against the real business date this
+      // property has, rather than the future dates above (checkIn has no
+      // date restriction of its own — this only needs a real open
+      // reservation_rooms row to exist, which is what the endpoint reads).
+      await t.trx('reservation_rooms').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        reservation_id: bookRes.body.data.id,
+        room_id: roomId,
+        effective_from: new Date(),
+        effective_to: null,
+      });
+      await t.trx('reservations').where({ id: bookRes.body.data.id }).update({ status: 'checked_in' });
+
+      const overlapping = await query({ arrivalDate: '2027-10-26', departureDate: '2027-10-27' });
+      expect(overlapping.body.data.map((r) => r.id)).not.toContain(String(roomId));
+
+      const nonOverlapping = await query({ arrivalDate: '2027-12-25', departureDate: '2027-12-26' });
+      expect(nonOverlapping.body.data.map((r) => r.id)).toContain(String(roomId));
+    });
+
+    it('excludes a dirty room only when the new arrival is the property\'s current business date', async () => {
+      const dirtyRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'ELIG5', housekeeping: 'dirty' });
+      // The fixture's own property row carries no business date by default
+      // (nullable, per the `properties` migration) — set one explicitly so
+      // "arriving today" is a real, known value to query against.
+      const businessDate = '2026-06-15';
+      await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: businessDate });
+
+      const arrivingToday = await query({ arrivalDate: businessDate, departureDate: '2099-01-01' });
+      expect(arrivingToday.body.data.map((r) => r.id)).not.toContain(String(dirtyRoomId));
+
+      const arrivingLater = await query({ arrivalDate: '2027-12-01', departureDate: '2027-12-02' });
+      expect(arrivingLater.body.data.map((r) => r.id)).toContain(String(dirtyRoomId));
+    });
+
+    it('requires reservations.view — housekeeping (ctx.a.users[1], neither reservations.view nor front_desk.view) gets a real 403', async () => {
+      const housekeepingToken = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+      const res = await t.request
+        .get('/api/v1/reservations/eligible-preferred-rooms')
+        .query({ room_type_id: String(roomTypeId), arrival_date: '2027-10-05', departure_date: '2027-10-06' })
+        .set('Authorization', `Bearer ${housekeepingToken}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+  });
+
   describe('GET /front-desk/free-rooms — actual room numbers free right now', () => {
     let roomTypeId;
     let freeRoomId;

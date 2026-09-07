@@ -26,20 +26,27 @@ import styles from './BookingScreen.module.css';
  *    For every other search this stays exactly the aggregate sellable
  *    table it always was.
  * 2. "Preferred room" — an optional, non-binding request recorded on the
- *    reservation (`preferred_room_id`), sourced from every room of the
- *    searched type regardless of current occupancy, since a preference for
- *    a future date can't honestly be checked against today's occupancy.
- *    `checkIn` still accepts any room — this is never enforced.
+ *    reservation (`preferred_room_id`). Sourced from `listEligiblePreferredRooms`
+ *    (gap closure, user-reported), not every room of the searched type — a
+ *    room already committed, by preference or actual check-in, to another
+ *    reservation whose dates overlap this search is excluded from the
+ *    list. This is still not a lock: `checkIn` still accepts any room, and
+ *    the exclusion only narrows what the picker OFFERS, never what could be
+ *    submitted directly against the API. See the backend's own
+ *    `listEligiblePreferredRooms` header for the exact rule, including why
+ *    it is DATE-OVERLAP aware rather than "hide until the other stay ends
+ *    entirely" — a room preferred for next week still appears for a
+ *    December search.
  */
 export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const [roomTypes, setRoomTypes] = useState(null);
   const [rateCodes, setRateCodes] = useState(null);
   const [guests, setGuests] = useState(null);
-  const [rooms, setRooms] = useState(null);
 
   const [search, setSearch] = useState({ room_type_id: '', arrival_date: '', departure_date: '' });
   const [availability, setAvailability] = useState(null);
   const [freeRoomsNow, setFreeRoomsNow] = useState(null);
+  const [eligiblePreferredRooms, setEligiblePreferredRooms] = useState(null);
   const [searchError, setSearchError] = useState(null);
   const [searching, setSearching] = useState(false);
 
@@ -60,16 +67,14 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
 
   async function reloadReferenceData() {
     try {
-      const [rt, rc, g, r] = await Promise.all([
+      const [rt, rc, g] = await Promise.all([
         setupApi.listRoomTypes(),
         setupApi.listRateCodes(),
         reservationsApi.listGuests(),
-        setupApi.listRooms(),
       ]);
       setRoomTypes(rt);
       setRateCodes(rc);
       setGuests(g);
-      setRooms(r);
     } catch (caught) {
       setSearchError(caught instanceof ApiError ? caught.message : 'Could not load room types, rate codes, or guests.');
     }
@@ -92,12 +97,30 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     }
   }
 
+  async function reloadEligiblePreferredRooms() {
+    try {
+      setEligiblePreferredRooms(
+        await reservationsApi.listEligiblePreferredRooms({
+          roomTypeId: search.room_type_id,
+          arrivalDate: search.arrival_date,
+          departureDate: search.departure_date,
+        })
+      );
+    } catch {
+      // Same per-widget degradation as `reloadFreeRoomsNow` — a failure
+      // here just leaves the picker empty (still "No preference"-only),
+      // never blocks the search or the booking form itself.
+      setEligiblePreferredRooms([]);
+    }
+  }
+
   async function handleSearch(event) {
     event.preventDefault();
     setSearching(true);
     setSearchError(null);
     setBookSuccess(null);
     setFreeRoomsNow(null);
+    setBooking((current) => ({ ...current, preferred_room_id: '' }));
     try {
       const result = await reservationsApi.checkAvailability({
         roomTypeId: search.room_type_id,
@@ -108,6 +131,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
       if (search.arrival_date === activeProperty?.current_business_date) {
         await reloadFreeRoomsNow(search.room_type_id);
       }
+      await reloadEligiblePreferredRooms();
     } catch (caught) {
       setAvailability(null);
       setSearchError(caught instanceof ApiError ? caught.message : 'Could not check availability.');
@@ -164,6 +188,8 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
       if (search.arrival_date === activeProperty?.current_business_date) {
         await reloadFreeRoomsNow(search.room_type_id);
       }
+      setBooking((current) => ({ ...current, preferred_room_id: '' }));
+      await reloadEligiblePreferredRooms();
     } catch (caught) {
       setBookError(caught instanceof ApiError ? caught.message : 'Could not create the reservation.');
     } finally {
@@ -368,13 +394,11 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                   onChange={(event) => setBooking({ ...booking, preferred_room_id: event.target.value })}
                 >
                   <option value="">No preference</option>
-                  {(rooms ?? [])
-                    .filter((room) => String(room.room_type_id) === String(search.room_type_id))
-                    .map((room) => (
-                      <option key={room.id} value={room.id}>
-                        {room.room_number}
-                      </option>
-                    ))}
+                  {(eligiblePreferredRooms ?? []).map((room) => (
+                    <option key={room.id} value={room.id}>
+                      {room.room_number}
+                    </option>
+                  ))}
                 </select>
               </label>
             </div>

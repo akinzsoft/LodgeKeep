@@ -90,4 +90,4 @@ async function listFreeRoomsNow({ db, roomTypeId, stayDate }) {
   return query.select('id', 'room_number', 'floor', 'room_type_id', 'housekeeping_reported_status').orderBy('room_number');
 }
 
-module.exports = { livePhysicalCount, listFreeRoomsNow };
+module.exports = { livePhysicalCount, listFreeRoomsNow, outOfOrderRoomIds };

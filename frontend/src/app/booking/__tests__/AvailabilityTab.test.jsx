@@ -7,24 +7,25 @@ const mocks = vi.hoisted(() => ({
   listRoomTypes: vi.fn(),
   listRateCodes: vi.fn(),
   listGuests: vi.fn(),
-  listRooms: vi.fn(),
   checkAvailability: vi.fn(),
   createReservation: vi.fn(),
   createGuest: vi.fn(),
   listFreeRooms: vi.fn(),
+  listEligiblePreferredRooms: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return {
     ...actual,
-    setupApi: { listRoomTypes: mocks.listRoomTypes, listRateCodes: mocks.listRateCodes, listRooms: mocks.listRooms },
+    setupApi: { listRoomTypes: mocks.listRoomTypes, listRateCodes: mocks.listRateCodes },
     reservationsApi: {
       listGuests: mocks.listGuests,
       checkAvailability: mocks.checkAvailability,
       createReservation: mocks.createReservation,
       createGuest: mocks.createGuest,
       listFreeRooms: mocks.listFreeRooms,
+      listEligiblePreferredRooms: mocks.listEligiblePreferredRooms,
     },
   };
 });
@@ -40,8 +41,8 @@ describe('<AvailabilityTab>', () => {
     mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE]);
     mocks.listRateCodes.mockResolvedValue([RATE_CODE]);
     mocks.listGuests.mockResolvedValue([GUEST]);
-    mocks.listRooms.mockResolvedValue([ROOM]);
     mocks.listFreeRooms.mockResolvedValue([ROOM]);
+    mocks.listEligiblePreferredRooms.mockResolvedValue([ROOM]);
   });
 
   it('searches availability and shows the sellable count per night', async () => {
@@ -167,6 +168,35 @@ describe('<AvailabilityTab>', () => {
 
     expect(await screen.findByText(/Booked — confirmation ABC123/)).toBeInTheDocument();
     expect(mocks.createReservation).toHaveBeenCalledWith(expect.objectContaining({ preferred_room_id: '5' }));
+  });
+
+  it('fetches only the eligible preferred rooms for the searched date range, not every room of the type', async () => {
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    mocks.listEligiblePreferredRooms.mockResolvedValue([]);
+
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2027-01-01');
+
+    expect(mocks.listEligiblePreferredRooms).toHaveBeenCalledWith({
+      roomTypeId: '1',
+      arrivalDate: '2027-01-01',
+      departureDate: '2027-01-02',
+    });
+    // Excluded (committed elsewhere) — only "No preference" remains.
+    const preferredRoomSelect = screen.getByLabelText('Preferred room (optional)');
+    expect(preferredRoomSelect.querySelectorAll('option')).toHaveLength(1);
   });
 
   it('omits preferred_room_id from the request entirely when left as "No preference"', async () => {

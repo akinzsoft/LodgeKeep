@@ -46,6 +46,16 @@ function reservationsRouter() {
 
   router.get('/availability', requirePermission('reservations.view'), controller.checkAvailability);
 
+  // Gap closure (user-reported): which rooms of a type are genuinely
+  // eligible to be offered as a "preferred room" for a date range — see
+  // `service.listEligiblePreferredRooms`'s own header. Gated the same as
+  // `checkAvailability` since it serves the same booking-form screen.
+  router.get(
+    '/reservations/eligible-preferred-rooms',
+    requirePermission('reservations.view'),
+    controller.listEligiblePreferredRooms
+  );
+
   // PLAN.md Phase 3: the missing overbooking-threshold config endpoint —
   // static path components either side of the two path params, no
   // collision risk with `/reservations/:id`-style routes below.

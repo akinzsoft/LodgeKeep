@@ -82,6 +82,25 @@ async function checkAvailability(req, res, next) {
 }
 
 /**
+ * Gap closure (user-reported): which rooms of a type are genuinely eligible
+ * to be offered as a "preferred room," for a specific date range — see
+ * `service.listEligiblePreferredRooms`'s own header for the exclusion rule.
+ * Gated on `reservations.view`, matching `checkAvailability`, since it
+ * serves the booking form, not front desk.
+ */
+async function listEligiblePreferredRooms(req, res, next) {
+  try {
+    const roomTypeId = require_(req.query, 'room_type_id');
+    const arrivalDate = require_(req.query, 'arrival_date');
+    const departureDate = require_(req.query, 'departure_date');
+    const rooms = await service.listEligiblePreferredRooms({ context: req.context, roomTypeId, arrivalDate, departureDate });
+    res.status(200).json(ok(rooms));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * PLAN.md Phase 3: the missing configuration endpoint for
  * `room_type_inventory.overbooking_threshold_pct` — not a state-transition
  * on a `reservations` row, so it does not go through `runMutation`'s
@@ -369,6 +388,7 @@ module.exports = {
   createGuest,
   listGuests,
   checkAvailability,
+  listEligiblePreferredRooms,
   configureOverbookingThreshold,
   createReservation,
   getReservation,

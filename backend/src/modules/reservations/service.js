@@ -23,7 +23,11 @@
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { writeOutboxEvent } = require('../../shared/outbox');
-const { livePhysicalCount: sharedLivePhysicalCount, listFreeRoomsNow: sharedListFreeRoomsNow } = require('../../shared/room-availability');
+const {
+  livePhysicalCount: sharedLivePhysicalCount,
+  listFreeRoomsNow: sharedListFreeRoomsNow,
+  outOfOrderRoomIds,
+} = require('../../shared/room-availability');
 const { generateUlid } = require('../../shared/ulid');
 const { resolveRate } = require('../setup/service');
 const { postAdjustment: postFolioAdjustment, ensurePrimaryFolio } = require('../cashiering/service');
@@ -792,6 +796,72 @@ async function listFreeRoomsNow({ context, roomTypeId }) {
   return sharedListFreeRoomsNow({ db, roomTypeId, stayDate });
 }
 
+/**
+ * Gap closure (user-reported): the "Preferred room" picker on the booking
+ * form used to source from every room of the type, unfiltered, so a room
+ * already earmarked for one guest's stay could be offered — and picked
+ * again — as the preference for a second, overlapping-dates guest. This
+ * narrows that list, WITHOUT turning a preference into a lock: `checkIn`
+ * still accepts any room, and this only changes what the picker OFFERS,
+ * never what a caller may explicitly submit.
+ *
+ * Confirmed with the user: exclusion is DATE-OVERLAP aware, not a blanket
+ * "hide until this other stay ends" rule — a room preferred for next week
+ * must still be offered for a December booking, since there is no real
+ * conflict. A room is excluded from `[arrivalDate, departureDate)` when:
+ *
+ * 1. It is the `preferred_room_id` of another reservation whose own stay
+ *    overlaps this range and whose status is still "open" (tentative,
+ *    confirmed, or checked_in) — a cancelled/no_show/checked_out
+ *    reservation's preference no longer means anything.
+ * 2. It is the room an ongoing `checked_in` reservation is ACTUALLY
+ *    assigned to (via `reservation_rooms`, `effective_to IS NULL`) for an
+ *    overlapping stay — covers the case where that guest never expressed a
+ *    preference of their own but is demonstrably in the room.
+ * 3. It is not yet marked clean by housekeeping AND the new booking's
+ *    arrival is the property's own CURRENT business date — the "checked
+ *    out and clean" half of the user's request: once a reservation is
+ *    checked_out it drops out of (1)/(2) entirely (there is no longer an
+ *    open assignment or an "open" status), so the only way a same-day
+ *    turnover still excludes the room is this real-time housekeeping
+ *    check, which naturally stops applying to a future-dated booking
+ *    (housekeeping will have caught up by then).
+ */
+async function listEligiblePreferredRooms({ context, roomTypeId, arrivalDate, departureDate }) {
+  const db = scopedDb().for(context);
+  const oooRoomIds = await outOfOrderRoomIds({ db, stayDate: arrivalDate });
+
+  let roomsQuery = db.table('rooms').where({ status: 'active', has_discrepancy: false, room_type_id: roomTypeId });
+  if (oooRoomIds.length > 0) roomsQuery = roomsQuery.whereNotIn('id', oooRoomIds);
+  const candidateRooms = await roomsQuery.select('id', 'room_number', 'floor', 'housekeeping_reported_status');
+
+  const preferenceCommits = await db
+    .table('reservations')
+    .whereNotNull('preferred_room_id')
+    .whereIn('status', ['tentative', 'confirmed', 'checked_in'])
+    .select('preferred_room_id as room_id', 'arrival_date', 'departure_date');
+
+  const assignmentCommits = await db
+    .table('reservation_rooms')
+    .joinScoped('reservations', (join) => join.on('reservations.id', '=', 'reservation_rooms.reservation_id'))
+    .whereNull('reservation_rooms.effective_to')
+    .select('reservation_rooms.room_id as room_id', 'reservations.arrival_date', 'reservations.departure_date');
+
+  const overlapsRange = (commit) => arrivalDate < commit.departure_date && commit.arrival_date < departureDate;
+  const committedRoomIds = new Set(
+    [...preferenceCommits, ...assignmentCommits].filter(overlapsRange).map((commit) => String(commit.room_id))
+  );
+
+  const businessDate = await propertyBusinessDate({ context });
+  const isArrivingNow = businessDate != null && arrivalDate === businessDate;
+
+  return candidateRooms.filter((room) => {
+    if (committedRoomIds.has(String(room.id))) return false;
+    if (isArrivingNow && room.housekeeping_reported_status !== 'clean') return false;
+    return true;
+  });
+}
+
 module.exports = {
   generateUlid,
   expandStayDates,
@@ -821,4 +891,5 @@ module.exports = {
   listDepartures,
   listInHouse,
   listFreeRoomsNow,
+  listEligiblePreferredRooms,
 };

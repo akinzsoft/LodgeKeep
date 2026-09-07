@@ -41,6 +41,19 @@ export function checkAvailability({ roomTypeId, arrivalDate, departureDate }) {
   return request(`/availability?${params}`);
 }
 
+/**
+ * Gap closure (user-reported): rooms of a type genuinely eligible to be
+ * offered as a "preferred room" for this date range — excludes a room
+ * already committed (by preference or actual check-in) to another
+ * overlapping-dates reservation. See the backend's own
+ * `listEligiblePreferredRooms` header for the exact exclusion rule.
+ * @param {{roomTypeId: string, arrivalDate: string, departureDate: string}} params
+ */
+export function listEligiblePreferredRooms({ roomTypeId, arrivalDate, departureDate }) {
+  const params = new URLSearchParams({ room_type_id: roomTypeId, arrival_date: arrivalDate, departure_date: departureDate });
+  return request(`/reservations/eligible-preferred-rooms?${params}`);
+}
+
 // ---------------------------------------------------------------------
 // Reservations
 // ---------------------------------------------------------------------
