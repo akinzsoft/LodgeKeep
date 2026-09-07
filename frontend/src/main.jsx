@@ -17,17 +17,8 @@ import { NightAuditScreen } from './app/night-audit/NightAuditScreen.jsx';
 import { ProfilesScreen } from './app/profiles/ProfilesScreen.jsx';
 import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
-import { notificationsApi } from './shared/api/index.js';
+import { notificationsApi, setupApi } from './shared/api/index.js';
 import { PortalApp } from './portal/PortalApp.jsx';
-
-/**
- * No backend endpoint returns a property's current business date yet
- * (that's Setup/Property-module territory) — this single constant is what
- * both `AppShell`'s indicator and `HomeDashboard`'s report-driven KPIs/alert
- * strip use, so the two stay consistent with each other rather than two
- * independent hardcoded literals drifting apart.
- */
-const BUSINESS_DATE = '2026-09-04';
 
 /**
  * Gap closure: shown only while `AuthContext.jsx` is probing the HttpOnly
@@ -53,11 +44,19 @@ function BootstrappingScreen() {
  * `localhost:5173` (`src/auth/tenant-resolution.js` on the backend has
  * nothing to resolve a bare `localhost` request to).
  *
- * `businessDate` stays hardcoded below: no backend endpoint returns a
- * property's current business date yet (that's Setup/Property-module
- * territory, PLAN.md Phase 1+) — same category of gap as `properties`
- * carrying no display name (see `AuthContext.jsx`'s header), surfaced here
- * rather than invented.
+ * Gap closure (user-reported): `businessDate` and every property's display
+ * NAME used to be hardcoded/placeholder here (`'2026-09-04'`, `Property
+ * {id}`) — real values exist and always have (`GET /properties`, ungated
+ * for any authenticated staff member per that route's own header — Phase
+ * 1's "creating a tenant's first property happens before any grant exists
+ * to check" exception), just never fetched from this file. `user.properties`
+ * (from login/refresh, `AuthContext.jsx`'s header) is still the ONLY source
+ * of WHICH property ids this user may switch into — that set is per-user
+ * (`user_property_access`) and must never widen. `GET /properties` returns
+ * every ACTIVE property in the whole tenant regardless of who can access
+ * it, so it is used here strictly to resolve a NAME (and the active one's
+ * business date) for ids `user.properties` already authorized, never to
+ * add or offer an id the user doesn't hold.
  *
  * `permissions` below is NOT the real grant set, and cannot be yet: no
  * endpoint returns "what can this user actually do" (a `GET
@@ -85,6 +84,10 @@ function Demo() {
   const [switchError, setSwitchError] = useState(null);
   const [activeItemKey, setActiveItemKey] = useState('home');
   const [notifications, setNotifications] = useState([]);
+  // Gap closure: real property records (name, current_business_date) —
+  // see this file's own header for why `GET /properties` is safe to call
+  // here but must never widen WHICH ids are offered.
+  const [properties, setProperties] = useState(null);
 
   async function reloadNotifications() {
     try {
@@ -96,10 +99,23 @@ function Demo() {
     }
   }
 
+  async function reloadProperties() {
+    try {
+      setProperties(await setupApi.listProperties());
+    } catch {
+      // Same graceful-degradation reasoning as the bell above — a failed
+      // fetch just leaves every property showing its "Property {id}"
+      // placeholder name and no real business date, exactly the prior
+      // behaviour, rather than breaking the shell.
+      setProperties([]);
+    }
+  }
+
   useEffect(() => {
     if (status !== 'authenticated') return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-authentication; no data-fetching library exists yet to own this, same pattern every other screen's mount-time fetch already uses.
     reloadNotifications();
+    reloadProperties();
   }, [status]);
 
   async function handleMarkNotificationRead(id) {
@@ -137,12 +153,27 @@ function Demo() {
     return <StaffLoginScreen isOffline={!isOnline} />;
   }
 
-  const activeProperty = user.properties.find((property) => property.propertyId === user.activePropertyId);
+  // Gap closure: `properties` (real names/business date) starts `null`
+  // right after authenticating and resolves one HTTP round trip later —
+  // wait for it rather than mounting `HomeDashboard` (whose own mount-time
+  // report fetches read `businessDate` once and do not re-fetch if it
+  // changes underneath them) with a transiently-null business date.
+  if (properties === null) {
+    return <BootstrappingScreen />;
+  }
+
   // Gap closure: a session restored via the bootstrap refresh (AuthContext.jsx's
   // own header) never submitted a login form this page load, so it carries
   // no email at all — the same "Property {id}" labelled-placeholder
   // precedent this file already uses for the missing property name.
   const displayName = user.email ?? `User ${user.userId}`;
+
+  // Real property records, resolved by id — `null` while still loading (the
+  // effect above hasn't resolved yet) is treated the same as "no match
+  // found," falling back to the same placeholder this file always used.
+  const realPropertyById = (id) => (properties ?? []).find((p) => String(p.id) === String(id));
+  const activePropertyRecord = realPropertyById(user.activePropertyId);
+  const businessDate = activePropertyRecord?.current_business_date ?? null;
 
   async function handleSwitchProperty(propertyId) {
     setSwitchError(null);
@@ -181,15 +212,19 @@ function Demo() {
       }
       activeItemKey={activeItemKey}
       onNavigate={setActiveItemKey}
-      // No property display name exists yet (AuthContext.jsx's header) —
-      // the id is shown as a labelled stand-in rather than invented text.
-      activeProperty={{ id: user.activePropertyId, name: `Property ${activeProperty?.propertyId ?? user.activePropertyId}` }}
+      // Real name when `GET /properties` has resolved it; the same
+      // "Property {id}" labelled stand-in as before while still loading or
+      // on a fetch failure (this file's own header) — never a broken UI.
+      activeProperty={{
+        id: user.activePropertyId,
+        name: activePropertyRecord?.name ?? `Property ${user.activePropertyId}`,
+      }}
       properties={user.properties.map((property) => ({
         id: property.propertyId,
-        name: `Property ${property.propertyId}`,
+        name: realPropertyById(property.propertyId)?.name ?? `Property ${property.propertyId}`,
       }))}
       onSwitchProperty={handleSwitchProperty}
-      businessDate={BUSINESS_DATE}
+      businessDate={businessDate}
       notificationCount={notifications.filter((n) => !n.read_at).length}
       notifications={notifications}
       onMarkNotificationRead={handleMarkNotificationRead}
@@ -218,7 +253,7 @@ function Demo() {
       ) : (
         <HomeDashboard
           greetingName={displayName}
-          businessDate={BUSINESS_DATE}
+          businessDate={businessDate}
           activePropertyId={user.activePropertyId}
           onNavigateToSetup={() => setActiveItemKey('setup')}
         />
