@@ -108,6 +108,7 @@ async function seedTwoTenants(trx) {
     users: [],
     access: [],
     guestAccounts: [],
+    guestPasswordResets: [],
     sessions: [],
     passwordResets: [],
     mfaDevices: [],
@@ -911,6 +912,34 @@ async function seedTwoTenants(trx) {
         }),
         property_id: t.properties[i].id,
         email: 'guest@example.com',
+      });
+    }
+  }
+
+  // guest_password_resets: one unspent, one already used — the same
+  // two-state shape password_resets uses below, for the guest audience's
+  // own separate credential store (feature-dev gap closure).
+  const guestResetPlan = [
+    { guestAccountIndex: 0, label: 'pending', used_at: null, expiresInHours: 1 },
+    { guestAccountIndex: 1, label: 'used', used_at: hoursFromNow(-0.5), expiresInHours: 1 },
+  ];
+  for (const plan of guestResetPlan) {
+    for (const t of both) {
+      const guestAccount = t.guestAccounts[plan.guestAccountIndex];
+      const hash = tokenHash(`${t.slug}-guest-reset-${plan.label}`);
+      t.guestPasswordResets.push({
+        id: await insertReturningId(trx, 'guest_password_resets', {
+          tenant_id: t.id,
+          property_id: guestAccount.property_id,
+          guest_account_id: guestAccount.id,
+          token_hash: hash,
+          expires_at: hoursFromNow(plan.expiresInHours),
+          used_at: plan.used_at,
+        }),
+        token_hash: hash,
+        guest_account_id: guestAccount.id,
+        property_id: guestAccount.property_id,
+        label: plan.label,
       });
     }
   }

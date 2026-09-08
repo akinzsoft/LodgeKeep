@@ -7,6 +7,8 @@ import { BookingCheckoutScreen } from './screens/BookingCheckoutScreen.jsx';
 import { ConfirmationScreen } from './screens/ConfirmationScreen.jsx';
 import { LoginScreen } from './screens/LoginScreen.jsx';
 import { RegisterScreen } from './screens/RegisterScreen.jsx';
+import { ForgotPasswordScreen } from './screens/ForgotPasswordScreen.jsx';
+import { ResetPasswordScreen } from './screens/ResetPasswordScreen.jsx';
 import { AccountBookingsScreen } from './screens/AccountBookingsScreen.jsx';
 
 /**
@@ -37,6 +39,9 @@ export function PortalApp() {
           <Route path="confirmation/:confirmationNumber" element={<ConfirmationScreen />} />
           <Route path="login" element={<LoginScreen />} />
           <Route path="register" element={<RegisterScreen />} />
+          {/* Gap closure (feature-dev): guest password-reset. */}
+          <Route path="forgot-password" element={<ForgotPasswordScreen />} />
+          <Route path="reset-password" element={<ResetPasswordScreen />} />
           <Route path="account/bookings" element={<AccountBookingsScreen />} />
         </Route>
       </Routes>

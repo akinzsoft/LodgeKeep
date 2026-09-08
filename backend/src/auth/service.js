@@ -23,6 +23,7 @@ const {
 const { signAccessToken, issueRefreshToken, hashRefreshToken, REFRESH_TTL_HOURS } = require('./tokens');
 const { hashPassword, verifyPassword, validatePassword } = require('./password');
 const { writeAuthEvent } = require('./events');
+const { writeOutboxEvent } = require('../shared/outbox');
 const { checkStaffLockout } = require('./lockout');
 const { listPropertyAccess, roleAtProperty, roleRequiresMfa } = require('./roles');
 const { signMfaChallengeToken, verifyMfaChallengeToken, isDevBypassCode } = require('./mfa');
@@ -738,6 +739,177 @@ async function guestLogin({ tenantId, propertySlug, email, password, ip, userAge
 }
 
 /**
+ * Gap closure (flagged in CLAUDE.md's own Phase 4 section, built via
+ * feature-dev): guest password-reset. Follows `requestPasswordReset`'s own
+ * shape — anti-enumeration (identical response whether or not the email
+ * resolves), single-use token, 1-hour expiry, an `auth_events` row
+ * regardless of outcome — against `guest_accounts` instead of `users`.
+ *
+ * Unlike staff's own version (which still returns the dev-only token as a
+ * Phase 0 stopgap with no real delivery), this ALSO writes a real outbox
+ * event inside the same transaction as the token insert — the exact
+ * "both, not either/or" precedent `users/service.js`'s `inviteUser`
+ * already established for staff invitations. No reactive dispatch enqueue:
+ * this is a public, pre-auth endpoint with no `req.context` or
+ * Idempotency-Key header, so delivery relies purely on the 60-second
+ * periodic sweep (`runOutboxDispatchSweep`) — the same shape `inviteUser`
+ * itself uses.
+ *
+ * `propertySlug` resolution failing is NOT part of the anti-enumeration
+ * surface — a property slug is public route data (it's in the URL a guest
+ * is already looking at), not a secret about which email addresses exist;
+ * this mirrors `guestRegister`'s own choice, not `guestLogin`'s.
+ */
+async function requestGuestPasswordReset({ tenantId, propertySlug, email, ip, userAgent, requestId }) {
+  const db = scopedDb();
+  const property = await resolvePropertyBySlug({ db, tenantId, propertySlug });
+  if (!property) throw new ValidationError('PROPERTY_NOT_FOUND', 'The specified property does not exist.');
+
+  const guestContext = guestContextFromSession({ tenantId, propertyId: property.id });
+  const scoped = db.for(guestContext);
+  const guest = await scoped.table('guest_accounts').where({ email, status: 'active' }).first();
+
+  let devOnlyToken = null;
+  if (guest) {
+    await scoped.transaction(async (trx) => {
+      const token = crypto.randomBytes(32).toString('base64url');
+      const hash = crypto.createHash('sha256').update(token).digest('hex');
+
+      const [id] = await trx.table('guest_password_resets').insert({
+        guest_account_id: guest.id,
+        token_hash: hash,
+        expires_at: hoursFromNow(1),
+      });
+
+      if (process.env.NODE_ENV !== 'production') devOnlyToken = token;
+
+      const tenant = await trx.table('tenants').where({ id: tenantId }).first('slug');
+      // No port here deliberately — resolves correctly in production; a
+      // local dev run of the Vite dev server still needs ":5173" appended
+      // by hand, the same manual step `inviteUser`'s own invitationUrl and
+      // `seeds/01_dev_tenants.js`'s printed dev-login URL already expect
+      // of a human running it.
+      const resetUrl = tenant?.slug
+        ? `http://${tenant.slug}.${process.env.APP_DOMAIN}/portal/${propertySlug}/reset-password?token=${token}`
+        : null;
+
+      await writeOutboxEvent({
+        trx,
+        eventType: 'guest.password_reset_requested',
+        aggregateType: 'guest_password_resets',
+        aggregateId: id,
+        propertyId: property.id,
+        payload: {
+          guestEmail: email,
+          propertyName: property.name,
+          resetUrl,
+          expiresInHours: 1,
+        },
+      });
+    });
+  }
+
+  await writeAuthEvent({
+    audience: 'guest',
+    eventType: 'password_reset_requested',
+    tenantId,
+    propertyId: property.id,
+    guestAccountId: guest?.id ?? null,
+    emailAttempted: email,
+    ip,
+    userAgent,
+    requestId,
+  });
+
+  return { status: 'ok', devOnlyToken };
+}
+
+/**
+ * The completion half. Deliberately takes no `propertySlug` — the token
+ * alone resolves the property, via `acrossProperties()` on a tenant-only
+ * context, the exact mechanism `acceptInvitation` already uses for the
+ * identical "no session yet, property not known" shape. The frontend route
+ * naturally carries the slug (`/portal/:propertySlug/reset-password`), but
+ * the backend has no need of it.
+ *
+ * Single-use claim is a conditional UPDATE with an affected-row check
+ * (ARCHITECTURE.md §5), not read-then-write — the same shape
+ * `completePasswordReset`/`acceptInvitation` both already use.
+ *
+ * Session invalidation: sets `guest_accounts.password_changed_at`, which
+ * `authenticate('guest')`'s live per-request re-check
+ * (`src/auth/middleware.js`) compares against a presented token's own
+ * `iat` claim — see that migration's own header for why this, not a
+ * `sessions`-table revoke, is the correct mechanism for an audience with
+ * no revocable-session table at all.
+ */
+async function completeGuestPasswordReset({ tenantId, token, newPassword, ip, userAgent, requestId }) {
+  const validationIssue = validatePassword(newPassword);
+  if (validationIssue) throw new ValidationError('PASSWORD_TOO_SHORT', validationIssue);
+
+  const db = scopedDb();
+  const context = contextFromSession({ tenantId });
+  const scoped = db.for(context);
+
+  const hash = crypto.createHash('sha256').update(token).digest('hex');
+  const reset = await scoped.acrossProperties().table('guest_password_resets').where({ token_hash: hash }).first();
+
+  const reject = async (failureReason) => {
+    await writeAuthEvent({
+      audience: 'guest',
+      eventType: 'password_reset_completed',
+      failureReason,
+      tenantId,
+      propertyId: reset?.property_id ?? null,
+      guestAccountId: reset?.guest_account_id ?? null,
+      ip,
+      userAgent,
+      requestId,
+    });
+    throw new TokenInvalidError();
+  };
+
+  if (!reset) return reject('token_unknown');
+  if (reset.expires_at && new Date(reset.expires_at) <= new Date()) return reject('token_expired');
+  if (reset.used_at) return reject('token_already_used');
+
+  // The single-use claim itself (ARCHITECTURE.md §5).
+  const claimed = await scoped
+    .acrossProperties()
+    .table('guest_password_resets')
+    .where({ id: reset.id })
+    .whereNull('used_at')
+    .update({ used_at: new Date() });
+  if (claimed === 0) return reject('token_already_used');
+
+  const guestContext = guestContextFromSession({ tenantId, propertyId: reset.property_id });
+  const guestScoped = db.for(guestContext);
+
+  await guestScoped
+    .table('guest_accounts')
+    .where({ id: reset.guest_account_id })
+    .update({
+      password_hash: await hashPassword(newPassword),
+      // The session-invalidation mechanism itself — see this function's
+      // own header.
+      password_changed_at: new Date(),
+    });
+
+  await writeAuthEvent({
+    audience: 'guest',
+    eventType: 'password_reset_completed',
+    tenantId,
+    propertyId: reset.property_id,
+    guestAccountId: reset.guest_account_id,
+    ip,
+    userAgent,
+    requestId,
+  });
+
+  return { status: 'ok' };
+}
+
+/**
  * Platform console login — PRODUCT_REQUIREMENTS.md §3.16 ("MFA mandatory with
  * no opt-out"). Every successful password check ends in a challenge in this
  * pass, never full tokens — see `src/auth/mfa.js`'s header. TESTING.md AUTH-13
@@ -789,6 +961,8 @@ module.exports = {
   acceptInvitation,
   guestRegister,
   guestLogin,
+  requestGuestPasswordReset,
+  completeGuestPasswordReset,
   platformLogin,
   verifyStaffMfa,
 };

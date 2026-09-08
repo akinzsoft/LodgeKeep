@@ -52,4 +52,16 @@ describe('<LoginScreen>', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Incorrect email or password.');
     expect(screen.getByLabelText('Email')).toBeInTheDocument();
   });
+
+  /**
+   * Gap closure (flagged in CLAUDE.md's own Phase 4 section, built via
+   * feature-dev): guest password-reset.
+   */
+  it('links to the forgot-password screen', () => {
+    renderScreen();
+    expect(screen.getByRole('link', { name: 'Forgot password?' })).toHaveAttribute(
+      'href',
+      `/portal/${PROPERTY_SLUG}/forgot-password`
+    );
+  });
 });

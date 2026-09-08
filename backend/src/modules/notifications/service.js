@@ -31,6 +31,9 @@ const EVENT_TEMPLATE_KEYS = {
   // a staff invitee, not a guest, but the payload still carries the address
   // under `guestEmail` (see that module's own `inviteUser` note on why).
   'staff.invited': 'staff_invitation',
+  // Gap closure (feature-dev): guest password-reset — the genuine, intended
+  // use of `guestEmail`, unlike `staff.invited`'s borrowed one.
+  'guest.password_reset_requested': 'guest_password_reset',
 };
 
 /**
@@ -59,6 +62,13 @@ const DEFAULT_TEMPLATES = {
   staff_invitation: {
     subject: "You're invited to join {{propertyName}} on LodgeKeep",
     body_html: '<p>You have been invited to join {{propertyName}} as {{role}}.</p><p><a href="{{invitationUrl}}">Set up your account</a></p>',
+  },
+  guest_password_reset: {
+    subject: 'Reset your password — {{propertyName}}',
+    body_html:
+      '<p>We received a request to reset your password for your account at {{propertyName}}.</p>' +
+      '<p><a href="{{resetUrl}}">Reset your password</a></p>' +
+      '<p>This link expires in {{expiresInHours}} hour(s). If you did not request this, you can safely ignore this email.</p>',
   },
 };
 

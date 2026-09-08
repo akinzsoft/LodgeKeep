@@ -47,6 +47,11 @@ function portalAuthRouter({ resolveTenant }) {
   const router = Router();
   router.post('/register', resolveTenant, controller.guestRegister);
   router.post('/login', resolveTenant, controller.guestLogin);
+  // Gap closure (feature-dev): guest password-reset. Public, same reasoning
+  // as staff's own password-reset pair above — a guest requesting or
+  // completing a reset holds no session yet.
+  router.post('/password/forgot', resolveTenant, controller.requestGuestPasswordReset);
+  router.post('/password/reset', resolveTenant, controller.completeGuestPasswordReset);
   return router;
 }
 

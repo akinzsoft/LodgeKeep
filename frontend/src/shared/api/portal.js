@@ -36,6 +36,28 @@ export function login({ propertySlug, email, password }) {
   });
 }
 
+/**
+ * Gap closure (flagged in CLAUDE.md's own Phase 4 section, built via
+ * feature-dev): guest password-reset. Same anti-enumeration shape as
+ * `login`/`register` above — public, no session held yet.
+ */
+export function requestPasswordReset({ propertySlug, email }) {
+  return request('/portal/auth/password/forgot', {
+    method: 'POST',
+    body: { property_slug: propertySlug, email },
+    auth: false,
+  });
+}
+
+/** Deliberately takes no `propertySlug` — the backend resolves the property from the token alone (see `src/auth/service.js`'s `completeGuestPasswordReset`). */
+export function completePasswordReset({ token, newPassword }) {
+  return request('/portal/auth/password/reset', {
+    method: 'POST',
+    body: { token, new_password: newPassword },
+    auth: false,
+  });
+}
+
 export function getPropertyBranding(propertySlug) {
   const params = new URLSearchParams({ property_slug: propertySlug });
   return request(`/portal/properties/branding?${params}`, { auth: false });

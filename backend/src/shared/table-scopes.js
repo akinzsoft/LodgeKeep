@@ -47,6 +47,12 @@ const TABLE_SCOPES = Object.freeze({
   platform_users: { scope: SCOPES.PLATFORM },
   guest_accounts: { scope: SCOPES.PROPERTY },
 
+  // Gap closure (feature-dev): guest password-reset. PROPERTY_SCOPED,
+  // matching its parent `guest_accounts` — NOT TENANT_SCOPED like staff's
+  // own `password_resets` below, since a guest's whole identity is
+  // anchored to one property, not the tenant.
+  guest_password_resets: { scope: SCOPES.PROPERTY },
+
   // Auth credentials — 20260903210341_create_auth_credentials
   //
   // `user_invitations` is PROPERTY_SCOPED rather than TENANT_SCOPED because an
