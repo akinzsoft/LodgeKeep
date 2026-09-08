@@ -24,6 +24,7 @@ const { signAccessToken, issueRefreshToken, hashRefreshToken, REFRESH_TTL_HOURS 
 const { hashPassword, verifyPassword, validatePassword } = require('./password');
 const { writeAuthEvent } = require('./events');
 const { writeOutboxEvent } = require('../shared/outbox');
+const { enqueueOutboxDispatch } = require('../jobs/outbox-dispatcher');
 const { checkStaffLockout } = require('./lockout');
 const { listPropertyAccess, roleAtProperty, roleRequiresMfa } = require('./roles');
 const { isEmailDeliveryReal } = require('../modules/notifications/service');
@@ -144,6 +145,16 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
     // `inviteUser`/`requestPasswordReset`/`requestGuestPasswordReset` all
     // already establish, not a hardcoded bypass string any more.
     let devOnlyCode = null;
+    // The outbox/notifications pipeline is PROPERTY_SCOPED end to end
+    // (`email_templates`/`notification_log`) — but a staff login challenge
+    // is fundamentally tenant-level, and `activePropertyId` is genuinely
+    // null for a user holding more than one property. Falling back to the
+    // first property this user holds access to is purely a "which
+    // property's template config to render against" choice for this one
+    // generic, non-branded security email — it implies nothing about which
+    // property they are signing into. Hoisted above the transaction since
+    // the reactive dispatch trigger below needs it too, after commit.
+    const notifyPropertyId = activePropertyId ?? access[0]?.property_id ?? null;
     await scoped.transaction(async (trx) => {
       // Supersede any still-outstanding code for this user — a repeat
       // login attempt while already mid-challenge should invalidate the
@@ -168,15 +179,6 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
       // still gates this outright; a real adapter narrows it further.
       if (process.env.NODE_ENV !== 'production' && !isEmailDeliveryReal()) devOnlyCode = code;
 
-      // The outbox/notifications pipeline is PROPERTY_SCOPED end to end
-      // (`email_templates`/`notification_log`) — but a staff login
-      // challenge is fundamentally tenant-level, and `activePropertyId`
-      // is genuinely null for a user holding more than one property.
-      // Falling back to the first property this user holds access to is
-      // purely a "which property's template config to render against"
-      // choice for this one generic, non-branded security email — it
-      // implies nothing about which property they are signing into.
-      const notifyPropertyId = activePropertyId ?? access[0]?.property_id ?? null;
       if (notifyPropertyId) {
         await writeOutboxEvent({
           trx,
@@ -188,6 +190,23 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
         });
       }
     });
+
+    // Gap closure (user-reported, live-tested): "the mails do delayed."
+    // This branch previously relied purely on the periodic sweep
+    // (`inviteUser`'s own "no req.context to fire the reactive trigger
+    // from" precedent) — true for a genuinely pre-auth endpoint, but an
+    // MFA code is a real-time login step someone is actively waiting on,
+    // unlike an invitation or a password-reset link a person checks their
+    // email for later. `tenantId`/`notifyPropertyId` are both already known
+    // here without needing `req.context`, so there is no real reason to
+    // wait up to 60s for the sweep — fired the same best-effort,
+    // never-fails-the-request way `runIdempotentMutation` already does; a
+    // Redis outage still falls back to the periodic sweep, unchanged.
+    if (notifyPropertyId) {
+      enqueueOutboxDispatch({ tenantId, propertyId: notifyPropertyId }).catch((error) => {
+        console.error('Failed to enqueue outbox dispatch for MFA code (will be caught by the periodic sweep):', error);
+      });
+    }
 
     await writeAuthEvent({
       audience: 'staff',

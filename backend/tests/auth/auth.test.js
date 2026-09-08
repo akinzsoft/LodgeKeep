@@ -17,6 +17,22 @@ const { seedTwoTenants, seedPlatformUser, PASSWORD_HASH } = require('../helpers/
 const { hashPassword } = require('../../src/auth/password');
 const { issueRefreshToken, hashRefreshToken } = require('../../src/auth/tokens');
 const { hashMfaCode } = require('../../src/auth/mfa');
+
+// Only `enqueueOutboxDispatch` is mocked (real elsewhere, including
+// `runOutboxDispatchSweep`/`startOutboxWorker`, per `jest.requireActual`) —
+// the real one opens a real BullMQ/Redis connection, and a job it enqueues
+// can be raced and consumed by any OTHER live worker sharing the same Redis
+// instance (e.g. a developer's own `npm run dev` process running alongside
+// the test suite), which made an earlier version of this test genuinely
+// flaky. Asserting the call directly is deterministic and matches this
+// codebase's own established boundary for mocking (`dispatch.test.js`'s
+// email-adapter mock) — the actual BullMQ wiring has its own dedicated,
+// real-Redis coverage in `tests/jobs/outbox-dispatcher.test.js`.
+jest.mock('../../src/jobs/outbox-dispatcher', () => ({
+  ...jest.requireActual('../../src/jobs/outbox-dispatcher'),
+  enqueueOutboxDispatch: jest.fn().mockResolvedValue(undefined),
+}));
+const { enqueueOutboxDispatch } = require('../../src/jobs/outbox-dispatcher');
 const { COOKIE_NAME: REFRESH_COOKIE_NAME } = require('../../src/auth/refresh-cookie');
 const {
   ACCOUNT_THRESHOLD,
@@ -639,6 +655,24 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
       const payload = typeof outboxEvent.payload === 'string' ? JSON.parse(outboxEvent.payload) : outboxEvent.payload;
       expect(payload.guestEmail).toBe(adminNoMfa.email);
       expect(payload.code).toBe(devOnlyCode);
+    });
+
+    // Gap closure (user-reported, live-tested): "the mails do delayed." This
+    // branch previously relied purely on the periodic (60s) sweep, the same
+    // "no req.context to fire the reactive trigger from" shape a genuinely
+    // pre-auth endpoint like account invitation has — but unlike an
+    // invitation, an MFA code is a real-time step someone is actively
+    // waiting on. Proven against the REAL BullMQ queue, not a mock — the
+    // same "don't just assert a mock was called" discipline this codebase's
+    // own concurrency tests already apply elsewhere.
+    it('fires the reactive outbox-dispatch trigger immediately, rather than relying solely on the periodic sweep', async () => {
+      enqueueOutboxDispatch.mockClear();
+      await challenge();
+
+      // IDs travel as strings throughout this codebase (ARCHITECTURE.md §10)
+      // — `ctx.a.id` itself is a plain fixture number, `tenantId` here is
+      // whatever `staffLogin` actually passed through.
+      expect(enqueueOutboxDispatch).toHaveBeenCalledWith(expect.objectContaining({ tenantId: String(ctx.a.id), propertyId: expect.anything() }));
     });
 
     it('completes the login with the real code', async () => {

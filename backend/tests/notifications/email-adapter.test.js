@@ -21,7 +21,28 @@ jest.mock('nodemailer', () => ({
 }));
 
 const nodemailer = require('nodemailer');
-const { getEmailAdapter, __closeSmtpTransportForTesting } = require('../../src/modules/notifications/email-adapter');
+const { getEmailAdapter, htmlToText, __closeSmtpTransportForTesting } = require('../../src/modules/notifications/email-adapter');
+
+// Gap closure (user-reported, live-tested): "the mail goin to my spam."
+describe('htmlToText', () => {
+  it('strips tags and preserves paragraph breaks', () => {
+    expect(htmlToText('<p>Hi Jane,</p><p>Your code is 123456.</p>')).toBe('Hi Jane,\n\nYour code is 123456.');
+  });
+
+  it('renders a link as text followed by its URL', () => {
+    expect(htmlToText('<p><a href="https://example.com/reset">Reset your password</a></p>')).toBe(
+      'Reset your password (https://example.com/reset)'
+    );
+  });
+
+  it('converts <br> to a newline', () => {
+    expect(htmlToText('Line one<br>Line two')).toBe('Line one\nLine two');
+  });
+
+  it('collapses more than two consecutive newlines', () => {
+    expect(htmlToText('<p>A</p><p></p><p>B</p>')).toBe('A\n\nB');
+  });
+});
 
 describe('email-adapter', () => {
   const ORIGINAL_ENV = { ...process.env };
@@ -73,12 +94,31 @@ describe('email-adapter', () => {
         })
       );
       expect(sendMail).toHaveBeenCalledWith({
-        from: 'no-reply@example.com',
+        // Gap closure (user-reported, live-tested): "goin to my spam" — a
+        // bare address with no display name is a real spam-classifier
+        // signal, defaults to "LodgeKeep" when SMTP_FROM_NAME is unset.
+        from: '"LodgeKeep" <no-reply@example.com>',
         to: 'guest@example.com',
         subject: 'Your code',
         html: '<p>123456</p>',
+        // The other half of that same gap closure — an HTML-only send is
+        // its own spam signal; a plain-text alternative is always included.
+        text: '123456',
       });
       expect(result).toEqual({ providerRef: 'real-message-id-123', status: 'sent' });
+    });
+
+    it('uses SMTP_FROM_NAME as the display name when set', async () => {
+      process.env.EMAIL_PROVIDER = 'smtp';
+      process.env.SMTP_HOST = 'smtp.example.com';
+      process.env.SMTP_USER = 'domain-hosting-renewal@example.com';
+      process.env.SMTP_FROM_NAME = 'Acme Hotels';
+
+      const sendMail = jest.fn().mockResolvedValue({ messageId: 'x' });
+      nodemailer.createTransport.mockReturnValue({ sendMail, close: jest.fn() });
+      await getEmailAdapter().send({ to: 'guest@example.com', subject: 's', html: '<p>h</p>' });
+
+      expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ from: '"Acme Hotels" <domain-hosting-renewal@example.com>' }));
     });
 
     it('treats port 465 as implicit TLS (secure: true)', async () => {
@@ -104,7 +144,7 @@ describe('email-adapter', () => {
       nodemailer.createTransport.mockReturnValue({ sendMail, close: jest.fn() });
       await getEmailAdapter().send({ to: 'guest@example.com', subject: 's', html: 'h' });
 
-      expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ from: 'bookings@lodgekeep-tenant.example.com' }));
+      expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ from: '"LodgeKeep" <bookings@lodgekeep-tenant.example.com>' }));
     });
 
     it('rejects with a clear error when SMTP_HOST is missing rather than connecting to nothing', async () => {

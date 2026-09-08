@@ -24,6 +24,27 @@ const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 
 /**
+ * Gap closure (user-reported, live-tested): "the mail goin to my spam."
+ * An HTML-only message with no plain-text alternative is one of the most
+ * common, well-documented spam-classifier signals (every legitimate bulk-
+ * mail sender includes both parts) — every template this codebase ships is
+ * only ever authored as `body_html`, so this derives a reasonable plain-text
+ * fallback from it rather than requiring a second, hand-maintained template
+ * field per event. A generic tag-stripper is genuinely sufficient here: this
+ * codebase's own templates (`DEFAULT_TEMPLATES`) are simple `<p>`/`<a>`
+ * markup, never a full HTML document.
+ */
+function htmlToText(html) {
+  return html
+    .replace(/<a\s[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi, '$2 ($1)')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
  * Logs the send instead of transmitting it — visible in server output for
  * local/dev verification, the same spirit as the password-reset dev
  * response.
@@ -74,11 +95,23 @@ const smtpAdapter = {
     // Host validated first — "which server" is more fundamental than "who
     // it's from", and building the transport is what actually needs it.
     const transport = buildSmtpTransport();
-    const from = process.env.SMTP_FROM || process.env.SMTP_USER;
-    if (!from) {
+    const fromAddress = process.env.SMTP_FROM || process.env.SMTP_USER;
+    if (!fromAddress) {
       throw new Error('EMAIL_PROVIDER=smtp requires SMTP_FROM (or SMTP_USER as a fallback) — see .env.example.');
     }
-    const info = await transport.sendMail({ from, to, subject, html });
+    // A bare mailbox address with no display name (nodemailer's default
+    // absent one) is a second common spam-classifier signal alongside a
+    // missing text part — SMTP_FROM_NAME lets a mailbox whose own local
+    // part reads oddly for transactional mail (e.g. a hosting-renewal
+    // inbox reused for this purpose) still present as a real sender name.
+    const fromName = process.env.SMTP_FROM_NAME || 'LodgeKeep';
+    const info = await transport.sendMail({
+      from: `"${fromName}" <${fromAddress}>`,
+      to,
+      subject,
+      html,
+      text: htmlToText(html),
+    });
     return { providerRef: info.messageId, status: 'sent' };
   },
 };
@@ -103,4 +136,4 @@ function __closeSmtpTransportForTesting() {
   }
 }
 
-module.exports = { getEmailAdapter, consoleAdapter, smtpAdapter, __closeSmtpTransportForTesting };
+module.exports = { getEmailAdapter, consoleAdapter, smtpAdapter, htmlToText, __closeSmtpTransportForTesting };

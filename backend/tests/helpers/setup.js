@@ -16,6 +16,19 @@
  * check (API.md §4) honest in tests.
  */
 
+// Pinned BEFORE `./db` below (which transitively requires `knexfile.js`,
+// which calls `dotenv.config()`) — dotenv never overrides an already-set
+// var, so this wins regardless of what a developer has configured in their
+// own local, gitignored `.env` for real dev-time email sending
+// (`EMAIL_PROVIDER=smtp` plus real SMTP_* credentials). Without this, the
+// suite's behavior — and whether `isEmailDeliveryReal()`-gated code paths
+// like the MFA dev-only-code disclosure exercise their "console" branch —
+// would silently depend on one developer's own machine, and a real SMTP
+// send could even be attempted from inside the test run. `NODE_ENV` needs
+// no equivalent pin: Jest itself already sets it to `'test'` before any
+// module (including this one) ever runs.
+process.env.EMAIL_PROVIDER = 'console';
+
 const { destroy } = require('./db');
 const { __closeQueuesForTesting } = require('../../src/jobs/queues');
 const { destroyRedisConnection } = require('../../src/jobs/redis-connection');
