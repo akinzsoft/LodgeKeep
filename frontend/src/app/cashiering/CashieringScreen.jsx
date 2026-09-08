@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, DataTable, Button, StatusPill, ConfirmDialog } from '../../shared/components/index.js';
-import { Money } from '../../shared/format/money.jsx';
+import { Money, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import { cashieringApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { OutstandingBalancesTab } from './OutstandingBalancesTab.jsx';
@@ -189,6 +189,8 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
   const [checkoutAccessCode, setCheckoutAccessCode] = useState(null);
   const [checkoutPaymentId, setCheckoutPaymentId] = useState(null);
   const [openingPopup, setOpeningPopup] = useState(false);
+  const isSettled = isBalanceSettled(folio.balance);
+  const balanceState = describeBalanceState(folio.balance);
 
   async function reload() {
     try {
@@ -211,6 +213,7 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
     <Card title={`Folio ${folio.folio_number} — ${folio.billed_to}`}>
       <div className={styles.folioHeader}>
         <StatusPill tone={folio.status === 'open' ? 'success' : 'neutral'} label={folio.status === 'open' ? 'Open' : 'Closed'} />
+        {folio.status === 'open' && balanceState && <StatusPill tone={balanceState.tone} label={balanceState.label} />}
         <span className={styles.balance}>
           Balance: <Money amount={folio.balance} currencyCode={folio.currency} />
         </span>
@@ -314,7 +317,7 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
           <Button variant="secondary" size="compact" disabled={isOffline} onClick={() => setShowAdjustmentForm((v) => !v)}>
             Post an adjustment
           </Button>
-          <Button variant="secondary" size="compact" disabled={isOffline} onClick={() => setShowPaymentForm((v) => !v)}>
+          <Button variant="secondary" size="compact" disabled={isOffline || isSettled} onClick={() => setShowPaymentForm((v) => !v)}>
             Capture a payment
           </Button>
         </div>
@@ -344,9 +347,10 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
         />
       )}
 
-      {showPaymentForm && (
+      {showPaymentForm && !isSettled && (
         <PaymentForm
           currency={folio.currency}
+          balance={folio.balance}
           disabled={isOffline || submitting}
           onCash={async (values) => {
             await onAction(() => cashieringApi.captureCashPayment(folio.id, values));
@@ -364,54 +368,56 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
         />
       )}
 
-      {checkoutUrl && (
-        <div className={formStyles.actionsRow}>
-          <p className={formStyles.disabledNotice}>
-            Paystack checkout started — send the guest this link to complete payment:{' '}
-            <a href={checkoutUrl} target="_blank" rel="noreferrer">
-              {checkoutUrl}
+      {/*
+        Gap closure (user-reported): "make it more profeesional and standard
+        form with the payment button" — one deliberate payment panel, not a
+        raw checkout URL sitting as visible link text next to a button. The
+        popup ("Pay now") is the one primary action; the plain checkout link
+        is a small secondary fallback, still needed for a guest who isn't
+        physically at this terminal. The popup's own success/close event is
+        never trusted by itself (ARCHITECTURE.md §7); closing it always
+        re-verifies through the real backend endpoint, the same one the
+        "Verify" action above already uses. Hidden once the folio settles —
+        nothing left to pay.
+      */}
+      {checkoutUrl && !isSettled && (
+        <div className={formStyles.paymentPanel}>
+          <p className={formStyles.paymentPanelHint}>Complete payment securely via Paystack — the popup opens on this page.</p>
+          <div className={formStyles.actionsRow}>
+            {checkoutAccessCode && (
+              <Button
+                type="button"
+                disabled={isOffline}
+                loading={openingPopup}
+                onClick={async () => {
+                  setOpeningPopup(true);
+                  try {
+                    await openPaystackPopup({
+                      accessCode: checkoutAccessCode,
+                      onClose: async () => {
+                        const paymentId = checkoutPaymentId;
+                        setCheckoutUrl(null);
+                        setCheckoutAccessCode(null);
+                        setCheckoutPaymentId(null);
+                        setOpeningPopup(false);
+                        if (paymentId) {
+                          await onAction(() => cashieringApi.verifyPayment(paymentId));
+                          reload();
+                        }
+                      },
+                    });
+                  } catch {
+                    setOpeningPopup(false);
+                  }
+                }}
+              >
+                Pay now
+              </Button>
+            )}
+            <a className={formStyles.paymentFallbackLink} href={checkoutUrl} target="_blank" rel="noreferrer">
+              Open payment page in a new tab
             </a>
-          </p>
-          {/*
-            Gap closure (user-reported): "cant it be done same page." An
-            embedded Paystack popup, opened right here, as an alternative
-            to the plain link above — not a replacement, since the link is
-            still the right choice to hand to a guest who isn't physically
-            at this terminal. The popup's own success/close event is never
-            trusted by itself (ARCHITECTURE.md §7); closing it always
-            re-verifies through the real backend endpoint, the same one the
-            "Verify" action above already uses.
-          */}
-          {checkoutAccessCode && (
-            <Button
-              type="button"
-              disabled={isOffline}
-              loading={openingPopup}
-              onClick={async () => {
-                setOpeningPopup(true);
-                try {
-                  await openPaystackPopup({
-                    accessCode: checkoutAccessCode,
-                    onClose: async () => {
-                      const paymentId = checkoutPaymentId;
-                      setCheckoutUrl(null);
-                      setCheckoutAccessCode(null);
-                      setCheckoutPaymentId(null);
-                      setOpeningPopup(false);
-                      if (paymentId) {
-                        await onAction(() => cashieringApi.verifyPayment(paymentId));
-                        reload();
-                      }
-                    },
-                  });
-                } catch {
-                  setOpeningPopup(false);
-                }
-              }}
-            >
-              Pay now (same page)
-            </Button>
-          )}
+          </div>
         </div>
       )}
 
@@ -559,9 +565,18 @@ function AdjustmentForm({ disabled, onSubmit, onCancel }) {
   );
 }
 
-function PaymentForm({ currency, disabled, onCash, onPaystack, onCancel }) {
+/**
+ * Gap closure (user-reported): "the form textfield amt is editable pls
+ * correct it." The Amount field is locked to the folio's own real balance
+ * — there is no free-text local `amount` state to hold a different value,
+ * since a payment capture here always pays the full outstanding balance
+ * (confirmed with the user: no partial-payment capability is needed today;
+ * `ChargeForm`/`AdjustmentForm` keep their own free-text amounts unchanged,
+ * since a charge or adjustment is legitimately arbitrary, never "the
+ * balance").
+ */
+function PaymentForm({ currency, balance, disabled, onCash, onPaystack, onCancel }) {
   const [method, setMethod] = useState('cash');
-  const [amount, setAmount] = useState('');
   const [guestEmail, setGuestEmail] = useState('');
 
   return (
@@ -569,8 +584,8 @@ function PaymentForm({ currency, disabled, onCash, onPaystack, onCancel }) {
       className={formStyles.form}
       onSubmit={(event) => {
         event.preventDefault();
-        if (method === 'cash') onCash({ amount, currency });
-        else onPaystack({ amount, currency, guestEmail });
+        if (method === 'cash') onCash({ amount: balance, currency });
+        else onPaystack({ amount: balance, currency, guestEmail });
       }}
     >
       <div className={formStyles.row}>
@@ -583,7 +598,12 @@ function PaymentForm({ currency, disabled, onCash, onPaystack, onCancel }) {
         </label>
         <label className={formStyles.field}>
           <span className={formStyles.label}>Amount</span>
-          <input className={formStyles.input} value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required />
+          <input
+            className={`${formStyles.input} ${formStyles.inputLocked}`}
+            value={balance}
+            readOnly
+            aria-readonly="true"
+          />
         </label>
         {method === 'paystack' && (
           <label className={formStyles.field}>

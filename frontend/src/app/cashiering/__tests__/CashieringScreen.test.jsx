@@ -81,17 +81,58 @@ describe('<CashieringScreen>', () => {
     expect(mocks.voidLineItem).toHaveBeenCalledWith('10', 'Posted in error');
   });
 
-  it('captures a cash payment', async () => {
+  it('captures a cash payment for the folio’s real balance, with no amount to type', async () => {
     mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
     mocks.captureCashPayment.mockResolvedValue({ id: '99', status: 'CAPTURED' });
     await loadReservation();
     await screen.findByText('Room 101');
 
     await userEvent.click(screen.getByRole('button', { name: 'Capture a payment' }));
-    await userEvent.type(screen.getByPlaceholderText('0.00'), '100.00');
     await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
 
     expect(mocks.captureCashPayment).toHaveBeenCalledWith('1', { amount: '100.00', currency: 'NGN' });
+  });
+
+  /**
+   * Gap closure (user-reported): "the form textfield amt is editable pls
+   * correct it."
+   */
+  it('renders the payment Amount field as read-only, locked to the real balance', async () => {
+    mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+    await loadReservation();
+    await screen.findByText('Room 101');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Capture a payment' }));
+
+    const amountInput = screen.getByLabelText('Amount');
+    expect(amountInput).toHaveAttribute('readonly');
+    expect(amountInput).toHaveValue('100.00');
+  });
+
+  /**
+   * Gap closure (user-reported): "wen payment is done disable the ...
+   * payment buttons." `folio.status` never reflects a zero balance, so the
+   * disable is driven purely by the balance the parent's refreshed `folios`
+   * list carries.
+   */
+  it('disables "Capture a payment" and shows a "Paid in full" pill once the folio balance is zero', async () => {
+    const SETTLED_FOLIO = { ...FOLIO, balance: '0.00' };
+    mocks.listFoliosForReservation.mockResolvedValue([SETTLED_FOLIO]);
+    await loadReservation();
+    await screen.findByText('Room 101');
+
+    expect(screen.getByRole('button', { name: 'Capture a payment' })).toBeDisabled();
+    expect(screen.getByText('Paid in full')).toBeInTheDocument();
+  });
+
+  it('treats a negative (credit) balance as settled too — "Credit balance" pill, "Capture a payment" disabled', async () => {
+    const CREDIT_FOLIO = { ...FOLIO, balance: '-20.00' };
+    mocks.listFoliosForReservation.mockResolvedValue([CREDIT_FOLIO]);
+    await loadReservation();
+    await screen.findByText('Room 101');
+
+    expect(screen.getByRole('button', { name: 'Capture a payment' })).toBeDisabled();
+    expect(screen.getByText('Credit balance')).toBeInTheDocument();
   });
 
   /**
@@ -151,19 +192,43 @@ describe('<CashieringScreen>', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Capture a payment' }));
     await userEvent.selectOptions(screen.getByLabelText('Method'), 'paystack');
-    await userEvent.type(screen.getByPlaceholderText('0.00'), '100.00');
     await userEvent.type(screen.getByLabelText('Guest email'), 'guest@example.com');
     await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
 
-    await screen.findByRole('link', { name: 'https://paystack.test/pay/abc' });
-    await userEvent.click(screen.getByRole('button', { name: 'Pay now (same page)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Pay now' }));
 
     expect(mocks.openPaystackPopup).toHaveBeenCalledWith(
       expect.objectContaining({ accessCode: 'access-abc', onClose: expect.any(Function) })
     );
     expect(mocks.verifyPayment).toHaveBeenCalledWith('31');
     expect(mocks.getFolio).toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: 'Pay now (same page)' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pay now' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * Gap closure (user-reported): "make it more profeesional and standard
+   * form with the payment button" — the raw checkout URL is never shown as
+   * visible link text; the popup button is primary, the link is a small,
+   * clearly-labelled fallback.
+   */
+  it('never shows the raw checkout URL as link text', async () => {
+    mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+    mocks.capturePaystackPayment.mockResolvedValue({
+      id: '31',
+      authorizationUrl: 'https://paystack.test/pay/abc',
+      accessCode: 'access-abc',
+    });
+    await loadReservation();
+    await screen.findByText('Room 101');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Capture a payment' }));
+    await userEvent.selectOptions(screen.getByLabelText('Method'), 'paystack');
+    await userEvent.type(screen.getByLabelText('Guest email'), 'guest@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
+
+    const link = await screen.findByRole('link', { name: 'Open payment page in a new tab' });
+    expect(link).toHaveAttribute('href', 'https://paystack.test/pay/abc');
+    expect(screen.queryByText('https://paystack.test/pay/abc')).not.toBeInTheDocument();
   });
 
   it('disables mutating actions while offline', async () => {

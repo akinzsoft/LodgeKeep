@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Card, Button, DataTable, StatusPill } from '../../shared/components/index.js';
 import { setupApi, reservationsApi, cashieringApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
+import { Money, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
 
@@ -80,7 +81,6 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
 
   // Gap closure: "pay at the point of booking" — see this file's own header.
   const [folio, setFolio] = useState(null);
-  const [cashAmount, setCashAmount] = useState('');
   const [checkoutUrl, setCheckoutUrl] = useState(null);
   const [checkoutAccessCode, setCheckoutAccessCode] = useState(null);
   const [checkoutPaymentId, setCheckoutPaymentId] = useState(null);
@@ -145,6 +145,18 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     setBookSuccess(null);
     setFreeRoomsNow(null);
     setBooking((current) => ({ ...current, preferred_room_id: '' }));
+    // Gap closure (user-reported): "disable the book button ... wen payment
+    // is done" — Book stays disabled once `bookSuccess` is set (see the
+    // Book button below), for the WHOLE remainder of this search cycle,
+    // not just until payment. A fresh Search is the one deliberate
+    // boundary that starts a new, independent booking cycle — clearing the
+    // previous cycle's payment/folio state here is what allows that.
+    setFolio(null);
+    setCheckoutUrl(null);
+    setCheckoutAccessCode(null);
+    setCheckoutPaymentId(null);
+    setPaymentError(null);
+    setPaymentSuccess(null);
     try {
       const result = await reservationsApi.checkAvailability({
         roomTypeId: search.room_type_id,
@@ -216,7 +228,6 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
         try {
           const openedFolio = await reservationsApi.openBookingFolio(reservation.id);
           setFolio(openedFolio);
-          setCashAmount(openedFolio.balance);
         } catch (caught) {
           setPaymentError(caught instanceof ApiError ? caught.message : 'Could not open the folio for payment.');
         }
@@ -240,16 +251,16 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   }
 
   const selectedGuest = (guests ?? []).find((guest) => String(guest.id) === String(booking.guest_id));
+  const isFolioSettled = folio ? isBalanceSettled(folio.balance) : false;
 
   async function handleCashPayment() {
     setCapturingPayment(true);
     setPaymentError(null);
     setPaymentSuccess(null);
     try {
-      await cashieringApi.captureCashPayment(folio.id, { amount: cashAmount, currency: folio.currency });
+      await cashieringApi.captureCashPayment(folio.id, { amount: folio.balance, currency: folio.currency });
       const refreshed = await cashieringApi.getFolio(folio.id);
       setFolio(refreshed);
-      setCashAmount(refreshed.balance);
       setPaymentSuccess('Cash payment captured.');
     } catch (caught) {
       setPaymentError(caught instanceof ApiError ? caught.message : 'Could not capture the cash payment.');
@@ -276,7 +287,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     setCheckoutPaymentId(null);
     try {
       const result = await cashieringApi.capturePaystackPayment(folio.id, {
-        amount: cashAmount,
+        amount: folio.balance,
         currency: folio.currency,
         guestEmail: selectedGuest?.email,
       });
@@ -329,7 +340,6 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
           }
           const refreshed = await cashieringApi.getFolio(folio.id);
           setFolio(refreshed);
-          setCashAmount(refreshed.balance);
         },
       });
     } catch {
@@ -577,10 +587,25 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
               </p>
             )}
             <div className={formStyles.actionsRow}>
-              <Button type="submit" loading={submitting} disabled={isOffline || !booking.guest_id || !booking.rate_code_id}>
+              <Button
+                type="submit"
+                loading={submitting}
+                disabled={isOffline || !booking.guest_id || !booking.rate_code_id || Boolean(bookSuccess)}
+              >
                 Book
               </Button>
             </div>
+            {/*
+              Gap closure (user-reported): "disable the book button ... wen
+              payment is done" — disabled the instant a reservation exists
+              for this search (bookSuccess), not only once payment settles:
+              a booked-but-unpaid reservation is still one real booking, and
+              a second Book click before paying would create a genuine
+              duplicate. Run a new Search to book again.
+            */}
+            {bookSuccess && (
+              <p className={formStyles.disabledNotice}>Run a new search to make another booking.</p>
+            )}
           </form>
 
           <details>
@@ -646,63 +671,86 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
               {paymentError}
             </p>
           )}
-          {paymentSuccess && <p className={formStyles.disabledNotice}>{paymentSuccess}</p>}
-          <p className={formStyles.disabledNotice}>
-            Balance due: {folio.balance} {folio.currency}
-          </p>
 
-          {checkoutUrl && (
-            <div className={formStyles.actionsRow}>
-              <p className={formStyles.disabledNotice}>
-                <a href={checkoutUrl} target="_blank" rel="noreferrer">
-                  Open the card payment page
-                </a>
-              </p>
-              {checkoutAccessCode && (
-                <Button type="button" loading={openingPopup} disabled={isOffline} onClick={handleResumePaystackPopup}>
-                  Pay now (same page)
-                </Button>
+          {isFolioSettled ? (
+            /* Gap closure (user-reported): "disable the book button and
+               payment buttons" once payment is done — a positive-state
+               summary in place of the now-pointless form controls, rather
+               than leaving disabled buttons with no explanation
+               (DESIGN_SYSTEM.md §1: status is never colour alone). */
+            <div className={formStyles.paymentSettled}>
+              {describeBalanceState(folio.balance) && (
+                <StatusPill tone={describeBalanceState(folio.balance).tone} label={describeBalanceState(folio.balance).label} />
               )}
+              <p className={formStyles.disabledNotice}>
+                No balance due — <Money amount={folio.balance} currencyCode={folio.currency} />. Booking and payment for this stay are complete.
+              </p>
             </div>
-          )}
+          ) : (
+            <>
+              {paymentSuccess && <p className={formStyles.disabledNotice}>{paymentSuccess}</p>}
+              <p className={formStyles.disabledNotice}>
+                Balance due: <Money amount={folio.balance} currencyCode={folio.currency} className={formStyles.balanceOwing} />
+              </p>
 
-          <div className={formStyles.row}>
-            <label className={formStyles.field}>
-              <span className={formStyles.label}>Amount</span>
-              <input
-                className={formStyles.input}
-                value={cashAmount}
-                onChange={(event) => setCashAmount(event.target.value)}
-              />
-            </label>
-          </div>
+              {/* Gap closure (user-reported): "make it more profeesional and
+                  standard form with the payment button" — one deliberate
+                  payment panel, not a raw checkout URL next to a button. */}
+              {checkoutUrl && (
+                <div className={formStyles.paymentPanel}>
+                  <p className={formStyles.paymentPanelHint}>Complete payment securely via Paystack — the popup opens on this page.</p>
+                  <div className={formStyles.actionsRow}>
+                    {checkoutAccessCode && (
+                      <Button type="button" loading={openingPopup} disabled={isOffline} onClick={handleResumePaystackPopup}>
+                        Pay now
+                      </Button>
+                    )}
+                    <a className={formStyles.paymentFallbackLink} href={checkoutUrl} target="_blank" rel="noreferrer">
+                      Open payment page in a new tab
+                    </a>
+                  </div>
+                </div>
+              )}
 
-          {isOffline && (
-            <p role="alert" className={formStyles.errorBanner}>
-              You&rsquo;re offline — payment is disabled until the connection returns.
-            </p>
-          )}
+              {/* Gap closure (user-reported): "the form textfield amt is
+                  editable pls correct it" — locked to the folio's real
+                  balance; Cash/Card always pay it in full (confirmed with
+                  the user: no partial-payment capability needed today). */}
+              <div className={formStyles.row}>
+                <label className={formStyles.field}>
+                  <span className={formStyles.label}>Amount</span>
+                  <input className={`${formStyles.input} ${formStyles.inputLocked}`} value={folio.balance} readOnly aria-readonly="true" />
+                </label>
+              </div>
 
-          <div className={formStyles.actionsRow}>
-            <Button type="button" loading={capturingPayment} disabled={isOffline} onClick={handleCashPayment}>
-              Cash
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              loading={capturingPayment}
-              disabled={isOffline || !selectedGuest?.email}
-              onClick={handleCardPayment}
-            >
-              Card
-            </Button>
-          </div>
-          {!selectedGuest?.email && (
-            <p className={formStyles.disabledNotice}>Add an email to this guest to accept card payment.</p>
+              {isOffline && (
+                <p role="alert" className={formStyles.errorBanner}>
+                  You&rsquo;re offline — payment is disabled until the connection returns.
+                </p>
+              )}
+
+              <div className={formStyles.actionsRow}>
+                <Button type="button" loading={capturingPayment} disabled={isOffline} onClick={handleCashPayment}>
+                  Cash
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  loading={capturingPayment}
+                  disabled={isOffline || !selectedGuest?.email}
+                  onClick={handleCardPayment}
+                >
+                  Card
+                </Button>
+              </div>
+              {!selectedGuest?.email && (
+                <p className={formStyles.disabledNotice}>Add an email to this guest to accept card payment.</p>
+              )}
+              <p className={formStyles.disabledNotice}>
+                Or leave it — the balance simply stays owing, to be settled later via Cashiering or at check-out.
+              </p>
+            </>
           )}
-          <p className={formStyles.disabledNotice}>
-            Or leave it — the balance simply stays owing, to be settled later via Cashiering or at check-out.
-          </p>
         </Card>
       )}
     </div>

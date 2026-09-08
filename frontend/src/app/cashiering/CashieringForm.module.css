@@ -75,3 +75,50 @@
   color: var(--state-danger);
   font-weight: var(--text-label-weight);
 }
+
+/* Gap closure: "make it more profeesional and standard form with the
+   payment button" — replaces a raw checkout URL shown as visible link
+   text next to the popup button with one deliberate payment panel. The
+   popup ("Pay now") is the one primary action; the plain checkout link is
+   a small secondary fallback for a guest who isn't physically at this
+   terminal. */
+.paymentPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+
+.paymentPanelHint {
+  margin: 0;
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
+.paymentFallbackLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-2);
+  color: var(--domain-money);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  text-decoration: none;
+}
+
+.paymentFallbackLink:hover {
+  text-decoration: underline;
+}
+
+/* Gap closure: "the form textfield amt is editable pls correct it" — the
+   payment Amount field is locked to the folio's real balance. The first
+   `readOnly` input in this codebase; visually distinct from a normal
+   editable `.input` so it reads as computed, not broken. */
+.inputLocked {
+  background: var(--state-neutral-bg);
+  color: var(--text-primary);
+  cursor: default;
+}
