@@ -758,6 +758,41 @@ async function listInHouse({ context }) {
   return db.table('reservations').where({ status: 'checked_in' }).orderBy('id');
 }
 
+/**
+ * PLAN.md Phase 4 (POS core): "look up an in-house guest by room number or
+ * name" (PRODUCT_REQUIREMENTS.md §3.4's charge-to-room settlement) — the
+ * one search this codebase needed a 3-table join for, via the scoped
+ * accessor's own `joinScoped` (`src/modules/tenancy/scoped-db.js`), the
+ * same mechanism `users/service.js`'s `listUsers` and `reporting/service.js`
+ * already use for their own single joins. Returns candidates only — the
+ * caller (POS settlement) re-checks in-house status and the open folio
+ * fresh at charge time rather than trusting a stale search result, per
+ * that section's own "reject if ... the guest has checked out" rule.
+ */
+async function findInHouseForCharge({ context, query }) {
+  const db = scopedDb().for(context);
+  const pattern = `%${query}%`;
+  return db
+    .table('reservations')
+    .joinScoped('reservation_rooms', (join) =>
+      join.on('reservation_rooms.reservation_id', '=', 'reservations.id').onNull('reservation_rooms.effective_to')
+    )
+    .joinScoped('rooms', (join) => join.on('rooms.id', '=', 'reservation_rooms.room_id'))
+    .joinScoped('guests', (join) => join.on('guests.id', '=', 'reservations.guest_id'))
+    .where({ 'reservations.status': 'checked_in' })
+    .where((group) =>
+      group.where('rooms.room_number', 'like', pattern).orWhere('guests.first_name', 'like', pattern).orWhere('guests.last_name', 'like', pattern)
+    )
+    .select(
+      'reservations.id as reservationId',
+      'rooms.room_number as roomNumber',
+      'guests.first_name as guestFirstName',
+      'guests.last_name as guestLastName'
+    )
+    .orderBy('rooms.room_number')
+    .limit(20);
+}
+
 module.exports = {
   generateUlid,
   expandStayDates,
@@ -786,4 +821,5 @@ module.exports = {
   listArrivals,
   listDepartures,
   listInHouse,
+  findInHouseForCharge,
 };

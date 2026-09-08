@@ -118,22 +118,29 @@ Reference schema for every module. Column lists are indicative rather than exhau
 
 **POS & integrations (3.15)**
 
+PLAN.md Phase 4 built POS **core** only — outlets, terminals, menu, order
+flow, cash-up, charge-to-room. QR self-ordering and inventory/stock
+control (both named below, correctly deferred) are Phase 6. Every "Built."
+row below is PROPERTY_SCOPED, following `pos_outlets` (the root of this
+family) for the same reason every outlet-adjacent table does.
+
 | Table | Key columns | Notes |
 |---|---|---|
-| `pos_outlets` | property_id, name, type (bar/restaurant) | |
-| `pos_shifts` | terminal_id, user_id, opening_float, counted_cash, expected_cash, variance, opened_at, closed_at | Blind cash-up — counted before expected is revealed |
-| `pos_terminals` | outlet_id, device_ref, supports_contactless | Terminal count varies per tenant — never hardcode |
-| `pos_orders` | outlet_id, terminal_id, opened_by_user_id, table_label, opened_at, closed_at, status, folio_id, settlement_method, tip_amount, service_charge | `folio_id` set when charged to a room |
-| `pos_order_items` | pos_order_id, item_id, quantity, unit_price, modifiers (JSON), voided_at, void_reason, voided_by_user_id | |
-| `pos_menu_items` | outlet_id, name, price, category, is_available, cost_price, photo_url |
-| `pos_menu_item_components` | menu_item_id, stock_item_id, quantity | Recipe/BOM — selling one cocktail deducts each component (3.4) |
-| `pos_order_tokens` | outlet_id, type (`table`/`room`), table_label, room_id, token_hash, active, rotated_at | The signed QR token. Never encode a bare table number — that lets anyone order against any table or room |
-| `pos_guest_orders` | pos_order_id, token_id, guest_contact, payment_status (`paid`/`charged_to_room`/`unpaid`), accepted_at, rejected_reason, status | Guest-placed orders; payment status shown on the kitchen/bar ticket |
-| `stock_items` | outlet_id, name, unit, purchase_cost, supplier, reorder_level, current_quantity | |
-| `stock_movements` | stock_item_id, type (`received`/`sold`/`wastage`/`transfer`/`count_adjustment`), quantity, reason, user_id, occurred_at | Append-only movement ledger — the audit trail for stock |
-| `stock_takes` | outlet_id, counted_at, counted_by_user_id, status | |
-| `stock_take_lines` | stock_take_id, stock_item_id, counted_quantity, theoretical_quantity, variance | Variance is the pilferage signal | |
-| `integration_configs` | tenant_id, property_id, integration_key, config (JSON), enabled | Gateway/channel-manager settings as data, not code |
+| `pos_outlets` | tenant_id, property_id, code, name, type, status | Built. `type` is a free string (e.g. "bar", "restaurant"), not an enum — PRODUCT_REQUIREMENTS.md's own example list is illustrative, not exhaustive. |
+| `pos_terminals` | tenant_id, property_id, outlet_id, device_ref, supports_contactless, status | Built. Terminal count varies per tenant — never hardcode. UNIQUE(outlet_id, device_ref). |
+| `pos_menu_items` | tenant_id, property_id, outlet_id, name, category, price, is_available, modifiers (JSON), status | Built. `modifiers` — the available modifier groups/price deltas, e.g. `[{name, options: [{label, priceDelta}]}]` — was added in Phase 4; not in this table's original draft. `cost_price`/`photo_url` from that original draft were dropped: nothing in POS core reads either (cost/margin reporting is inventory-adjacent, Phase 6); adding either back is a trivial additive migration once a real caller needs one. |
+| `pos_orders` | tenant_id, property_id, outlet_id, terminal_id, opened_by_user_id, table_label, status (open/settled/void), opened_at, closed_at, voided_at, void_reason, voided_by_user_id | Built. One row per tab. Settlement fields (`folio_id`/`settlement_method`/`tip_amount`/`service_charge`) from this table's original draft moved to `pos_order_settlements` below — one order can settle across several methods (a split bill), which a single-settlement row on the order itself can't express. |
+| `pos_order_items` | tenant_id, property_id, pos_order_id, menu_item_id, quantity, unit_price, modifiers (JSON), split_group, voided_at, void_reason, voided_by_user_id | Built. `unit_price`/`modifiers` snapshotted at add-time (never re-read live, matching `reservation_daily_rates`). `split_group` (nullable int) tags an item into one of the tab's split groups. Renamed from this table's original draft's `item_id` to `menu_item_id` for the same clarity `rooms.room_type_id` (not `type_id`) already established. |
+| `pos_order_settlements` | tenant_id, property_id, pos_order_id, split_group, method (cash/card/room_charge), subtotal, tax_amount, tip_amount, service_charge, currency, folio_id, folio_line_item_id, tip_service_charge_line_item_id, room_charge_auth_method, room_charge_auth_reference, settled_by_user_id, settled_at, voided_at, void_reason, voided_by_user_id | Built in Phase 4, not in this table's original draft (see `pos_orders`' own note above) — one row per (possibly partial) settlement against a tab. `folio_id`/`folio_line_item_id` set only for `room_charge` (posts through the existing `cashieringService.postCharge`, `type: 'pos_charge'` — zero Cashiering changes needed). `tip_service_charge_line_item_id` (added by this pass's own quality-review step): a nonzero tip/service charge on a room-charge settlement posts as a SEPARATE, untaxed `postAdjustment` line rather than being folded into the taxed base — this column tracks it so a settlement void also voids it, leaving no orphaned tip on the folio. `room_charge_auth_method`/`room_charge_auth_reference` are this session's confirmed decision for "more than a room number alone": a property-configured method (signature/room_key/pin, mirroring the door-lock adapter picker's own free-string precedent) plus a short operator attestation — no signature-capture or key-card-reader hardware integration exists yet. |
+| `pos_shifts` | tenant_id, property_id, terminal_id, user_id, opening_float, counted_cash, expected_cash, variance, currency, opened_at, closed_at | Built. Blind cash-up — `counted_cash` is the operator's own input; `expected_cash`/`variance` are computed and returned in that SAME response, never exposed earlier. "One open shift per terminal" is enforced by a `SELECT ... FOR UPDATE` gap lock in application code, not a DB constraint — MySQL's unique-index semantics treat every NULL `closed_at` as distinct, so no index alone can express it. `currency` (added by this pass's own quality-review step) was missing from this table's original draft, inconsistent with every sibling money-carrying table — set from the property's own `base_currency` at open time. |
+| `pos_menu_item_components` | menu_item_id, stock_item_id, quantity | **Not built — Phase 6.** Recipe/BOM — selling one cocktail deducts each component (3.4). |
+| `pos_order_tokens` | outlet_id, type (`table`/`room`), table_label, room_id, token_hash, active, rotated_at | **Not built — Phase 6.** The signed QR token. Never encode a bare table number — that lets anyone order against any table or room. |
+| `pos_guest_orders` | pos_order_id, token_id, guest_contact, payment_status (`paid`/`charged_to_room`/`unpaid`), accepted_at, rejected_reason, status | **Not built — Phase 6.** Guest-placed orders; payment status shown on the kitchen/bar ticket. |
+| `stock_items` | outlet_id, name, unit, purchase_cost, supplier, reorder_level, current_quantity | **Not built — Phase 6.** |
+| `stock_movements` | stock_item_id, type (`received`/`sold`/`wastage`/`transfer`/`count_adjustment`), quantity, reason, user_id, occurred_at | **Not built — Phase 6.** Append-only movement ledger — the audit trail for stock. |
+| `stock_takes` | outlet_id, counted_at, counted_by_user_id, status | **Not built — Phase 6.** |
+| `stock_take_lines` | stock_take_id, stock_item_id, counted_quantity, theoretical_quantity, variance | **Not built — Phase 6.** Variance is the pilferage signal. |
+| `integration_configs` | tenant_id, property_id, integration_key, config (JSON), enabled | Not built. Gateway/channel-manager settings as data, not code. |
 
 **Migration & audit (3.20, 4.1)**
 
@@ -173,8 +180,9 @@ room_types:            UNIQUE(property_id, code)
 rate_codes:            UNIQUE(property_id, code)
 reservations:          UNIQUE(tenant_id, confirmation_number)
 folios:                UNIQUE(reservation_id, folio_number)
+pos_outlets:           UNIQUE(property_id, code)
 pos_terminals:         UNIQUE(outlet_id, device_ref)
-pos_order_tokens:      UNIQUE(token_hash)
+pos_order_tokens:      UNIQUE(token_hash)  -- not built yet, Phase 6
 door_access_events:    UNIQUE(lock_system, external_event_id)
 users:                 UNIQUE(tenant_id, email)
 guest_accounts:        UNIQUE(property_id, email)
@@ -186,6 +194,7 @@ payment_webhook_events: UNIQUE(provider, provider_event_id)
 taxes:                 UNIQUE(property_id, tax_code, effective_from)
 room_types:            UNIQUE(tenant_id, property_id, id)  -- parent key for 3-column composite FKs
 rate_codes:            UNIQUE(tenant_id, property_id, id)  -- same purpose, see ARCHITECTURE.md §3 note below
+pos_outlets:           UNIQUE(tenant_id, property_id, id)  -- same purpose: parent key for pos_terminals/pos_menu_items/pos_orders
 ```
 
 **The 3-column composite FK pattern.** Phase 0 only ever needed 2-column parent keys (`(tenant_id, id)`) because every cross-table reference went TENANT_SCOPED → PROPERTY_SCOPED. The first time one PROPERTY_SCOPED table references *another* PROPERTY_SCOPED table — `rooms.room_type_id → room_types`, `rate_calendar.room_type_id/rate_code_id → room_types/rate_codes` — a 2-column key isn't enough: it would let a room at Property A reference a room type belonging to Property B in the *same* tenant, which ARCHITECTURE.md §3 explicitly rules out. The referencing FK must be the full 3-column composite — `(tenant_id, property_id, room_type_id)` against `room_types(tenant_id, property_id, id)` — and the referenced table needs that composite declared as its own unique constraint (added above) for the FK to be possible at all. Any future PROPERTY_SCOPED-to-PROPERTY_SCOPED reference follows this same pattern.
@@ -201,7 +210,10 @@ A migration adding a new table checks this list first — if the table represent
 | `rooms` | active → out_of_service → archived | Historical reservations reference the room; deleting it orphans them |
 | `room_types`, `rate_codes` | active → archived | Historical reservations and rate history reference them |
 | `taxes` | no status column — `effective_to` alone is the lifecycle. A tax version "ends" by having `effective_to` set, never by a status flag or a row edit | Historical folio tax lines must recompute against the version effective on their `business_date` (ARCHITECTURE.md §12.1) — a status column inviting an in-place edit would defeat that reproducibility guarantee outright |
+| `pos_outlets`, `pos_terminals` | active → archived | Historical orders/shifts reference them |
 | `pos_menu_items` | active → archived (via `is_available` for transient stock-outs, a separate concept) | Historical order lines reference them |
+| `pos_orders` | open → settled / void | Void, never delete (ARCHITECTURE.md §8) — a voided tab keeps its own record, same as a voided folio line |
+| `pos_order_items`, `pos_order_settlements` | posted → voided (`voided_at`) | Void, never delete (ARCHITECTURE.md §8) — the single most common vector for staff theft in food and beverage is exactly this kind of record disappearing instead of staying visible, struck through |
 | `users` | active → inactive | Audit log entries reference `user_id` (SECURITY.md §5) |
 | `properties` | active → suspended → archived | Tenant history, reporting, and every property-scoped table reference it |
 | `guests` | active → merged (points to the surviving record) → anonymised | Reservation history; see the GDPR/NDPA note below |

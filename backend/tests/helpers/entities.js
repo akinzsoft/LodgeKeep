@@ -1532,6 +1532,208 @@ const ENTITIES = [
       },
     ],
   },
+
+  // -----------------------------------------------------------------------
+  // POS core — PLAN.md Phase 4
+  // -----------------------------------------------------------------------
+
+  {
+    table: 'pos_outlets',
+    uniqueKeys: [['property_id', 'code']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      code: 'NEWOUTLET',
+      name: 'New Fixture Outlet',
+      type: 'restaurant',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      code: 'BAR', // Matches seedTwoTenants' own fixture outlet.
+      name: 'Duplicate Bar',
+      type: 'bar',
+    }),
+    crossTenant: [
+      {
+        name: "creates an outlet against another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          code: 'CROSSOUTLET',
+          name: 'Cross-Tenant Outlet',
+          type: 'bar',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'pos_terminals',
+    uniqueKeys: [['outlet_id', 'device_ref']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      device_ref: `NEWTERMINAL-${t.slug}`,
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      device_ref: `FIXTURE-TERMINAL-${t.slug}`, // Matches seedTwoTenants' own fixture terminal.
+    }),
+    crossTenant: [
+      {
+        name: "assigns a terminal to another tenant's outlet",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          device_ref: `CROSSTERMINAL-${own.slug}`,
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'pos_menu_items',
+    // No natural business unique key — two menu items can legitimately
+    // share a name/category/price, the same reasoning `folio_line_items`
+    // declares none.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      name: 'New Fixture Item',
+      category: 'Starters',
+      price: '10.00',
+    }),
+    crossTenant: [
+      {
+        name: "creates a menu item against another tenant's outlet",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          name: 'Cross-Tenant Item',
+          category: 'Starters',
+          price: '10.00',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'pos_orders',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      terminal_id: t.posTerminals[0].id,
+      opened_by_user_id: t.users[0].id,
+      table_label: 'T2',
+    }),
+    crossTenant: [
+      {
+        name: "opens a tab against another tenant's outlet",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          terminal_id: other.posTerminals[0].id,
+          opened_by_user_id: own.users[0].id,
+          table_label: 'CROSS',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'pos_order_items',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      pos_order_id: t.posOrders[0].id,
+      menu_item_id: t.posMenuItems[0].id,
+      quantity: 1,
+      unit_price: '20.00',
+    }),
+    crossTenant: [
+      {
+        name: "adds a line item to another tenant's order",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          pos_order_id: other.posOrders[0].id,
+          menu_item_id: own.posMenuItems[0].id,
+          quantity: 1,
+          unit_price: '20.00',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'pos_order_settlements',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      pos_order_id: t.posOrders[0].id,
+      method: 'card',
+      subtotal: '20.00',
+      currency: 'NGN',
+      settled_by_user_id: t.users[0].id,
+    }),
+    crossTenant: [
+      {
+        name: "settles against another tenant's order",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          pos_order_id: other.posOrders[0].id,
+          method: 'card',
+          subtotal: '20.00',
+          currency: 'NGN',
+          settled_by_user_id: own.users[0].id,
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'pos_shifts',
+    // `UNIQUE(terminal_id, closed_at)` cannot enforce "one open shift" —
+    // MySQL treats every NULL as distinct (see the migration's own
+    // header) — so this table, like `folio_line_items`, declares no
+    // natural unique key for the isolation suite either.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      terminal_id: t.posTerminals[0].id,
+      user_id: t.users[0].id,
+      opening_float: '100.00',
+      currency: 'NGN',
+    }),
+    crossTenant: [
+      {
+        name: "opens a shift against another tenant's terminal",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          terminal_id: other.posTerminals[0].id,
+          user_id: own.users[0].id,
+          opening_float: '100.00',
+          currency: 'NGN',
+        }),
+      },
+    ],
+  },
 ];
 
 const byTable = (table) => ENTITIES.find((e) => e.table === table);

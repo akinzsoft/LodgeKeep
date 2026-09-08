@@ -58,6 +58,7 @@ const TENANTS = [
     },
     staffUser: { email: 'manager@alpha-hotels.example.com', first_name: 'Alpha', last_name: 'Manager' },
     adminUser: { email: 'admin@alpha-hotels.example.com', first_name: 'Alpha', last_name: 'Admin' },
+    posOperatorUser: { email: 'pos@alpha-hotels.example.com', first_name: 'Alpha', last_name: 'Bartender' },
   },
   {
     slug: 'beta-resorts',
@@ -70,6 +71,7 @@ const TENANTS = [
     },
     staffUser: { email: 'manager@beta-resorts.example.com', first_name: 'Beta', last_name: 'Manager' },
     adminUser: { email: 'admin@beta-resorts.example.com', first_name: 'Beta', last_name: 'Admin' },
+    posOperatorUser: { email: 'pos@beta-resorts.example.com', first_name: 'Beta', last_name: 'Bartender' },
   },
 ];
 
@@ -186,6 +188,119 @@ exports.seed = async function seed(knex) {
   }
 
   /**
+   * PLAN.md Phase 4's POS core. SECURITY.md §5's matrix showed a plain "✓"
+   * for `pos_operator`; this session's confirmed decision splits it the
+   * same way Cashiering's own "Limited" cell already is — manager gets
+   * BOTH `pos.operate` and `pos.manage` (full access, matching the
+   * matrix's own manager row), `pos_operator` gets `pos.operate` only
+   * (`ensurePosOperatorRoleAccess` below).
+   */
+  async function ensureManagerPosAccess(tenantId) {
+    const keys = ['pos.operate', 'pos.manage'];
+    const permissions = await knex('permissions').whereIn('permission_key', keys).select('id', 'permission_key');
+    if (permissions.length !== keys.length) return; // migrations not yet run — nothing to grant
+    const managerRole = await knex('roles').where({ tenant_id: tenantId, code: 'manager' }).first('id');
+    if (!managerRole) return;
+
+    const existingGrants = await knex('role_permissions')
+      .where({ tenant_id: tenantId, role_id: managerRole.id })
+      .whereIn('permission_id', permissions.map((p) => p.id))
+      .select('permission_id');
+    const alreadyGranted = new Set(existingGrants.map((g) => String(g.permission_id)));
+
+    const toGrant = permissions.filter((p) => !alreadyGranted.has(String(p.id)));
+    if (toGrant.length) {
+      await knex('role_permissions').insert(toGrant.map((p) => ({ tenant_id: tenantId, role_id: managerRole.id, permission_id: p.id })));
+    }
+  }
+
+  /**
+   * `pos_operator` has existed as a system role since Phase 0 but held ZERO
+   * permission grants until now — invisible for the same reason
+   * `admin`/`super_admin` were before the MFA cross-cutting fix: no POS
+   * screen existed to notice. `pos.operate` only, never `pos.manage` — see
+   * `ensureManagerPosAccess`'s own header for the RBAC split.
+   */
+  async function ensurePosOperatorRoleAccess(tenantId) {
+    const permission = await knex('permissions').where({ permission_key: 'pos.operate' }).first('id');
+    if (!permission) return; // migrations not yet run — nothing to grant
+    const posOperatorRole = await knex('roles').where({ tenant_id: tenantId, code: 'pos_operator' }).first('id');
+    if (!posOperatorRole) return;
+
+    const existing = await knex('role_permissions')
+      .where({ tenant_id: tenantId, role_id: posOperatorRole.id, permission_id: permission.id })
+      .first('id');
+    if (!existing) {
+      await knex('role_permissions').insert({ tenant_id: tenantId, role_id: posOperatorRole.id, permission_id: permission.id });
+    }
+  }
+
+  /**
+   * The third seeded user per tenant (alongside the manager and admin
+   * accounts above) — `pos_operator` role, no MFA (not admin/super_admin),
+   * so this account's login needs no dev bypass at all — a real login
+   * completes the same way the seeded manager's own always has.
+   */
+  async function ensurePosOperatorAccount(tenantId, propertyId, spec) {
+    if (!spec.posOperatorUser) return;
+    let posUserId = (await knex('users').where({ tenant_id: tenantId, email: spec.posOperatorUser.email }).first('id'))?.id;
+    if (!posUserId) {
+      [posUserId] = await knex('users').insert({
+        tenant_id: tenantId,
+        email: spec.posOperatorUser.email,
+        password_hash: passwordHash,
+        first_name: spec.posOperatorUser.first_name,
+        last_name: spec.posOperatorUser.last_name,
+        status: 'active',
+      });
+    }
+    const existingAccess = await knex('user_property_access')
+      .where({ tenant_id: tenantId, property_id: propertyId, user_id: posUserId })
+      .first('id');
+    if (!existingAccess) {
+      await knex('user_property_access').insert({ tenant_id: tenantId, property_id: propertyId, user_id: posUserId, role: 'pos_operator' });
+    }
+  }
+
+  /**
+   * PLAN.md Phase 4: a real bar outlet, terminal, and two menu items per
+   * dev tenant — insert-if-missing by code, the same idempotent shape
+   * `ensureReferenceData` already uses.
+   */
+  async function ensurePosReferenceData(tenantId, propertyId) {
+    let outletId = (await knex('pos_outlets').where({ tenant_id: tenantId, property_id: propertyId, code: 'BAR' }).first('id'))?.id;
+    if (!outletId) {
+      [outletId] = await knex('pos_outlets').insert({ tenant_id: tenantId, property_id: propertyId, code: 'BAR', name: 'Main Bar', type: 'bar' });
+    }
+
+    const existingTerminal = await knex('pos_terminals')
+      .where({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, device_ref: 'BAR-TERMINAL-1' })
+      .first('id');
+    if (!existingTerminal) {
+      await knex('pos_terminals').insert({
+        tenant_id: tenantId,
+        property_id: propertyId,
+        outlet_id: outletId,
+        device_ref: 'BAR-TERMINAL-1',
+        supports_contactless: true,
+      });
+    }
+
+    const menuItems = [
+      { name: 'House Cocktail', category: 'Cocktails', price: '20.00' },
+      { name: 'Bottled Water', category: 'Soft Drinks', price: '3.00' },
+    ];
+    for (const item of menuItems) {
+      const existingItem = await knex('pos_menu_items')
+        .where({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, name: item.name })
+        .first('id');
+      if (!existingItem) {
+        await knex('pos_menu_items').insert({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, ...item });
+      }
+    }
+  }
+
+  /**
    * SECURITY.md §5's matrix gives `admin`/`super_admin` "✓" (full access)
    * on every single domain — every permission key that exists, not a
    * per-module list this function would need to keep in sync as each new
@@ -287,6 +402,8 @@ exports.seed = async function seed(knex) {
       await ensureManagerReservationsAccess(existingTenant.id);
       await ensureManagerPhase3Access(existingTenant.id);
       await ensureManagerPhase25Access(existingTenant.id);
+      await ensureManagerPosAccess(existingTenant.id);
+      await ensurePosOperatorRoleAccess(existingTenant.id);
       // src/auth/mfa.js's dev-only bypass: backfill the admin account and
       // its full-access grant onto a pre-existing dev tenant too, same
       // reasoning as the manager grants above.
@@ -294,7 +411,9 @@ exports.seed = async function seed(knex) {
       const existingProperty = await knex('properties').where({ tenant_id: existingTenant.id }).first('id');
       if (existingProperty) {
         await ensureAdminAccount(existingTenant.id, existingProperty.id, spec);
+        await ensurePosOperatorAccount(existingTenant.id, existingProperty.id, spec);
         await ensureReferenceData(existingTenant.id, existingProperty.id);
+        await ensurePosReferenceData(existingTenant.id, existingProperty.id);
       }
       ready.push({ slug: spec.slug, email: spec.staffUser.email, alreadyExisted: true });
       continue;
@@ -365,6 +484,12 @@ exports.seed = async function seed(knex) {
     // PLAN.md Phase 2.5's Cashiering/Night Audit modules.
     await ensureManagerPhase25Access(tenantId);
 
+    // PLAN.md Phase 4's POS core — see `ensureManagerPosAccess`'s own header.
+    await ensureManagerPosAccess(tenantId);
+    await ensurePosOperatorRoleAccess(tenantId);
+    await ensurePosOperatorAccount(tenantId, propertyId, spec);
+    await ensurePosReferenceData(tenantId, propertyId);
+
     // PLAN.md Phase 1 gap closure — see `ensureReferenceData`'s own header.
     await ensureReferenceData(tenantId, propertyId);
 
@@ -382,4 +507,11 @@ exports.seed = async function seed(knex) {
     console.log(`  tenant=${spec.slug}  email=${spec.adminUser.email}  password=${DEV_PASSWORD}`);
   }
   console.log('  After "MFA required": submit code 000000 (src/auth/mfa.js\'s DEV_MFA_BYPASS_CODE) — never valid outside NODE_ENV!=="production".\n');
+
+  console.log('[seed] POS operator (pos.operate) dev login — no MFA, logs in the same way the seeded manager does:');
+  for (const spec of TENANTS) {
+    if (!spec.posOperatorUser) continue;
+    console.log(`  tenant=${spec.slug}  email=${spec.posOperatorUser.email}  password=${DEV_PASSWORD}`);
+  }
+  console.log('');
 };

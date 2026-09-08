@@ -15,6 +15,7 @@ import { ReportingScreen } from './app/reporting/ReportingScreen.jsx';
 import { CashieringScreen } from './app/cashiering/CashieringScreen.jsx';
 import { NightAuditScreen } from './app/night-audit/NightAuditScreen.jsx';
 import { ProfilesScreen } from './app/profiles/ProfilesScreen.jsx';
+import { POSScreen } from './app/pos/POSScreen.jsx';
 import { Toast } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { notificationsApi } from './shared/api/index.js';
@@ -146,6 +147,8 @@ function Demo() {
           'cashiering.void_line',
           'night_audit.view',
           'night_audit.run',
+          'pos.operate',
+          'pos.manage',
         ])
       }
       activeItemKey={activeItemKey}
@@ -184,6 +187,8 @@ function Demo() {
         <NightAuditScreen isOffline={!isOnline} />
       ) : activeItemKey === 'profiles' ? (
         <ProfilesScreen />
+      ) : activeItemKey === 'pos' ? (
+        <POSScreen isOffline={!isOnline} />
       ) : (
         <HomeDashboard
           greetingName={user.email}

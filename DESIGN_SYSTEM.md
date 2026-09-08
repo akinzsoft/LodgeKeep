@@ -75,6 +75,8 @@ Status is always rendered as a filled pill — background `--state-*-bg`, text `
   --sidebar-w-collapsed: 72px;
   --topbar-h:         64px;
   --control-h:        40px;  /* inputs, buttons — 44px on touch screens */
+  --control-h-touch:  44px;
+  --control-h-pos:    64px;  /* PLAN.md Phase 4: the POS order screen only — see "Touch targets" below */
 }
 ```
 
@@ -99,7 +101,7 @@ All spacing is a multiple of 4px. Card padding is `--space-4` on mobile, `--spac
 
 Weights: 400 body, 500 labels, 600 headings and numerals. Never below 12px — front-desk terminals are often old, low-resolution, and viewed at arm's length. **Tabular figures (`font-variant-numeric: tabular-nums`) on every money column and folio total**, so digits align vertically down a column; proportional figures in a folio are genuinely hard to scan.
 
-**Touch targets**: minimum 44×44px on any screen a housekeeper or front-desk agent uses on a tablet or phone (3.18). Desktop-only admin screens may use 40px.
+**Touch targets**: minimum 44×44px on any screen a housekeeper or front-desk agent uses on a tablet or phone (3.18). Desktop-only admin screens may use 40px. **The POS order screen (3.4) is the one place this bends further**: PRODUCT_REQUIREMENTS.md §3.4 names it explicitly as "a different design problem from the rest of the product — used standing up, at speed, often one-handed, on a touch terminal... aim for 64px+ here." `--control-h-pos` (64px) is that token — scoped to `app/pos/`'s own order-screen components only, never used elsewhere in the admin app, and paired with fewer words and higher information sparsity than every other screen in this spec uses.
 
 **Focus & accessibility**: a visible focus ring (`2px solid --domain-booking`, 2px offset) on every interactive element — front-desk staff are keyboard-heavy and speed matters more than polish. Body text must hit WCAG AA (4.5:1); status pills must hit AA at their small size, which is why they use tinted backgrounds rather than coloured text. Never encode meaning in colour alone — every status pill carries a text label, since a colour-blind night auditor still needs to read the room grid.
 

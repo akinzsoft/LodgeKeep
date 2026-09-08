@@ -41,6 +41,7 @@ const { cashieringRouter, paystackWebhookRouter } = require('./modules/cashierin
 const { nightAuditRouter } = require('./modules/night-audit');
 const { profilesRouter } = require('./modules/profiles');
 const { portalPublicRouter, portalAccountRouter } = require('./modules/portal');
+const { posRouter } = require('./modules/pos');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -63,6 +64,7 @@ function buildStaffRouter() {
   router.use(reportingRouter());
   router.use(cashieringRouter());
   router.use(nightAuditRouter());
+  router.use(posRouter());
   router.use((req, res) => notFound(res));
   return router;
 }

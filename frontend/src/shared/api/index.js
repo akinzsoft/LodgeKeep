@@ -11,3 +11,4 @@ export * as notificationsApi from './notifications.js';
 export * as reportingApi from './reporting.js';
 export * as cashieringApi from './cashiering.js';
 export * as nightAuditApi from './night-audit.js';
+export * as posApi from './pos.js';

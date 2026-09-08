@@ -61,6 +61,16 @@ export const DEFAULT_NAV_GROUPS = [
       // one, "Limited" — the screen itself further gates payment/refund/
       // void actions on `cashiering.void_line` via the API's own checks).
       { key: 'cashiering', label: 'Cashiering', requiredPermission: 'cashiering.post_charge' },
+      // PLAN.md Phase 4's POS core: same "no separate top-level slot in the
+      // literal spec" gap every operational module here already has — filed
+      // under MAIN, next to Cashiering, since a POS charge-to-room settles
+      // against the same kind of folio Cashiering already manages. Gated on
+      // `pos.operate`, the broader of the two POS keys (SECURITY.md §5:
+      // pos_operator holds only this one, "Limited" — outlet/terminal/menu
+      // configuration and post-settlement voids stay gated on `pos.manage`
+      // via the API's own checks, the same split Cashiering's own
+      // `cashiering.void_line` already established).
+      { key: 'pos', label: 'POS', requiredPermission: 'pos.operate' },
       { key: 'departments', label: 'Departments' },
       { key: 'staff', label: 'Staff' },
     ],
