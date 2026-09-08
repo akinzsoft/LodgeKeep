@@ -17,3 +17,23 @@
   flex-wrap: wrap;
   gap: var(--space-5);
 }
+
+/* Gap closure: "export to PDF" — the browser's own print dialog (its
+   "Save as PDF" destination produces a real PDF, no new library needed;
+   see AppShell/Sidebar/TopBar/Footer's own `@media print` rules for the
+   app-chrome half of this). This screen's own search form/toolbar aren't
+   part of the exported document — only the guest list is. */
+.printOnly {
+  display: none;
+}
+
+@media print {
+  .noPrint {
+    display: none;
+  }
+
+  .printOnly {
+    display: block;
+    margin: 0 0 var(--space-4);
+  }
+}

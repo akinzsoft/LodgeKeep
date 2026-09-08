@@ -9,6 +9,15 @@
   transition: width var(--transition-fast);
 }
 
+/* Gap closure: "export to PDF" (Profiles) prints only a screen's own
+   content — the browser's print dialog otherwise renders the whole app
+   shell, sidebar included, which is meaningless on paper. */
+@media print {
+  .sidebar {
+    display: none;
+  }
+}
+
 .collapsed {
   width: var(--sidebar-w-collapsed);
 }
