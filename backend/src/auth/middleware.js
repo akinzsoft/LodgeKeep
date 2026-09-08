@@ -51,6 +51,33 @@ async function liveContextFor(claims) {
     });
     const guest = await db.for(context).table('guest_accounts').where({ id: claims.sub }).first();
     if (!guest || guest.status !== 'active') throw new SessionInvalidError();
+    // Gap closure (feature-dev): guest password-reset's session-invalidation
+    // mechanism. No `sessions`-equivalent table exists for guests to revoke
+    // rows in (short-lived, no-refresh access tokens) — a token issued
+    // before the account's last password change is rejected instead,
+    // the stateless-JWT equivalent of a row-based revoke. See the migration
+    // that added `password_changed_at` for the full reasoning.
+    //
+    // `Math.ceil`, not a direct millisecond comparison: `iat` (JWT spec) is
+    // only second-granular — `claims.iat` is the FLOOR of the real issue
+    // instant, discarding its position within that second. Comparing that
+    // floor directly against a millisecond-precise `password_changed_at`
+    // is asymmetric: it correctly rejects a token from an earlier second,
+    // but a token issued in the SAME second as the reset can land on
+    // either side of the millisecond boundary depending on where within
+    // that second each event fell — an unpredictable false accept OR
+    // false reject. Rounding the boundary UP to the start of the next
+    // whole second removes the ambiguity in the safe direction: every
+    // token from the reset's own second or earlier is rejected (a
+    // password reset invalidating a token minted a few hundred
+    // milliseconds earlier, in the worst case, is exactly the conservative
+    // behaviour AUTH-8's "every existing session" already models for
+    // staff), and every token from a genuinely later second is accepted
+    // normally.
+    if (guest.password_changed_at) {
+      const invalidateBefore = Math.ceil(new Date(guest.password_changed_at).getTime() / 1000);
+      if (claims.iat < invalidateBefore) throw new SessionInvalidError();
+    }
     return context;
   }
 

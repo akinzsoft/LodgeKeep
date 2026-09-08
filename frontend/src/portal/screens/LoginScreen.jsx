@@ -66,6 +66,10 @@ export function LoginScreen() {
             <Link className={formStyles.link} to={`/portal/${propertySlug}/register`}>
               Create an account
             </Link>
+            {/* Gap closure (feature-dev): guest password-reset. */}
+            <Link className={formStyles.link} to={`/portal/${propertySlug}/forgot-password`}>
+              Forgot password?
+            </Link>
           </div>
         </form>
       </Card>

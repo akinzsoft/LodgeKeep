@@ -248,6 +248,40 @@ const ENTITIES = [
     ],
   },
 
+  // Gap closure (feature-dev): guest password-reset. PROPERTY_SCOPED,
+  // matching its parent guest_accounts — a genuinely separate store from
+  // staff's own TENANT_SCOPED password_resets below.
+  {
+    table: 'guest_password_resets',
+    uniqueKeys: [['token_hash']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      guest_account_id: t.guestAccounts[0].id,
+      token_hash: tokenHash(`${t.slug}-guest-reset-additional`),
+      expires_at: hoursFromNow(1),
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      guest_account_id: t.guestAccounts[1].id,
+      token_hash: byLabel(t.guestPasswordResets, 'pending').token_hash,
+      expires_at: hoursFromNow(1),
+    }),
+    crossTenant: [
+      {
+        name: "claims another tenant's guest account under our own tenant/property id",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          guest_account_id: other.guestAccounts[0].id,
+          token_hash: tokenHash(`${own.slug}-guest-reset-crossing`),
+          expires_at: hoursFromNow(1),
+        }),
+      },
+    ],
+  },
+
   // ------------------------------------------------------------------
   // Auth credentials (20260903210341_create_auth_credentials).
   //

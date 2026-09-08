@@ -224,6 +224,42 @@ async function guestLogin(req, res, next) {
   }
 }
 
+/** POST /api/v1/portal/auth/password/forgot */
+async function requestGuestPasswordReset(req, res, next) {
+  try {
+    const propertySlug = require_(req.body, 'property_slug');
+    const email = require_(req.body, 'email');
+    const result = await service.requestGuestPasswordReset({
+      tenantId: req.tenantId,
+      propertySlug,
+      email,
+      ...requestMeta(req),
+    });
+    // Same anti-enumeration shape as staff's own /password/forgot above —
+    // identical response whether or not the address resolved.
+    res.status(200).json(ok({ status: 'ok', dev_only_token: result.devOnlyToken }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** POST /api/v1/portal/auth/password/reset */
+async function completeGuestPasswordReset(req, res, next) {
+  try {
+    const token = require_(req.body, 'token');
+    const newPassword = require_(req.body, 'new_password');
+    const result = await service.completeGuestPasswordReset({
+      tenantId: req.tenantId,
+      token,
+      newPassword,
+      ...requestMeta(req),
+    });
+    res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
 /**
  * POST /auth/mfa/verify — staff and platform both. The only real
  * verification performed is `src/auth/mfa.js`'s dev-only bypass code,
@@ -269,6 +305,8 @@ module.exports = {
   acceptInvitation,
   guestRegister,
   guestLogin,
+  requestGuestPasswordReset,
+  completeGuestPasswordReset,
   platformLogin,
   verifyMfa,
 };
