@@ -65,3 +65,13 @@
   color: var(--text-primary);
   font-size: var(--text-label-size);
 }
+
+/* Gap closure: "see all outstanding balance" — the same non-zero-balance
+   highlight `FrontDeskTab`'s own Balance column already established
+   (`BookingForm.module.css`'s `.balanceOwing`, copied verbatim). Colour
+   alone is never the only signal — this always accompanies the real
+   amount text via the shared `Money` component, never replaces it. */
+.balanceOwing {
+  color: var(--state-danger);
+  font-weight: var(--text-label-weight);
+}

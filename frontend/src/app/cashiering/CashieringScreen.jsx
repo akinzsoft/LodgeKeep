@@ -2,30 +2,45 @@ import { useEffect, useState } from 'react';
 import { Card, DataTable, Button, StatusPill, ConfirmDialog } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { cashieringApi, ApiError } from '../../shared/api/index.js';
+import { OutstandingBalancesTab } from './OutstandingBalancesTab.jsx';
 import formStyles from './CashieringForm.module.css';
 import styles from './CashieringScreen.module.css';
+
+const TABS = [
+  { key: 'balances', label: 'Balances' },
+  { key: 'lookup', label: 'Folio Lookup' },
+];
 
 /**
  * CashieringScreen — PLAN.md Phase 2.5, PRODUCT_REQUIREMENTS.md §3.5.
  *
- * No router exists in this app (the same constraint every other screen
- * here works within), and no other screen exposes a "view this
- * reservation's folio" deep link yet — so this screen starts from a plain
- * reservation-id lookup rather than assuming navigation state it would
- * have to invent. A caller who already knows the reservation id (visible
- * on the Reservations/Front Desk tabs) enters it here.
+ * Two tabs. "Balances" (default) is new — gap closure (user-reported):
+ * "see all outstanding balance of guest and there room no." Before this,
+ * the screen had no relationship at all to PRODUCT_REQUIREMENTS.md's own
+ * "Role-based views" table, which names an "Open folios list" as the
+ * Cashier role's own LANDING screen — a real, previously-unflagged gap,
+ * not an invented one. "Folio Lookup" is everything this screen already
+ * was: a plain reservation-id lookup, since no other screen exposes a
+ * "view this reservation's folio" deep link — a caller who already knows
+ * the id (visible on Reservations/Front Desk) enters it here, or arrives
+ * via "View folio" from the Balances tab (`handleViewFolio`).
  *
- * One screen, not four tabs, deliberately: PRODUCT_REQUIREMENTS.md's four
- * named Cashiering screens (folio view, split billing, payment capture,
- * refunds & adjustments) are all actions against the SAME folio a cashier
- * is already looking at, not four separate destinations — splitting them
- * into tabs would mean re-loading the same folio state four times over.
+ * This does NOT contradict this screen's own original "one screen, not
+ * four tabs" reasoning — that was specifically about PRODUCT_REQUIREMENTS.md's
+ * four named Cashiering *actions* (folio view, split billing, payment
+ * capture, refunds/adjustments) being the same destination against the
+ * SAME folio, not four separate ones. "Open folios list" is a genuinely
+ * different, property-wide destination — the same category of addition
+ * every other multi-tab screen here (`SetupScreen`, `BookingScreen`,
+ * `HousekeepingScreen`, `ReportingScreen`) already handles with a tab, not
+ * a second top-level nav item.
  *
  * Voided lines render struck-through, never removed (PRODUCT_REQUIREMENTS.md
  * §3.5's own explicit requirement, and ARCHITECTURE.md §8's "void, never
  * delete" made visible).
  */
 export function CashieringScreen({ isOffline = false }) {
+  const [tab, setTab] = useState('balances');
   const [reservationIdInput, setReservationIdInput] = useState('');
   const [reservationId, setReservationId] = useState(null);
   const [folios, setFolios] = useState(null);
@@ -52,6 +67,13 @@ export function CashieringScreen({ isOffline = false }) {
     loadFolios(id);
   }
 
+  function handleViewFolio(id) {
+    setReservationIdInput(String(id));
+    setReservationId(String(id));
+    loadFolios(id);
+    setTab('lookup');
+  }
+
   async function withSubmitting(action) {
     setSubmitting(true);
     setError(null);
@@ -75,56 +97,79 @@ export function CashieringScreen({ isOffline = false }) {
     <div className={styles.page}>
       <h1 className={styles.title}>Cashiering</h1>
 
-      <Card title="Find a reservation's folio">
-        <form className={formStyles.row} onSubmit={handleLookup}>
-          <label className={formStyles.field}>
-            <span className={formStyles.label}>Reservation ID</span>
-            <input
-              className={formStyles.input}
-              value={reservationIdInput}
-              onChange={(event) => setReservationIdInput(event.target.value)}
-              placeholder="e.g. 42"
-            />
-          </label>
-          <div className={formStyles.actionsRow}>
-            <Button type="submit">Load folios</Button>
-          </div>
-        </form>
-      </Card>
-
-      {error && (
-        <p role="alert" className={formStyles.errorBanner}>
-          {error}
-        </p>
-      )}
-
-      {isOffline && (
-        <p className={formStyles.disabledNotice}>You are offline. Cashiering actions are disabled until connectivity returns.</p>
-      )}
-
-      {folios !== null && folios.length === 0 && (
-        <Card title="Folios" state="empty" emptyMessage="No folios exist yet for this reservation — check in the guest first." />
-      )}
-
-      {folios !== null &&
-        folios.map((folio) => (
-          <FolioPanel
-            key={folio.id}
-            folio={folio}
-            otherFolios={folios.filter((f) => f.id !== folio.id)}
-            isOffline={isOffline}
-            submitting={submitting}
-            onAction={withSubmitting}
-          />
+      <div className={styles.tabs} role="tablist" aria-label="Cashiering sections">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.key}
+            className={`${styles.tab} ${tab === t.key ? styles.tabActive : ''}`.trim()}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
         ))}
+      </div>
 
-      {folios !== null && folios.length > 0 && (
-        <div className={formStyles.actionsRow}>
-          <Button variant="secondary" disabled={isOffline || submitting} onClick={handleOpenAdditionalFolio}>
-            Open a split folio
-          </Button>
-        </div>
-      )}
+      <div className={styles.panel}>
+        {tab === 'balances' && <OutstandingBalancesTab isOffline={isOffline} onViewFolio={handleViewFolio} />}
+
+        {tab === 'lookup' && (
+          <>
+            <Card title="Find a reservation's folio">
+              <form className={formStyles.row} onSubmit={handleLookup}>
+                <label className={formStyles.field}>
+                  <span className={formStyles.label}>Reservation ID</span>
+                  <input
+                    className={formStyles.input}
+                    value={reservationIdInput}
+                    onChange={(event) => setReservationIdInput(event.target.value)}
+                    placeholder="e.g. 42"
+                  />
+                </label>
+                <div className={formStyles.actionsRow}>
+                  <Button type="submit">Load folios</Button>
+                </div>
+              </form>
+            </Card>
+
+            {error && (
+              <p role="alert" className={formStyles.errorBanner}>
+                {error}
+              </p>
+            )}
+
+            {isOffline && (
+              <p className={formStyles.disabledNotice}>You are offline. Cashiering actions are disabled until connectivity returns.</p>
+            )}
+
+            {folios !== null && folios.length === 0 && (
+              <Card title="Folios" state="empty" emptyMessage="No folios exist yet for this reservation — check in the guest first." />
+            )}
+
+            {folios !== null &&
+              folios.map((folio) => (
+                <FolioPanel
+                  key={folio.id}
+                  folio={folio}
+                  otherFolios={folios.filter((f) => f.id !== folio.id)}
+                  isOffline={isOffline}
+                  submitting={submitting}
+                  onAction={withSubmitting}
+                />
+              ))}
+
+            {folios !== null && folios.length > 0 && (
+              <div className={formStyles.actionsRow}>
+                <Button variant="secondary" disabled={isOffline || submitting} onClick={handleOpenAdditionalFolio}>
+                  Open a split folio
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

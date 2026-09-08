@@ -40,3 +40,43 @@
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
 }
+
+/* Gap closure: "see all outstanding balance ... recommended a standard
+   feature" — PRODUCT_REQUIREMENTS.md's own "Role-based views" table names
+   an "Open folios list" as the Cashier role's own landing screen, so this
+   screen gains its first tab (Balances / Lookup), the same tabbed pattern
+   `HousekeepingScreen`/`SetupScreen` already established, with
+   `--domain-money` (tokens.css: "cashiering, revenue, AR") as the accent —
+   this screen's own domain, distinct from `--domain-rooms` (Housekeeping). */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+}
+
+.tabActive {
+  color: var(--domain-money);
+  border-bottom-color: var(--domain-money);
+}
+
+.panel {
+  min-width: 0;
+}

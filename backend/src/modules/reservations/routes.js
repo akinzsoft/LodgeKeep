@@ -102,6 +102,22 @@ function reservationsRouter() {
   // `HomeDashboard`'s own KPI cards already use.
   router.get('/front-desk/free-rooms', requirePermission('front_desk.view'), controller.listFreeRooms);
 
+  // Gap closure (user-reported): PRODUCT_REQUIREMENTS.md's own "Role-based
+  // views" table names "Open folios list" as the Cashier role's landing
+  // screen — this is that report. Gated on `cashiering.post_charge`, NOT
+  // `front_desk.view`: SECURITY.md §5's matrix gives Cashier a flat ✗ on
+  // Front Desk, so gating on the front-desk key would lock out the one
+  // role this screen is spec'd for. `cashiering.post_charge` already gates
+  // the two existing folio-VIEW reads (`getFolio`/`listFoliosForReservation`,
+  // `cashiering/routes.js`), so this is the same "view a folio" right,
+  // just property-wide — matching the identical cross-domain gate
+  // `POST /reservations/:id/open-folio` already established above.
+  router.get(
+    '/front-desk/outstanding-balances',
+    requirePermission('cashiering.post_charge'),
+    controller.listOutstandingBalances
+  );
+
   router.post('/reservations/:id/check-in', requirePermission('front_desk.manage'), controller.checkIn);
   router.post('/reservations/:id/check-out', requirePermission('front_desk.manage'), controller.checkOut);
   router.post('/reservations/:id/room-move', requirePermission('front_desk.manage'), controller.roomMove);
