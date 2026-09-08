@@ -35,4 +35,21 @@ class TaxEffectiveDateOverlapError extends AppError {
   }
 }
 
-module.exports = { DuplicateEntryError, InvalidBulkRangeError, TaxEffectiveDateOverlapError };
+/**
+ * A real attempt to send through a property's own configured email
+ * settings failed — surfaced as its own error rather than a generic 500 so
+ * `POST /setup/email-settings/test`'s caller (an admin checking whether
+ * their own configuration actually works) sees the real provider error,
+ * not just "something went wrong." No `PAYMENT_`/`AUTH_`/etc. namespace
+ * fits an external-send failure that isn't a validation problem with the
+ * REQUEST itself — modeled as `VALIDATION_` anyway, in the same spirit
+ * `TaxEffectiveDateOverlapError` above already flags: the configuration,
+ * once actually tried against reality, turned out not to work.
+ */
+class EmailTestSendFailedError extends ValidationError {
+  constructor(reason) {
+    super('EMAIL_TEST_SEND_FAILED', `Test email could not be sent: ${reason}`, [{ field: 'email_settings', issue: 'send_failed' }]);
+  }
+}
+
+module.exports = { DuplicateEntryError, InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError };

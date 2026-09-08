@@ -1351,6 +1351,38 @@ const ENTITIES = [
   },
 
   {
+    // Gap closure: "add the mail setup on in SETUP menu" — one row per
+    // property (UNIQUE(tenant_id, property_id)). `newRow` targets
+    // properties[1], not [0] — fixtures.js itself now seeds a real
+    // email_settings row on properties[0] for both tenants (for this same
+    // generic suite's own "every table has interleaved rows already"
+    // assumption elsewhere), so [0] would collide here instead of proving
+    // a genuinely new row is accepted.
+    table: 'email_settings',
+    uniqueKeys: [['tenant_id', 'property_id']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[1].id,
+      provider: 'console',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      provider: 'smtp',
+    }),
+    crossTenant: [
+      {
+        name: "creates email settings for another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          provider: 'console',
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'notification_log',
     uniqueKeys: [],
     newRow: (ctx, t) => ({

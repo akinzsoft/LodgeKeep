@@ -7,6 +7,7 @@ import { RateCodesTab } from './RateCodesTab.jsx';
 import { TaxesTab } from './TaxesTab.jsx';
 import { ReferenceDataTab } from './ReferenceDataTab.jsx';
 import { UsersTab } from './UsersTab.jsx';
+import { EmailSettingsTab } from './EmailSettingsTab.jsx';
 import { SetupWizard } from './SetupWizard.jsx';
 import styles from './SetupScreen.module.css';
 
@@ -19,7 +20,9 @@ import styles from './SetupScreen.module.css';
  * one component under a single "Setup" nav item.
  *
  * Market segments, booking sources, and cancellation policies (the
- * "Reference Data" tab), user management (the "Users" tab), and the guided
+ * "Reference Data" tab), user management (the "Users" tab), per-property
+ * email/SMTP delivery configuration (the "Email" tab, gap closure:
+ * "add the mail setup on in SETUP menu"), and the guided
  * first-run wizard with resumable progress (the "Guided Setup" tab, the
  * default one — PRODUCT_REQUIREMENTS.md §3.19: "public signup, then
  * straight into the setup wizard") have all closed gaps flagged here since
@@ -44,6 +47,7 @@ const TABS = [
   { key: 'taxes', label: 'Taxes' },
   { key: 'reference-data', label: 'Reference Data' },
   { key: 'users', label: 'Users' },
+  { key: 'email', label: 'Email' },
 ];
 
 export function SetupScreen({ activePropertyId, isOffline = false }) {
@@ -125,6 +129,7 @@ export function SetupScreen({ activePropertyId, isOffline = false }) {
         {tab === 'taxes' && <TaxesTab activeProperty={activeProperty} disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'reference-data' && <ReferenceDataTab disabled={!activeProperty} />}
         {tab === 'users' && <UsersTab disabled={!activeProperty} isOffline={isOffline} />}
+        {tab === 'email' && <EmailSettingsTab disabled={!activeProperty} isOffline={isOffline} />}
       </div>
     </div>
   );
