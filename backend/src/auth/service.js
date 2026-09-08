@@ -365,21 +365,54 @@ async function staffRefresh({ tenantId, refreshToken, propertyId, ip, userAgent,
   };
 }
 
-/** Revokes the session behind one refresh token — the client's own "log out". */
-async function staffLogout({ context, refreshToken, ip, userAgent, requestId }) {
-  const scoped = scopedDb().for(context);
+/**
+ * Revokes the session behind one refresh token — the client's own "log
+ * out".
+ *
+ * Gap closure (user-reported, live-tested): "i click the signout it
+ * logout if i refresh the page it take me back to the dashboard." Root
+ * cause, confirmed by reproducing it directly: this endpoint used to sit
+ * behind `authenticate('staff')`, so a still-valid refresh cookie's own
+ * session could only ever be revoked while the caller ALSO happened to
+ * hold a fresh access token — and `shared/api/client.js`'s auto-retry
+ * only covers `AUTH_TOKEN_EXPIRED`, never `AUTH_TOKEN_INVALID`/
+ * `AUTH_UNAUTHENTICATED` (confirmed live: a malformed/absent token
+ * returns `AUTH_TOKEN_INVALID`, not `_EXPIRED`). `AuthContext.jsx`'s
+ * `logout()` also deliberately swallows the resulting error (so a
+ * genuine network failure doesn't trap someone visibly "still logged
+ * in") — so the UI showed the login screen regardless, while the real
+ * session, never actually revoked, stayed live server-side for up to its
+ * full 30-day expiry. A page reload then bootstrapped right back into it.
+ *
+ * Fixed the same way `staffRefresh` already works: resolved entirely
+ * from the refresh token itself (`tenantId` from the Host header via
+ * `resolveTenant`, everything else — including WHICH user — from the
+ * session row the hash finds), needing no access token, valid or
+ * otherwise, at all. This is not a new attack surface: `/auth/refresh`
+ * has always been public and cookie-gated, and is a strictly MORE
+ * powerful operation (it mints a fresh access token) than merely
+ * revoking a session — logout matching that shape is a reduction in
+ * fragility, not an increase in exposure.
+ */
+async function staffLogout({ tenantId, refreshToken, ip, userAgent, requestId }) {
+  const scoped = scopedDb().for(contextFromSession({ tenantId }));
   const hash = hashRefreshToken(refreshToken);
-  const updated = await scoped
-    .table('sessions')
-    .where({ user_id: context.userId, refresh_token_hash: hash })
-    .whereNull('revoked_at')
-    .update({ revoked_at: new Date(), revoked_reason: 'logout' });
+  const session = await scoped.table('sessions').where({ refresh_token_hash: hash }).whereNull('revoked_at').first();
+
+  let updated = 0;
+  if (session) {
+    updated = await scoped
+      .table('sessions')
+      .where({ id: session.id })
+      .whereNull('revoked_at')
+      .update({ revoked_at: new Date(), revoked_reason: 'logout' });
+  }
 
   await writeAuthEvent({
     audience: 'staff',
     eventType: 'logout',
-    tenantId: context.tenantId,
-    userId: context.userId,
+    tenantId,
+    userId: session?.user_id ?? null,
     ip,
     userAgent,
     requestId,

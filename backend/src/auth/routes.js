@@ -4,12 +4,14 @@
  * Route wiring for all three identity populations (API.md §4).
  *
  * `resolveTenant` is passed in and applied per-route, only to the endpoints
- * that genuinely run before authentication (login, refresh, the two password-
- * reset steps) — not to `/logout` or `/switch-property`, which already carry a
- * verified `req.context` from `authenticate()` and would otherwise fail a
+ * that genuinely run before — or without needing — a verified `req.context`
+ * from `authenticate()`: login, refresh, the two password-reset steps, and
+ * (gap closure — see `service.js`'s own `staffLogout` header) logout. Not
+ * `/switch-property`, which genuinely needs the authenticated context's
+ * `userId` to look up `user_property_access`, and would otherwise fail a
  * legitimate authenticated request the instant the Host header didn't happen
  * to resolve (a stripped header behind some proxy, a client that only sends
- * `Authorization`), for a tenant lookup those handlers never use.
+ * `Authorization`).
  *
  * Every other route under a tree runs `authenticate(audience)` first, mounted
  * here per-route rather than router-wide, so `resolveTenant` and
@@ -35,9 +37,13 @@ function staffAuthRouter({ resolveTenant }) {
   // behind authenticate('staff'), and needs no tenant resolution either (the
   // challenge token itself, once real, carries what verification needs).
   router.post('/mfa/verify', controller.verifyMfa);
+  // Gap closure: public + cookie-gated, same shape as /refresh — see
+  // service.js's own staffLogout header for why this moved off
+  // authenticate('staff'). Revoking a session needs only the refresh
+  // cookie itself, never a fresh access token.
+  router.post('/logout', resolveTenant, controller.staffLogout);
 
   // Authenticated — tenant comes from the verified token, not the Host header.
-  router.post('/logout', authenticate('staff'), controller.staffLogout);
   router.post('/switch-property', authenticate('staff'), controller.switchProperty);
 
   return router;
