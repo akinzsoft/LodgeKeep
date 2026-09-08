@@ -180,3 +180,18 @@ export function roomMove(id, { newRoomId, reason }) {
     headers: { 'Idempotency-Key': idempotencyKey() },
   });
 }
+
+/**
+ * Gap closure (user-reported): a guest still checked in past their booked
+ * departure date — see `reservations/service.js`'s own `extendStay` header
+ * for why this is a deliberate, explicit front-desk action rather than
+ * something Night Audit infers on its own.
+ * @param {string} id @param {{newDepartureDate: string}} params
+ */
+export function extendStay(id, { newDepartureDate }) {
+  return request(`/reservations/${id}/extend-stay`, {
+    method: 'POST',
+    body: { new_departure_date: newDepartureDate },
+    headers: { 'Idempotency-Key': idempotencyKey() },
+  });
+}

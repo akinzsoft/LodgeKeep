@@ -756,6 +756,73 @@ async function roomMove({ trx, id, newRoomId, reason }) {
   return trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).first();
 }
 
+/**
+ * Gap closure (user-reported): a guest still checked in past their booked
+ * departure date was never billed for the extra night(s) — Night Audit's
+ * own room-charge step only posts a charge for a night that already has a
+ * `reservation_daily_rates` row, fixed at booking time to the ORIGINAL
+ * arrival/departure range (`createReservation`'s own header). Confirmed
+ * with the user rather than assumed: extending a stay is a deliberate
+ * front-desk decision, never something Night Audit should infer and bill
+ * on its own — so this is a new, explicit transition, not a change to
+ * Night Audit itself, which keeps billing exactly whatever
+ * `reservation_daily_rates` says, unchanged.
+ *
+ * Reuses the exact same last-room-race mechanism `createReservation`
+ * already uses (`reserveInventoryForDates`), but only for the NEW nights
+ * (the current departure date up to the new one) — extending a stay
+ * competes for the same room-type inventory a fresh booking for those
+ * dates would, and is rejected the same `OverbookingThresholdExceededError`
+ * way if none is left; the guest's own already-assigned physical room
+ * needs no separate availability check, since a room is never assigned to
+ * a future reservation before ITS OWN check-in (Phase 2's confirmed
+ * decision) — nothing else could be holding this specific room for those
+ * dates. `reservation_daily_rates` gets one new row per added night, its
+ * rate resolved through the same `resolveRate`/`rate_calendar` snapshot
+ * `createReservation` uses — the nights already posted/billed are never
+ * touched. Requires `checked_in` (an overstay is, by definition, a guest
+ * already in the building — this is not how a still-`confirmed` future
+ * reservation's dates get changed, which remains the flagged
+ * `PATCH /reservations/:id` gap). Night Audit bills the added night(s)
+ * exactly like any other booked night, the next time it runs — this
+ * function itself posts no charge.
+ */
+async function extendStay({ trx, id, newDepartureDate }) {
+  const reservation = await trx.table('reservations').where({ id }).first();
+  if (!reservation) return null;
+  if (reservation.status !== 'checked_in') {
+    throw new ValidationError('NOT_CHECKED_IN', 'Only a checked-in reservation can have its stay extended.');
+  }
+  if (!(newDepartureDate > reservation.departure_date)) {
+    throw new ValidationError(
+      'EXTENSION_NOT_AFTER_CURRENT_DEPARTURE',
+      'The new departure date must be after the current departure date.'
+    );
+  }
+
+  const addedStayDates = expandStayDates(reservation.departure_date, newDepartureDate);
+  await reserveInventoryForDates({ trx, roomTypeId: reservation.room_type_id, stayDates: addedStayDates });
+
+  const rateCode = await trx.table('rate_codes').where({ id: reservation.rate_code_id }).first();
+  const overrides = await trx
+    .table('rate_calendar')
+    .where({ rate_code_id: reservation.rate_code_id, room_type_id: reservation.room_type_id })
+    .whereIn('stay_date', addedStayDates);
+  const overrideByDate = new Map(overrides.map((o) => [String(o.stay_date), o]));
+
+  await trx.table('reservation_daily_rates').insert(
+    addedStayDates.map((stayDate) => ({
+      reservation_id: id,
+      stay_date: stayDate,
+      rate: resolveRate(rateCode, overrideByDate.get(stayDate)),
+      currency: rateCode.currency,
+    }))
+  );
+
+  await trx.table('reservations').where({ id }).update({ departure_date: newDepartureDate });
+  return trx.table('reservations').where({ id }).first();
+}
+
 // ---------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------
@@ -1000,6 +1067,7 @@ module.exports = {
   checkIn,
   checkOut,
   roomMove,
+  extendStay,
   getReservation,
   listReservations,
   listWaitlist,

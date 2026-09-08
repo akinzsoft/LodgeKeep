@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   listFreeRooms: vi.fn(),
   checkIn: vi.fn(),
   checkOut: vi.fn(),
+  extendStay: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -23,6 +24,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       listFreeRooms: mocks.listFreeRooms,
       checkIn: mocks.checkIn,
       checkOut: mocks.checkOut,
+      extendStay: mocks.extendStay,
     },
   };
 });
@@ -265,5 +267,54 @@ describe('<FrontDeskTab>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Confirm check-in' }));
 
     expect(mocks.checkIn).toHaveBeenCalledWith('1', { roomId: '10', overrideDirty: false });
+  });
+
+  /**
+   * Gap closure (user-reported): "the customer have not check out ... he
+   * suppose to pay for the number of night he as stay ... is it not
+   * supposed to increase" — In-House now has an explicit "Extend Stay"
+   * action so an overstaying guest's extra night(s) get billed by Night
+   * Audit, instead of silently never accruing (`service.extendStay`'s own
+   * header covers why this is deliberate, not automatic).
+   */
+  describe('Extend Stay', () => {
+    beforeEach(() => {
+      mocks.listInHouse.mockResolvedValue([{ ...RESERVATION, status: 'checked_in', departure_date: '2027-01-05' }]);
+    });
+
+    it('opens pre-filled with the reservation\'s current departure date and submits the new one', async () => {
+      mocks.extendStay.mockResolvedValue({ ...RESERVATION, status: 'checked_in', departure_date: '2027-01-06' });
+
+      render(<FrontDeskTab />);
+      await screen.findByText('ABC123');
+      await userEvent.click(screen.getByRole('tab', { name: 'In-House' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Extend Stay' }));
+
+      expect(await screen.findByText(/Currently booked through 2027-01-05/)).toBeInTheDocument();
+      expect(screen.getByLabelText('New departure date')).toHaveValue('2027-01-05');
+
+      await userEvent.clear(screen.getByLabelText('New departure date'));
+      await userEvent.type(screen.getByLabelText('New departure date'), '2027-01-06');
+      await userEvent.click(screen.getByRole('button', { name: 'Confirm extension' }));
+
+      expect(mocks.extendStay).toHaveBeenCalledWith('1', { newDepartureDate: '2027-01-06' });
+    });
+
+    it('shows the real backend error when the extension is rejected (e.g. no inventory for the added night)', async () => {
+      const { ApiError } = await import('../../../shared/api/ApiError.js');
+      mocks.extendStay.mockRejectedValue(
+        new ApiError({ code: 'BUSINESS_RULE_OVERBOOKING_THRESHOLD_EXCEEDED', message: 'No inventory remains for the added night.' })
+      );
+
+      render(<FrontDeskTab />);
+      await screen.findByText('ABC123');
+      await userEvent.click(screen.getByRole('tab', { name: 'In-House' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Extend Stay' }));
+      await userEvent.clear(screen.getByLabelText('New departure date'));
+      await userEvent.type(screen.getByLabelText('New departure date'), '2027-01-06');
+      await userEvent.click(screen.getByRole('button', { name: 'Confirm extension' }));
+
+      expect(await screen.findAllByText('No inventory remains for the added night.')).not.toHaveLength(0);
+    });
   });
 });

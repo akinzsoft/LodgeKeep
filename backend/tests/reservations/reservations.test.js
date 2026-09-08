@@ -1273,6 +1273,185 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
         .set('Authorization', `Bearer ${tokenFor()}`);
       expect(availability.body.data.minSellable).toBe(0);
     });
+
+    describe('gap closure (user-reported): extend stay — a guest still in-house past their booked departure', () => {
+      it('adds a new reservation_daily_rates row, updates departure_date, and reserves inventory for the added night', async () => {
+        const businessDate = '2026-08-27';
+        await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: businessDate });
+
+        const roomTypeId = await createRoomType(ctx.a, { code: 'EXTSTAY' });
+        const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'ES1' });
+        const rateCodeId = await createRateCode(ctx.a, { code: 'EXTSTAYRATE', baseRate: '5000.00' });
+
+        const created = await t.request
+          .post('/api/v1/reservations')
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({
+            guest_id: String(ctx.a.guests[0].id),
+            room_type_id: String(roomTypeId),
+            rate_code_id: String(rateCodeId),
+            arrival_date: businessDate,
+            departure_date: '2026-08-28',
+          });
+        const reservationId = created.body.data.id;
+
+        await t.request
+          .post(`/api/v1/reservations/${reservationId}/check-in`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ room_id: String(roomId) });
+
+        // The guest doesn't leave on the 28th — extend one more night.
+        const extended = await t.request
+          .post(`/api/v1/reservations/${reservationId}/extend-stay`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ new_departure_date: '2026-08-29' });
+        expect(extended.status).toBe(200);
+        expect(extended.body.data.departure_date).toBe('2026-08-29');
+
+        const dailyRates = await t.trx('reservation_daily_rates').where({ reservation_id: reservationId }).orderBy('stay_date');
+        expect(dailyRates.map((r) => r.stay_date)).toEqual(['2026-08-27', '2026-08-28']);
+        expect(dailyRates[1].rate).toBe('5000.00');
+
+        const inventoryRow = await t.trx('room_type_inventory').where({ room_type_id: roomTypeId, stay_date: '2026-08-28' }).first();
+        expect(inventoryRow.rooms_sold).toBe(1);
+
+        // Night Audit's own room-charge step (night-audit/service.js, step 4)
+        // posts a charge for any night with a `reservation_daily_rates` row —
+        // unconditional, already covered by night-audit.test.js's own
+        // suite — so proving the row now exists here (it didn't before this
+        // call) is the actual proof that the added night WILL be billed the
+        // next time Night Audit runs, which is what extendStay is
+        // responsible for. Not re-run here: this file shares one test
+        // transaction across many unrelated tests, and Night Audit refuses
+        // to run at all while ANY housekeeping discrepancy is unresolved
+        // anywhere on the property — a real, unrelated blocking condition
+        // from elsewhere in this shared transaction, not anything to do
+        // with extendStay.
+        const folio = await t.trx('folios').where({ reservation_id: reservationId, status: 'open' }).first();
+        expect(folio.balance).toBe('0.00'); // No charge posted yet — extendStay itself posts no charge.
+      });
+
+      it('rejects extending a reservation that is not checked in', async () => {
+        const roomTypeId = await createRoomType(ctx.a, { code: 'EXTNOTCHECKEDIN' });
+        await createRoom(ctx.a, { roomTypeId, roomNumber: 'ENC1' });
+        const rateCodeId = await createRateCode(ctx.a, { code: 'EXTNOTCHECKEDINRATE' });
+
+        const created = await t.request
+          .post('/api/v1/reservations')
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({
+            guest_id: String(ctx.a.guests[0].id),
+            room_type_id: String(roomTypeId),
+            rate_code_id: String(rateCodeId),
+            arrival_date: '2027-11-01',
+            departure_date: '2027-11-02',
+          });
+
+        const res = await t.request
+          .post(`/api/v1/reservations/${created.body.data.id}/extend-stay`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ new_departure_date: '2027-11-03' });
+        expect(res.status).toBe(400);
+        expect(res.body.error.code).toBe('VALIDATION_NOT_CHECKED_IN');
+      });
+
+      it('rejects a new departure date that is not after the current one', async () => {
+        const roomTypeId = await createRoomType(ctx.a, { code: 'EXTBACKWARDS' });
+        const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'EB1' });
+        const rateCodeId = await createRateCode(ctx.a, { code: 'EXTBACKWARDSRATE' });
+
+        const created = await t.request
+          .post('/api/v1/reservations')
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({
+            guest_id: String(ctx.a.guests[0].id),
+            room_type_id: String(roomTypeId),
+            rate_code_id: String(rateCodeId),
+            arrival_date: '2027-11-05',
+            departure_date: '2027-11-07',
+          });
+        await t.request
+          .post(`/api/v1/reservations/${created.body.data.id}/check-in`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ room_id: String(roomId) });
+
+        const res = await t.request
+          .post(`/api/v1/reservations/${created.body.data.id}/extend-stay`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ new_departure_date: '2027-11-07' });
+        expect(res.status).toBe(400);
+        expect(res.body.error.code).toBe('VALIDATION_EXTENSION_NOT_AFTER_CURRENT_DEPARTURE');
+      });
+
+      it('is rejected by the same last-room-race overbooking check as a fresh booking when no inventory remains for the added night', async () => {
+        const roomTypeId = await createRoomType(ctx.a, { code: 'EXTOVERSOLD' });
+        const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'EO1' });
+        const rateCodeId = await createRateCode(ctx.a, { code: 'EXTOVERSOLDRATE' });
+
+        const created = await t.request
+          .post('/api/v1/reservations')
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({
+            guest_id: String(ctx.a.guests[0].id),
+            room_type_id: String(roomTypeId),
+            rate_code_id: String(rateCodeId),
+            arrival_date: '2027-11-10',
+            departure_date: '2027-11-11',
+          });
+        await t.request
+          .post(`/api/v1/reservations/${created.body.data.id}/check-in`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ room_id: String(roomId) });
+
+        // The property's only room of this type is sold to someone else on
+        // the night this reservation is about to try to extend into.
+        await t.request
+          .post('/api/v1/reservations')
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({
+            guest_id: String(ctx.a.guests[0].id),
+            room_type_id: String(roomTypeId),
+            rate_code_id: String(rateCodeId),
+            arrival_date: '2027-11-11',
+            departure_date: '2027-11-12',
+          });
+
+        const res = await t.request
+          .post(`/api/v1/reservations/${created.body.data.id}/extend-stay`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ new_departure_date: '2027-11-12' });
+        expect(res.status).toBe(422);
+        expect(res.body.error.code).toBe('BUSINESS_RULE_OVERBOOKING_THRESHOLD_EXCEEDED');
+      });
+
+      it('is gated on front_desk.manage — a housekeeping-role user (users[1]\'s default grant, per fixtures.js) is refused', async () => {
+        const token = signAccessToken({
+          aud: 'staff',
+          sub: String(ctx.a.users[1].id),
+          tenant_id: String(ctx.a.id),
+          property_id: String(ctx.a.properties[0].id),
+        });
+        const res = await t.request
+          .post(`/api/v1/reservations/${reservationId}/extend-stay`)
+          .set('Authorization', `Bearer ${token}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ new_departure_date: '2099-01-01' });
+        expect(res.status).toBe(403);
+        expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+      });
+    });
   });
 
   // ====================================================================

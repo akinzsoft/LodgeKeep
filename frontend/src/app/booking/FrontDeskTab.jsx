@@ -33,6 +33,9 @@ export function FrontDeskTab({ isOffline = false } = {}) {
   const [movingRoom, setMovingRoom] = useState(null);
   const [moveForm, setMoveForm] = useState({ new_room_id: '', reason: '' });
 
+  const [extending, setExtending] = useState(null);
+  const [newDepartureDate, setNewDepartureDate] = useState('');
+
   const [submitting, setSubmitting] = useState(false);
   const [checkoutSuccess, setCheckoutSuccess] = useState(null);
 
@@ -157,6 +160,32 @@ export function FrontDeskTab({ isOffline = false } = {}) {
     }
   }
 
+  /**
+   * Gap closure (user-reported): "the customer have not check out ... he
+   * suppose to pay for the number of night he as stay ... is it not
+   * supposed to increase" — a guest still in-house past their booked
+   * departure date was never billed for the extra night(s), since Night
+   * Audit only bills nights already in `reservation_daily_rates`
+   * (`service.extendStay`'s own header). This posts no charge itself —
+   * it adds the extra night(s) to the reservation so Night Audit bills
+   * them normally, the next time it runs.
+   */
+  async function handleExtendStay(event) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await reservationsApi.extendStay(extending.id, { newDepartureDate });
+      setExtending(null);
+      setNewDepartureDate('');
+      await reloadBoard();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not extend this reservation’s stay.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className={styles.page}>
       <div className={styles.tabs} role="tablist" aria-label="Front desk boards">
@@ -264,6 +293,16 @@ export function FrontDeskTab({ isOffline = false } = {}) {
                   }}
                 >
                   Move Room
+                </Button>
+                <Button
+                  size="compact"
+                  variant="secondary"
+                  onClick={() => {
+                    setExtending(row);
+                    setNewDepartureDate(row.departure_date);
+                  }}
+                >
+                  Extend Stay
                 </Button>
                 <Button size="compact" onClick={() => setCheckingOut(row)}>
                   Check Out
@@ -440,6 +479,46 @@ export function FrontDeskTab({ isOffline = false } = {}) {
                 Confirm move
               </Button>
               <Button type="button" variant="ghost" onClick={() => setMovingRoom(null)}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
+
+      {extending && (
+        <Card title={`Extend stay — ${extending.confirmation_number}`}>
+          <p className={formStyles.disabledNotice}>
+            Currently booked through {extending.departure_date}. Extending posts no charge now — the added night(s)
+            are billed automatically the next time Night Audit runs.
+          </p>
+          {error && (
+            <p role="alert" className={formStyles.errorBanner}>
+              {error}
+            </p>
+          )}
+          <form className={formStyles.form} onSubmit={handleExtendStay}>
+            <label className={formStyles.field}>
+              <span className={formStyles.label}>New departure date</span>
+              <input
+                type="date"
+                className={formStyles.input}
+                value={newDepartureDate}
+                min={extending.departure_date}
+                onChange={(event) => setNewDepartureDate(event.target.value)}
+                required
+              />
+            </label>
+            {isOffline && (
+              <p role="alert" className={formStyles.errorBanner}>
+                You&rsquo;re offline — extending a stay is disabled until the connection returns.
+              </p>
+            )}
+            <div className={formStyles.actionsRow}>
+              <Button type="submit" loading={submitting} disabled={isOffline}>
+                Confirm extension
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setExtending(null)}>
                 Cancel
               </Button>
             </div>

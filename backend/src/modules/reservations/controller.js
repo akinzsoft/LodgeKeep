@@ -394,6 +394,34 @@ async function roomMove(req, res, next) {
   }
 }
 
+/**
+ * Gap closure (user-reported): "the customer have not check out ... the
+ * balance is not increasing" for a guest still in-house past their booked
+ * departure — see `service.extendStay`'s own header. `new_departure_date`
+ * is required, same shape as `roomMove`'s `new_room_id`/`reason`.
+ */
+async function extendStay(req, res, next) {
+  try {
+    const { id } = req.params;
+    const newDepartureDate = require_(req.body, 'new_departure_date');
+    const before = await service.getReservation({ context: req.context, id });
+    if (!before) return notFound(res);
+
+    await runMutation(req, res, {
+      operationType: 'reservations.extend_stay',
+      entityType: 'reservations',
+      entityId: id,
+      action: 'extend_stay',
+      handler: async (trx) => {
+        const reservation = await service.extendStay({ trx, id, newDepartureDate });
+        return { status: 200, body: ok(reservation) };
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createGuest,
   listGuests,
@@ -418,4 +446,5 @@ module.exports = {
   checkIn,
   checkOut,
   roomMove,
+  extendStay,
 };

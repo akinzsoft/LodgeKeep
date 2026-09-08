@@ -106,6 +106,13 @@ function reservationsRouter() {
   router.post('/reservations/:id/check-out', requirePermission('front_desk.manage'), controller.checkOut);
   router.post('/reservations/:id/room-move', requirePermission('front_desk.manage'), controller.roomMove);
 
+  // Gap closure (user-reported): a guest who overstays past their booked
+  // departure without checking out — see `service.extendStay`'s own
+  // header. Gated the same as check-in/check-out/room-move: this is a
+  // front-desk transition on an already-checked-in reservation, not a
+  // reservations.manage-level change to a future booking's dates.
+  router.post('/reservations/:id/extend-stay', requirePermission('front_desk.manage'), controller.extendStay);
+
   return router;
 }
 
