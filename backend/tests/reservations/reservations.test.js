@@ -1060,6 +1060,67 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       expect(departureRow.room_number).toBe('RC1');
     });
 
+    it('gap closure (user-reported): In-House and Departures include the real folio balance — the exact number checkout itself gates on', async () => {
+      const arrivalDate = '2026-08-27';
+      const departureDate = '2026-08-28';
+      await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: arrivalDate });
+
+      const roomTypeId = await createRoomType(ctx.a, { code: 'BALCOL' });
+      const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'BC1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'BALCOLRATE', baseRate: '75.00' });
+      const created = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: arrivalDate,
+          departure_date: departureDate,
+        });
+
+      const arrivalsRes = await t.request.get('/api/v1/front-desk/arrivals').set('Authorization', `Bearer ${tokenFor()}`);
+      const arrivalRow = arrivalsRes.body.data.find((r) => String(r.id) === String(created.body.data.id));
+      expect(arrivalRow.folio_balance).toBeUndefined();
+
+      await t.request
+        .post(`/api/v1/reservations/${created.body.data.id}/check-in`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ room_id: String(roomId) });
+
+      // check-in opens the folio but posts no charge on its own — post one
+      // for real, the same way a manual room charge or Night Audit would,
+      // so there is a genuine non-zero balance to assert against.
+      const foliosRes = await t.request
+        .get(`/api/v1/cashiering/reservations/${created.body.data.id}/folios`)
+        .set('Authorization', `Bearer ${tokenFor()}`);
+      const folioId = foliosRes.body.data[0].id;
+      await t.request
+        .post(`/api/v1/cashiering/folios/${folioId}/charges`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ type: 'room_charge', description: 'Room charge', amount: '75.00', business_date: arrivalDate });
+
+      // Compared against the folio's OWN reported balance, not a hardcoded
+      // literal — this tenant's fixture may (or may not) carry a seeded
+      // tax, and the point of this test is that the board shows the same
+      // number checkout gates on, not a specific tax computation.
+      const realFolio = (await t.request.get(`/api/v1/cashiering/folios/${folioId}`).set('Authorization', `Bearer ${tokenFor()}`))
+        .body.data;
+      expect(realFolio.balance).not.toBe('0.00');
+
+      const inHouseRes = await t.request.get('/api/v1/front-desk/in-house').set('Authorization', `Bearer ${tokenFor()}`);
+      const inHouseRow = inHouseRes.body.data.find((r) => String(r.id) === String(created.body.data.id));
+      expect(inHouseRow.folio_balance).toBe(realFolio.balance);
+
+      await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: departureDate });
+      const departuresRes = await t.request.get('/api/v1/front-desk/departures').set('Authorization', `Bearer ${tokenFor()}`);
+      const departureRow = departuresRes.body.data.find((r) => String(r.id) === String(created.body.data.id));
+      expect(departureRow.folio_balance).toBe(realFolio.balance);
+    });
+
     it('FD-2: check-in to a dirty room is blocked', async () => {
       await t.trx('rooms').where({ id: roomId }).update({ housekeeping_reported_status: 'dirty' });
       const res = await t.request

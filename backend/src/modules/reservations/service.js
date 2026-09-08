@@ -830,6 +830,14 @@ function selectReservationWithGuest(query) {
  * defensive choice, not because it should ever actually happen for a
  * checked_in reservation) — an inner join here would silently drop such a
  * row off the board entirely rather than showing it with no room number.
+ *
+ * Gap closure (user-reported): the folio balance too — specifically the
+ * OPEN folio, the exact same row `checkOut`'s own precondition (`Number(
+ * folio.balance) !== 0`) checks, so what this board shows is always the
+ * number checkout will actually gate on, never a different one. LEFT JOIN
+ * again — a checked_in reservation should always have one (opened at
+ * check-in), but showing "—" for a row this query didn't expect to lack
+ * one beats silently dropping it from the board.
  */
 function selectReservationWithGuestAndRoom(query) {
   return selectReservationWithGuest(query)
@@ -839,7 +847,12 @@ function selectReservationWithGuestAndRoom(query) {
       { type: 'left' }
     )
     .joinScoped('rooms', (join) => join.on('rooms.id', '=', 'reservation_rooms.room_id'), { type: 'left' })
-    .select('rooms.room_number as room_number');
+    .joinScoped(
+      'folios',
+      (join) => join.on('folios.reservation_id', '=', 'reservations.id').andOnVal('folios.status', '=', 'open'),
+      { type: 'left' }
+    )
+    .select('rooms.room_number as room_number', 'folios.balance as folio_balance', 'folios.currency as folio_currency');
 }
 
 /**

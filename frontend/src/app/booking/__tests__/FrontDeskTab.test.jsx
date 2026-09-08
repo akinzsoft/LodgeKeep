@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listInHouse: vi.fn(),
   listFreeRooms: vi.fn(),
   checkIn: vi.fn(),
+  checkOut: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -21,6 +22,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       listInHouse: mocks.listInHouse,
       listFreeRooms: mocks.listFreeRooms,
       checkIn: mocks.checkIn,
+      checkOut: mocks.checkOut,
     },
   };
 });
@@ -87,6 +89,65 @@ describe('<FrontDeskTab>', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Departures' }));
     expect(await screen.findByRole('columnheader', { name: 'Room' })).toBeInTheDocument();
     expect(await screen.findByText('204')).toBeInTheDocument();
+  });
+
+  /**
+   * Gap closure (user-reported): the real folio balance on Departures/
+   * In-House — the exact number checkout itself gates on — with no "Balance"
+   * column on Arrivals at all (no folio necessarily exists there).
+   */
+  it('shows the real folio balance on In-House, formatted as money', async () => {
+    mocks.listInHouse.mockResolvedValue([{ ...RESERVATION, status: 'checked_in', folio_balance: '75.00', folio_currency: 'NGN' }]);
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('tab', { name: 'In-House' }));
+    expect(await screen.findByRole('columnheader', { name: 'Balance' })).toBeInTheDocument();
+    expect(await screen.findByText(/₦75\.00/)).toBeInTheDocument();
+  });
+
+  it('does not show a Balance column on Arrivals', async () => {
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    expect(screen.queryByRole('columnheader', { name: 'Balance' })).not.toBeInTheDocument();
+  });
+
+  it('shows a real, unmissable warning in the check-out dialog when the folio has an outstanding balance', async () => {
+    mocks.listDepartures.mockResolvedValue([{ ...RESERVATION, status: 'checked_in', folio_balance: '75.00', folio_currency: 'NGN' }]);
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('tab', { name: 'Departures' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Check Out' }));
+
+    expect(await screen.findByText(/Outstanding balance of/)).toBeInTheDocument();
+  });
+
+  it('shows no balance warning in the check-out dialog once the balance is zero', async () => {
+    mocks.listDepartures.mockResolvedValue([{ ...RESERVATION, status: 'checked_in', folio_balance: '0.00', folio_currency: 'NGN' }]);
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('tab', { name: 'Departures' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Check Out' }));
+
+    expect(screen.queryByText(/Outstanding balance of/)).not.toBeInTheDocument();
+  });
+
+  it('shows the real backend error, not a blank failure, when a checkout attempt is rejected for an owing balance', async () => {
+    const { ApiError } = await import('../../../shared/api/ApiError.js');
+    mocks.listDepartures.mockResolvedValue([{ ...RESERVATION, status: 'checked_in', folio_balance: '75.00', folio_currency: 'NGN' }]);
+    mocks.checkOut.mockRejectedValue(
+      new ApiError({ code: 'BUSINESS_RULE_FOLIO_BALANCE_OWING', message: 'Cannot check out — folio balance of 75.00 is still owing.' })
+    );
+
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('tab', { name: 'Departures' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Check Out' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm check-out' }));
+
+    // Shown twice by design — the board's own toolbar banner AND, now,
+    // inside the check-out dialog itself, so it's unmissable right where
+    // the action happens. `findAllByText` rather than `findByText`.
+    expect(await screen.findAllByText('Cannot check out — folio balance of 75.00 is still owing.')).not.toHaveLength(0);
   });
 
   /**

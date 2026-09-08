@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Card, DataTable, Button } from '../../shared/components/index.js';
 import { reservationsApi, ApiError } from '../../shared/api/index.js';
+import { Money } from '../../shared/format/money.jsx';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
 
@@ -192,6 +193,30 @@ export function FrontDeskTab({ isOffline = false } = {}) {
           // dashes, which would misleadingly imply a room is already
           // assigned before check-in has happened.
           ...(board !== 'arrivals' ? [{ key: 'room_number', label: 'Room', render: (row) => row.room_number ?? '—' }] : []),
+          // Gap closure (user-reported): the real folio balance — the exact
+          // number checkout itself gates on (`service.js`'s own
+          // `selectReservationWithGuestAndRoom` header) — so staff can see
+          // at a glance, before even opening Check Out, whether a
+          // departure is actually ready to leave. DESIGN_SYSTEM.md §1's
+          // "tabular figures on every money column" via the shared `Money`
+          // component, not a raw string — never a literal currency symbol.
+          ...(board !== 'arrivals'
+            ? [
+                {
+                  key: 'folio_balance',
+                  label: 'Balance',
+                  align: 'right',
+                  render: (row) =>
+                    row.folio_balance == null ? (
+                      '—'
+                    ) : (
+                      <span className={Number(row.folio_balance) !== 0 ? formStyles.balanceOwing : undefined}>
+                        <Money amount={row.folio_balance} currencyCode={row.folio_currency} />
+                      </span>
+                    ),
+                },
+              ]
+            : []),
           // Gap closure (user-reported follow-up): Arrivals gets a
           // DIFFERENT column instead — the guest's preferred room, a
           // request, never an assignment (`service.js`'s own
@@ -298,6 +323,22 @@ export function FrontDeskTab({ isOffline = false } = {}) {
 
       {checkingOut && (
         <Card title={`Check out — ${checkingOut.confirmation_number}`}>
+          {/* Gap closure (user-reported): a real, unmissable warning right
+              where the action happens — not just the board's own toolbar
+              banner above, easy to miss once this dialog is open below it.
+              Backend still gates the real check — this is a proactive
+              heads-up, not a substitute for it. */}
+          {checkingOut.folio_balance != null && Number(checkingOut.folio_balance) !== 0 && (
+            <p role="alert" className={formStyles.errorBanner}>
+              Outstanding balance of <Money amount={checkingOut.folio_balance} currencyCode={checkingOut.folio_currency} /> —
+              checkout will be blocked until this is cleared (Cashiering).
+            </p>
+          )}
+          {error && (
+            <p role="alert" className={formStyles.errorBanner}>
+              {error}
+            </p>
+          )}
           <p className={formStyles.disabledNotice}>
             Leave the times blank for a standard checkout with no early/late fee.
           </p>
