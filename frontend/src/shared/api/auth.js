@@ -62,8 +62,20 @@ export function refresh({ propertyId } = {}) {
 }
 
 /** @returns {Promise<{revoked: boolean}>} */
+/**
+ * Gap closure (user-reported, live-tested): "sign out ... refresh the
+ * page ... take me back to the dashboard." The backend endpoint no longer
+ * requires (or reads) an access token at all — it revokes the session
+ * named by the refresh cookie alone (`backend/src/auth/service.js`'s own
+ * `staffLogout` header has the full story). `auth: false` here matches
+ * that: no Authorization header is sent, and this call is no longer a
+ * candidate for `client.js`'s auto-refresh-on-`AUTH_TOKEN_EXPIRED` retry,
+ * which the old, access-token-gated version of this endpoint could
+ * silently fail past (a malformed/absent token returns `AUTH_TOKEN_INVALID`,
+ * never retried) — the real root cause of the bug this closes.
+ */
 export function logout() {
-  return request('/auth/logout', { method: 'POST', body: {} });
+  return request('/auth/logout', { method: 'POST', body: {}, auth: false });
 }
 
 /** @returns {Promise<{accessToken: string, activePropertyId: string, role: string}>} */

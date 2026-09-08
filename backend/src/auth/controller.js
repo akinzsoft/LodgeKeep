@@ -97,12 +97,17 @@ async function staffRefresh(req, res, next) {
  * treated as an already-logged-out no-op (200, `revoked: false`) rather than
  * a validation error — the caller's goal ("stop being logged in") is already
  * true.
+ *
+ * Gap closure: no longer requires a valid access token at all — `tenantId`
+ * comes from `resolveTenant` (the Host header), same as `/login`/`/refresh`,
+ * not from `req.context`. See `service.js`'s own `staffLogout` header for
+ * the real, live-reproduced bug this closes.
  */
 async function staffLogout(req, res, next) {
   try {
     const refreshToken = readRefreshTokenCookie(req);
     const result = refreshToken
-      ? await service.staffLogout({ context: req.context, refreshToken, ...requestMeta(req) })
+      ? await service.staffLogout({ tenantId: req.tenantId, refreshToken, ...requestMeta(req) })
       : { revoked: false };
     clearRefreshTokenCookie(res);
     res.status(200).json(ok(result));

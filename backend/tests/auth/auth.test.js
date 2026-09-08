@@ -250,12 +250,17 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
         { expiresIn: -10 }
       );
 
+      // Gap closure: /auth/logout moved off authenticate('staff') (see
+      // service.js's own staffLogout header for why), so it's no longer a
+      // route where "expired access token → 401" applies at all — this
+      // general authenticate()-gate case now uses /switch-property
+      // instead, which genuinely still needs the authenticated context.
       const res = await t.request
-        .post('/api/v1/auth/logout')
+        .post('/api/v1/auth/switch-property')
         .set('Authorization', `Bearer ${expired}`)
-        .send({ refresh_token: 'irrelevant' });
-      // No X-Tenant-Slug needed here: /auth/logout is authenticated, not
-      // tenant-resolved (see routes.js) — tenant comes from the token itself.
+        .send({ property_id: loginable.propertyId });
+      // No X-Tenant-Slug needed here: /auth/switch-property is
+      // authenticated, not tenant-resolved — tenant comes from the token.
 
       expect(res.status).toBe(401);
       expect(res.body.error.code).toBe('AUTH_TOKEN_EXPIRED');
@@ -406,13 +411,12 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
         email: loginable.email,
         password: STRONG_PASSWORD,
       });
-      const accessToken = login.body.data.accessToken;
       const loginCookie = refreshCookieHeader(login);
 
-      const res = await t.request
-        .post('/api/v1/auth/logout')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .set('Cookie', loginCookie);
+      // Gap closure: /auth/logout is tenant-resolved now (see service.js's
+      // own staffLogout header), not authenticated — X-Tenant-Slug replaces
+      // the Authorization header this test used to need.
+      const res = await asTenantA(t.request.post('/api/v1/auth/logout')).set('Cookie', loginCookie);
 
       expect(res.status).toBe(200);
       expect(res.body.data.revoked).toBe(true);
@@ -426,16 +430,55 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
     });
 
     it('is a no-op (200, revoked: false) rather than an error when no cookie is present', async () => {
+      const res = await asTenantA(t.request.post('/api/v1/auth/logout'));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.revoked).toBe(false);
+    });
+
+    /**
+     * The actual bug (user-reported, live-tested): sign out appeared to
+     * work (the UI showed the login screen), but a page reload afterward
+     * restored the same dashboard session — because the OLD /auth/logout
+     * required a fresh access token, and any access-token problem other
+     * than a clean `AUTH_TOKEN_EXPIRED` (a malformed one, a missing one,
+     * one from a stale in-memory ref) meant the real, server-side session
+     * was never actually revoked. Proven here with NO Authorization header
+     * at all — the harshest real case — and confirmed the session is
+     * genuinely gone afterward via a real subsequent refresh attempt, not
+     * just a 200 response.
+     */
+    it('revokes the session from the cookie alone, with no access token needed at all', async () => {
       const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
         email: loginable.email,
         password: STRONG_PASSWORD,
       });
-      const accessToken = login.body.data.accessToken;
+      const loginCookie = refreshCookieHeader(login);
 
-      const res = await t.request.post('/api/v1/auth/logout').set('Authorization', `Bearer ${accessToken}`);
+      const res = await asTenantA(t.request.post('/api/v1/auth/logout')).set('Cookie', loginCookie);
+      // Deliberately no .set('Authorization', ...) at all.
 
       expect(res.status).toBe(200);
-      expect(res.body.data.revoked).toBe(false);
+      expect(res.body.data.revoked).toBe(true);
+
+      const refreshAfterLogout = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', loginCookie);
+      expect(refreshAfterLogout.status).toBe(401);
+      expect(refreshAfterLogout.body.error.code).toBe('AUTH_TOKEN_INVALID');
+    });
+
+    it('revokes the session from the cookie alone even with a malformed Authorization header (the AUTH_TOKEN_INVALID case the old logout could never recover from)', async () => {
+      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+        email: loginable.email,
+        password: STRONG_PASSWORD,
+      });
+      const loginCookie = refreshCookieHeader(login);
+
+      const res = await asTenantA(t.request.post('/api/v1/auth/logout'))
+        .set('Cookie', loginCookie)
+        .set('Authorization', 'Bearer this-is-not-a-real-token');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.revoked).toBe(true);
     });
   });
 
@@ -650,10 +693,14 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
 
       await t.trx('users').where({ id: userId }).update({ status: 'inactive' });
 
+      // Gap closure: /auth/logout moved off authenticate('staff') (see
+      // service.js's own staffLogout header) — a deactivated account can,
+      // and should, still be able to revoke its own lingering session, so
+      // this general authenticate()-gate case now uses /switch-property.
       const res = await t.request
-        .post('/api/v1/auth/logout')
+        .post('/api/v1/auth/switch-property')
         .set('Authorization', `Bearer ${accessToken}`)
-        .send({ refresh_token: 'anything' });
+        .send({ property_id: ctx.a.properties[0].id });
 
       expect(res.status).toBe(401);
       expect(res.body.error.code).toBe('AUTH_SESSION_INVALID');
