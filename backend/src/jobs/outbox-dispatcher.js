@@ -80,9 +80,32 @@ async function runOutboxDispatchSweep() {
   return tenants.length;
 }
 
-/** Registers the repeatable sweep job — call once at process startup. */
+const SWEEP_SCHEDULER_ID = 'outbox-sweep';
+
+/**
+ * Registers the repeatable sweep job — call once at process startup.
+ *
+ * Bug fix (found live, not shipped): `Queue#add(name, data, {repeat, jobId})`
+ * is BullMQ v4-era API. BullMQ v6 (this codebase's own installed version —
+ * `package.json`) renamed repeatable jobs to "Job Schedulers" — `#add()`'s
+ * own `repeat` option is a silent no-op against a v6 queue: it neither
+ * throws nor registers anything a running Worker will ever fire, and
+ * `jobId` inside `RepeatOptions` is explicitly deprecated in BullMQ's own
+ * type definitions. The old call genuinely completed without error, which
+ * is exactly why this went unnoticed — `Queue#getJobSchedulers()` (the v6
+ * equivalent of the old `getRepeatableJobs()`, itself removed from the
+ * `Queue` prototype entirely in v6) returned an empty array against the
+ * real dev Redis, confirming no scheduler had EVER actually been
+ * registered. The practical effect: every outbox event whose controller
+ * doesn't ALSO call `enqueueOutboxDispatch` reactively (`inviteUser`'s own
+ * documented "relies purely on the periodic sweep" precedent — which this
+ * session's own guest-password-reset and MFA-code passes both followed)
+ * has never been dispatched at all outside a manual sweep — not a gap
+ * specific to either of those features, a pre-existing one in the
+ * scheduling transport itself, surfaced by live-testing them.
+ */
 async function scheduleOutboxSweep() {
-  await outboxDispatchQueue().add(SWEEP_JOB_NAME, {}, { repeat: { every: SWEEP_INTERVAL_MS }, jobId: 'outbox-sweep' });
+  await outboxDispatchQueue().upsertJobScheduler(SWEEP_SCHEDULER_ID, { every: SWEEP_INTERVAL_MS }, { name: SWEEP_JOB_NAME, data: {} });
 }
 
 /** The worker process — one job handler for both trigger types. */
@@ -101,4 +124,11 @@ function startOutboxWorker() {
   );
 }
 
-module.exports = { enqueueOutboxDispatch, runOutboxDispatchSweep, scheduleOutboxSweep, startOutboxWorker };
+module.exports = {
+  enqueueOutboxDispatch,
+  runOutboxDispatchSweep,
+  scheduleOutboxSweep,
+  startOutboxWorker,
+  SWEEP_SCHEDULER_ID,
+  SWEEP_JOB_NAME,
+};
