@@ -18,6 +18,13 @@ jobs:
     # constraints, FK enforcement, transaction rollback, and row locking on the
     # last-room race, which a mock cannot stand in for (same reason local dev
     # runs MySQL via docker-compose rather than an in-memory substitute).
+    #
+    # Redis is here for the same reason, as of tests/jobs/outbox-dispatcher.test.js
+    # (the first live-BullMQ integration test in this codebase, ARCHITECTURE.md
+    # §14) — it needs a real Queue backed by a real Redis to prove a job
+    # scheduler is genuinely registered, which a mock cannot stand in for
+    # either. `redis-connection.js`'s own default (127.0.0.1:6379) needs no
+    # extra env vars here, matching this service's exposed port exactly.
     services:
       mysql:
         image: mysql:8
@@ -28,6 +35,15 @@ jobs:
           - 3306:3306
         options: >-
           --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
