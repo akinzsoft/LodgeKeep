@@ -19,6 +19,9 @@ function housekeepingRouter() {
   const router = Router();
 
   router.get('/housekeeping/board', requirePermission('housekeeping.view'), controller.listBoard);
+  // Gap closure (user-reported): every user holding the housekeeping role
+  // at this property — see controller.listAttendants's own header.
+  router.get('/housekeeping/attendants', requirePermission('housekeeping.view'), controller.listAttendants);
   router.post('/housekeeping/assignments', requirePermission('housekeeping.manage'), controller.createAssignment);
   router.patch('/housekeeping/assignments/:id', requirePermission('housekeeping.manage'), controller.updateAssignment);
 

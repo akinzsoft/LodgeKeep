@@ -130,6 +130,31 @@ async function listBoard({ context, businessDate }) {
   }));
 }
 
+/**
+ * Gap closure (user-reported): "all houseppers shld show ... i dont need to
+ * type anytin" — the assignment form took a raw attendant user id with no
+ * picker, since no staff-directory endpoint existed when this module was
+ * built (this file's own header once flagged it). `GET /users` (a later,
+ * separate gap closure — PLAN.md Phase 1's user management pass) exists
+ * now, but is gated on `setup.view`, a permission the `housekeeping` role
+ * itself does not hold (Phase 1's own confirmed decision: manager gets
+ * `setup.view`, not every operational role) — the one role that actually
+ * runs this board could not have called it. A narrower, purpose-built read
+ * instead: every user holding the `housekeeping` role at the active
+ * property, gated on `housekeeping.view` (the same permission this board's
+ * own read already requires), the same `user_property_access` join
+ * `users/service.js`'s own `listUsers` already established.
+ */
+async function listAttendants({ context }) {
+  const db = scopedDb().for(context);
+  return db
+    .table('user_property_access')
+    .where({ role: 'housekeeping' })
+    .joinScoped('users', (join) => join.on('user_property_access.user_id', '=', 'users.id'))
+    .select('users.id as id', 'users.email as email', 'users.first_name as first_name', 'users.last_name as last_name')
+    .orderBy('users.first_name');
+}
+
 // ---------------------------------------------------------------------
 // Housekeeping status reports & discrepancy detection
 // (PRODUCT_REQUIREMENTS.md §3.6's own discrepancy requirement)
@@ -281,6 +306,7 @@ module.exports = {
   createAssignment,
   updateAssignment,
   getAssignment,
+  listAttendants,
   listBoard,
   reportRoomStatus,
   listDiscrepancies,
