@@ -23,6 +23,10 @@ const { requirePermission } = require('../../auth');
 function profilesRouter() {
   const router = Router();
 
+  // Gap closure (user-reported): the active/inactive customer summary —
+  // see controller.getGuestActivitySummary's own header. Static path,
+  // registered before /guests/:id for the same reason /guests/search is.
+  router.get('/guests/activity-summary', requirePermission('reservations.view'), controller.getGuestActivitySummary);
   router.get('/guests/search', requirePermission('reservations.view'), controller.searchGuests);
   router.get('/guests/:id/stay-history', requirePermission('reservations.view'), controller.getGuestStayHistory);
   router.get('/guests/:id', requirePermission('reservations.view'), controller.getGuest);

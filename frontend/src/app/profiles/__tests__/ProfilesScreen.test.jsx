@@ -7,6 +7,7 @@ import { ApiError } from '../../../shared/api/ApiError.js';
 const mocks = vi.hoisted(() => ({
   searchGuests: vi.fn(),
   getGuestStayHistory: vi.fn(),
+  getGuestActivitySummary: vi.fn(),
   listGuests: vi.fn(),
 }));
 
@@ -14,7 +15,11 @@ vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return {
     ...actual,
-    profilesApi: { searchGuests: mocks.searchGuests, getGuestStayHistory: mocks.getGuestStayHistory },
+    profilesApi: {
+      searchGuests: mocks.searchGuests,
+      getGuestStayHistory: mocks.getGuestStayHistory,
+      getGuestActivitySummary: mocks.getGuestActivitySummary,
+    },
     reservationsApi: { listGuests: mocks.listGuests },
   };
 });
@@ -26,6 +31,7 @@ describe('<ProfilesScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listGuests.mockResolvedValue([]);
+    mocks.getGuestActivitySummary.mockResolvedValue({ active: 0, inactive: 0 });
   });
 
   /**
@@ -133,5 +139,78 @@ describe('<ProfilesScreen>', () => {
     render(<ProfilesScreen />);
     await screen.findByText('All guests');
     expect(screen.queryByRole('button', { name: 'Export to PDF' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * Gap closure (user-reported): "add summary report on the profile num of
+   * active and inactive customer. also i hsld be able to click to see
+   * active or inactive customers."
+   */
+  describe('active/inactive summary', () => {
+    it('shows the real active/inactive counts', async () => {
+      mocks.getGuestActivitySummary.mockResolvedValue({ active: 3, inactive: 11 });
+      render(<ProfilesScreen />);
+      expect(await screen.findByText('3')).toBeInTheDocument();
+      expect(screen.getByText('11')).toBeInTheDocument();
+      expect(screen.getByText('Active')).toBeInTheDocument();
+      expect(screen.getByText('Inactive')).toBeInTheDocument();
+    });
+
+    it('shows the real backend error if the summary fails to load, without breaking the rest of the screen', async () => {
+      mocks.listGuests.mockResolvedValue([GUEST]);
+      mocks.getGuestActivitySummary.mockRejectedValue(new ApiError({ code: 'INTERNAL_ERROR', message: 'Could not load the summary.' }));
+      render(<ProfilesScreen />);
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the summary.');
+      expect(await screen.findByText('jordan@example.com')).toBeInTheDocument();
+    });
+
+    it('clicking "Active" filters the list to active guests only, via a real API call', async () => {
+      mocks.getGuestActivitySummary.mockResolvedValue({ active: 1, inactive: 1 });
+      mocks.listGuests.mockImplementation((params) =>
+        Promise.resolve(params?.activity === 'active' ? [GUEST] : [GUEST, OTHER_GUEST])
+      );
+      render(<ProfilesScreen />);
+      await screen.findByText('ada@example.com');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Active guests' }));
+
+      expect(mocks.listGuests).toHaveBeenCalledWith({ activity: 'active' });
+      expect(await screen.findByText('Active guests')).toBeInTheDocument();
+      expect(screen.getByText('jordan@example.com')).toBeInTheDocument();
+      expect(screen.queryByText('ada@example.com')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Active guests' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('clicking "Inactive" filters the list to inactive guests only', async () => {
+      mocks.getGuestActivitySummary.mockResolvedValue({ active: 1, inactive: 1 });
+      mocks.listGuests.mockImplementation((params) =>
+        Promise.resolve(params?.activity === 'inactive' ? [OTHER_GUEST] : [GUEST, OTHER_GUEST])
+      );
+      render(<ProfilesScreen />);
+      await screen.findByText('jordan@example.com');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Inactive guests' }));
+
+      expect(mocks.listGuests).toHaveBeenCalledWith({ activity: 'inactive' });
+      expect(await screen.findByText('Inactive guests')).toBeInTheDocument();
+      expect(screen.getByText('ada@example.com')).toBeInTheDocument();
+      expect(screen.queryByText('jordan@example.com')).not.toBeInTheDocument();
+    });
+
+    it('"Show all guests" clears an activity filter and returns to the full list', async () => {
+      mocks.getGuestActivitySummary.mockResolvedValue({ active: 1, inactive: 1 });
+      mocks.listGuests.mockImplementation((params) =>
+        Promise.resolve(params?.activity === 'active' ? [GUEST] : [GUEST, OTHER_GUEST])
+      );
+      render(<ProfilesScreen />);
+      await screen.findByText('ada@example.com');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Active guests' }));
+      await screen.findByText('Active guests');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Show all guests' }));
+      expect(await screen.findByText('All guests')).toBeInTheDocument();
+      expect(screen.getByText('ada@example.com')).toBeInTheDocument();
+    });
   });
 });

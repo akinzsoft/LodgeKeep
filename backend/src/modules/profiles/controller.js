@@ -18,6 +18,14 @@ function requireQuery(query, field) {
   return value.trim();
 }
 
+async function getGuestActivitySummary(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.getGuestActivitySummary({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function searchGuests(req, res, next) {
   try {
     const query = requireQuery(req.query, 'q');
@@ -47,4 +55,4 @@ async function getGuestStayHistory(req, res, next) {
   }
 }
 
-module.exports = { searchGuests, getGuest, getGuestStayHistory };
+module.exports = { getGuestActivitySummary, searchGuests, getGuest, getGuestStayHistory };

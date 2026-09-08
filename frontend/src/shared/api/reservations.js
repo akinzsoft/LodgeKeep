@@ -23,8 +23,15 @@ function idempotencyKey() {
 // Guests
 // ---------------------------------------------------------------------
 
-export function listGuests() {
-  return request('/guests');
+/**
+ * Gap closure (user-reported): "active or inactive customers" — `activity`
+ * ('active'|'inactive') narrows the list; omitted returns every guest,
+ * unfiltered, the original behaviour.
+ * @param {{activity?: 'active'|'inactive'}} [params]
+ */
+export function listGuests(params = {}) {
+  const query = params.activity ? `?${new URLSearchParams({ activity: params.activity })}` : '';
+  return request(`/guests${query}`);
 }
 
 export function createGuest(body) {

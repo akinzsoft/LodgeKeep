@@ -8,6 +8,11 @@ import { request } from './client.js';
  * here.
  */
 
+/** Gap closure (user-reported): "num of active and inactive customer." @returns {Promise<{active: number, inactive: number}>} */
+export function getGuestActivitySummary() {
+  return request('/guests/activity-summary');
+}
+
 export function searchGuests(query) {
   const params = new URLSearchParams({ q: query });
   return request(`/guests/search?${params}`);
