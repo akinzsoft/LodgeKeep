@@ -34,6 +34,10 @@ const EVENT_TEMPLATE_KEYS = {
   // Gap closure (feature-dev): guest password-reset — the genuine, intended
   // use of `guestEmail`, unlike `staff.invited`'s borrowed one.
   'guest.password_reset_requested': 'guest_password_reset',
+  // Gap closure (user-reported): a real staff MFA login code — the
+  // recipient is staff, not a guest, the same borrowed-field reuse
+  // `staff.invited` already established.
+  'staff.mfa_code_requested': 'staff_mfa_code',
 };
 
 /**
@@ -69,6 +73,13 @@ const DEFAULT_TEMPLATES = {
       '<p>We received a request to reset your password for your account at {{propertyName}}.</p>' +
       '<p><a href="{{resetUrl}}">Reset your password</a></p>' +
       '<p>This link expires in {{expiresInHours}} hour(s). If you did not request this, you can safely ignore this email.</p>',
+  },
+  staff_mfa_code: {
+    subject: 'Your LodgeKeep verification code',
+    body_html:
+      '<p>Your verification code is:</p>' +
+      '<p style="font-size: 24px; font-weight: bold; letter-spacing: 4px;">{{code}}</p>' +
+      '<p>This code expires in {{expiresInMinutes}} minute(s). If you did not attempt to sign in, you can safely ignore this email.</p>',
   },
 };
 

@@ -76,19 +76,38 @@ class SessionInvalidError extends AppError {
 }
 
 /**
- * `POST /auth/mfa/verify` exists so the shape is fixed, but real TOTP
- * verification — and the `mfa_devices.secret` / `platform_users.mfa_secret`
- * encryption-at-rest story it depends on — is deferred past this pass. Every
- * account that requires MFA still gets a challenge and stops there, with one
- * documented exception: `src/auth/mfa.js`'s dev-only bypass code lets a
- * staff login resume outside production, since without it no admin/
- * super_admin account could ever complete login at all, even in
- * development. 501, not 500: this is a known, temporary gap in what the API
- * offers, not a server fault.
+ * `POST /auth/mfa/verify` exists so the shape is fixed. Real TOTP/
+ * authenticator-app verification — and the `mfa_devices.secret` /
+ * `platform_users.mfa_secret` encryption-at-rest story it depends on — is
+ * still deferred, so a PLATFORM MFA-verify attempt (which never holds a
+ * real challenge token to resume at all — `platformLogin` has no
+ * token-issuance path to resume into yet) still returns this. The STAFF
+ * path no longer does: a gap closure (user-reported) replaced the old
+ * fixed dev-only bypass code with a real, emailed 6-digit code, so a
+ * genuinely wrong/expired/already-used code for a valid staff challenge
+ * now gets `MfaCodeInvalidError` below, not this. 501, not 500: this is a
+ * known, temporary gap in what the API offers for the paths that still
+ * hit it, not a server fault.
  */
 class MfaNotImplementedError extends AppError {
   constructor() {
     super('AUTH_MFA_NOT_IMPLEMENTED', 'MFA verification is not yet available.', 501);
+  }
+}
+
+/**
+ * Gap closure (user-reported, live-tested): the real rejection for a
+ * staff MFA code that is wrong, expired, already used, or has exceeded
+ * `MFA_CODE_MAX_ATTEMPTS` (`src/auth/mfa.js`) — the STAFF counterpart to
+ * `MfaNotImplementedError` now that real verification exists for that
+ * path. One code for all of these, matching `TokenInvalidError`'s own
+ * "the true reason is recorded server-side in auth_events.failure_reason,
+ * not returned" reasoning — a caller learns only "this code did not work",
+ * never which specific case applied.
+ */
+class MfaCodeInvalidError extends AppError {
+  constructor() {
+    super('AUTH_MFA_CODE_INVALID', 'That verification code is incorrect or has expired.', 401);
   }
 }
 
@@ -134,6 +153,7 @@ module.exports = {
   UnauthenticatedError,
   SessionInvalidError,
   MfaNotImplementedError,
+  MfaCodeInvalidError,
   NoActivePropertyError,
   PermissionDeniedError,
   ValidationError,

@@ -6,24 +6,29 @@ import styles from './MfaChallengeScreen.module.css';
 
 /**
  * MfaChallengeScreen — PRODUCT_REQUIREMENTS.md §3.16: "MFA challenge as a
- * second step for roles that require it." Real TOTP verification is still
- * not built (`src/auth/errors.js`'s `MfaNotImplementedError` header) — the
- * one code `POST /auth/mfa/verify` can ever accept today is
- * `src/auth/mfa.js`'s dev-only bypass value, never valid outside a
- * non-production backend.
+ * second step for roles that require it."
  *
- * This screen always renders a real code-entry form and submits it for
- * real, with no frontend-side environment check of its own — the backend's
- * actual response (success outside production, or the same honest 501
- * everywhere else) is what should drive what a person sees here, per this
+ * Gap closure (user-reported, live-tested): "the verification code shld be
+ * send to the account email to login not a static code." `POST
+ * /auth/mfa/verify` now checks a real, emailed 6-digit code
+ * (`src/auth/mfa.js`/`service.js`'s `verifyStaffMfa`) — a wrong, expired,
+ * already-used, or attempts-exhausted code gets a real
+ * `AUTH_MFA_CODE_INVALID` 401, not the old `AUTH_MFA_NOT_IMPLEMENTED` 501
+ * every submission used to get. Real TOTP/authenticator-app enrollment is
+ * still not built — this closes the "no verification exists at all" gap
+ * with a real emailed code, not a QR-code flow.
+ *
+ * Still no frontend-side environment check of its own — the backend's
+ * actual response is what drives what a person sees here, per this
  * codebase's own "UI-level ... is convenience only, the API check is the
- * real one" rule. A wrong code, an expired challenge, or any submission
- * against a production backend surfaces that 501 as the same plain error
- * message DESIGN_SYSTEM.md §2 requires everywhere else, not a raw
- * exception string.
+ * real one" rule. `mfaDevOnlyCode` (outside production only) is shown as an
+ * additional disclosure beneath the form, the same shape
+ * `ForgotPasswordScreen` already uses for its own dev-only token — never a
+ * substitute for actually typing the code in, so a real client-side
+ * submission flow is always exercised, dev environment included.
  */
 export function MfaChallengeScreen() {
-  const { status, error, cancelMfaChallenge, verifyMfa } = useAuth();
+  const { status, error, cancelMfaChallenge, verifyMfa, mfaDevOnlyCode } = useAuth();
   const [code, setCode] = useState('');
   const isSubmitting = status === 'authenticating';
 
@@ -42,12 +47,18 @@ export function MfaChallengeScreen() {
         <div className={styles.card}>
           <h1 className={styles.title}>Verification required</h1>
           <p className={styles.body}>
-            This account requires multi-factor authentication. Enter your verification code to continue.
+            This account requires multi-factor authentication. We&rsquo;ve emailed you a verification code — enter it below to continue.
           </p>
 
           {error && (
             <p role="alert" className={styles.errorBanner}>
               {error.message}
+            </p>
+          )}
+
+          {mfaDevOnlyCode && (
+            <p className={styles.devNote}>
+              Dev-only (never shown outside a non-production environment): verification code <code>{mfaDevOnlyCode}</code>
             </p>
           )}
 

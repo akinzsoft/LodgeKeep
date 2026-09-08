@@ -130,12 +130,14 @@ export function AuthProvider({ children }) {
 
         if (result.status === 'mfa_challenge_required') {
           // TESTING.md AUTH-9's frontend counterpart: a challenge, not full
-          // access yet. Real TOTP verification is still a 501 stub
-          // (`src/auth/errors.js`'s MfaNotImplementedError) — the one thing
-          // `verifyMfa` below can actually complete is `src/auth/mfa.js`'s
-          // dev-only bypass code, never valid outside a non-production
-          // backend.
-          setMfaChallenge({ challengeToken: result.challengeToken, email });
+          // access yet. Gap closure (user-reported, live-tested): the
+          // backend now emails a real 6-digit code and, outside
+          // production only, also discloses it here as `dev_only_code` —
+          // the same disclosure shape every other credential-issuing
+          // endpoint in this codebase already uses
+          // (`requestPasswordReset` et al.) — `MfaChallengeScreen` shows
+          // it the same way `ForgotPasswordScreen` shows its own.
+          setMfaChallenge({ challengeToken: result.challengeToken, email, devOnlyCode: result.dev_only_code ?? null });
           setStatus(MFA_REQUIRED);
           return result;
         }
@@ -154,13 +156,15 @@ export function AuthProvider({ children }) {
   );
 
   /**
-   * Resumes the login `mfa_challenge_required` above paused. On a wrong
-   * code — or any submission against a production backend, where
-   * `isDevBypassCode` always returns false — the backend's real
-   * `AUTH_MFA_NOT_IMPLEMENTED` 501 lands in `error` and status returns to
+   * Resumes the login `mfa_challenge_required` above paused, against the
+   * real emailed code now (gap closure — see `login()`'s own comment
+   * above). On a wrong/expired/already-used code, the backend's real
+   * `AUTH_MFA_CODE_INVALID` 401 lands in `error` and status returns to
    * `MFA_REQUIRED` (not `idle`) so the pending challenge, and the screen
    * showing it, both survive a retry rather than bouncing back to the
-   * email/password form.
+   * email/password form. An invalid challenge token itself (expired,
+   * garbage) still surfaces the pre-existing `AUTH_MFA_NOT_IMPLEMENTED`
+   * 501 — that path is genuinely unchanged by this pass.
    */
   const verifyMfa = useCallback(
     async (code) => {
@@ -279,6 +283,10 @@ export function AuthProvider({ children }) {
     isAuthenticated: status === AUTHENTICATED,
     user,
     error,
+    // Gap closure: the real, emailed code — outside production only —
+    // for `MfaChallengeScreen`'s own disclosure, the same shape
+    // `ForgotPasswordScreen` already uses for its own dev-only token.
+    mfaDevOnlyCode: mfaChallenge?.devOnlyCode ?? null,
     login,
     verifyMfa,
     logout,

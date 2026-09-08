@@ -16,6 +16,7 @@ const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants, seedPlatformUser, PASSWORD_HASH } = require('../helpers/fixtures');
 const { hashPassword } = require('../../src/auth/password');
 const { issueRefreshToken, hashRefreshToken } = require('../../src/auth/tokens');
+const { hashMfaCode } = require('../../src/auth/mfa');
 const { COOKIE_NAME: REFRESH_COOKIE_NAME } = require('../../src/auth/refresh-cookie');
 const {
   ACCOUNT_THRESHOLD,
@@ -605,25 +606,44 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
   });
 
   // ==================================================================
-  // MFA dev bypass — src/auth/mfa.js. Not a TESTING.md-numbered case (no
-  // real MFA verification exists to number), but the only path today by
-  // which an admin/super_admin account can complete a real HTTP login, so
-  // its one production-safety property (never outside NODE_ENV!=='production')
-  // gets its own explicit failing-path coverage per CLAUDE.md's "auth needs
-  // every branch including failure paths" rule.
+  // Real staff MFA verification — src/auth/mfa.js, src/auth/service.js.
+  // Gap closure (user-reported, live-tested): "the verification code shld
+  // be send to the account email to login not a static code." Not a
+  // TESTING.md-numbered case by name, but the same "auth needs every
+  // branch including failure paths" discipline the old dev-bypass block
+  // already applied — now proven against a real emailed code, not a fixed
+  // string.
   // ==================================================================
-  describe('MFA dev bypass (src/auth/mfa.js)', () => {
+  describe('staff MFA verification (real emailed code)', () => {
     async function challenge() {
       const res = await asTenantA(t.request.post('/api/v1/auth/login')).send({
         email: adminNoMfa.email,
         password: STRONG_PASSWORD,
       });
-      return res.body.data.challengeToken;
+      return { challengeToken: res.body.data.challengeToken, devOnlyCode: res.body.data.dev_only_code };
     }
 
-    it('completes the login with the dev bypass code outside production', async () => {
-      const challengeToken = await challenge();
-      const res = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: '000000' });
+    it('issues a real code: stored hashed, emailed via the outbox, and disclosed as dev_only_code outside production', async () => {
+      const { challengeToken, devOnlyCode } = await challenge();
+      expect(typeof challengeToken).toBe('string');
+      expect(typeof devOnlyCode).toBe('string');
+      expect(devOnlyCode).toMatch(/^\d{6}$/);
+
+      const stored = await t.trx('mfa_login_codes').where({ user_id: adminNoMfa.id }).whereNull('used_at').orderBy('id', 'desc').first();
+      expect(stored).toBeDefined();
+      expect(stored.code_hash).toBe(hashMfaCode(devOnlyCode));
+      expect(stored.attempts).toBe(0);
+
+      const outboxEvent = await t.trx('outbox_events').where({ event_type: 'staff.mfa_code_requested' }).orderBy('id', 'desc').first();
+      expect(outboxEvent).toBeDefined();
+      const payload = typeof outboxEvent.payload === 'string' ? JSON.parse(outboxEvent.payload) : outboxEvent.payload;
+      expect(payload.guestEmail).toBe(adminNoMfa.email);
+      expect(payload.code).toBe(devOnlyCode);
+    });
+
+    it('completes the login with the real code', async () => {
+      const { challengeToken, devOnlyCode } = await challenge();
+      const res = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: devOnlyCode });
 
       expect(res.status).toBe(200);
       expect(res.body.data.status).toBe('ok');
@@ -636,34 +656,112 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
 
       const events = await authEventsFor(adminNoMfa.id);
       expect(events.some((e) => e.event_type === 'mfa_verified')).toBe(true);
+
+      const stored = await t.trx('mfa_login_codes').where({ code_hash: hashMfaCode(devOnlyCode) }).first();
+      expect(stored.used_at).not.toBeNull();
     });
 
-    it('rejects the wrong code with the standard 501, and audits it as mfa_failed', async () => {
-      const challengeToken = await challenge();
-      const res = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: '123456' });
+    it('rejects a wrong code with a real 401, and audits it as mfa_failed', async () => {
+      const { challengeToken, devOnlyCode } = await challenge();
+      const wrongCode = devOnlyCode === '111111' ? '222222' : '111111';
+      const res = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: wrongCode });
 
-      expect(res.status).toBe(501);
-      expect(res.body.error.code).toBe('AUTH_MFA_NOT_IMPLEMENTED');
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('AUTH_MFA_CODE_INVALID');
 
       const events = await authEventsFor(adminNoMfa.id);
       expect(events.some((e) => e.event_type === 'mfa_failed')).toBe(true);
     });
 
-    it('rejects an invalid or garbage challenge token with the standard 501', async () => {
+    it('rejects reuse of an already-verified code (single-use)', async () => {
+      const { challengeToken, devOnlyCode } = await challenge();
+      const first = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: devOnlyCode });
+      expect(first.status).toBe(200);
+
+      // A fresh login+challenge is needed for a second attempt in real use
+      // (staffLogin deletes/replaces the outstanding code on each new
+      // challenge) — but the SAME challenge token can still be replayed
+      // against the now-spent code row directly, which is exactly the
+      // single-use claim this proves.
+      const second = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: devOnlyCode });
+      expect(second.status).toBe(401);
+      expect(second.body.error.code).toBe('AUTH_MFA_CODE_INVALID');
+    });
+
+    it('rejects an expired code', async () => {
+      const { challengeToken, devOnlyCode } = await challenge();
+      await t.trx('mfa_login_codes').where({ code_hash: hashMfaCode(devOnlyCode) }).update({ expires_at: new Date(Date.now() - 1000) });
+
+      const res = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: devOnlyCode });
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('AUTH_MFA_CODE_INVALID');
+    });
+
+    it('locks out a code after MFA_CODE_MAX_ATTEMPTS wrong guesses, even once the right code is finally submitted', async () => {
+      const { challengeToken, devOnlyCode } = await challenge();
+      const wrongCode = devOnlyCode === '111111' ? '222222' : '111111';
+
+      for (let i = 0; i < 5; i += 1) {
+        const attempt = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: wrongCode });
+        expect(attempt.status).toBe(401);
+      }
+
+      const finalAttempt = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: devOnlyCode });
+      expect(finalAttempt.status).toBe(401);
+      expect(finalAttempt.body.error.code).toBe('AUTH_MFA_CODE_INVALID');
+
+      const stored = await t.trx('mfa_login_codes').where({ code_hash: hashMfaCode(devOnlyCode) }).first();
+      expect(stored.attempts).toBe(5);
+      expect(stored.used_at).toBeNull();
+    });
+
+    it('a repeat login attempt while already mid-challenge supersedes the earlier code — the old one no longer works', async () => {
+      const first = await challenge();
+      const second = await challenge();
+      expect(second.devOnlyCode).not.toBe(first.devOnlyCode);
+
+      const staleAttempt = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: first.challengeToken, code: first.devOnlyCode });
+      expect(staleAttempt.status).toBe(401);
+
+      const freshAttempt = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: second.challengeToken, code: second.devOnlyCode });
+      expect(freshAttempt.status).toBe(200);
+    });
+
+    it('rejects an invalid or garbage challenge token with the standard 501 (also the only path a platform MFA-verify attempt ever reaches)', async () => {
       const res = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: 'not-a-real-token', code: '000000' });
 
       expect(res.status).toBe(501);
       expect(res.body.error.code).toBe('AUTH_MFA_NOT_IMPLEMENTED');
     });
 
-    it('never accepts the bypass code when NODE_ENV is production, even with a valid challenge token', async () => {
-      const challengeToken = await challenge();
+    it('never discloses dev_only_code when NODE_ENV is production, though real verification still works', async () => {
       const originalNodeEnv = process.env.NODE_ENV;
       process.env.NODE_ENV = 'production';
       try {
-        const res = await t.request.post('/api/v1/auth/mfa/verify').send({ challenge_token: challengeToken, code: '000000' });
-        expect(res.status).toBe(501);
-        expect(res.body.error.code).toBe('AUTH_MFA_NOT_IMPLEMENTED');
+        // `resolveTenant` only honours the X-Tenant-Slug dev override
+        // outside production (`tenant-resolution.js`'s own header) — a
+        // real Host header, matching production's actual subdomain
+        // resolution, is what every other test in this describe block
+        // gets from X-Tenant-Slug for free.
+        const loginRes = await t.request
+          .post('/api/v1/auth/login')
+          .set('Host', `${ctx.a.slug}.${process.env.APP_DOMAIN}`)
+          .send({ email: adminNoMfa.email, password: STRONG_PASSWORD });
+        expect(loginRes.body.data.dev_only_code).toBeNull();
+
+        // The real code still exists in the database (it was still really
+        // emailed via the outbox) — read it directly, the same way a real
+        // client in production would only ever see it via the actual
+        // email, never this response.
+        const stored = await t.trx('mfa_login_codes').where({ user_id: adminNoMfa.id }).whereNull('used_at').orderBy('id', 'desc').first();
+        const outboxEvent = await t.trx('outbox_events').where({ event_type: 'staff.mfa_code_requested' }).orderBy('id', 'desc').first();
+        const payload = typeof outboxEvent.payload === 'string' ? JSON.parse(outboxEvent.payload) : outboxEvent.payload;
+        expect(stored.code_hash).toBe(hashMfaCode(payload.code));
+
+        const verifyRes = await t.request
+          .post('/api/v1/auth/mfa/verify')
+          .send({ challenge_token: loginRes.body.data.challengeToken, code: payload.code });
+        expect(verifyRes.status).toBe(200);
       } finally {
         process.env.NODE_ENV = originalNodeEnv;
       }

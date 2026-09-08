@@ -55,7 +55,7 @@ describe('<MfaChallengeScreen>', () => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
   });
 
-  it('renders a real code-entry form — src/auth/mfa.js\'s dev-only bypass makes verification real, if not for every code', () => {
+  it('renders a real code-entry form for the real, emailed code', () => {
     render(
       <AuthProvider>
         <MfaChallengeScreen />
@@ -64,6 +64,42 @@ describe('<MfaChallengeScreen>', () => {
     expect(screen.getByRole('heading', { name: 'Verification required' })).toBeInTheDocument();
     expect(screen.getByRole('textbox')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Verify' })).toBeInTheDocument();
+  });
+
+  /**
+   * Gap closure (user-reported, live-tested): "the verification code shld
+   * be send to the account email to login not a static code."
+   */
+  it('shows the real dev-only code as a disclosure, never a substitute for the form', async () => {
+    mocks.login.mockResolvedValue({ status: 'mfa_challenge_required', challengeToken: 'challenge-abc', dev_only_code: '482913' });
+
+    render(
+      <AuthProvider>
+        <Harness />
+      </AuthProvider>
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'trigger-login' }));
+    await screen.findByRole('heading', { name: 'Verification required' });
+
+    expect(screen.getByText('482913')).toBeInTheDocument();
+    // The disclosure never replaces the real form — still a real textbox to type into.
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+  });
+
+  it('shows no disclosure at all when the backend discloses no code (production)', async () => {
+    mocks.login.mockResolvedValue({ status: 'mfa_challenge_required', challengeToken: 'challenge-abc', dev_only_code: null });
+
+    render(
+      <AuthProvider>
+        <Harness />
+      </AuthProvider>
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'trigger-login' }));
+    await screen.findByRole('heading', { name: 'Verification required' });
+
+    expect(screen.queryByText(/Dev-only/)).not.toBeInTheDocument();
   });
 
   it('submits the entered code against POST /auth/mfa/verify and reaches authenticated on success', async () => {
@@ -96,10 +132,10 @@ describe('<MfaChallengeScreen>', () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Verification required' })).not.toBeInTheDocument());
   });
 
-  it('shows the backend\'s real 501 as a plain error message on a wrong code, and stays on the challenge screen', async () => {
+  it('shows the backend\'s real rejection as a plain error message on a wrong code, and stays on the challenge screen', async () => {
     mocks.login.mockResolvedValue({ status: 'mfa_challenge_required', challengeToken: 'challenge-abc' });
     mocks.verifyMfa.mockRejectedValue(
-      new ApiError({ code: 'AUTH_MFA_NOT_IMPLEMENTED', message: 'MFA verification is not yet available.' })
+      new ApiError({ code: 'AUTH_MFA_CODE_INVALID', message: 'That verification code is incorrect or has expired.' })
     );
 
     render(
@@ -114,7 +150,7 @@ describe('<MfaChallengeScreen>', () => {
     await userEvent.type(screen.getByRole('textbox'), '123456');
     await userEvent.click(screen.getByRole('button', { name: 'Verify' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('MFA verification is not yet available.');
+    expect(await screen.findByRole('alert')).toHaveTextContent('That verification code is incorrect or has expired.');
     expect(screen.getByRole('heading', { name: 'Verification required' })).toBeInTheDocument();
   });
 

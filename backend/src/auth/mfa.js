@@ -2,34 +2,37 @@
 
 /**
  * MFA challenge issuance and verification — PRODUCT_REQUIREMENTS.md §3.16
- * ("MFA mandatory for admin/super_admin, no opt-out"). Real TOTP secret
- * generation, enrollment, and verification are NOT built here — see
- * `errors.js`'s `MfaNotImplementedError` header for that gap. This file's
- * only real job is minting and checking the short-lived challenge token
- * `staffLogin` issues instead of full access tokens whenever
- * `roleRequiresMfa`/`user.mfa_enabled` triggers a challenge (`service.js`'s
- * `mfa_challenge_required` branch), plus a single, explicitly dev-only
- * bypass code that lets a real MFA-required account (admin/super_admin)
- * actually finish logging in outside production. Before this file existed,
- * no admin/super_admin account could complete login at all — not even in
- * development — which is a real gap for anyone needing to exercise an
- * admin-only screen (Setup's `setup.manage`, for one) through a browser
- * rather than the test suite's direct-token-minting harness.
+ * ("MFA mandatory for admin/super_admin, no opt-out").
  *
- * `isDevBypassCode` is gated on `process.env.NODE_ENV !== 'production'`
- * ONLY — a literal string comparison, never a separate feature flag that
- * could be left on by accident — the same pattern `service.js`'s
- * `requestPasswordReset` already uses to expose its own dev-only reset
- * token outside production. In production this always returns `false`, so
- * the mfa-verify endpoint falls straight through to the exact
- * `501 AUTH_MFA_NOT_IMPLEMENTED` it has always returned — this file changes
- * no production behaviour at all.
+ * Gap closure (user-reported, live-tested): "the verification code shld be
+ * send to the account email to login not a static code." This file used to
+ * expose only a fixed `000000` dev-only bypass — no real check existed at
+ * all outside a hardcoded string comparison, and nothing was ever emailed.
+ * `generateMfaCode`/`hashMfaCode` are now the real thing: a random 6-digit
+ * code, actually emailed via the outbox (`service.js`'s `staffLogin`), and
+ * actually verified against a stored, hashed, expiring, single-use row
+ * (`mfa_login_codes`, `service.js`'s `verifyStaffMfa`) — in every
+ * environment, not just outside production. See `errors.js`'s
+ * `MfaCodeInvalidError` for the real rejection path a wrong/expired code
+ * now takes.
+ *
+ * This file's OWN job stays narrow: mint and verify the short-lived
+ * challenge token `staffLogin` issues instead of full access tokens
+ * whenever `roleRequiresMfa`/`user.mfa_enabled` triggers a challenge — the
+ * code itself, and its email delivery, live in `service.js`, matching
+ * where `requestPasswordReset`/`completePasswordReset` already keep the
+ * identical shape of logic for password resets.
+ *
+ * Real TOTP/authenticator-app enrollment (`mfa_devices.secret`) is still
+ * not built — this closes the "no verification exists at all" gap with a
+ * real emailed code, not a QR-code/authenticator flow; that remains
+ * separate, larger, deferred scope, unchanged by this pass.
  *
  * Platform login (`platformLogin`) never calls `signMfaChallengeToken` — it
  * has no token-issuance path to resume into once "verified" at all yet (see
- * that function's own header), so this bypass only ever completes a STAFF
- * login. A platform MFA-verify attempt still falls through to
- * `MfaNotImplementedError`, unchanged.
+ * that function's own header), so a platform MFA-verify attempt still
+ * falls through to `MfaNotImplementedError`, entirely unchanged by this
+ * pass — only the staff path gains real verification.
  */
 
 const jwt = require('jsonwebtoken');
@@ -38,11 +41,11 @@ const crypto = require('crypto');
 const CHALLENGE_TTL = '5m';
 const CHALLENGE_AUD = 'staff_mfa_challenge';
 
-// Fixed and documented, never read from an environment variable — a
-// misconfigured or leaked env var could otherwise enable this in a
-// deployment that only forgot to set NODE_ENV=production. The NODE_ENV
-// check in `isDevBypassCode` is the only gate.
-const DEV_MFA_BYPASS_CODE = '000000';
+/** How long an emailed code stays valid — shorter than a password-reset link (1h), matching the "use it right away" nature of an OTP. */
+const MFA_CODE_TTL_MINUTES = 10;
+
+/** Wrong guesses a single issued code tolerates before it's treated as spent regardless of what's submitted next — see the migration's own header for why this isn't folded into lockout.js's existing dimensions. */
+const MFA_CODE_MAX_ATTEMPTS = 5;
 
 function secret() {
   const value = process.env.JWT_SECRET;
@@ -77,12 +80,28 @@ function verifyMfaChallengeToken(token) {
 }
 
 /**
- * True only outside production and only for the exact dev bypass code —
- * the entire "MFA verification" this codebase performs today. See this
- * file's own header for why a real TOTP check isn't built here yet.
+ * A real 6-digit numeric code — `crypto.randomInt`, not `Math.random`, for
+ * the same "cryptographically strong, not merely plausible-looking"
+ * reasoning every other credential in this codebase already follows —
+ * plus its SHA-256 digest, the same hash-never-plaintext shape
+ * `password_resets`/`guest_password_resets`/`user_invitations` all use.
+ * Zero-padded so a code starting with one or more zeros is still exactly
+ * 6 digits, never silently shorter.
  */
-function isDevBypassCode(code) {
-  return process.env.NODE_ENV !== 'production' && code === DEV_MFA_BYPASS_CODE;
+function generateMfaCode() {
+  const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+  return { code, hash: hashMfaCode(code) };
 }
 
-module.exports = { signMfaChallengeToken, verifyMfaChallengeToken, isDevBypassCode, DEV_MFA_BYPASS_CODE };
+function hashMfaCode(code) {
+  return crypto.createHash('sha256').update(code).digest('hex');
+}
+
+module.exports = {
+  signMfaChallengeToken,
+  verifyMfaChallengeToken,
+  generateMfaCode,
+  hashMfaCode,
+  MFA_CODE_TTL_MINUTES,
+  MFA_CODE_MAX_ATTEMPTS,
+};

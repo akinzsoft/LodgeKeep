@@ -64,6 +64,11 @@ const TABLE_SCOPES = Object.freeze({
   mfa_devices: { scope: SCOPES.TENANT },
   user_invitations: { scope: SCOPES.PROPERTY },
 
+  // Gap closure: real emailed MFA login codes (20260916090000_create_mfa_login_codes)
+  // — TENANT_SCOPED, matching password_resets above (no active property
+  // exists yet at the point a login challenge is issued).
+  mfa_login_codes: { scope: SCOPES.TENANT },
+
   // Auth audit — 20260904101500_create_auth_events
   //
   // The one table that carries tenant_id and property_id while declaring
