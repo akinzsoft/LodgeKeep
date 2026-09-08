@@ -11,6 +11,7 @@ import { HomeDashboard } from './app/dashboard/HomeDashboard.jsx';
 import { SetupScreen } from './app/setup/SetupScreen.jsx';
 import { BookingScreen } from './app/booking/BookingScreen.jsx';
 import { HousekeepingScreen } from './app/housekeeping/HousekeepingScreen.jsx';
+import { RoomsScreen } from './app/rooms/RoomsScreen.jsx';
 import { ReportingScreen } from './app/reporting/ReportingScreen.jsx';
 import { CashieringScreen } from './app/cashiering/CashieringScreen.jsx';
 import { NightAuditScreen } from './app/night-audit/NightAuditScreen.jsx';
@@ -245,6 +246,8 @@ function Demo() {
         <BookingScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} />
       ) : activeItemKey === 'housekeeping' ? (
         <HousekeepingScreen isOffline={!isOnline} />
+      ) : activeItemKey === 'rooms' ? (
+        <RoomsScreen activeProperty={activePropertyRecord} />
       ) : activeItemKey === 'reports' ? (
         <ReportingScreen activePropertyId={user.activePropertyId} />
       ) : activeItemKey === 'cashiering' ? (
