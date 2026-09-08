@@ -169,9 +169,52 @@ async function getGuest({ context, id }) {
   return db.table('guests').where({ id }).first();
 }
 
-async function listGuests({ context }) {
+/**
+ * Gap closure (user-reported): "num of active and inactive customer ...
+ * click to see active or inactive customers." Confirmed with the user
+ * before building — `guests.status` (active/merged/anonymised) is a GDPR
+ * record-lifecycle flag, not a customer-activity concept, and nothing in
+ * this codebase ever writes `merged`/`anonymised`, so every guest is
+ * "active" by that field alone; a report built on it would always read
+ * 100%/0%. "Active" here means something real instead: at least one
+ * reservation (any status) with an arrival date in the last 12 months.
+ * Pure — exported for direct unit testing, no clock mocking needed at the
+ * DB layer — `now` defaults to the real clock but is overridable for tests.
+ */
+function activityCutoffDate(now = new Date()) {
+  const cutoff = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - 12);
+  return cutoff.toISOString().slice(0, 10);
+}
+
+/**
+ * Every guest id with at least one reservation arriving on/after the
+ * 12-month cutoff above — deliberately no upper bound, so a guest with a
+ * reservation arriving next month or next year counts as active too, not
+ * only one arriving in the past 12 months. Excluding a guest with a real
+ * upcoming stay from "active" would be a worse report than the one this
+ * closes, even though it reads narrower than the literal "last 12 months"
+ * phrasing. `acrossProperties()` since a guest (TENANT_SCOPED) can have
+ * stays at more than one property, the same reasoning `getGuestStayHistory`
+ * (`profiles/service.js`) already uses for its own tenant-wide read. Shared
+ * by `listGuests`'s own `activity` filter below and `profiles/service.js`'s
+ * `getGuestActivitySummary` (a cross-module service-to-service call, the
+ * same shape that file's own `getGuest` re-export already establishes).
+ */
+async function getActiveGuestIds({ context }) {
   const db = scopedDb().for(context);
-  return db.table('guests').where({ status: 'active' }).orderBy('last_name');
+  const rows = await db.acrossProperties().table('reservations').where('arrival_date', '>=', activityCutoffDate()).select('guest_id');
+  return new Set(rows.map((r) => String(r.guest_id)));
+}
+
+/** @param {'active'|'inactive'} [activity] Optional — omitted returns every active-status guest, unfiltered by activity (the original Phase 2 behaviour). */
+async function listGuests({ context, activity }) {
+  const db = scopedDb().for(context);
+  const guests = await db.table('guests').where({ status: 'active' }).orderBy('last_name');
+  if (activity !== 'active' && activity !== 'inactive') return guests;
+
+  const activeIds = await getActiveGuestIds({ context });
+  return guests.filter((guest) => activeIds.has(String(guest.id)) === (activity === 'active'));
 }
 
 // ---------------------------------------------------------------------
@@ -1089,6 +1132,8 @@ module.exports = {
   createGuest,
   getGuest,
   listGuests,
+  activityCutoffDate,
+  getActiveGuestIds,
   checkAvailability,
   reserveInventoryForDates,
   releaseInventoryForDates,

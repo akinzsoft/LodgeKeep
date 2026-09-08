@@ -18,6 +18,59 @@
   gap: var(--space-5);
 }
 
+/* Gap closure: "add summary report ... num of active and inactive
+   customer ... click to see active or inactive customers" — each stat
+   doubles as a filter toggle button, `--domain-guest` (tokens.css:
+   "profiles, guests, CRM") marking the pressed one, the same domain
+   accent `IconBadge` already uses elsewhere on this screen's module. */
+.summaryRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.summaryStat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 8rem;
+  min-height: var(--control-h-touch);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+
+.summaryStat:hover {
+  border-color: var(--domain-guest);
+}
+
+.summaryStat[aria-pressed='true'] {
+  border-color: var(--domain-guest);
+  background: var(--domain-guest-tint);
+}
+
+.summaryStat:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.summaryValue {
+  font-size: var(--text-kpi-size);
+  line-height: var(--text-kpi-line);
+  font-weight: var(--text-kpi-weight);
+  color: var(--text-primary);
+}
+
+.summaryLabel {
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  color: var(--text-secondary);
+}
+
 /* Gap closure: "export to PDF" — the browser's own print dialog (its
    "Save as PDF" destination produces a real PDF, no new library needed;
    see AppShell/Sidebar/TopBar/Footer's own `@media print` rules for the

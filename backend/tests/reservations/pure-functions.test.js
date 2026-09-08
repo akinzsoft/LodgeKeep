@@ -9,7 +9,7 @@
  * reservations.test.js` exercises for real over HTTP instead.
  */
 
-const { generateUlid, expandStayDates, isValidTransition, computeEarlyLateFee } = require('../../src/modules/reservations/service');
+const { generateUlid, expandStayDates, isValidTransition, computeEarlyLateFee, activityCutoffDate } = require('../../src/modules/reservations/service');
 
 describe('generateUlid (ARCHITECTURE.md §10)', () => {
   it('produces a 26-character string from Crockford\'s base32 alphabet', () => {
@@ -43,6 +43,25 @@ describe('expandStayDates', () => {
 
   it('crosses a month boundary correctly', () => {
     expect(expandStayDates('2026-01-30', '2026-02-02')).toEqual(['2026-01-30', '2026-01-31', '2026-02-01']);
+  });
+});
+
+/**
+ * Gap closure (user-reported): "active/inactive customer" — confirmed with
+ * the user as "a reservation arriving in the last 12 months," a pure
+ * date computation exported for exactly this direct-test discipline.
+ */
+describe('activityCutoffDate (gap closure: active/inactive customer report)', () => {
+  it('is exactly 12 months before the given date', () => {
+    expect(activityCutoffDate(new Date('2026-09-08T12:00:00Z'))).toBe('2025-09-08');
+  });
+
+  it('crosses a year boundary correctly', () => {
+    expect(activityCutoffDate(new Date('2026-01-15T00:00:00Z'))).toBe('2025-01-15');
+  });
+
+  it('handles a leap-day "now" without throwing (Feb 29 has no exact same day 12 months earlier)', () => {
+    expect(activityCutoffDate(new Date('2028-02-29T00:00:00Z'))).toBe('2027-03-01');
   });
 });
 

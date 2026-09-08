@@ -59,7 +59,8 @@ async function createGuest(req, res, next) {
 
 async function listGuests(req, res, next) {
   try {
-    res.status(200).json(ok(await service.listGuests({ context: req.context })));
+    const activity = req.query?.activity;
+    res.status(200).json(ok(await service.listGuests({ context: req.context, activity })));
   } catch (error) {
     next(error);
   }

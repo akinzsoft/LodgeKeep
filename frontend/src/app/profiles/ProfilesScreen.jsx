@@ -34,14 +34,27 @@ import formStyles from './ProfilesForm.module.css';
  * file's own `.module.css` and `app/shell`'s `@media print` rules for the
  * two halves of that (hiding this screen's own toolbar; hiding the app
  * chrome around it).
+ *
+ * Gap closure (user-reported): "add summary report ... num of active and
+ * inactive customer ... click to see active or inactive customers." A
+ * plain two-stat summary — built directly here, not `KPICard` (that
+ * component is documented as presentation-only, no click behaviour, and
+ * used across the dashboard; bolting an `onClick` onto it for one screen
+ * would stretch a shared component past its own contract for a single
+ * caller) — with each stat doubling as a filter toggle
+ * (`aria-pressed`), the third view alongside "all guests" and "search",
+ * mutually exclusive with both (`filterMode`).
  */
 export function ProfilesScreen() {
   const [allGuests, setAllGuests] = useState(null);
   const [allGuestsError, setAllGuestsError] = useState(null);
+  const [activitySummary, setActivitySummary] = useState(null);
+  const [activitySummaryError, setActivitySummaryError] = useState(null);
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState(null);
-  const [searchError, setSearchError] = useState(null);
-  const [searching, setSearching] = useState(false);
+  const [filterMode, setFilterMode] = useState(null); // null | 'search' | 'active' | 'inactive'
+  const [filteredGuests, setFilteredGuests] = useState(null);
+  const [filterError, setFilterError] = useState(null);
+  const [filtering, setFiltering] = useState(false);
 
   const [selectedGuest, setSelectedGuest] = useState(null);
   const [stayHistory, setStayHistory] = useState(null);
@@ -55,32 +68,58 @@ export function ProfilesScreen() {
         setAllGuests([]);
         setAllGuestsError(caught instanceof ApiError ? caught.message : 'Could not load guests.');
       });
+    profilesApi
+      .getGuestActivitySummary()
+      .then(setActivitySummary)
+      .catch((caught) => {
+        setActivitySummary(null);
+        setActivitySummaryError(caught instanceof ApiError ? caught.message : 'Could not load the guest activity summary.');
+      });
   }, []);
 
-  // `results` is only ever set by a submitted search; while it's null, the
-  // full list (fetched on mount) is what's shown — "search narrows it"
-  // rather than "search is the only way to see anyone."
-  const displayedGuests = results ?? allGuests;
-  const isSearchActive = results !== null;
+  // `filteredGuests` is only ever set by a submitted search or an activity
+  // click; while it's null, the full list (fetched on mount) is what's
+  // shown — filtering narrows it, never the only way to see anyone.
+  const displayedGuests = filteredGuests ?? allGuests;
+  const isFiltered = filterMode !== null;
 
   async function handleSearch(event) {
     event.preventDefault();
-    setSearching(true);
-    setSearchError(null);
+    setFiltering(true);
+    setFilterError(null);
     try {
-      setResults(await profilesApi.searchGuests(query));
+      setFilteredGuests(await profilesApi.searchGuests(query));
+      setFilterMode('search');
     } catch (caught) {
-      setResults([]);
-      setSearchError(caught instanceof ApiError ? caught.message : 'Could not search guests.');
+      setFilteredGuests([]);
+      setFilterMode('search');
+      setFilterError(caught instanceof ApiError ? caught.message : 'Could not search guests.');
     } finally {
-      setSearching(false);
+      setFiltering(false);
     }
   }
 
-  function handleClearSearch() {
+  async function handleFilterByActivity(activity) {
+    setFiltering(true);
+    setFilterError(null);
     setQuery('');
-    setResults(null);
-    setSearchError(null);
+    try {
+      setFilteredGuests(await reservationsApi.listGuests({ activity }));
+      setFilterMode(activity);
+    } catch (caught) {
+      setFilteredGuests([]);
+      setFilterMode(activity);
+      setFilterError(caught instanceof ApiError ? caught.message : 'Could not load guests by activity.');
+    } finally {
+      setFiltering(false);
+    }
+  }
+
+  function handleClearFilter() {
+    setQuery('');
+    setFilteredGuests(null);
+    setFilterMode(null);
+    setFilterError(null);
   }
 
   async function handleSelect(guest) {
@@ -95,15 +134,63 @@ export function ProfilesScreen() {
     }
   }
 
+  const tableTitle =
+    filterMode === 'search' ? 'Search results' : filterMode === 'active' ? 'Active guests' : filterMode === 'inactive' ? 'Inactive guests' : 'All guests';
+  const emptyMessage =
+    filterMode === 'search'
+      ? 'No guests match this search.'
+      : filterMode === 'active'
+        ? 'No active guests — nobody has a reservation arriving in the last 12 months.'
+        : filterMode === 'inactive'
+          ? 'No inactive guests — everyone has a reservation arriving in the last 12 months.'
+          : 'No guests on file yet.';
+
   return (
     <div className={styles.page}>
       <div className={styles.noPrint}>
         <h1 className={styles.title}>Profiles</h1>
 
-        <Card title="Find a guest">
-          {searchError && (
+        <Card title="Guest activity">
+          {activitySummaryError && (
             <p role="alert" className={formStyles.errorBanner}>
-              {searchError}
+              {activitySummaryError}
+            </p>
+          )}
+          {activitySummary && (
+            <p className={formStyles.disabledNotice}>
+              &ldquo;Active&rdquo; means a reservation arriving in the last 12 months.
+            </p>
+          )}
+          <div className={styles.summaryRow}>
+            <button
+              type="button"
+              className={styles.summaryStat}
+              aria-pressed={filterMode === 'active'}
+              aria-label="Active guests"
+              disabled={!activitySummary}
+              onClick={() => handleFilterByActivity('active')}
+            >
+              <span className={`${styles.summaryValue} tabular-nums`}>{activitySummary ? activitySummary.active : '—'}</span>
+              <span className={styles.summaryLabel}>Active</span>
+            </button>
+            <button
+              type="button"
+              className={styles.summaryStat}
+              aria-pressed={filterMode === 'inactive'}
+              aria-label="Inactive guests"
+              disabled={!activitySummary}
+              onClick={() => handleFilterByActivity('inactive')}
+            >
+              <span className={`${styles.summaryValue} tabular-nums`}>{activitySummary ? activitySummary.inactive : '—'}</span>
+              <span className={styles.summaryLabel}>Inactive</span>
+            </button>
+          </div>
+        </Card>
+
+        <Card title="Find a guest">
+          {filterError && (
+            <p role="alert" className={formStyles.errorBanner}>
+              {filterError}
             </p>
           )}
           <form className={formStyles.row} onSubmit={handleSearch}>
@@ -118,11 +205,11 @@ export function ProfilesScreen() {
               />
             </label>
             <div className={formStyles.actionsRow}>
-              <Button type="submit" loading={searching}>
+              <Button type="submit" loading={filtering}>
                 Search
               </Button>
-              {isSearchActive && (
-                <Button type="button" variant="ghost" onClick={handleClearSearch}>
+              {isFiltered && (
+                <Button type="button" variant="ghost" onClick={handleClearFilter}>
                   Show all guests
                 </Button>
               )}
@@ -135,20 +222,20 @@ export function ProfilesScreen() {
           chrome and business date aren't visible there once Sidebar/TopBar
           hide themselves, so the exported document needs its own label. */}
       <div className={styles.printOnly}>
-        <h1>Guest List{isSearchActive ? ` — matching "${query}"` : ''}</h1>
+        <h1>Guest List — {tableTitle}</h1>
         <p>Printed {new Date().toLocaleString()}</p>
       </div>
 
-      {allGuestsError && !isSearchActive && (
+      {allGuestsError && !isFiltered && (
         <p role="alert" className={`${formStyles.errorBanner} ${styles.noPrint}`.trim()}>
           {allGuestsError}
         </p>
       )}
 
       <DataTable
-        title={isSearchActive ? 'Search results' : 'All guests'}
+        title={tableTitle}
         state={displayedGuests === null ? 'loading' : displayedGuests.length === 0 ? 'empty' : 'success'}
-        emptyMessage={isSearchActive ? 'No guests match this search.' : 'No guests on file yet.'}
+        emptyMessage={emptyMessage}
         columns={[
           { key: 'first_name', label: 'Name', render: (row) => `${row.first_name} ${row.last_name}` },
           { key: 'email', label: 'Email', render: (row) => row.email ?? '—' },

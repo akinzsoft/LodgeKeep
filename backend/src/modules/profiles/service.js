@@ -21,7 +21,7 @@
  */
 
 const { scopedDb } = require('../../db');
-const { getGuest } = require('../reservations/service');
+const { getGuest, getActiveGuestIds } = require('../reservations/service');
 
 /**
  * Substring match across name/email/phone — `guests` is TENANT_SCOPED
@@ -78,4 +78,22 @@ async function getGuestStayHistory({ context, id }) {
     .orderBy('arrival_date', 'desc');
 }
 
-module.exports = { getGuest, searchGuests, getGuestStayHistory };
+/**
+ * Gap closure (user-reported): "add summary report on the profile num of
+ * active and inactive customer" — the counts behind the report; see
+ * `reservations/service.js`'s own `getActiveGuestIds` header for the real
+ * definition of "active" this was confirmed against with the user
+ * (a reservation arriving in the last 12 months, not the `guests.status`
+ * GDPR field). Reused directly, not recomputed — the same cross-module
+ * service-to-service call this file's own `getGuest` re-export already
+ * establishes.
+ */
+async function getGuestActivitySummary({ context }) {
+  const db = scopedDb().for(context);
+  const guests = await db.table('guests').where({ status: 'active' }).select('id');
+  const activeIds = await getActiveGuestIds({ context });
+  const active = guests.filter((guest) => activeIds.has(String(guest.id))).length;
+  return { active, inactive: guests.length - active };
+}
+
+module.exports = { getGuest, searchGuests, getGuestStayHistory, getGuestActivitySummary };
