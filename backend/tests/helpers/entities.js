@@ -360,6 +360,32 @@ const ENTITIES = [
   },
 
   {
+    table: 'mfa_login_codes',
+    // No natural unique key — see the migration's own header: a 6-digit
+    // code has only 1,000,000 possible values, so two different users
+    // legitimately sharing a code_hash around the same time is an
+    // ordinary coincidence, not a collision to guard against.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      user_id: t.users[0].id,
+      code_hash: tokenHash(`${t.slug}-mfa-code-additional`),
+      expires_at: hoursFromNow(1),
+    }),
+    crossTenant: [
+      {
+        name: "issues an MFA code against another tenant's user",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          user_id: other.users[0].id,
+          code_hash: tokenHash(`${own.slug}-mfa-code-crossing`),
+          expires_at: hoursFromNow(1),
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'mfa_devices',
     // Not from DATABASE.md §2's list; see the migration's note on why one
     // device per type per user is the right constraint despite the cost.

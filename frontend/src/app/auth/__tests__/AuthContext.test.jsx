@@ -158,10 +158,17 @@ describe('AuthProvider / useAuth', () => {
     expect(result.current.user).toMatchObject({ userId: '2', role: 'admin', email: 'admin@example.com' });
   });
 
-  it('verifyMfa() with the wrong code returns to mfa_required (not idle) with the real 501 as the error', async () => {
+  /**
+   * Gap closure (user-reported, live-tested): "the verification code shld
+   * be send to the account email to login not a static code." A wrong
+   * code against a real, valid challenge now gets the real
+   * `AUTH_MFA_CODE_INVALID` — the `AUTH_MFA_NOT_IMPLEMENTED` 501 this test
+   * used to assert was the OLD, dev-bypass-only reality.
+   */
+  it('verifyMfa() with the wrong code returns to mfa_required (not idle) with the real AUTH_MFA_CODE_INVALID as the error', async () => {
     mocks.login.mockResolvedValue({ status: 'mfa_challenge_required', challengeToken: 'challenge-abc' });
     mocks.verifyMfa.mockRejectedValue(
-      new ApiError({ code: 'AUTH_MFA_NOT_IMPLEMENTED', message: 'MFA verification is not yet available.' })
+      new ApiError({ code: 'AUTH_MFA_CODE_INVALID', message: 'That verification code is incorrect or has expired.' })
     );
 
     const { result } = await renderSettledAuth();
@@ -175,7 +182,33 @@ describe('AuthProvider / useAuth', () => {
 
     expect(result.current.status).toBe('mfa_required');
     expect(result.current.isAuthenticated).toBe(false);
-    expect(result.current.error).toEqual({ code: 'AUTH_MFA_NOT_IMPLEMENTED', message: 'MFA verification is not yet available.' });
+    expect(result.current.error).toEqual({ code: 'AUTH_MFA_CODE_INVALID', message: 'That verification code is incorrect or has expired.' });
+  });
+
+  it('login() with an MFA challenge exposes the real emailed code as mfaDevOnlyCode outside production', async () => {
+    mocks.login.mockResolvedValue({
+      status: 'mfa_challenge_required',
+      challengeToken: 'challenge-abc',
+      dev_only_code: '482913',
+    });
+
+    const { result } = await renderSettledAuth();
+    await act(async () => {
+      await result.current.login({ email: 'admin@example.com', password: 'x' });
+    });
+
+    expect(result.current.mfaDevOnlyCode).toBe('482913');
+  });
+
+  it('mfaDevOnlyCode is null when the backend discloses none (production)', async () => {
+    mocks.login.mockResolvedValue({ status: 'mfa_challenge_required', challengeToken: 'challenge-abc', dev_only_code: null });
+
+    const { result } = await renderSettledAuth();
+    await act(async () => {
+      await result.current.login({ email: 'admin@example.com', password: 'x' });
+    });
+
+    expect(result.current.mfaDevOnlyCode).toBeNull();
   });
 
   it('verifyMfa() rejects immediately with no pending challenge, and never calls the API', async () => {

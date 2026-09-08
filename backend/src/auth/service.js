@@ -26,18 +26,30 @@ const { writeAuthEvent } = require('./events');
 const { writeOutboxEvent } = require('../shared/outbox');
 const { checkStaffLockout } = require('./lockout');
 const { listPropertyAccess, roleAtProperty, roleRequiresMfa } = require('./roles');
-const { signMfaChallengeToken, verifyMfaChallengeToken, isDevBypassCode } = require('./mfa');
+const {
+  signMfaChallengeToken,
+  verifyMfaChallengeToken,
+  generateMfaCode,
+  hashMfaCode,
+  MFA_CODE_TTL_MINUTES,
+  MFA_CODE_MAX_ATTEMPTS,
+} = require('./mfa');
 const {
   InvalidCredentialsError,
   AccountLockedError,
   TokenInvalidError,
   ValidationError,
   MfaNotImplementedError,
+  MfaCodeInvalidError,
   DuplicateEntryError,
 } = require('./errors');
 
 function hoursFromNow(hours) {
   return new Date(Date.now() + hours * 3600 * 1000);
+}
+
+function minutesFromNow(minutes) {
+  return new Date(Date.now() + minutes * 60 * 1000);
 }
 
 /** The single property a user holds access to, or null if they hold zero or several (SECURITY.md §3: chosen, never guessed). */
@@ -117,12 +129,58 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
 
   // TESTING.md AUTH-9: a role that mandates MFA (PRODUCT_REQUIREMENTS.md
   // §3.16 — admin/super_admin, unconditionally) or a user who has opted in
-  // gets a challenge, not tokens. Full TOTP verification is deferred (see
-  // `src/auth/mfa.js`'s header); `challengeToken` is what `verifyStaffMfa`
-  // below resumes this specific login with, once a code — today, only ever
-  // the dev bypass code — is submitted for it.
+  // gets a challenge, not tokens. `challengeToken` is what `verifyStaffMfa`
+  // below resumes this specific login with, once the real, emailed code
+  // (or, outside production, the same `devOnlyCode` disclosure this
+  // codebase's other credential flows already use) is submitted for it.
   const mfaRequired = user.mfa_enabled || access.some((grant) => roleRequiresMfa(grant.role));
   if (mfaRequired) {
+    // Gap closure (user-reported, live-tested): "the verification code
+    // shld be send to the account email to login not a static code." A
+    // real 6-digit code, hashed and stored with a 10-minute expiry
+    // (`mfa_login_codes`) and delivered through the real outbox — the
+    // exact "both a real send AND a dev-only disclosure" precedent
+    // `inviteUser`/`requestPasswordReset`/`requestGuestPasswordReset` all
+    // already establish, not a hardcoded bypass string any more.
+    let devOnlyCode = null;
+    await scoped.transaction(async (trx) => {
+      // Supersede any still-outstanding code for this user — a repeat
+      // login attempt while already mid-challenge should invalidate the
+      // earlier code rather than leave two simultaneously "valid" ones,
+      // the same "delete the outstanding one before issuing a new one"
+      // rule `inviteUser` already applies to invitations.
+      await trx.table('mfa_login_codes').where({ user_id: user.id }).whereNull('used_at').delete();
+
+      const { code, hash } = generateMfaCode();
+      await trx.table('mfa_login_codes').insert({
+        user_id: user.id,
+        code_hash: hash,
+        expires_at: minutesFromNow(MFA_CODE_TTL_MINUTES),
+      });
+
+      if (process.env.NODE_ENV !== 'production') devOnlyCode = code;
+
+      // The outbox/notifications pipeline is PROPERTY_SCOPED end to end
+      // (`email_templates`/`notification_log`) — but a staff login
+      // challenge is fundamentally tenant-level, and `activePropertyId`
+      // is genuinely null for a user holding more than one property.
+      // Falling back to the first property this user holds access to is
+      // purely a "which property's template config to render against"
+      // choice for this one generic, non-branded security email — it
+      // implies nothing about which property they are signing into.
+      const notifyPropertyId = activePropertyId ?? access[0]?.property_id ?? null;
+      if (notifyPropertyId) {
+        await writeOutboxEvent({
+          trx,
+          eventType: 'staff.mfa_code_requested',
+          aggregateType: 'mfa_login_codes',
+          aggregateId: user.id,
+          propertyId: notifyPropertyId,
+          payload: { guestEmail: user.email, code, expiresInMinutes: MFA_CODE_TTL_MINUTES },
+        });
+      }
+    });
+
     await writeAuthEvent({
       audience: 'staff',
       eventType: 'mfa_challenge_issued',
@@ -132,7 +190,11 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
       userAgent,
       requestId,
     });
-    return { status: 'mfa_challenge_required', challengeToken: signMfaChallengeToken({ userId: user.id, tenantId }) };
+    return {
+      status: 'mfa_challenge_required',
+      challengeToken: signMfaChallengeToken({ userId: user.id, tenantId }),
+      devOnlyCode,
+    };
   }
 
   return issueStaffSession({ scoped, tenantId, user, access, activePropertyId, role, ip, userAgent, requestId });
@@ -188,13 +250,18 @@ async function issueStaffSession({ scoped, tenantId, user, access, activePropert
 }
 
 /**
- * Completes a challenge `staffLogin` issued above. The only real
- * verification this performs is `isDevBypassCode` — outside production,
- * with the fixed dev bypass code, this resumes the login exactly as if MFA
- * had been satisfied for real. Any other input (production, a wrong code,
- * an expired/invalid/wrong-audience token) throws `MfaNotImplementedError`,
- * the exact `501` this endpoint has always returned — a real client, and any
- * production deployment, sees no change in behaviour at all.
+ * Completes a challenge `staffLogin` issued above.
+ *
+ * Gap closure (user-reported, live-tested): real verification now, against
+ * the emailed code (`mfa_login_codes`) — not a fixed dev-only bypass
+ * string. An invalid/expired/wrong-audience CHALLENGE TOKEN still throws
+ * `MfaNotImplementedError` unchanged — this is also the only path a
+ * platform MFA-verify attempt ever reaches (it never holds a real challenge
+ * token to decode), so preserving this exact behaviour keeps platform's
+ * documented "always 501" fallthrough intact. A valid challenge token
+ * paired with a wrong/expired/already-used/attempts-exhausted CODE now
+ * gets the real, new `MfaCodeInvalidError` (401) instead — the STAFF path
+ * genuinely works now, in every environment, not just outside production.
  */
 async function verifyStaffMfa({ challengeToken, code, ip, userAgent, requestId }) {
   let payload;
@@ -207,14 +274,54 @@ async function verifyStaffMfa({ challengeToken, code, ip, userAgent, requestId }
   const tenantId = Number(payload.tenant_id);
   const userId = Number(payload.sub);
 
-  if (!isDevBypassCode(code)) {
-    await writeAuthEvent({ audience: 'staff', eventType: 'mfa_failed', tenantId, userId, ip, userAgent, requestId });
-    throw new MfaNotImplementedError();
-  }
-
   const db = scopedDb();
   const context = contextFromSession({ tenantId, userId });
   const scoped = db.for(context);
+
+  const fail = async () => {
+    await writeAuthEvent({ audience: 'staff', eventType: 'mfa_failed', tenantId, userId, ip, userAgent, requestId });
+    throw new MfaCodeInvalidError();
+  };
+
+  // The outstanding code for this user — `staffLogin` deletes any prior
+  // one before issuing a fresh one, so there is at most one row here.
+  const pending = await scoped
+    .table('mfa_login_codes')
+    .where({ user_id: userId })
+    .whereNull('used_at')
+    .orderBy('id', 'desc')
+    .first();
+
+  if (!pending) return fail();
+  if (new Date(pending.expires_at) <= new Date()) return fail();
+  if (pending.attempts >= MFA_CODE_MAX_ATTEMPTS) return fail();
+
+  if (hashMfaCode(String(code)) !== pending.code_hash) {
+    // Plain read-then-write, not a raw SQL increment — the scoped
+    // accessor deliberately exposes no raw-knex passthrough (CLAUDE.md:
+    // "raw table access in a module is a review-blocking defect"). A rare
+    // concurrent-guess race under-counting this by one only affects how
+    // soon the lockout below trips — the real security boundaries
+    // (`expires_at`, the single-use `used_at` claim) are unaffected.
+    await scoped
+      .table('mfa_login_codes')
+      .where({ id: pending.id })
+      .whereNull('used_at')
+      .update({ attempts: pending.attempts + 1 });
+    return fail();
+  }
+
+  // The single-use claim itself (ARCHITECTURE.md §5) — a conditional
+  // UPDATE with an affected-row check, not read-then-write, the same
+  // shape `completePasswordReset`/`acceptInvitation` both already use.
+  // Guards the case two concurrent submissions of the same correct code
+  // both pass the hash comparison above.
+  const claimed = await scoped
+    .table('mfa_login_codes')
+    .where({ id: pending.id })
+    .whereNull('used_at')
+    .update({ used_at: new Date() });
+  if (claimed === 0) return fail();
 
   const user = await scoped.table('users').where({ id: userId }).first();
   if (!user || user.status !== 'active') throw new MfaNotImplementedError();

@@ -30,6 +30,19 @@ function stripRefreshToken(result) {
   return rest;
 }
 
+/**
+ * Gap closure: `mfa_challenge_required` now carries a real `devOnlyCode`
+ * (outside production only — `service.js`'s own `staffLogin` header) —
+ * renamed to snake_case here to match the `dev_only_token` shape every
+ * other credential-issuing endpoint in this file already uses
+ * (`requestPasswordReset` below, `guestRegister`/`inviteUser` elsewhere).
+ */
+function renameDevOnlyCode(result) {
+  if (!('devOnlyCode' in result)) return result;
+  const { devOnlyCode, ...rest } = result;
+  return { ...rest, dev_only_code: devOnlyCode };
+}
+
 function require_(body, field) {
   const value = body?.[field];
   if (typeof value !== 'string' || value.length === 0) {
@@ -57,7 +70,7 @@ async function staffLogin(req, res, next) {
     if (result.refreshToken) {
       setRefreshTokenCookie(res, result.refreshToken, { maxAgeMs: REFRESH_TOKEN_MAX_AGE_MS });
     }
-    res.status(200).json(ok(stripRefreshToken(result)));
+    res.status(200).json(ok(renameDevOnlyCode(stripRefreshToken(result))));
   } catch (error) {
     next(error);
   }

@@ -111,6 +111,7 @@ async function seedTwoTenants(trx) {
     guestPasswordResets: [],
     sessions: [],
     passwordResets: [],
+    mfaLoginCodes: [],
     mfaDevices: [],
     invitations: [],
     auditLog: [],
@@ -1006,6 +1007,30 @@ async function seedTwoTenants(trx) {
           used_at: plan.used_at,
         }),
         token_hash: hash,
+        user_id: t.users[plan.user].id,
+        label: plan.label,
+      });
+    }
+  }
+
+  // Gap closure: real emailed MFA login codes — one unspent, one already
+  // used, the same two-state shape password_resets uses above.
+  const mfaCodePlan = [
+    { user: 0, label: 'pending', used_at: null, expiresInHours: 1 },
+    { user: 1, label: 'used', used_at: hoursFromNow(-0.5), expiresInHours: 1 },
+  ];
+  for (const plan of mfaCodePlan) {
+    for (const t of both) {
+      const hash = tokenHash(`${t.slug}-mfa-code-${plan.label}`);
+      t.mfaLoginCodes.push({
+        id: await insertReturningId(trx, 'mfa_login_codes', {
+          tenant_id: t.id,
+          user_id: t.users[plan.user].id,
+          code_hash: hash,
+          expires_at: hoursFromNow(plan.expiresInHours),
+          used_at: plan.used_at,
+        }),
+        code_hash: hash,
         user_id: t.users[plan.user].id,
         label: plan.label,
       });
