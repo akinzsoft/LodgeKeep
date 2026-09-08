@@ -25,6 +25,7 @@
 const { ok, notFound } = require('../../shared/response');
 const { ValidationError } = require('../../shared/errors');
 const { runIdempotentMutation: runMutation } = require('../../shared/mutation');
+const { toCsv } = require('../reporting/service');
 const service = require('./service');
 
 function require_(body, field) {
@@ -293,6 +294,41 @@ async function listInHouse(req, res, next) {
 }
 
 /**
+ * Gap closure (user-reported): "see all outstanding balance of guest and
+ * there room no" — see `service.listOutstandingBalances`'s own header.
+ * `?format=csv` reuses the reporting module's already-generic `toCsv`
+ * (a pure `(rows, columns) => string`, no dependency the other way), the
+ * same CSV-export shape `ReportingScreen`'s own tabs already use.
+ */
+async function listOutstandingBalances(req, res, next) {
+  try {
+    const rows = await service.listOutstandingBalances({ context: req.context });
+    if (req.query?.format === 'csv') {
+      res
+        .status(200)
+        .set('Content-Type', 'text/csv')
+        .set('Content-Disposition', 'attachment; filename="outstanding-balances.csv"')
+        .send(
+          toCsv(rows, [
+            'confirmation_number',
+            'guest_first_name',
+            'guest_last_name',
+            'room_number',
+            'arrival_date',
+            'departure_date',
+            'folio_balance',
+            'folio_currency',
+          ])
+        );
+      return;
+    }
+    res.status(200).json(ok(rows));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * Gap closure: "which actual room numbers are free right now" — see
  * `service.listFreeRoomsNow`'s own header for why this is a distinct read
  * from `checkAvailability`, always as-of the property's current business
@@ -443,6 +479,7 @@ module.exports = {
   listArrivals,
   listDepartures,
   listInHouse,
+  listOutstandingBalances,
   listFreeRooms,
   checkIn,
   checkOut,

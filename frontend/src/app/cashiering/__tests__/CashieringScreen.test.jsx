@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   refundPayment: vi.fn(),
   openAdditionalFolio: vi.fn(),
   verifyPayment: vi.fn(),
+  listOutstandingBalances: vi.fn(),
+  getOutstandingBalancesCsv: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -29,10 +31,15 @@ describe('<CashieringScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.getFolio.mockResolvedValue({ ...FOLIO, lineItems: [LINE_ITEM], payments: [] });
+    mocks.listOutstandingBalances.mockResolvedValue([]);
   });
 
+  // The screen now defaults to the Balances tab (PRODUCT_REQUIREMENTS.md's
+  // own "Open folios list" landing screen for Cashier) — every existing
+  // lookup-form test switches to "Folio Lookup" first.
   async function loadReservation() {
     render(<CashieringScreen />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Folio Lookup' }));
     await userEvent.type(screen.getByPlaceholderText('e.g. 42'), '7');
     await userEvent.click(screen.getByRole('button', { name: 'Load folios' }));
   }
@@ -118,10 +125,74 @@ describe('<CashieringScreen>', () => {
   it('disables mutating actions while offline', async () => {
     mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
     render(<CashieringScreen isOffline />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Folio Lookup' }));
     await userEvent.type(screen.getByPlaceholderText('e.g. 42'), '7');
     await userEvent.click(screen.getByRole('button', { name: 'Load folios' }));
     await screen.findByText('Room 101');
     expect(screen.getByText(/cashiering actions are disabled/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Void' })).toBeDisabled();
+  });
+
+  /**
+   * Gap closure (user-reported): "Cashiering menu shld be able to see all
+   * outstanding balance of guest and there room no."
+   */
+  describe('Balances tab (default)', () => {
+    it('defaults to the Balances tab, not the lookup form', async () => {
+      render(<CashieringScreen />);
+      expect(await screen.findByRole('tab', { name: 'Balances' })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.queryByPlaceholderText('e.g. 42')).not.toBeInTheDocument();
+    });
+
+    it('renders real outstanding balances with room number and guest name', async () => {
+      mocks.listOutstandingBalances.mockResolvedValue([
+        {
+          id: '9',
+          confirmation_number: 'CONF9',
+          guest_first_name: 'Jordan',
+          guest_last_name: 'Fixture',
+          room_number: '204',
+          arrival_date: '2027-01-01',
+          departure_date: '2027-01-03',
+          folio_balance: '150.00',
+          folio_currency: 'NGN',
+        },
+      ]);
+      render(<CashieringScreen />);
+      expect(await screen.findByText('Jordan Fixture')).toBeInTheDocument();
+      expect(screen.getByText('204')).toBeInTheDocument();
+      expect(screen.getByText('CONF9')).toBeInTheDocument();
+    });
+
+    it('clicking "View folio" switches to Folio Lookup and loads that reservation', async () => {
+      mocks.listOutstandingBalances.mockResolvedValue([
+        {
+          id: '9',
+          confirmation_number: 'CONF9',
+          guest_first_name: 'Jordan',
+          guest_last_name: 'Fixture',
+          room_number: '204',
+          arrival_date: '2027-01-01',
+          departure_date: '2027-01-03',
+          folio_balance: '150.00',
+          folio_currency: 'NGN',
+        },
+      ]);
+      mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+      render(<CashieringScreen />);
+      await screen.findByText('Jordan Fixture');
+
+      await userEvent.click(screen.getByRole('button', { name: 'View folio' }));
+
+      expect(mocks.listFoliosForReservation).toHaveBeenCalledWith('9');
+      expect(await screen.findByRole('tab', { name: 'Folio Lookup' })).toHaveAttribute('aria-selected', 'true');
+      expect(await screen.findByText(/Folio F1 — Guest/)).toBeInTheDocument();
+    });
+
+    it('shows the empty-state message when every folio is settled', async () => {
+      mocks.listOutstandingBalances.mockResolvedValue([]);
+      render(<CashieringScreen />);
+      expect(await screen.findByText(/every in-house folio is settled/i)).toBeInTheDocument();
+    });
   });
 });

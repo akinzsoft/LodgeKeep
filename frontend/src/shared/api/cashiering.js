@@ -1,4 +1,4 @@
-import { request, requestWithMeta } from './client.js';
+import { request, requestWithMeta, requestBlob } from './client.js';
 
 /**
  * PLAN.md Phase 2.5's cashiering module. Same shape as `reservations.js`:
@@ -24,6 +24,22 @@ export function listFoliosForReservation(reservationId) {
 
 export function getFolio(folioId) {
   return request(`/cashiering/folios/${folioId}`);
+}
+
+/**
+ * Gap closure (user-reported): "see all outstanding balance of guest and
+ * there room no" — PRODUCT_REQUIREMENTS.md's own "Open folios list," the
+ * Cashier role's landing screen. Routed from `/front-desk/*`, not
+ * `/cashiering/*` — it reuses `reservations/service.js`'s existing
+ * guest+room join, the same as `listInHouse`/`listDepartures`, just gated
+ * on a cashiering permission (see the backend route's own comment).
+ */
+export function listOutstandingBalances() {
+  return request('/front-desk/outstanding-balances');
+}
+
+export function getOutstandingBalancesCsv() {
+  return requestBlob('/front-desk/outstanding-balances?format=csv');
 }
 
 export function openAdditionalFolio(reservationId, billedTo) {

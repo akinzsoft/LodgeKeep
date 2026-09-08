@@ -1121,6 +1121,161 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       expect(departureRow.folio_balance).toBe(realFolio.balance);
     });
 
+    /**
+     * Gap closure (user-reported): "see all outstanding balance of guest
+     * and there room no ... recommended a standard feature" —
+     * PRODUCT_REQUIREMENTS.md's own "Role-based views" table names this
+     * exact report ("Open folios list") as the Cashier role's landing
+     * screen.
+     */
+    describe('GET /front-desk/outstanding-balances', () => {
+      it('shows a checked-in guest with an unpaid charge, their real room number and exact balance', async () => {
+        const businessDate = '2026-08-29';
+        await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: businessDate });
+
+        const roomTypeId = await createRoomType(ctx.a, { code: 'OWEBAL' });
+        const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'OWE1' });
+        const rateCodeId = await createRateCode(ctx.a, { code: 'OWEBALRATE', baseRate: '50.00' });
+        const created = await t.request
+          .post('/api/v1/reservations')
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({
+            guest_id: String(ctx.a.guests[0].id),
+            room_type_id: String(roomTypeId),
+            rate_code_id: String(rateCodeId),
+            arrival_date: businessDate,
+            departure_date: '2026-08-30',
+          });
+        await t.request
+          .post(`/api/v1/reservations/${created.body.data.id}/check-in`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ room_id: String(roomId) });
+
+        const foliosRes = await t.request
+          .get(`/api/v1/cashiering/reservations/${created.body.data.id}/folios`)
+          .set('Authorization', `Bearer ${tokenFor()}`);
+        const folioId = foliosRes.body.data[0].id;
+        await t.request
+          .post(`/api/v1/cashiering/folios/${folioId}/charges`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ type: 'room_charge', description: 'Room charge', amount: '50.00', business_date: businessDate });
+        const realFolio = (await t.request.get(`/api/v1/cashiering/folios/${folioId}`).set('Authorization', `Bearer ${tokenFor()}`))
+          .body.data;
+
+        const res = await t.request.get('/api/v1/front-desk/outstanding-balances').set('Authorization', `Bearer ${tokenFor()}`);
+        expect(res.status).toBe(200);
+        const row = res.body.data.find((r) => String(r.id) === String(created.body.data.id));
+        expect(row).toBeDefined();
+        expect(row.room_number).toBe('OWE1');
+        expect(row.folio_balance).toBe(realFolio.balance);
+        expect(row.folio_balance).not.toBe('0.00');
+      });
+
+      it('does not show a checked-in guest whose folio is fully settled', async () => {
+        const businessDate = '2026-08-29';
+        const roomTypeId = await createRoomType(ctx.a, { code: 'SETTLED' });
+        const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'SET1' });
+        const rateCodeId = await createRateCode(ctx.a, { code: 'SETTLEDRATE' });
+        const created = await t.request
+          .post('/api/v1/reservations')
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({
+            guest_id: String(ctx.a.guests[0].id),
+            room_type_id: String(roomTypeId),
+            rate_code_id: String(rateCodeId),
+            arrival_date: businessDate,
+            departure_date: '2026-08-30',
+          });
+        await t.request
+          .post(`/api/v1/reservations/${created.body.data.id}/check-in`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ room_id: String(roomId) });
+        // Folio balance stays 0.00 — check-in itself posts no charge.
+
+        const res = await t.request.get('/api/v1/front-desk/outstanding-balances').set('Authorization', `Bearer ${tokenFor()}`);
+        expect(res.body.data.some((r) => String(r.id) === String(created.body.data.id))).toBe(false);
+      });
+
+      it('does not show a reservation that is only confirmed, not checked in', async () => {
+        const roomTypeId = await createRoomType(ctx.a, { code: 'NOTCHECKEDINYET' });
+        await createRoom(ctx.a, { roomTypeId, roomNumber: 'NCI1' });
+        const rateCodeId = await createRateCode(ctx.a, { code: 'NOTCHECKEDINRATE' });
+        const created = await t.request
+          .post('/api/v1/reservations')
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({
+            guest_id: String(ctx.a.guests[0].id),
+            room_type_id: String(roomTypeId),
+            rate_code_id: String(rateCodeId),
+            arrival_date: '2027-11-01',
+            departure_date: '2027-11-02',
+          });
+
+        const res = await t.request.get('/api/v1/front-desk/outstanding-balances').set('Authorization', `Bearer ${tokenFor()}`);
+        expect(res.body.data.some((r) => String(r.id) === String(created.body.data.id))).toBe(false);
+      });
+
+      it('sorts by outstanding balance, highest first', async () => {
+        const businessDate = '2026-08-29';
+        const roomTypeId = await createRoomType(ctx.a, { code: 'SORTORDER' });
+        const rateCodeId = await createRateCode(ctx.a, { code: 'SORTORDERRATE' });
+
+        async function checkInWithCharge(roomNumber, amount) {
+          const roomId = await createRoom(ctx.a, { roomTypeId, roomNumber });
+          const created = await t.request
+            .post('/api/v1/reservations')
+            .set('Authorization', `Bearer ${tokenFor()}`)
+            .set('Idempotency-Key', idemKey())
+            .send({
+              guest_id: String(ctx.a.guests[0].id),
+              room_type_id: String(roomTypeId),
+              rate_code_id: String(rateCodeId),
+              arrival_date: businessDate,
+              departure_date: '2026-08-30',
+            });
+          await t.request
+            .post(`/api/v1/reservations/${created.body.data.id}/check-in`)
+            .set('Authorization', `Bearer ${tokenFor()}`)
+            .set('Idempotency-Key', idemKey())
+            .send({ room_id: String(roomId) });
+          const foliosRes = await t.request
+            .get(`/api/v1/cashiering/reservations/${created.body.data.id}/folios`)
+            .set('Authorization', `Bearer ${tokenFor()}`);
+          const folioId = foliosRes.body.data[0].id;
+          await t.request
+            .post(`/api/v1/cashiering/folios/${folioId}/charges`)
+            .set('Authorization', `Bearer ${tokenFor()}`)
+            .set('Idempotency-Key', idemKey())
+            .send({ type: 'room_charge', description: 'Room charge', amount, business_date: businessDate });
+          return created.body.data.id;
+        }
+
+        const smallId = await checkInWithCharge('SORT1', '20.00');
+        const bigId = await checkInWithCharge('SORT2', '2000.00');
+
+        const res = await t.request.get('/api/v1/front-desk/outstanding-balances').set('Authorization', `Bearer ${tokenFor()}`);
+        const indexOf = (id) => res.body.data.findIndex((r) => String(r.id) === String(id));
+        expect(indexOf(bigId)).toBeGreaterThanOrEqual(0);
+        expect(indexOf(smallId)).toBeGreaterThan(indexOf(bigId));
+      });
+
+      it('supports a CSV export carrying the same rows', async () => {
+        const res = await t.request
+          .get('/api/v1/front-desk/outstanding-balances')
+          .query({ format: 'csv' })
+          .set('Authorization', `Bearer ${tokenFor()}`);
+        expect(res.status).toBe(200);
+        expect(res.headers['content-type']).toMatch(/text\/csv/);
+        expect(res.text).toMatch(/^confirmation_number,guest_first_name,guest_last_name,room_number,arrival_date,departure_date,folio_balance,folio_currency/);
+      });
+    });
+
     it('FD-2: check-in to a dirty room is blocked', async () => {
       await t.trx('rooms').where({ id: roomId }).update({ housekeeping_reported_status: 'dirty' });
       const res = await t.request
@@ -1671,6 +1826,38 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       const arrivals = await t.request.get('/api/v1/front-desk/arrivals').set('Authorization', `Bearer ${token}`);
       expect(arrivals.status).toBe(403);
       expect(arrivals.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+
+    /**
+     * Gap closure (user-reported): proves the permission-domain correction
+     * this pass made is real, not just asserted in a comment — a cashier
+     * has NO `front_desk.view` (confirmed 403 above) yet must still reach
+     * the outstanding-balances board, since PRODUCT_REQUIREMENTS.md names
+     * it as exactly this role's own landing screen.
+     */
+    it('cashier CAN reach outstanding balances (cashiering.post_charge), despite having nothing on front desk', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'cashier' });
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+      const res = await t.request.get('/api/v1/front-desk/outstanding-balances').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+    });
+
+    it('housekeeping role is refused on outstanding balances', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'housekeeping' });
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+      const res = await t.request.get('/api/v1/front-desk/outstanding-balances').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
     });
 
     it('front_desk role (ctx.a.users[0] at properties[1]) can check in a reservation there', async () => {
