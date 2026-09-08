@@ -21,6 +21,7 @@
  */
 
 const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 
 /**
  * Logs the send instead of transmitting it — visible in server output for
@@ -36,7 +37,53 @@ const consoleAdapter = {
   },
 };
 
-const ADAPTERS = { console: consoleAdapter };
+/**
+ * A real transactional-email transport over plain SMTP — the user's own
+ * webhosting mailbox, not a dedicated transactional provider (SendGrid/SES/
+ * etc. remain unbuilt; adding one later is a new adapter file plus one env
+ * var, per this file's own header). Lazily constructed and memoized (one
+ * pooled connection for the process's lifetime), same shape as `redisConnection()`/
+ * `knex()`'s own lazy singletons — nothing here opens a connection until the
+ * first real send.
+ */
+let smtpTransport = null;
+
+function buildSmtpTransport() {
+  if (!smtpTransport) {
+    const host = process.env.SMTP_HOST;
+    const port = Number(process.env.SMTP_PORT || 587);
+    if (!host) {
+      throw new Error('EMAIL_PROVIDER=smtp requires SMTP_HOST (see .env.example).');
+    }
+    smtpTransport = nodemailer.createTransport({
+      host,
+      port,
+      // Port 465 is implicit TLS; every other port (587, 25) negotiates TLS
+      // via STARTTLS instead — nodemailer's own documented convention,
+      // matching how most webhosting SMTP providers explain their own ports.
+      secure: port === 465,
+      auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD } : undefined,
+    });
+  }
+  return smtpTransport;
+}
+
+const smtpAdapter = {
+  name: 'smtp',
+  async send({ to, subject, html }) {
+    // Host validated first — "which server" is more fundamental than "who
+    // it's from", and building the transport is what actually needs it.
+    const transport = buildSmtpTransport();
+    const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+    if (!from) {
+      throw new Error('EMAIL_PROVIDER=smtp requires SMTP_FROM (or SMTP_USER as a fallback) — see .env.example.');
+    }
+    const info = await transport.sendMail({ from, to, subject, html });
+    return { providerRef: info.messageId, status: 'sent' };
+  },
+};
+
+const ADAPTERS = { console: consoleAdapter, smtp: smtpAdapter };
 
 /** `EMAIL_PROVIDER` env var selects the adapter; defaults to `console` (no credentials required). */
 function getEmailAdapter() {
@@ -48,4 +95,12 @@ function getEmailAdapter() {
   return adapter;
 }
 
-module.exports = { getEmailAdapter, consoleAdapter };
+/** Test-only teardown, mirroring `__closeQueuesForTesting`/`destroyRedisConnection` — closes the pooled SMTP connection so a test process can exit cleanly. */
+function __closeSmtpTransportForTesting() {
+  if (smtpTransport) {
+    smtpTransport.close();
+    smtpTransport = null;
+  }
+}
+
+module.exports = { getEmailAdapter, consoleAdapter, smtpAdapter, __closeSmtpTransportForTesting };

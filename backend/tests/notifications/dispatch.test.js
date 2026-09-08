@@ -29,7 +29,23 @@ jest.mock('../../src/modules/notifications/email-adapter', () => ({
   getEmailAdapter: jest.fn(),
 }));
 const { getEmailAdapter } = require('../../src/modules/notifications/email-adapter');
-const { dispatchPendingOutboxEventsForTenant } = require('../../src/modules/notifications/service');
+const { dispatchPendingOutboxEventsForTenant, isEmailDeliveryReal } = require('../../src/modules/notifications/service');
+
+describe('isEmailDeliveryReal', () => {
+  afterEach(() => {
+    getEmailAdapter.mockReset();
+  });
+
+  it('is false while the console adapter is active — no real inbox, a dev-only disclosure is still honest', () => {
+    getEmailAdapter.mockReturnValue({ name: 'console' });
+    expect(isEmailDeliveryReal()).toBe(false);
+  });
+
+  it('is true once a real adapter (e.g. smtp) is configured — a dev-only disclosure would now be redundant and confusing', () => {
+    getEmailAdapter.mockReturnValue({ name: 'smtp' });
+    expect(isEmailDeliveryReal()).toBe(true);
+  });
+});
 
 describe('Notifications dispatch (PLAN.md Phase 3)', () => {
   const t = useTestApp();

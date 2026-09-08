@@ -279,9 +279,24 @@ async function markNotificationRead({ context, id, userId }) {
   return db.table('in_app_notifications').where({ id }).first();
 }
 
+/**
+ * Whether an outbox email genuinely reaches a real inbox right now — the
+ * `console` adapter (the default with no `EMAIL_PROVIDER` configured) never
+ * does. Other modules use this to decide whether a "dev-only" disclosure
+ * (a code/token also returned directly in the API response, outside
+ * production, for local testing with no real inbox) is still honest to
+ * show — once a real adapter is wired up, the whole reason that disclosure
+ * existed is gone, and showing it alongside a genuinely working email would
+ * defeat the point of sending the email at all.
+ */
+function isEmailDeliveryReal() {
+  return getEmailAdapter().name !== 'console';
+}
+
 module.exports = {
   EVENT_TEMPLATE_KEYS,
   dispatchPendingOutboxEventsForTenant,
+  isEmailDeliveryReal,
   listTemplates,
   upsertTemplate,
   listNotificationLog,
