@@ -5,6 +5,7 @@ import { HousekeepingScreen } from '../HousekeepingScreen.jsx';
 
 const mocks = vi.hoisted(() => ({
   getBoard: vi.fn(),
+  listAttendants: vi.fn(),
   listRooms: vi.fn(),
   listDiscrepancies: vi.fn(),
   listOutOfOrderPeriods: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock('../../../shared/api/index.js', async () => {
     ...actual,
     housekeepingApi: {
       getBoard: mocks.getBoard,
+      listAttendants: mocks.listAttendants,
       listDiscrepancies: mocks.listDiscrepancies,
       listOutOfOrderPeriods: mocks.listOutOfOrderPeriods,
     },
@@ -27,6 +29,7 @@ describe('<HousekeepingScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.getBoard.mockResolvedValue([]);
+    mocks.listAttendants.mockResolvedValue([]);
     mocks.listRooms.mockResolvedValue([]);
     mocks.listDiscrepancies.mockResolvedValue([]);
     mocks.listOutOfOrderPeriods.mockResolvedValue([]);
