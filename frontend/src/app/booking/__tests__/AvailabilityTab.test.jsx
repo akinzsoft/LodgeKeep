@@ -15,7 +15,9 @@ const mocks = vi.hoisted(() => ({
   openBookingFolio: vi.fn(),
   captureCashPayment: vi.fn(),
   capturePaystackPayment: vi.fn(),
+  verifyPayment: vi.fn(),
   getFolio: vi.fn(),
+  openPaystackPopup: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -35,10 +37,15 @@ vi.mock('../../../shared/api/index.js', async () => {
     cashieringApi: {
       captureCashPayment: mocks.captureCashPayment,
       capturePaystackPayment: mocks.capturePaystackPayment,
+      verifyPayment: mocks.verifyPayment,
       getFolio: mocks.getFolio,
     },
   };
 });
+
+vi.mock('../../../shared/paystack.js', () => ({
+  openPaystackPopup: mocks.openPaystackPopup,
+}));
 
 const ROOM_TYPE = { id: '1', code: 'DLX', name: 'Deluxe' };
 const RATE_CODE = { id: '1', code: 'BAR', base_rate: '150.00', currency: 'NGN' };
@@ -361,6 +368,59 @@ describe('<AvailabilityTab>', () => {
       'href',
       'https://paystack.test/pay/abc'
     );
+  });
+
+  /**
+   * Gap closure (user-reported): "cant it be done same page." The backend
+   * now also returns `accessCode` alongside `authorizationUrl` — this
+   * proves the screen surfaces a same-page popup option for it, and that
+   * closing the popup re-verifies through the real backend and refreshes
+   * the folio, exactly like `CashieringScreen`'s identical flow.
+   */
+  it('offers an embedded "Pay now" popup when accessCode is present, and re-verifies + refreshes on close', async () => {
+    mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
+    mocks.openBookingFolio.mockResolvedValue({ id: '20', balance: '150.00', currency: 'NGN', status: 'open' });
+    mocks.capturePaystackPayment.mockResolvedValue({
+      id: '31',
+      authorizationUrl: 'https://paystack.test/pay/abc',
+      accessCode: 'access-abc',
+    });
+    mocks.verifyPayment.mockResolvedValue({ id: '31', status: 'CAPTURED' });
+    mocks.getFolio.mockResolvedValue({ id: '20', balance: '0.00', currency: 'NGN', status: 'open' });
+    mocks.openPaystackPopup.mockImplementation(async ({ onClose }) => {
+      await onClose();
+    });
+
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2027-01-01');
+    await userEvent.selectOptions(screen.getByLabelText('Guest'), '2');
+    await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
+    await userEvent.click(screen.getByRole('button', { name: 'Book' }));
+    await screen.findByText('Balance due: 150.00 NGN');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Card' }));
+    await screen.findByRole('link', { name: 'Open the card payment page' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pay now (same page)' }));
+
+    expect(mocks.openPaystackPopup).toHaveBeenCalledWith(
+      expect.objectContaining({ accessCode: 'access-abc', onClose: expect.any(Function) })
+    );
+    expect(mocks.verifyPayment).toHaveBeenCalledWith('31');
+    expect(await screen.findByText('Balance due: 0.00 NGN')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pay now (same page)' })).not.toBeInTheDocument();
   });
 
   it('shows the honest partial-success message when the gateway is not configured', async () => {

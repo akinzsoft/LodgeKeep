@@ -411,12 +411,26 @@ async function initiatePaystackPaymentIntent({ trx, folioId, amount, currency, i
  * not still `INITIATED` (already progressed by a prior successful call, a
  * webhook, or a manual verify) is a no-op, so retrying this after a prior
  * partial failure is always safe.
+ *
+ * Gap closure (user-reported): "can't it be done same page ... instead of a
+ * url." `paystack.initializeTransaction` already captured `access_code` from
+ * Paystack's own `/transaction/initialize` response — it just never left
+ * this function. `accessCode` is now returned alongside `authorizationUrl`
+ * so a caller can open Paystack's own embedded Inline JS popup
+ * (`resumeTransaction(accessCode)`) INSTEAD of redirecting to the hosted
+ * link, without a second call to Paystack — the same transaction, two ways
+ * to complete it. `authorizationUrl` is kept, unchanged, for the case a
+ * caller still wants a plain link (e.g. to send to a guest who isn't
+ * physically present). Reconciliation is unchanged either way — a client
+ * popup's own success callback is never trusted by itself (ARCHITECTURE.md
+ * §7); the real state transition still only happens via the webhook or the
+ * existing `POST /cashiering/payments/:id/verify`.
  */
 async function startPaystackCheckout({ context, paymentId, guestEmail, callbackUrl }) {
   const db = scopedDb().for(context);
   const payment = await db.table('payments').where({ id: paymentId }).first();
   if (!payment) throw new ValidationError('PAYMENT_NOT_FOUND', 'The specified payment does not exist.');
-  if (payment.status !== 'INITIATED') return { payment, authorizationUrl: null };
+  if (payment.status !== 'INITIATED') return { payment, authorizationUrl: null, accessCode: null };
 
   const init = await paystack.initializeTransaction({
     email: guestEmail,
@@ -428,7 +442,7 @@ async function startPaystackCheckout({ context, paymentId, guestEmail, callbackU
 
   await db.table('payments').where({ id: paymentId }).update({ status: 'PENDING' });
   const updated = await db.table('payments').where({ id: paymentId }).first();
-  return { payment: updated, authorizationUrl: init.authorizationUrl };
+  return { payment: updated, authorizationUrl: init.authorizationUrl, accessCode: init.accessCode };
 }
 
 const TERMINAL_PAYMENT_STATUSES = new Set(['CAPTURED', 'FAILED', 'EXPIRED', 'VOIDED', 'REFUNDED', 'PARTIALLY_REFUNDED', 'CANCELLED']);

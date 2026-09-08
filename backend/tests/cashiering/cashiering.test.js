@@ -411,7 +411,37 @@ describe('Cashiering (PLAN.md Phase 2.5)', () => {
       expect(res.status).toBe(201);
       expect(res.body.data.status).toBe('PENDING');
       expect(res.body.meta.authorizationUrl).toBe('https://paystack.test/pay/abc');
+      // Gap closure (user-reported): "same page ... instead of a url" — the
+      // access_code Paystack's own initialize response already carries now
+      // reaches the caller too, so the frontend can open an embedded Inline
+      // JS popup instead of redirecting to `authorizationUrl`.
+      expect(res.body.meta.accessCode).toBe('abc');
       expect(paystack.initializeTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('POST .../start-checkout also returns accessCode, for retrying a checkout that failed to reach the gateway the first time', async () => {
+      paystack.initializeTransaction.mockRejectedValueOnce(new Error('gateway unreachable'));
+      const folio = await openFolio();
+      const initRes = await t.request
+        .post(`/api/v1/cashiering/folios/${folio.id}/payments/paystack`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ amount: '60.00', currency: 'NGN', guest_email: 'guest@example.com' });
+      expect(initRes.status).toBe(202);
+      const paymentId = initRes.body.data.id;
+
+      paystack.initializeTransaction.mockImplementation(async ({ reference }) => ({
+        authorizationUrl: 'https://paystack.test/pay/retry',
+        accessCode: 'retry-code',
+        reference,
+      }));
+      const retryRes = await t.request
+        .post(`/api/v1/cashiering/payments/${paymentId}/start-checkout`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .send({ guest_email: 'guest@example.com' });
+      expect(retryRes.status).toBe(200);
+      expect(retryRes.body.meta.authorizationUrl).toBe('https://paystack.test/pay/retry');
+      expect(retryRes.body.meta.accessCode).toBe('retry-code');
     });
 
     it('a verify call after a successful gateway status applies CAPTURED and posts the folio effect', async () => {

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Card, DataTable, Button, StatusPill, ConfirmDialog } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { cashieringApi, ApiError } from '../../shared/api/index.js';
+import { openPaystackPopup } from '../../shared/paystack.js';
 import { OutstandingBalancesTab } from './OutstandingBalancesTab.jsx';
 import formStyles from './CashieringForm.module.css';
 import styles from './CashieringScreen.module.css';
@@ -185,6 +186,9 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
   const [movingLine, setMovingLine] = useState(null);
   const [destinationFolioId, setDestinationFolioId] = useState('');
   const [checkoutUrl, setCheckoutUrl] = useState(null);
+  const [checkoutAccessCode, setCheckoutAccessCode] = useState(null);
+  const [checkoutPaymentId, setCheckoutPaymentId] = useState(null);
+  const [openingPopup, setOpeningPopup] = useState(false);
 
   async function reload() {
     try {
@@ -352,6 +356,8 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
           onPaystack={async (values) => {
             const result = await cashieringApi.capturePaystackPayment(folio.id, values);
             if (result?.authorizationUrl) setCheckoutUrl(result.authorizationUrl);
+            if (result?.accessCode) setCheckoutAccessCode(result.accessCode);
+            if (result?.id) setCheckoutPaymentId(result.id);
             await reload();
           }}
           onCancel={() => setShowPaymentForm(false)}
@@ -359,12 +365,54 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
       )}
 
       {checkoutUrl && (
-        <p className={formStyles.disabledNotice}>
-          Paystack checkout started — send the guest this link to complete payment:{' '}
-          <a href={checkoutUrl} target="_blank" rel="noreferrer">
-            {checkoutUrl}
-          </a>
-        </p>
+        <div className={formStyles.actionsRow}>
+          <p className={formStyles.disabledNotice}>
+            Paystack checkout started — send the guest this link to complete payment:{' '}
+            <a href={checkoutUrl} target="_blank" rel="noreferrer">
+              {checkoutUrl}
+            </a>
+          </p>
+          {/*
+            Gap closure (user-reported): "cant it be done same page." An
+            embedded Paystack popup, opened right here, as an alternative
+            to the plain link above — not a replacement, since the link is
+            still the right choice to hand to a guest who isn't physically
+            at this terminal. The popup's own success/close event is never
+            trusted by itself (ARCHITECTURE.md §7); closing it always
+            re-verifies through the real backend endpoint, the same one the
+            "Verify" action above already uses.
+          */}
+          {checkoutAccessCode && (
+            <Button
+              type="button"
+              disabled={isOffline}
+              loading={openingPopup}
+              onClick={async () => {
+                setOpeningPopup(true);
+                try {
+                  await openPaystackPopup({
+                    accessCode: checkoutAccessCode,
+                    onClose: async () => {
+                      const paymentId = checkoutPaymentId;
+                      setCheckoutUrl(null);
+                      setCheckoutAccessCode(null);
+                      setCheckoutPaymentId(null);
+                      setOpeningPopup(false);
+                      if (paymentId) {
+                        await onAction(() => cashieringApi.verifyPayment(paymentId));
+                        reload();
+                      }
+                    },
+                  });
+                } catch {
+                  setOpeningPopup(false);
+                }
+              }}
+            >
+              Pay now (same page)
+            </Button>
+          )}
+        </div>
       )}
 
       {voidingLine && (
