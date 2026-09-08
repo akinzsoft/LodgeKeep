@@ -16,15 +16,23 @@ const ASSIGNMENT_TONE = { assigned: 'neutral', in_progress: 'info', completed: '
  * the 44px touch-safe control (see its own header) — this tab never opts
  * into `size="compact"`, unlike the desktop-oriented Setup/Booking tables.
  *
- * "Attendant" is entered as a raw user id, not picked from a name list — no
- * staff-directory endpoint exists yet in this codebase (`GET /users` was
- * never built; PLAN.md's own Phase 0/1 status calls user management "a UI
- * gap"). Flagged here rather than inventing a fake picker.
+ * Gap closure (user-reported): "all dirty rooms shld show and all
+ * houseppers shld show i dont need to type anytin" — the room picker now
+ * lists only rooms actually needing a housekeeper
+ * (`housekeeping_reported_status === 'dirty'`), excluding a room already on
+ * today's board (assigning it again would just hit
+ * `CONFLICT_ASSIGNMENT_ALREADY_EXISTS`, since a room can only be assigned
+ * once per business date). The attendant field is now a real `<select>`
+ * sourced from `GET /housekeeping/attendants` (new — see that endpoint's
+ * own header for why it's a dedicated read rather than reusing `GET
+ * /users`), not a raw id typed by hand — and the board's own "Attendant"
+ * column now resolves the same list to a real name instead of a bare id.
  */
 export function BoardTab({ isOffline = false }) {
   const [businessDate, setBusinessDate] = useState(todayIso());
   const [board, setBoard] = useState(null);
   const [rooms, setRooms] = useState(null);
+  const [attendants, setAttendants] = useState(null);
   const [error, setError] = useState(null);
   const [form, setForm] = useState({ room_id: '', attendant_user_id: '' });
   const [submitting, setSubmitting] = useState(false);
@@ -43,8 +51,18 @@ export function BoardTab({ isOffline = false }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     reload();
     setupApi.listRooms().then(setRooms).catch(() => setRooms([]));
+    housekeepingApi.listAttendants().then(setAttendants).catch(() => setAttendants([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only fetch, same pattern FrontDeskTab's own effect documents
   }, []);
+
+  const assignedRoomIds = new Set((board ?? []).map((row) => String(row.room_id)));
+  const dirtyUnassignedRooms = (rooms ?? []).filter(
+    (room) => room.housekeeping_reported_status === 'dirty' && !assignedRoomIds.has(String(room.id))
+  );
+  const attendantName = (userId) => {
+    const attendant = (attendants ?? []).find((a) => String(a.id) === String(userId));
+    return attendant ? `${attendant.first_name} ${attendant.last_name}` : `Staff ${userId}`;
+  };
 
   async function handleCreate(event) {
     event.preventDefault();
@@ -101,7 +119,7 @@ export function BoardTab({ isOffline = false }) {
         emptyMessage="No rooms assigned for this date yet."
         columns={[
           { key: 'room_number', label: 'Room' },
-          { key: 'attendant_user_id', label: 'Attendant' },
+          { key: 'attendant_user_id', label: 'Attendant', render: (row) => attendantName(row.attendant_user_id) },
           {
             key: 'status',
             label: 'Status',
@@ -125,19 +143,16 @@ export function BoardTab({ isOffline = false }) {
         }
       />
 
-      <Card title="Assign a room">
+      <Card title="Assign a dirty room">
         {error && (
           <p role="alert" className={formStyles.errorBanner}>
             {error}
           </p>
         )}
-        <p className={formStyles.disabledNotice}>
-          Attendant is entered by staff id — there is no staff directory to pick a name from yet.
-        </p>
         <form className={formStyles.form} onSubmit={handleCreate}>
           <div className={formStyles.row}>
             <label className={formStyles.field}>
-              <span className={formStyles.label}>Room</span>
+              <span className={formStyles.label}>Dirty room</span>
               <select
                 className={formStyles.select}
                 value={form.room_id}
@@ -145,9 +160,9 @@ export function BoardTab({ isOffline = false }) {
                 required
               >
                 <option value="" disabled>
-                  Select a room
+                  {rooms === null ? 'Loading rooms…' : 'Select a room'}
                 </option>
-                {(rooms ?? []).map((room) => (
+                {dirtyUnassignedRooms.map((room) => (
                   <option key={room.id} value={room.id}>
                     {room.room_number}
                   </option>
@@ -155,16 +170,30 @@ export function BoardTab({ isOffline = false }) {
               </select>
             </label>
             <label className={formStyles.field}>
-              <span className={formStyles.label}>Attendant staff id</span>
-              <input
-                className={formStyles.input}
+              <span className={formStyles.label}>Housekeeper</span>
+              <select
+                className={formStyles.select}
                 value={form.attendant_user_id}
                 onChange={(event) => setForm({ ...form, attendant_user_id: event.target.value })}
-                placeholder="e.g. 2"
                 required
-              />
+              >
+                <option value="" disabled>
+                  {attendants === null ? 'Loading housekeepers…' : 'Select a housekeeper'}
+                </option>
+                {(attendants ?? []).map((attendant) => (
+                  <option key={attendant.id} value={attendant.id}>
+                    {attendant.first_name} {attendant.last_name}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
+          {rooms !== null && dirtyUnassignedRooms.length === 0 && (
+            <p className={formStyles.disabledNotice}>No dirty, unassigned rooms right now.</p>
+          )}
+          {attendants !== null && attendants.length === 0 && (
+            <p className={formStyles.disabledNotice}>No housekeeping staff on file for this property yet.</p>
+          )}
           {isOffline && (
             <p role="alert" className={formStyles.errorBanner}>
               You&rsquo;re offline — assignments are disabled until the connection returns.

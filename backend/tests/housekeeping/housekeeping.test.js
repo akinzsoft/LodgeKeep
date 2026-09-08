@@ -136,6 +136,34 @@ describe('Housekeeping (PLAN.md Phase 3)', () => {
       expect(completed.status).toBe(200);
       expect(completed.body.data.completed_at).not.toBeNull();
     });
+
+    /**
+     * Gap closure (user-reported): "all houseppers shld show ... i dont
+     * need to type anytin" — a real, pickable list of housekeeping-role
+     * users, not a raw id typed by hand.
+     */
+    it('lists every user holding the housekeeping role at this property, and no one else', async () => {
+      const res = await t.request.get('/api/v1/housekeeping/attendants').set('Authorization', `Bearer ${tokenFor()}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([
+        expect.objectContaining({ id: String(ctx.a.users[1].id), email: 'ada@example.com', first_name: 'Ada', last_name: 'Bello' }),
+      ]);
+      // users[0] (Sam Okoro) holds `manager`, not `housekeeping` — excluded.
+      expect(res.body.data.some((row) => String(row.id) === String(ctx.a.users[0].id))).toBe(false);
+    });
+
+    it('is gated on housekeeping.view — a role without it is refused', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 1, role: 'cashier' });
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[1].id),
+      });
+      const res = await t.request.get('/api/v1/housekeeping/attendants').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
   });
 
   // ====================================================================
