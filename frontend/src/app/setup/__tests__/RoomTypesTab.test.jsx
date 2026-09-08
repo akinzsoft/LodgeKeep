@@ -7,13 +7,14 @@ import { ApiError } from '../../../shared/api/ApiError.js';
 const mocks = vi.hoisted(() => ({
   listRoomTypes: vi.fn(),
   createRoomType: vi.fn(),
+  updateRoomType: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return {
     ...actual,
-    setupApi: { listRoomTypes: mocks.listRoomTypes, createRoomType: mocks.createRoomType },
+    setupApi: { listRoomTypes: mocks.listRoomTypes, createRoomType: mocks.createRoomType, updateRoomType: mocks.updateRoomType },
   };
 });
 
@@ -85,5 +86,64 @@ describe('<RoomTypesTab>', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('already exists at this property');
     expect(screen.getByPlaceholderText('DLX')).toHaveValue('DLX');
+  });
+
+  /**
+   * Gap closure (user-reported): "update room type and Base rate only
+   * super admin" — `updateRoomType` existed in the API layer but was never
+   * called from anywhere in the frontend. No client-side role check hides
+   * the Edit button (this app has no such mechanism anywhere) — a
+   * non-super_admin sees the same button and gets the real backend 403.
+   */
+  it('opens the Edit form pre-filled and submits the real update', async () => {
+    mocks.listRoomTypes.mockResolvedValue([
+      { id: '5', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00', description: 'Nice room' },
+    ]);
+    mocks.updateRoomType.mockResolvedValue({ id: '5', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '200.00' });
+    render(<RoomTypesTab activeProperty={PROPERTY} disabled={false} />);
+    await screen.findByText('DLX');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByRole('heading', { name: 'Edit room type' })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('150.00')).toBeInTheDocument();
+
+    const editBaseRateInput = screen.getByDisplayValue('150.00');
+    await userEvent.clear(editBaseRateInput);
+    await userEvent.type(editBaseRateInput, '200.00');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(mocks.updateRoomType).toHaveBeenCalledWith('5', {
+      code: 'DLX',
+      name: 'Deluxe',
+      default_occupancy: 2,
+      base_rate: '200.00',
+      description: 'Nice room',
+    });
+  });
+
+  it('shows the real backend 403 when a non-super_admin tries to save an edit', async () => {
+    mocks.listRoomTypes.mockResolvedValue([{ id: '5', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00' }]);
+    mocks.updateRoomType.mockRejectedValue(
+      new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'You do not have permission to perform this action.' })
+    );
+    render(<RoomTypesTab activeProperty={PROPERTY} disabled={false} />);
+    await screen.findByText('DLX');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('You do not have permission to perform this action.');
+  });
+
+  it('cancels the edit without submitting', async () => {
+    mocks.listRoomTypes.mockResolvedValue([{ id: '5', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00' }]);
+    render(<RoomTypesTab activeProperty={PROPERTY} disabled={false} />);
+    await screen.findByText('DLX');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('heading', { name: 'Edit room type' })).not.toBeInTheDocument();
+    expect(mocks.updateRoomType).not.toHaveBeenCalled();
   });
 });
