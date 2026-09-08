@@ -9,6 +9,13 @@
   border-top: 1px solid var(--border);
 }
 
+/* Gap closure: see Sidebar.module.css's own note on the same rule. */
+@media print {
+  .footer {
+    display: none;
+  }
+}
+
 .icon {
   width: var(--space-5);
   height: var(--space-5);

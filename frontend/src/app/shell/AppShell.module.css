@@ -41,3 +41,24 @@
     z-index: 150;
   }
 }
+
+/* Gap closure: "export to PDF" (Profiles) — a printed page has no
+   viewport to scroll, so the flex/overflow layout that keeps `.content`
+   scrollable on screen must not clip a table taller than one screen's
+   worth; a printed guest list should flow across as many pages as it
+   needs, not truncate at the fold. Sidebar/TopBar/Footer hide themselves
+   (their own `.module.css` files), so `.body`/`.main` no longer need to
+   fill a fixed height either. */
+@media print {
+  .shell,
+  .body,
+  .main {
+    display: block;
+    min-height: 0;
+  }
+
+  .content {
+    overflow: visible;
+    padding: 0;
+  }
+}

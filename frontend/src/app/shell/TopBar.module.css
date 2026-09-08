@@ -8,6 +8,13 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Gap closure: see Sidebar.module.css's own note on the same rule. */
+@media print {
+  .topbar {
+    display: none;
+  }
+}
+
 .spacer {
   flex: 1;
 }

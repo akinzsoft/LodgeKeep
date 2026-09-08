@@ -13,3 +13,10 @@
 .message {
   margin: 0;
 }
+
+/* Gap closure: see Sidebar.module.css's own note on the same rule. */
+@media print {
+  .banner {
+    display: none;
+  }
+}
