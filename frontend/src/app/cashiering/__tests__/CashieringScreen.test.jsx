@@ -17,12 +17,17 @@ const mocks = vi.hoisted(() => ({
   verifyPayment: vi.fn(),
   listOutstandingBalances: vi.fn(),
   getOutstandingBalancesCsv: vi.fn(),
+  openPaystackPopup: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return { ...actual, cashieringApi: mocks };
 });
+
+vi.mock('../../../shared/paystack.js', () => ({
+  openPaystackPopup: mocks.openPaystackPopup,
+}));
 
 const FOLIO = { id: '1', folio_number: 'F1', billed_to: 'Guest', status: 'open', balance: '100.00', currency: 'NGN' };
 const LINE_ITEM = { id: '10', folio_id: '1', type: 'room_charge', description: 'Room 101', amount: '100.00', business_date: '2027-01-01', voided_at: null };
@@ -120,6 +125,45 @@ describe('<CashieringScreen>', () => {
     await screen.findByText('Room 101');
 
     expect(screen.queryByRole('button', { name: 'Verify' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * Gap closure (user-reported): "the payment i noticed it rendered a url
+   * paystack to make payment cant it be done same page." The backend now
+   * also returns `accessCode` — this proves the screen offers a same-page
+   * popup for it alongside the existing link, and that closing the popup
+   * re-verifies through the real backend and refreshes the folio (the
+   * popup's own close/success event is never trusted by itself).
+   */
+  it('offers an embedded "Pay now" popup for a Paystack checkout, and re-verifies + reloads on close', async () => {
+    mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+    mocks.capturePaystackPayment.mockResolvedValue({
+      id: '31',
+      authorizationUrl: 'https://paystack.test/pay/abc',
+      accessCode: 'access-abc',
+    });
+    mocks.verifyPayment.mockResolvedValue({ id: '31', status: 'CAPTURED' });
+    mocks.openPaystackPopup.mockImplementation(async ({ onClose }) => {
+      await onClose();
+    });
+    await loadReservation();
+    await screen.findByText('Room 101');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Capture a payment' }));
+    await userEvent.selectOptions(screen.getByLabelText('Method'), 'paystack');
+    await userEvent.type(screen.getByPlaceholderText('0.00'), '100.00');
+    await userEvent.type(screen.getByLabelText('Guest email'), 'guest@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
+
+    await screen.findByRole('link', { name: 'https://paystack.test/pay/abc' });
+    await userEvent.click(screen.getByRole('button', { name: 'Pay now (same page)' }));
+
+    expect(mocks.openPaystackPopup).toHaveBeenCalledWith(
+      expect.objectContaining({ accessCode: 'access-abc', onClose: expect.any(Function) })
+    );
+    expect(mocks.verifyPayment).toHaveBeenCalledWith('31');
+    expect(mocks.getFolio).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Pay now (same page)' })).not.toBeInTheDocument();
   });
 
   it('disables mutating actions while offline', async () => {

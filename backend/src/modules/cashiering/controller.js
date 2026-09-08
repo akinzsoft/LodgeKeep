@@ -226,7 +226,7 @@ async function capturePaystackPayment(req, res, next) {
     }
 
     try {
-      const { payment, authorizationUrl } = await service.startPaystackCheckout({
+      const { payment, authorizationUrl, accessCode } = await service.startPaystackCheckout({
         context: req.context,
         paymentId: intentResult.id,
         guestEmail,
@@ -235,7 +235,11 @@ async function capturePaystackPayment(req, res, next) {
       if (!intentOutcome.replayed) {
         await req.audit({ entityType: 'payments', entityId: payment.id, action: 'start_checkout', afterState: payment });
       }
-      res.status(201).json(ok(payment, { authorizationUrl }));
+      // `accessCode` (new, gap closure — "same page ... instead of a url")
+      // lets the caller open Paystack's own embedded Inline JS popup
+      // instead of the plain `authorizationUrl` link — see service.js's
+      // own header comment on `startPaystackCheckout` for the full reasoning.
+      res.status(201).json(ok(payment, { authorizationUrl, accessCode }));
     } catch (checkoutError) {
       // The local intent is real and saved; only starting checkout with the
       // gateway failed. Surface both facts rather than a bare 500 — the
@@ -257,7 +261,7 @@ async function startCheckout(req, res, next) {
       guestEmail: require_(req.body, 'guest_email'),
       callbackUrl: req.body?.callback_url,
     });
-    res.status(200).json(ok(result.payment, { authorizationUrl: result.authorizationUrl }));
+    res.status(200).json(ok(result.payment, { authorizationUrl: result.authorizationUrl, accessCode: result.accessCode }));
   } catch (error) {
     next(error);
   }

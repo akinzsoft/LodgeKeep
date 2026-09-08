@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Card, Button, DataTable, StatusPill } from '../../shared/components/index.js';
 import { setupApi, reservationsApi, cashieringApi, ApiError } from '../../shared/api/index.js';
+import { openPaystackPopup } from '../../shared/paystack.js';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
 
@@ -81,6 +82,9 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const [folio, setFolio] = useState(null);
   const [cashAmount, setCashAmount] = useState('');
   const [checkoutUrl, setCheckoutUrl] = useState(null);
+  const [checkoutAccessCode, setCheckoutAccessCode] = useState(null);
+  const [checkoutPaymentId, setCheckoutPaymentId] = useState(null);
+  const [openingPopup, setOpeningPopup] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
   const [paymentSuccess, setPaymentSuccess] = useState(null);
   const [capturingPayment, setCapturingPayment] = useState(false);
@@ -268,6 +272,8 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     setPaymentError(null);
     setPaymentSuccess(null);
     setCheckoutUrl(null);
+    setCheckoutAccessCode(null);
+    setCheckoutPaymentId(null);
     try {
       const result = await cashieringApi.capturePaystackPayment(folio.id, {
         amount: cashAmount,
@@ -276,6 +282,8 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
       });
       if (result?.authorizationUrl) {
         setCheckoutUrl(result.authorizationUrl);
+        if (result?.accessCode) setCheckoutAccessCode(result.accessCode);
+        if (result?.id) setCheckoutPaymentId(result.id);
       } else {
         // The honest-202-partial-success path (`controller.js`'s own
         // `capturePaystackPayment`) — the local intent is real and saved,
@@ -288,6 +296,44 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
       setPaymentError(caught instanceof ApiError ? caught.message : 'Could not start the card payment.');
     } finally {
       setCapturingPayment(false);
+    }
+  }
+
+  /**
+   * Gap closure (user-reported): "cant it be done same page." Opens
+   * Paystack's own embedded popup for the transaction `handleCardPayment`
+   * already started, instead of the guest/staff having to follow the
+   * `checkoutUrl` link out to a separate page. See `shared/paystack.js`'s
+   * own header for why the popup's own close/success event is never
+   * trusted by itself — this always re-verifies through the real backend
+   * afterward, same as `CashieringScreen`'s identical flow.
+   */
+  async function handleResumePaystackPopup() {
+    setOpeningPopup(true);
+    try {
+      await openPaystackPopup({
+        accessCode: checkoutAccessCode,
+        onClose: async () => {
+          const paymentId = checkoutPaymentId;
+          setCheckoutUrl(null);
+          setCheckoutAccessCode(null);
+          setCheckoutPaymentId(null);
+          setOpeningPopup(false);
+          if (!paymentId) return;
+          try {
+            await cashieringApi.verifyPayment(paymentId);
+          } catch {
+            // The verify call itself can fail honestly (e.g. no gateway
+            // credentials in this environment) — the folio refresh below
+            // still shows the real, current balance either way.
+          }
+          const refreshed = await cashieringApi.getFolio(folio.id);
+          setFolio(refreshed);
+          setCashAmount(refreshed.balance);
+        },
+      });
+    } catch {
+      setOpeningPopup(false);
     }
   }
 
@@ -606,11 +652,18 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
           </p>
 
           {checkoutUrl && (
-            <p className={formStyles.disabledNotice}>
-              <a href={checkoutUrl} target="_blank" rel="noreferrer">
-                Open the card payment page
-              </a>
-            </p>
+            <div className={formStyles.actionsRow}>
+              <p className={formStyles.disabledNotice}>
+                <a href={checkoutUrl} target="_blank" rel="noreferrer">
+                  Open the card payment page
+                </a>
+              </p>
+              {checkoutAccessCode && (
+                <Button type="button" loading={openingPopup} disabled={isOffline} onClick={handleResumePaystackPopup}>
+                  Pay now (same page)
+                </Button>
+              )}
+            </div>
           )}
 
           <div className={formStyles.row}>
