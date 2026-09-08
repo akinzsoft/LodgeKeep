@@ -62,6 +62,10 @@ jobs:
       JWT_ACCESS_TTL: 15m
       JWT_REFRESH_TTL: 30d
       APP_DOMAIN: lodgekeep.app
+      # src/shared/encryption.js — a throwaway key for the CI schema only,
+      # never a real secret. Required to encrypt/decrypt email_settings'
+      # smtp_password_encrypted column.
+      ENCRYPTION_KEY: QHPmf9o+5XHE98VJUL6OTl/xicwtWLhDrZsSOOnhtIo=
 
     steps:
       - uses: actions/checkout@v4
