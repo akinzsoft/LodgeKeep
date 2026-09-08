@@ -59,6 +59,15 @@
   gap: var(--space-3);
 }
 
+/* Gap closure: an outstanding folio balance on the front-desk boards —
+   colour alone is never the only signal (DESIGN_SYSTEM.md §1's status-pill
+   rule extends to this too), so this only ever accompanies the real amount
+   text, never replaces it. */
+.balanceOwing {
+  color: var(--state-danger);
+  font-weight: var(--text-label-weight);
+}
+
 .errorBanner {
   margin: 0 0 var(--space-4);
   padding: var(--space-3);

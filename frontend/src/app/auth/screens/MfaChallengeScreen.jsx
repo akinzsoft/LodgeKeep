@@ -23,7 +23,7 @@ import styles from './MfaChallengeScreen.module.css';
  * exception string.
  */
 export function MfaChallengeScreen() {
-  const { status, error, logout, verifyMfa } = useAuth();
+  const { status, error, cancelMfaChallenge, verifyMfa } = useAuth();
   const [code, setCode] = useState('');
   const isSubmitting = status === 'authenticating';
 
@@ -69,7 +69,7 @@ export function MfaChallengeScreen() {
             </Button>
           </form>
 
-          <Button variant="secondary" onClick={logout} className={styles.backButton}>
+          <Button variant="secondary" onClick={cancelMfaChallenge} className={styles.backButton}>
             Back to sign in
           </Button>
         </div>

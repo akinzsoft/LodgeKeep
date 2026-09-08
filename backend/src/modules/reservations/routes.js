@@ -46,6 +46,16 @@ function reservationsRouter() {
 
   router.get('/availability', requirePermission('reservations.view'), controller.checkAvailability);
 
+  // Gap closure (user-reported): which rooms of a type are genuinely
+  // eligible to be offered as a "preferred room" for a date range — see
+  // `service.listEligiblePreferredRooms`'s own header. Gated the same as
+  // `checkAvailability` since it serves the same booking-form screen.
+  router.get(
+    '/reservations/eligible-preferred-rooms',
+    requirePermission('reservations.view'),
+    controller.listEligiblePreferredRooms
+  );
+
   // PLAN.md Phase 3: the missing overbooking-threshold config endpoint —
   // static path components either side of the two path params, no
   // collision risk with `/reservations/:id`-style routes below.
@@ -65,6 +75,15 @@ function reservationsRouter() {
   router.post('/reservations/:id/cancel', requirePermission('reservations.manage'), controller.cancelReservation);
   router.post('/reservations/:id/mark-no-show', requirePermission('reservations.manage'), controller.markNoShow);
 
+  // Gap closure (user-reported): opens a folio and posts room charges
+  // before check-in so payment can be taken at booking time — see
+  // `service.openBookingFolio`'s own header. Gated on `cashiering.post_charge`
+  // (not `reservations.manage`), matching SECURITY.md §5's own "post a
+  // charge" definition for that key — this action posts real
+  // folio_line_items, so the money-handling permission is the correct gate,
+  // not the reservation one.
+  router.post('/reservations/:id/open-folio', requirePermission('cashiering.post_charge'), controller.openBookingFolio);
+
   router.get('/reservations/:id/notes', requirePermission('reservations.view'), controller.listNotes);
   router.post('/reservations/:id/notes', requirePermission('reservations.manage'), controller.addNote);
 
@@ -73,9 +92,26 @@ function reservationsRouter() {
   router.get('/front-desk/departures', requirePermission('front_desk.view'), controller.listDepartures);
   router.get('/front-desk/in-house', requirePermission('front_desk.view'), controller.listInHouse);
 
+  // Gap closure: actual free room numbers as of the property's current
+  // business date — see `service.listFreeRoomsNow`'s own header. Gated on
+  // `front_desk.view` (not `reservations.view`) since "which rooms are
+  // physically free right now" is a front-desk-shaped question (walk-ins,
+  // check-in); the Availability screen's own permission fetches
+  // `reservations.view` for everything else and treats a 403 here as
+  // "hide this panel," the same per-widget degradation
+  // `HomeDashboard`'s own KPI cards already use.
+  router.get('/front-desk/free-rooms', requirePermission('front_desk.view'), controller.listFreeRooms);
+
   router.post('/reservations/:id/check-in', requirePermission('front_desk.manage'), controller.checkIn);
   router.post('/reservations/:id/check-out', requirePermission('front_desk.manage'), controller.checkOut);
   router.post('/reservations/:id/room-move', requirePermission('front_desk.manage'), controller.roomMove);
+
+  // Gap closure (user-reported): a guest who overstays past their booked
+  // departure without checking out — see `service.extendStay`'s own
+  // header. Gated the same as check-in/check-out/room-move: this is a
+  // front-desk transition on an already-checked-in reservation, not a
+  // reservations.manage-level change to a future booking's dates.
+  router.post('/reservations/:id/extend-stay', requirePermission('front_desk.manage'), controller.extendStay);
 
   return router;
 }

@@ -20,4 +20,18 @@ describe('<BusinessDateIndicator>', () => {
     render(<BusinessDateIndicator businessDate="2026-03-15" now={new Date(2026, 2, 15)} />);
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
+
+  /**
+   * Gap closure (user-reported): `main.jsx` used to pass a hardcoded
+   * placeholder date here always, so this component never had to handle a
+   * genuinely absent one. It's real now for two cases — the properties
+   * fetch it comes from hasn't resolved yet, and a real property that has
+   * never had one configured (Phase 1's own nullable default) — neither of
+   * which should crash on `null.split(...)`.
+   */
+  it('shows "Not set" rather than crashing when businessDate is absent', () => {
+    render(<BusinessDateIndicator businessDate={null} />);
+    expect(screen.getByText('Not set')).toBeInTheDocument();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  });
 });

@@ -1,4 +1,4 @@
-import { request } from './client.js';
+import { request, requestWithMeta } from './client.js';
 
 /**
  * PLAN.md Phase 2.5's cashiering module. Same shape as `reservations.js`:
@@ -84,20 +84,37 @@ export function captureCashPayment(folioId, { amount, currency }) {
   });
 }
 
-/** @param {string} folioId @param {{amount: string, currency: string, guestEmail: string, callbackUrl?: string}} params */
-export function capturePaystackPayment(folioId, { amount, currency, guestEmail, callbackUrl }) {
-  return request(`/cashiering/folios/${folioId}/payments/paystack`, {
+/**
+ * Gap closure (found while wiring "pay at the point of booking," not
+ * previously flagged): the backend's `authorizationUrl` — and the
+ * honest-202-partial-success path's `checkoutError`/`retry` — travel in
+ * the response envelope's `meta`, never `data` (`controller.js`'s
+ * `capturePaystackPayment`/`startCheckout`), the identical shape
+ * `portal.js`'s own checkout endpoints already needed `requestWithMeta`
+ * for. This function used plain `request()` until now, which silently
+ * discards `meta` — meaning `authorizationUrl` could never have reached
+ * any caller, including `CashieringScreen.jsx`'s own existing card-payment
+ * button, which has therefore never actually worked. Flattened the same
+ * way `portal.js` already does, so a caller never has to know which half
+ * of the envelope a field came from.
+ *
+ * @param {string} folioId @param {{amount: string, currency: string, guestEmail: string, callbackUrl?: string}} params
+ */
+export async function capturePaystackPayment(folioId, { amount, currency, guestEmail, callbackUrl }) {
+  const { data, meta } = await requestWithMeta(`/cashiering/folios/${folioId}/payments/paystack`, {
     method: 'POST',
     body: { amount, currency, guest_email: guestEmail, callback_url: callbackUrl },
     headers: { 'Idempotency-Key': idempotencyKey() },
   });
+  return { ...data, ...meta };
 }
 
-export function startPaystackCheckout(paymentId, { guestEmail, callbackUrl }) {
-  return request(`/cashiering/payments/${paymentId}/start-checkout`, {
+export async function startPaystackCheckout(paymentId, { guestEmail, callbackUrl }) {
+  const { data, meta } = await requestWithMeta(`/cashiering/payments/${paymentId}/start-checkout`, {
     method: 'POST',
     body: { guest_email: guestEmail, callback_url: callbackUrl },
   });
+  return { ...data, ...meta };
 }
 
 export function verifyPayment(paymentId) {

@@ -221,14 +221,40 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
         ]}
         rows={payments ?? []}
         rowKey={(row) => row.id}
-        actions={(row) =>
-          row.status === 'CAPTURED' &&
-          !row.parent_payment_id && (
-            <Button size="compact" variant="danger" disabled={isOffline || submitting} onClick={() => setRefundingPayment(row)}>
-              Refund
-            </Button>
-          )
-        }
+        actions={(row) => (
+          <div className={formStyles.actionsRow}>
+            {/*
+              Gap closure (user-reported): a real Paystack payment can
+              succeed on Paystack's own side while this app's own copy
+              stays PENDING/INITIATED — the webhook that would normally
+              flip it to CAPTURED can't reach a local dev backend at all,
+              and nothing anywhere in the UI ever called the backend's
+              already-real `POST /cashiering/payments/:id/verify` (checks
+              the transaction directly against Paystack's own API, not
+              dependent on the webhook). Shown only for a still-pending
+              gateway payment — cash is always synchronous, and a
+              CAPTURED/FAILED/REFUNDED payment has nothing left to verify.
+            */}
+            {row.provider === 'paystack' && (row.status === 'PENDING' || row.status === 'INITIATED') && (
+              <Button
+                size="compact"
+                variant="secondary"
+                disabled={isOffline || submitting}
+                onClick={async () => {
+                  await onAction(() => cashieringApi.verifyPayment(row.id));
+                  reload();
+                }}
+              >
+                Verify
+              </Button>
+            )}
+            {row.status === 'CAPTURED' && !row.parent_payment_id && (
+              <Button size="compact" variant="danger" disabled={isOffline || submitting} onClick={() => setRefundingPayment(row)}>
+                Refund
+              </Button>
+            )}
+          </div>
+        )}
       />
 
       {folio.status === 'open' && (

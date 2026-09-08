@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   listArrivals: vi.fn(),
   listDepartures: vi.fn(),
   listInHouse: vi.fn(),
+  listFreeRooms: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -33,6 +34,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       listArrivals: mocks.listArrivals,
       listDepartures: mocks.listDepartures,
       listInHouse: mocks.listInHouse,
+      listFreeRooms: mocks.listFreeRooms,
     },
   };
 });
@@ -51,6 +53,7 @@ describe('<BookingScreen>', () => {
     mocks.listArrivals.mockResolvedValue([]);
     mocks.listDepartures.mockResolvedValue([]);
     mocks.listInHouse.mockResolvedValue([]);
+    mocks.listFreeRooms.mockResolvedValue([]);
   });
 
   it('shows a loading state before properties resolve', () => {

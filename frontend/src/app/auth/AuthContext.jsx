@@ -4,22 +4,39 @@ import { authApi, configureApiClient, ApiError } from '../../shared/api/index.js
 /**
  * AuthContext — the frontend half of PLAN.md Phase 0's "a user can log in,
  * see an empty shell scoped to their tenant" exit line. Owns the only copy
- * of the access/refresh tokens this app holds, and is the one place
+ * of the access token this app holds, and is the one place
  * `configureApiClient` is called, wiring `shared/api/client.js`'s generic
  * refresh-on-expiry hook to this context's own refresh logic.
  *
- * ── TOKENS LIVE IN MEMORY ONLY, NEVER localStorage ─────────────────────────
+ * ── THE ACCESS TOKEN LIVES IN MEMORY ONLY; THE REFRESH TOKEN LIVES IN AN
+ *    HttpOnly COOKIE, NEVER IN JS AT ALL ─────────────────────────────────
  *
  * PRODUCT_REQUIREMENTS.md §3.16: "tokens are never placed in localStorage
- * where an XSS can read them" — session persistence is meant to come from an
- * HttpOnly cookie instead, which the backend does not set yet (it returns
- * both tokens in the login/refresh response body, not a Set-Cookie header).
- * Given that, an in-memory-only store is the compliant choice available
- * today, not a shortcut: a full page reload always logs the user out. Adding
- * HttpOnly-cookie-based refresh-token delivery is backend work — changing
- * how `src/auth/service.js` issues tokens — outside this pass's scope, and
- * belongs on the list of things to close before Phase 1 ships something a
- * real front-desk shift would rely on staying signed in through.
+ * where an XSS can read them." This used to mean the refresh token sat in a
+ * JS variable for its whole lifetime (compliant — not localStorage — but
+ * wiped by every page reload, logging a real front-desk shift out mid-task,
+ * and still readable by any script running on the page). Gap closure:
+ * `src/auth/service.js` now sets the refresh token as a `Set-Cookie` header
+ * (`HttpOnly`, `src/auth/refresh-cookie.js`) instead of returning it in the
+ * response body at all — this file never receives it, holds it, or could
+ * leak it even under XSS. The browser attaches it automatically to
+ * `/auth/refresh` and `/auth/logout`; nothing here manages it directly.
+ *
+ * ── BOOTSTRAP: RESTORING A SESSION ACROSS A RELOAD ─────────────────────────
+ *
+ * The access token is still gone the instant the page reloads (by design —
+ * it is a short-lived JWT, never meant to persist), but the refresh cookie
+ * survives. `AuthProvider` spends its first render in `status ===
+ * 'bootstrapping'` while it calls `POST /auth/refresh` with no arguments —
+ * "is there still a valid session cookie?" — before showing either the
+ * login screen or the app shell. A rejection here (no cookie, expired,
+ * revoked) is a normal, silent "not logged in," not a session-expiry error:
+ * it lands on `idle`, exactly like a browser that was never logged in at
+ * all, never `session_expired` (that status is reserved for a session that
+ * broke mid-use — see below). The bootstrap call is guarded by a ref, not a
+ * cleanup-cancelled flag, so React 19's StrictMode double-invoking this
+ * effect in development can't fire the (non-idempotent — it ROTATES the
+ * refresh token) call twice.
  *
  * ── WHAT "USER" DOES NOT INCLUDE ────────────────────────────────────────
  *
@@ -30,9 +47,13 @@ import { authApi, configureApiClient, ApiError } from '../../shared/api/index.js
  * There is no display name, avatar, or email in that response. `email` here
  * is the value `login()` was CALLED with, kept as the least-wrong stand-in
  * for a name until either the login response carries real profile fields or
- * a `GET /api/v1/me`-shaped endpoint exists (neither is built). Anything
- * rendering `user.email` as a name should read as a placeholder, not a
- * finished feature.
+ * a `GET /api/v1/me`-shaped endpoint exists (neither is built). A session
+ * restored by the bootstrap refresh above has no `email` at all — no login
+ * form was ever submitted this page load to supply one — so `user.email` is
+ * `undefined` in that case; a consumer (`main.jsx`) falls back to a labelled
+ * placeholder, the same "Property {id}" precedent this file already uses
+ * for the missing property name. Anything rendering `user.email` as a name
+ * should read as a placeholder, not a finished feature.
  *
  * ── SESSION EXPIRY (TESTING.md FE-6) ───────────────────────────────────────
  *
@@ -47,6 +68,7 @@ import { authApi, configureApiClient, ApiError } from '../../shared/api/index.js
 
 const AuthContext = createContext(null);
 
+const BOOTSTRAPPING = 'bootstrapping';
 const IDLE = 'idle';
 const AUTHENTICATING = 'authenticating';
 const AUTHENTICATED = 'authenticated';
@@ -54,7 +76,7 @@ const MFA_REQUIRED = 'mfa_required';
 const SESSION_EXPIRED = 'session_expired';
 
 export function AuthProvider({ children }) {
-  const [status, setStatus] = useState(IDLE);
+  const [status, setStatus] = useState(BOOTSTRAPPING);
   const [user, setUser] = useState(null);
   const [error, setError] = useState(null);
   // Set only while status === MFA_REQUIRED — the challenge token
@@ -63,21 +85,24 @@ export function AuthProvider({ children }) {
   // name yet" gap this file's own header already notes for a real login).
   const [mfaChallenge, setMfaChallenge] = useState(null);
 
-  // Refs, not state: `configureApiClient`'s callbacks close over these once,
+  // A ref, not state: `configureApiClient`'s callback closes over this once,
   // on mount, and must always see the LATEST token — a state closure from
-  // the initial render would go stale the moment a token rotates.
+  // the initial render would go stale the moment a token rotates. There is
+  // no equivalent ref for the refresh token any more — it never reaches
+  // this file at all (see this file's own header).
   const accessTokenRef = useRef(null);
-  const refreshTokenRef = useRef(null);
   // Mirrors user.activePropertyId. Needed alongside the state itself because
   // the refresh handler below is registered once (see the effect's comment)
   // and would otherwise close over whatever `user` was on that first render
-  // — always `null` — forever, the same staleness problem the token refs
-  // exist to avoid, just missed for this one field originally.
+  // — always `null` — forever, the same staleness problem the token ref
+  // exists to avoid, just missed for this one field originally.
   const activePropertyIdRef = useRef(null);
+  // Guards the bootstrap effect below against React 19 StrictMode's
+  // double-invoke-in-development behaviour — see this file's own header.
+  const hasBootstrappedRef = useRef(false);
 
   const clearSession = useCallback(() => {
     accessTokenRef.current = null;
-    refreshTokenRef.current = null;
     activePropertyIdRef.current = null;
     setUser(null);
     setMfaChallenge(null);
@@ -85,7 +110,6 @@ export function AuthProvider({ children }) {
 
   const applySession = useCallback((result) => {
     accessTokenRef.current = result.accessToken;
-    refreshTokenRef.current = result.refreshToken ?? refreshTokenRef.current;
     activePropertyIdRef.current = result.activePropertyId ?? activePropertyIdRef.current ?? null;
     setUser((previous) => ({
       ...previous,
@@ -162,22 +186,37 @@ export function AuthProvider({ children }) {
   );
 
   const logout = useCallback(async () => {
-    const refreshToken = refreshTokenRef.current;
     clearSession();
     setStatus(IDLE);
     setError(null);
-    if (refreshToken) {
-      // Best-effort: the point of logging out client-side is to stop acting
-      // as this user immediately, which clearSession() above already did.
-      // A network failure here must not trap someone in a "logged in" state
-      // they can visibly see they've left.
-      try {
-        await authApi.logout({ refreshToken });
-      } catch {
-        // Deliberately swallowed — see comment above.
-      }
+    // Best-effort: the point of logging out client-side is to stop acting as
+    // this user immediately, which clearSession() above already did. A
+    // network failure here must not trap someone in a "logged in" state they
+    // can visibly see they've left. No refresh token to pass any more — the
+    // browser attaches the cookie itself; the endpoint is a clean no-op if
+    // it's already gone (`staffLogout`'s own header).
+    try {
+      await authApi.logout();
+    } catch {
+      // Deliberately swallowed — see comment above.
     }
   }, [clearSession]);
+
+  /**
+   * Backing out of an MFA challenge (`MfaChallengeScreen`'s "Back to sign
+   * in") — deliberately NOT `logout()`. No session was ever established at
+   * this stage (a challenge token, not a refresh cookie), so there is
+   * nothing server-side to revoke; this used to be enforceable client-side
+   * by checking "do we hold a refresh token yet" before calling `logout()`,
+   * a check that no longer exists now that the refresh token lives in an
+   * HttpOnly cookie this file never sees (see this file's own header) — so
+   * it gets its own local-only reset instead of losing that guarantee.
+   */
+  const cancelMfaChallenge = useCallback(() => {
+    setMfaChallenge(null);
+    setStatus(IDLE);
+    setError(null);
+  }, []);
 
   const switchProperty = useCallback(async (propertyId) => {
     const result = await authApi.switchProperty({ propertyId });
@@ -188,32 +227,23 @@ export function AuthProvider({ children }) {
   }, []);
 
   // The refresh-on-expiry handshake `shared/api/client.js` calls into.
-  // Registered once; reads the CURRENT tokens via refs, never a stale
-  // closure over the render that first set them up.
+  // Registered once; reads the CURRENT access token via the ref, never a
+  // stale closure over the render that first set it up. No refresh token to
+  // read any more — the browser attaches the cookie to this same call
+  // automatically.
   useEffect(() => {
     configureApiClient({
       accessTokenGetter: () => accessTokenRef.current,
       accessTokenExpiredHandler: async () => {
-        const refreshToken = refreshTokenRef.current;
-        if (!refreshToken) {
-          const sessionError = new ApiError({ code: 'AUTH_TOKEN_INVALID', message: 'No session to refresh.' });
-          clearSession();
-          setStatus(SESSION_EXPIRED);
-          setError(toDisplayError(sessionError));
-          throw sessionError;
-        }
         try {
-          const result = await authApi.refresh({
-            refreshToken,
-            propertyId: activePropertyIdRef.current ?? undefined,
-          });
+          const result = await authApi.refresh({ propertyId: activePropertyIdRef.current ?? undefined });
           accessTokenRef.current = result.accessToken;
-          refreshTokenRef.current = result.refreshToken;
           return result.accessToken;
         } catch (caught) {
-          // The refresh token itself is no longer usable (revoked, expired,
-          // or the account was deactivated — AUTH-6/AUTH-10's refresh-path
-          // cases). This is genuine session expiry, not a retryable blip.
+          // The refresh cookie itself is no longer usable (missing, revoked,
+          // expired, or the account was deactivated — AUTH-6/AUTH-10's
+          // refresh-path cases). This is genuine session expiry, not a
+          // retryable blip — the user WAS signed in and now isn't.
           clearSession();
           setStatus(SESSION_EXPIRED);
           setError(toDisplayError(caught));
@@ -223,6 +253,27 @@ export function AuthProvider({ children }) {
     });
   }, [clearSession]);
 
+  // Bootstrap: does a valid session cookie already exist (a page reload, or
+  // the very first load of a browser that logged in before)? See this
+  // file's own header for the full reasoning, including why this is guarded
+  // by a ref rather than depending on effect cleanup.
+  useEffect(() => {
+    if (hasBootstrappedRef.current) return;
+    hasBootstrappedRef.current = true;
+    (async () => {
+      try {
+        const result = await authApi.refresh({});
+        applySession(result);
+        setStatus(AUTHENTICATED);
+      } catch {
+        // No cookie, or it's expired/revoked — a normal "not logged in,"
+        // never an error banner: nothing was actually lost this page load.
+        clearSession();
+        setStatus(IDLE);
+      }
+    })();
+  }, [applySession, clearSession]);
+
   const value = {
     status,
     isAuthenticated: status === AUTHENTICATED,
@@ -231,6 +282,7 @@ export function AuthProvider({ children }) {
     login,
     verifyMfa,
     logout,
+    cancelMfaChallenge,
     switchProperty,
     requestPasswordReset: authApi.requestPasswordReset,
     completePasswordReset: authApi.completePasswordReset,

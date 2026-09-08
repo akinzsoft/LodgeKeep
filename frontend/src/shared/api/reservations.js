@@ -41,12 +41,38 @@ export function checkAvailability({ roomTypeId, arrivalDate, departureDate }) {
   return request(`/availability?${params}`);
 }
 
+/**
+ * Gap closure (user-reported): rooms of a type genuinely eligible to be
+ * offered as a "preferred room" for this date range — excludes a room
+ * already committed (by preference or actual check-in) to another
+ * overlapping-dates reservation. See the backend's own
+ * `listEligiblePreferredRooms` header for the exact exclusion rule.
+ * @param {{roomTypeId: string, arrivalDate: string, departureDate: string}} params
+ */
+export function listEligiblePreferredRooms({ roomTypeId, arrivalDate, departureDate }) {
+  const params = new URLSearchParams({ room_type_id: roomTypeId, arrival_date: arrivalDate, departure_date: departureDate });
+  return request(`/reservations/eligible-preferred-rooms?${params}`);
+}
+
 // ---------------------------------------------------------------------
 // Reservations
 // ---------------------------------------------------------------------
 
 export function createReservation(body) {
   return request('/reservations', { method: 'POST', body, headers: { 'Idempotency-Key': idempotencyKey() } });
+}
+
+/**
+ * Gap closure (user-reported): "pay at the point of booking" — opens the
+ * reservation's folio and posts its room charges before check-in, so
+ * `cashieringApi`'s real cash/card capture endpoints have a real folio to
+ * post against. See the backend's own `openBookingFolio` header for why
+ * this stays a request, never a hold — the reservation is already
+ * confirmed by the time this is called.
+ * @returns {Promise<{id: string, balance: string, currency: string, status: string}>}
+ */
+export function openBookingFolio(id) {
+  return request(`/reservations/${id}/open-folio`, { method: 'POST', body: {}, headers: { 'Idempotency-Key': idempotencyKey() } });
 }
 
 export function getReservation(id) {
@@ -108,6 +134,20 @@ export function listInHouse() {
   return request('/front-desk/in-house');
 }
 
+/**
+ * Gap closure: actual room numbers free as of the property's current
+ * business date — see `backend/src/modules/reservations/service.js`'s
+ * `listFreeRoomsNow` for why this is a distinct read from
+ * `checkAvailability`'s aggregate sellable count. `roomTypeId` is optional —
+ * omitted for check-in/room-move, which deliberately allow any room type
+ * (an upgrade); supplied by the availability search, scoped to one type.
+ * @param {string} [roomTypeId]
+ */
+export function listFreeRooms(roomTypeId) {
+  const query = roomTypeId ? `?${new URLSearchParams({ room_type_id: roomTypeId })}` : '';
+  return request(`/front-desk/free-rooms${query}`);
+}
+
 /** @param {string} id @param {{roomId: string, overrideDirty?: boolean}} params */
 export function checkIn(id, { roomId, overrideDirty }) {
   return request(`/reservations/${id}/check-in`, {
@@ -137,6 +177,21 @@ export function roomMove(id, { newRoomId, reason }) {
   return request(`/reservations/${id}/room-move`, {
     method: 'POST',
     body: { new_room_id: newRoomId, reason },
+    headers: { 'Idempotency-Key': idempotencyKey() },
+  });
+}
+
+/**
+ * Gap closure (user-reported): a guest still checked in past their booked
+ * departure date — see `reservations/service.js`'s own `extendStay` header
+ * for why this is a deliberate, explicit front-desk action rather than
+ * something Night Audit infers on its own.
+ * @param {string} id @param {{newDepartureDate: string}} params
+ */
+export function extendStay(id, { newDepartureDate }) {
+  return request(`/reservations/${id}/extend-stay`, {
+    method: 'POST',
+    body: { new_departure_date: newDepartureDate },
     headers: { 'Idempotency-Key': idempotencyKey() },
   });
 }

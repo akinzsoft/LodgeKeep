@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   capturePaystackPayment: vi.fn(),
   refundPayment: vi.fn(),
   openAdditionalFolio: vi.fn(),
+  verifyPayment: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -79,6 +80,39 @@ describe('<CashieringScreen>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
 
     expect(mocks.captureCashPayment).toHaveBeenCalledWith('1', { amount: '100.00', currency: 'NGN' });
+  });
+
+  /**
+   * Gap closure (user-reported): a real Paystack payment that succeeded on
+   * Paystack's own side stayed PENDING in the app — the webhook that would
+   * normally reconcile it can't reach a local dev backend, and nothing in
+   * the UI ever called the backend's already-real verify endpoint. "Verify"
+   * shows only for a still-pending gateway payment, never cash or an
+   * already-settled one.
+   */
+  it('shows a Verify action for a pending Paystack payment, and calls the real verify endpoint', async () => {
+    const PENDING_PAYSTACK_PAYMENT = { id: '5', provider: 'paystack', status: 'PENDING', amount: '100.00', currency: 'NGN' };
+    mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+    mocks.getFolio.mockResolvedValue({ ...FOLIO, lineItems: [LINE_ITEM], payments: [PENDING_PAYSTACK_PAYMENT] });
+    mocks.verifyPayment.mockResolvedValue({ id: '5', status: 'CAPTURED' });
+
+    await loadReservation();
+    await screen.findByText('Room 101');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    expect(mocks.verifyPayment).toHaveBeenCalledWith('5');
+  });
+
+  it('does not show a Verify action for a cash payment or an already-captured payment', async () => {
+    const CASH_PAYMENT = { id: '6', provider: 'cash', status: 'CAPTURED', amount: '50.00', currency: 'NGN' };
+    const CAPTURED_PAYSTACK_PAYMENT = { id: '7', provider: 'paystack', status: 'CAPTURED', amount: '50.00', currency: 'NGN' };
+    mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+    mocks.getFolio.mockResolvedValue({ ...FOLIO, lineItems: [LINE_ITEM], payments: [CASH_PAYMENT, CAPTURED_PAYSTACK_PAYMENT] });
+
+    await loadReservation();
+    await screen.findByText('Room 101');
+
+    expect(screen.queryByRole('button', { name: 'Verify' })).not.toBeInTheDocument();
   });
 
   it('disables mutating actions while offline', async () => {

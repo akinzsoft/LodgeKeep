@@ -7,7 +7,28 @@
 
 const { ok } = require('../shared/response');
 const service = require('./service');
-const { ValidationError } = require('./errors');
+const { ValidationError, TokenInvalidError } = require('./errors');
+const { REFRESH_TTL_HOURS } = require('./tokens');
+const {
+  setRefreshTokenCookie,
+  clearRefreshTokenCookie,
+  readRefreshTokenCookie,
+  refreshTokenMaxAgeMs,
+} = require('./refresh-cookie');
+
+const REFRESH_TOKEN_MAX_AGE_MS = refreshTokenMaxAgeMs(REFRESH_TTL_HOURS);
+
+/**
+ * Gap closure: the refresh token used to travel in the JSON response body,
+ * which is why `AuthContext.jsx` had to hold it in a JS variable and lost it
+ * on every page reload. It now travels ONLY as an HttpOnly cookie
+ * (`refresh-cookie.js`) — stripped from every response body below so it
+ * never touches JS at all, not even transiently.
+ */
+function stripRefreshToken(result) {
+  const { refreshToken, ...rest } = result;
+  return rest;
+}
 
 function require_(body, field) {
   const value = body?.[field];
@@ -32,16 +53,27 @@ async function staffLogin(req, res, next) {
       password,
       ...requestMeta(req),
     });
-    res.status(200).json(ok(result));
+    // `mfa_challenge_required` carries no refreshToken yet — nothing to set.
+    if (result.refreshToken) {
+      setRefreshTokenCookie(res, result.refreshToken, { maxAgeMs: REFRESH_TOKEN_MAX_AGE_MS });
+    }
+    res.status(200).json(ok(stripRefreshToken(result)));
   } catch (error) {
     next(error);
   }
 }
 
-/** POST /api/v1/auth/refresh */
+/**
+ * POST /api/v1/auth/refresh — the refresh token now comes from the
+ * HttpOnly cookie, never the request body (see `refresh-cookie.js`'s
+ * header). A missing cookie is the same `TokenInvalidError` the service
+ * layer already throws for an unknown/expired/revoked one — there is
+ * nothing to distinguish it from the caller's point of view.
+ */
 async function staffRefresh(req, res, next) {
   try {
-    const refreshToken = require_(req.body, 'refresh_token');
+    const refreshToken = readRefreshTokenCookie(req);
+    if (!refreshToken) throw new TokenInvalidError();
     // Optional: the client's own record of its active property, restored
     // (after re-verification) rather than silently dropped on every rotation
     // — see the note in service.js's staffRefresh.
@@ -52,19 +84,27 @@ async function staffRefresh(req, res, next) {
       propertyId,
       ...requestMeta(req),
     });
-    res.status(200).json(
-      ok({ accessToken: result.accessToken, refreshToken: result.refreshToken })
-    );
+    setRefreshTokenCookie(res, result.refreshToken, { maxAgeMs: REFRESH_TOKEN_MAX_AGE_MS });
+    res.status(200).json(ok(stripRefreshToken(result)));
   } catch (error) {
     next(error);
   }
 }
 
-/** POST /api/v1/auth/logout */
+/**
+ * POST /api/v1/auth/logout — reads the same cookie, revokes the session it
+ * names (if any), and clears the cookie either way. No cookie at all is
+ * treated as an already-logged-out no-op (200, `revoked: false`) rather than
+ * a validation error — the caller's goal ("stop being logged in") is already
+ * true.
+ */
 async function staffLogout(req, res, next) {
   try {
-    const refreshToken = require_(req.body, 'refresh_token');
-    const result = await service.staffLogout({ context: req.context, refreshToken, ...requestMeta(req) });
+    const refreshToken = readRefreshTokenCookie(req);
+    const result = refreshToken
+      ? await service.staffLogout({ context: req.context, refreshToken, ...requestMeta(req) })
+      : { revoked: false };
+    clearRefreshTokenCookie(res);
     res.status(200).json(ok(result));
   } catch (error) {
     next(error);
@@ -198,7 +238,10 @@ async function verifyMfa(req, res, next) {
     const challengeToken = require_(req.body, 'challenge_token');
     const code = require_(req.body, 'code');
     const result = await service.verifyStaffMfa({ challengeToken, code, ...requestMeta(req) });
-    res.status(200).json(ok(result));
+    if (result.refreshToken) {
+      setRefreshTokenCookie(res, result.refreshToken, { maxAgeMs: REFRESH_TOKEN_MAX_AGE_MS });
+    }
+    res.status(200).json(ok(stripRefreshToken(result)));
   } catch (error) {
     next(error);
   }

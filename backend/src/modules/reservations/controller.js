@@ -82,6 +82,25 @@ async function checkAvailability(req, res, next) {
 }
 
 /**
+ * Gap closure (user-reported): which rooms of a type are genuinely eligible
+ * to be offered as a "preferred room," for a specific date range — see
+ * `service.listEligiblePreferredRooms`'s own header for the exclusion rule.
+ * Gated on `reservations.view`, matching `checkAvailability`, since it
+ * serves the booking form, not front desk.
+ */
+async function listEligiblePreferredRooms(req, res, next) {
+  try {
+    const roomTypeId = require_(req.query, 'room_type_id');
+    const arrivalDate = require_(req.query, 'arrival_date');
+    const departureDate = require_(req.query, 'departure_date');
+    const rooms = await service.listEligiblePreferredRooms({ context: req.context, roomTypeId, arrivalDate, departureDate });
+    res.status(200).json(ok(rooms));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * PLAN.md Phase 3: the missing configuration endpoint for
  * `room_type_inventory.overbooking_threshold_pct` — not a state-transition
  * on a `reservations` row, so it does not go through `runMutation`'s
@@ -144,6 +163,7 @@ async function createReservation(req, res, next) {
           marketSegmentId: req.body?.market_segment_id,
           bookingSourceId: req.body?.booking_source_id,
           cancellationPolicyId: req.body?.cancellation_policy_id,
+          preferredRoomId: req.body?.preferred_room_id,
         });
         return { status: 201, body: ok(reservation) };
       },
@@ -271,6 +291,34 @@ async function listInHouse(req, res, next) {
   }
 }
 
+/**
+ * Gap closure: "which actual room numbers are free right now" — see
+ * `service.listFreeRoomsNow`'s own header for why this is a distinct read
+ * from `checkAvailability`, always as-of the property's current business
+ * date, never a caller-supplied one. `room_type_id` is OPTIONAL, unlike
+ * `checkAvailability`'s: the availability search always supplies it (one
+ * searched type), but check-in/room-move deliberately allow assigning any
+ * room type (an upgrade, `checkIn`'s own header) so must see every free
+ * room, not just the reservation's own type.
+ */
+async function listFreeRooms(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listFreeRoomsNow({ context: req.context, roomTypeId: req.query?.room_type_id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Gap closure (user-reported): opens the reservation's folio and posts its
+ * room charges before check-in, so front desk can offer real payment right
+ * on the booking screen — see `service.openBookingFolio`'s own header for
+ * why this is deliberately not the guest portal's hold-and-cancel shape.
+ * A financial mutation (it posts real folio_line_items), so it goes
+ * through the same idempotency wrapper every other one here does.
+ */
+const openBookingFolio = transitionAction('open_folio', ({ trx, req }) => service.openBookingFolio({ trx, id: req.params.id }));
+
 async function checkIn(req, res, next) {
   try {
     const { id } = req.params;
@@ -346,12 +394,42 @@ async function roomMove(req, res, next) {
   }
 }
 
+/**
+ * Gap closure (user-reported): "the customer have not check out ... the
+ * balance is not increasing" for a guest still in-house past their booked
+ * departure — see `service.extendStay`'s own header. `new_departure_date`
+ * is required, same shape as `roomMove`'s `new_room_id`/`reason`.
+ */
+async function extendStay(req, res, next) {
+  try {
+    const { id } = req.params;
+    const newDepartureDate = require_(req.body, 'new_departure_date');
+    const before = await service.getReservation({ context: req.context, id });
+    if (!before) return notFound(res);
+
+    await runMutation(req, res, {
+      operationType: 'reservations.extend_stay',
+      entityType: 'reservations',
+      entityId: id,
+      action: 'extend_stay',
+      handler: async (trx) => {
+        const reservation = await service.extendStay({ trx, id, newDepartureDate });
+        return { status: 200, body: ok(reservation) };
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createGuest,
   listGuests,
   checkAvailability,
+  listEligiblePreferredRooms,
   configureOverbookingThreshold,
   createReservation,
+  openBookingFolio,
   getReservation,
   listReservations,
   listWaitlist,
@@ -364,7 +442,9 @@ module.exports = {
   listArrivals,
   listDepartures,
   listInHouse,
+  listFreeRooms,
   checkIn,
   checkOut,
   roomMove,
+  extendStay,
 };

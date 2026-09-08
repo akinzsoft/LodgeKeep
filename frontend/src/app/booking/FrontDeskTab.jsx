@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Card, DataTable, Button } from '../../shared/components/index.js';
-import { setupApi, reservationsApi, ApiError } from '../../shared/api/index.js';
+import { reservationsApi, ApiError } from '../../shared/api/index.js';
+import { Money } from '../../shared/format/money.jsx';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
 
@@ -32,6 +33,9 @@ export function FrontDeskTab({ isOffline = false } = {}) {
   const [movingRoom, setMovingRoom] = useState(null);
   const [moveForm, setMoveForm] = useState({ new_room_id: '', reason: '' });
 
+  const [extending, setExtending] = useState(null);
+  const [newDepartureDate, setNewDepartureDate] = useState('');
+
   const [submitting, setSubmitting] = useState(false);
   const [checkoutSuccess, setCheckoutSuccess] = useState(null);
 
@@ -45,10 +49,52 @@ export function FrontDeskTab({ isOffline = false } = {}) {
     }
   }
 
+  /**
+   * Gap closure: was `setupApi.listRooms()` — every room in the property,
+   * including already-occupied ones, relying on the backend to reject a bad
+   * pick after submission. Now the actual free-right-now list
+   * (`reservationsApi.listFreeRooms`, no room-type filter — `checkIn`/
+   * `roomMove` deliberately allow any type, an upgrade, see their own
+   * headers), so the picker only ever offers a room genuinely available at
+   * this moment. Returns the list (not just setting state) so a caller that
+   * needs it immediately — `startCheckIn` below, to decide whether the
+   * reservation's own preferred room is still offerable — doesn't race a
+   * stale `rooms` state value from before this reload resolved.
+   */
+  async function reloadFreeRooms() {
+    let list;
+    try {
+      list = await reservationsApi.listFreeRooms();
+    } catch {
+      list = [];
+    }
+    setRooms(list);
+    return list;
+  }
+
+  /**
+   * Gap closure (user-reported): opening the check-in dialog used to always
+   * start with "Select a room," even when the guest had a preferred room on
+   * file. Pre-selects it now — but only when it is ALSO still in the
+   * just-reloaded free-now list, since a preference is a request, never a
+   * lock (`AvailabilityTab`'s own header), and may no longer be free by
+   * check-in time. Still fully changeable — this only sets the dropdown's
+   * starting value, per PRODUCT_REQUIREMENTS.md §3.3's own "if the customer
+   * requests a different room" allowance.
+   */
+  async function startCheckIn(row) {
+    setCheckingIn(row);
+    setOverrideDirty(false);
+    const freeRooms = await reloadFreeRooms();
+    const preferredStillFree =
+      row.preferred_room_id && freeRooms.some((room) => String(room.id) === String(row.preferred_room_id));
+    setRoomId(preferredStillFree ? String(row.preferred_room_id) : '');
+  }
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     reloadBoard();
-    setupApi.listRooms().then(setRooms).catch(() => setRooms([]));
+    reloadFreeRooms();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadBoard is redefined every render and read here only for the mount-time fetch (board is still its initial value at that point); listing it as a dep would re-run this effect on every render since it's a new function reference each time. Board-change reloads already go through switchBoard, which calls reloadBoard(key) explicitly.
   }, []);
 
@@ -114,6 +160,32 @@ export function FrontDeskTab({ isOffline = false } = {}) {
     }
   }
 
+  /**
+   * Gap closure (user-reported): "the customer have not check out ... he
+   * suppose to pay for the number of night he as stay ... is it not
+   * supposed to increase" — a guest still in-house past their booked
+   * departure date was never billed for the extra night(s), since Night
+   * Audit only bills nights already in `reservation_daily_rates`
+   * (`service.extendStay`'s own header). This posts no charge itself —
+   * it adds the extra night(s) to the reservation so Night Audit bills
+   * them normally, the next time it runs.
+   */
+  async function handleExtendStay(event) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await reservationsApi.extendStay(extending.id, { newDepartureDate });
+      setExtending(null);
+      setNewDepartureDate('');
+      await reloadBoard();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not extend this reservation’s stay.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className={styles.page}>
       <div className={styles.tabs} role="tablist" aria-label="Front desk boards">
@@ -137,6 +209,51 @@ export function FrontDeskTab({ isOffline = false } = {}) {
         emptyMessage="Nothing on this board today."
         columns={[
           { key: 'confirmation_number', label: 'Confirmation' },
+          {
+            key: 'guest_name',
+            label: 'Guest',
+            render: (row) => `${row.guest_first_name ?? ''} ${row.guest_last_name ?? ''}`.trim() || '—',
+          },
+          { key: 'guest_phone', label: 'Phone', render: (row) => row.guest_phone ?? '—' },
+          // Gap closure (user-reported): a real physical room only exists
+          // once checked in — Departures/In-House, never Arrivals (see
+          // `service.js`'s own `selectReservationWithGuestAndRoom` header).
+          // Omitted entirely for Arrivals rather than shown as a column of
+          // dashes, which would misleadingly imply a room is already
+          // assigned before check-in has happened.
+          ...(board !== 'arrivals' ? [{ key: 'room_number', label: 'Room', render: (row) => row.room_number ?? '—' }] : []),
+          // Gap closure (user-reported): the real folio balance — the exact
+          // number checkout itself gates on (`service.js`'s own
+          // `selectReservationWithGuestAndRoom` header) — so staff can see
+          // at a glance, before even opening Check Out, whether a
+          // departure is actually ready to leave. DESIGN_SYSTEM.md §1's
+          // "tabular figures on every money column" via the shared `Money`
+          // component, not a raw string — never a literal currency symbol.
+          ...(board !== 'arrivals'
+            ? [
+                {
+                  key: 'folio_balance',
+                  label: 'Balance',
+                  align: 'right',
+                  render: (row) =>
+                    row.folio_balance == null ? (
+                      '—'
+                    ) : (
+                      <span className={Number(row.folio_balance) !== 0 ? formStyles.balanceOwing : undefined}>
+                        <Money amount={row.folio_balance} currencyCode={row.folio_currency} />
+                      </span>
+                    ),
+                },
+              ]
+            : []),
+          // Gap closure (user-reported follow-up): Arrivals gets a
+          // DIFFERENT column instead — the guest's preferred room, a
+          // request, never an assignment (`service.js`'s own
+          // `selectReservationWithGuestAndPreferredRoom` header). Labelled
+          // distinctly from "Room" so it's never mistaken for one.
+          ...(board === 'arrivals'
+            ? [{ key: 'preferred_room_number', label: 'Preferred room', render: (row) => row.preferred_room_number ?? '—' }]
+            : []),
           { key: 'arrival_date', label: 'Arrival' },
           { key: 'departure_date', label: 'Departure' },
           { key: 'adults', label: 'Adults', align: 'right' },
@@ -156,7 +273,7 @@ export function FrontDeskTab({ isOffline = false } = {}) {
         actions={(row) => (
           <>
             {board === 'arrivals' && (
-              <Button size="compact" onClick={() => setCheckingIn(row)}>
+              <Button size="compact" onClick={() => startCheckIn(row)}>
                 Check In
               </Button>
             )}
@@ -167,8 +284,25 @@ export function FrontDeskTab({ isOffline = false } = {}) {
             )}
             {board === 'in-house' && (
               <>
-                <Button size="compact" variant="secondary" onClick={() => setMovingRoom(row)}>
+                <Button
+                  size="compact"
+                  variant="secondary"
+                  onClick={() => {
+                    setMovingRoom(row);
+                    reloadFreeRooms();
+                  }}
+                >
                   Move Room
+                </Button>
+                <Button
+                  size="compact"
+                  variant="secondary"
+                  onClick={() => {
+                    setExtending(row);
+                    setNewDepartureDate(row.departure_date);
+                  }}
+                >
+                  Extend Stay
                 </Button>
                 <Button size="compact" onClick={() => setCheckingOut(row)}>
                   Check Out
@@ -195,6 +329,11 @@ export function FrontDeskTab({ isOffline = false } = {}) {
                 ))}
               </select>
             </label>
+            {roomId && String(roomId) === String(checkingIn.preferred_room_id) && (
+              <p className={formStyles.disabledNotice}>
+                Pre-filled with the guest&rsquo;s preferred room — pick a different one if they&rsquo;d rather change.
+              </p>
+            )}
             <label className={formStyles.checkboxField}>
               <input
                 type="checkbox"
@@ -223,6 +362,22 @@ export function FrontDeskTab({ isOffline = false } = {}) {
 
       {checkingOut && (
         <Card title={`Check out — ${checkingOut.confirmation_number}`}>
+          {/* Gap closure (user-reported): a real, unmissable warning right
+              where the action happens — not just the board's own toolbar
+              banner above, easy to miss once this dialog is open below it.
+              Backend still gates the real check — this is a proactive
+              heads-up, not a substitute for it. */}
+          {checkingOut.folio_balance != null && Number(checkingOut.folio_balance) !== 0 && (
+            <p role="alert" className={formStyles.errorBanner}>
+              Outstanding balance of <Money amount={checkingOut.folio_balance} currencyCode={checkingOut.folio_currency} /> —
+              checkout will be blocked until this is cleared (Cashiering).
+            </p>
+          )}
+          {error && (
+            <p role="alert" className={formStyles.errorBanner}>
+              {error}
+            </p>
+          )}
           <p className={formStyles.disabledNotice}>
             Leave the times blank for a standard checkout with no early/late fee.
           </p>
@@ -324,6 +479,46 @@ export function FrontDeskTab({ isOffline = false } = {}) {
                 Confirm move
               </Button>
               <Button type="button" variant="ghost" onClick={() => setMovingRoom(null)}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
+
+      {extending && (
+        <Card title={`Extend stay — ${extending.confirmation_number}`}>
+          <p className={formStyles.disabledNotice}>
+            Currently booked through {extending.departure_date}. Extending posts no charge now — the added night(s)
+            are billed automatically the next time Night Audit runs.
+          </p>
+          {error && (
+            <p role="alert" className={formStyles.errorBanner}>
+              {error}
+            </p>
+          )}
+          <form className={formStyles.form} onSubmit={handleExtendStay}>
+            <label className={formStyles.field}>
+              <span className={formStyles.label}>New departure date</span>
+              <input
+                type="date"
+                className={formStyles.input}
+                value={newDepartureDate}
+                min={extending.departure_date}
+                onChange={(event) => setNewDepartureDate(event.target.value)}
+                required
+              />
+            </label>
+            {isOffline && (
+              <p role="alert" className={formStyles.errorBanner}>
+                You&rsquo;re offline — extending a stay is disabled until the connection returns.
+              </p>
+            )}
+            <div className={formStyles.actionsRow}>
+              <Button type="submit" loading={submitting} disabled={isOffline}>
+                Confirm extension
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setExtending(null)}>
                 Cancel
               </Button>
             </div>

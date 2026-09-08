@@ -19,10 +19,26 @@ import styles from './BusinessDateIndicator.module.css';
  * way, from the viewer's own local calendar date — never from a `Date`
  * parse of `businessDate`.
  *
- * @param {string} businessDate   'YYYY-MM-DD'
+ * `businessDate` is genuinely absent, not just not-yet-loaded, for two real
+ * cases: the properties fetch this value comes from hasn't resolved yet
+ * (`main.jsx`'s own brief window right after authenticating), and a real
+ * property that has never had one configured (Phase 1's own nullable
+ * default — a legitimate, ongoing state, not only a loading transient). An
+ * honest "Not set" beats guessing or crashing on a `null.split(...)`.
+ *
+ * @param {string|null} [businessDate]   'YYYY-MM-DD', or absent — see above.
  * @param {Date} [now]            Injectable for tests; defaults to `new Date()`.
  */
 export function BusinessDateIndicator({ businessDate, now = new Date() }) {
+  if (!businessDate) {
+    return (
+      <div className={styles.indicator} title="Property business date">
+        <span className={styles.label}>Business date</span>
+        <span className={styles.value}>Not set</span>
+      </div>
+    );
+  }
+
   const [year, month, day] = businessDate.split('-');
   const display = `${MONTHS[Number(month) - 1]} ${Number(day)}, ${year}`;
 

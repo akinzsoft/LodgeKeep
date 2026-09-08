@@ -61,6 +61,14 @@ async function doFetch(path, { method = 'GET', body, token, headers } = {}) {
   try {
     response = await fetch(`${BASE_URL}${path}`, {
       method,
+      // Gap closure: the staff refresh token now travels as an HttpOnly
+      // cookie (`src/auth/refresh-cookie.js`), not a body field — `fetch`
+      // must be told to send/accept cookies for that to work. Explicit
+      // rather than relying on the platform default (`'same-origin'` as of
+      // the current fetch spec, but this file's own precedent — see
+      // `vite.config.js`'s proxy comment — is to never leave a
+      // security-relevant default unstated).
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),

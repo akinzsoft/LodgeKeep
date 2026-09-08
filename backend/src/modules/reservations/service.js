@@ -23,10 +23,14 @@
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { writeOutboxEvent } = require('../../shared/outbox');
-const { livePhysicalCount: sharedLivePhysicalCount } = require('../../shared/room-availability');
+const {
+  livePhysicalCount: sharedLivePhysicalCount,
+  listFreeRoomsNow: sharedListFreeRoomsNow,
+  outOfOrderRoomIds,
+} = require('../../shared/room-availability');
 const { generateUlid } = require('../../shared/ulid');
 const { resolveRate } = require('../setup/service');
-const { postAdjustment: postFolioAdjustment, ensurePrimaryFolio } = require('../cashiering/service');
+const { postAdjustment: postFolioAdjustment, ensurePrimaryFolio, postRoomChargesForStay } = require('../cashiering/service');
 const {
   OverbookingThresholdExceededError,
   RoomUnavailableError,
@@ -309,6 +313,7 @@ async function createReservation({
   marketSegmentId,
   bookingSourceId,
   cancellationPolicyId,
+  preferredRoomId,
 }) {
   if (!(departureDate > arrivalDate)) {
     throw new ArrivalAfterDepartureError();
@@ -339,6 +344,23 @@ async function createReservation({
     );
   }
 
+  // Gap closure: a guest-requested room number, stored as a REQUEST, never a
+  // lock — see `checkIn`, which still accepts any `roomId` unmodified.
+  // Validated the same friendly way as rate_code_id/market_segment_id above
+  // (existence, then a same-room-type sanity check) rather than surfacing a
+  // raw FK-violation error — but deliberately NOT checked against current
+  // occupancy: a preference for a future date can't be, and shouldn't be,
+  // gated on who happens to be in that room today.
+  if (preferredRoomId != null) {
+    const preferredRoom = await trx.table('rooms').where({ id: preferredRoomId }).first();
+    if (!preferredRoom) {
+      throw new ValidationError('PREFERRED_ROOM_NOT_FOUND', 'The specified preferred room does not exist at this property.');
+    }
+    if (String(preferredRoom.room_type_id) !== String(roomTypeId)) {
+      throw new ValidationError('PREFERRED_ROOM_TYPE_MISMATCH', 'The specified preferred room does not belong to the requested room type.');
+    }
+  }
+
   let status = asHold ? 'tentative' : 'confirmed';
   try {
     await reserveInventoryForDates({ trx, roomTypeId, stayDates });
@@ -363,6 +385,7 @@ async function createReservation({
     market_segment_id: marketSegmentId ?? null,
     booking_source_id: bookingSourceId ?? null,
     cancellation_policy_id: cancellationPolicyId ?? null,
+    preferred_room_id: preferredRoomId ?? null,
   });
 
   // TESTING.md RES-7/RES-8: resolve and snapshot the rate for every night
@@ -392,6 +415,40 @@ async function createReservation({
     await emitReservationEvent({ trx, eventType: 'reservation.confirmed', reservation: created });
   }
   return created;
+}
+
+/**
+ * Gap closure (user-reported): "if the customer wants to pay at the point
+ * of booking" — opens the reservation's primary folio and posts every
+ * night's room charge immediately, WITHOUT waiting for check-in, so front
+ * desk can offer real cash/card payment right there on the booking screen.
+ * Deliberately NOT the guest portal's own `createBookingWithPayment` shape
+ * (`portal/service.js`) — that flow books as a `tentative` hold and
+ * cancels the whole reservation if payment is never completed; a staff
+ * booking made over the phone or in person stays `confirmed` regardless of
+ * whether payment happens now, later, or never (an unpaid balance is a
+ * normal, expected outcome here, not a failure to roll back — confirmed
+ * with the user before building this). Only a `confirmed` reservation may
+ * have its folio opened this way — a `waitlisted` reservation holds no
+ * room to bill, and a `tentative` hold's own fate is still undecided.
+ *
+ * Idempotent and safe to call more than once for the same reservation:
+ * `ensurePrimaryFolio` reuses an existing folio rather than opening a
+ * second one, and `postRoomChargesForStay`'s own per-business_date guard
+ * skips a night already posted — reopening the booking screen (or a
+ * network retry) never double-bills.
+ */
+async function openBookingFolio({ trx, id }) {
+  const reservation = await trx.table('reservations').where({ id }).first();
+  if (!reservation) return null;
+  if (reservation.status !== 'confirmed') {
+    throw new ValidationError(
+      'RESERVATION_NOT_CONFIRMED',
+      'Only a confirmed reservation can have its folio opened for payment.'
+    );
+  }
+  const folio = await ensurePrimaryFolio({ trx, reservationId: id });
+  return postRoomChargesForStay({ trx, reservationId: id, folioId: folio.id });
 }
 
 /** `tentative` -> `confirmed`. No inventory change: a tentative hold already counts against sellable inventory (§11). */
@@ -699,6 +756,73 @@ async function roomMove({ trx, id, newRoomId, reason }) {
   return trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).first();
 }
 
+/**
+ * Gap closure (user-reported): a guest still checked in past their booked
+ * departure date was never billed for the extra night(s) — Night Audit's
+ * own room-charge step only posts a charge for a night that already has a
+ * `reservation_daily_rates` row, fixed at booking time to the ORIGINAL
+ * arrival/departure range (`createReservation`'s own header). Confirmed
+ * with the user rather than assumed: extending a stay is a deliberate
+ * front-desk decision, never something Night Audit should infer and bill
+ * on its own — so this is a new, explicit transition, not a change to
+ * Night Audit itself, which keeps billing exactly whatever
+ * `reservation_daily_rates` says, unchanged.
+ *
+ * Reuses the exact same last-room-race mechanism `createReservation`
+ * already uses (`reserveInventoryForDates`), but only for the NEW nights
+ * (the current departure date up to the new one) — extending a stay
+ * competes for the same room-type inventory a fresh booking for those
+ * dates would, and is rejected the same `OverbookingThresholdExceededError`
+ * way if none is left; the guest's own already-assigned physical room
+ * needs no separate availability check, since a room is never assigned to
+ * a future reservation before ITS OWN check-in (Phase 2's confirmed
+ * decision) — nothing else could be holding this specific room for those
+ * dates. `reservation_daily_rates` gets one new row per added night, its
+ * rate resolved through the same `resolveRate`/`rate_calendar` snapshot
+ * `createReservation` uses — the nights already posted/billed are never
+ * touched. Requires `checked_in` (an overstay is, by definition, a guest
+ * already in the building — this is not how a still-`confirmed` future
+ * reservation's dates get changed, which remains the flagged
+ * `PATCH /reservations/:id` gap). Night Audit bills the added night(s)
+ * exactly like any other booked night, the next time it runs — this
+ * function itself posts no charge.
+ */
+async function extendStay({ trx, id, newDepartureDate }) {
+  const reservation = await trx.table('reservations').where({ id }).first();
+  if (!reservation) return null;
+  if (reservation.status !== 'checked_in') {
+    throw new ValidationError('NOT_CHECKED_IN', 'Only a checked-in reservation can have its stay extended.');
+  }
+  if (!(newDepartureDate > reservation.departure_date)) {
+    throw new ValidationError(
+      'EXTENSION_NOT_AFTER_CURRENT_DEPARTURE',
+      'The new departure date must be after the current departure date.'
+    );
+  }
+
+  const addedStayDates = expandStayDates(reservation.departure_date, newDepartureDate);
+  await reserveInventoryForDates({ trx, roomTypeId: reservation.room_type_id, stayDates: addedStayDates });
+
+  const rateCode = await trx.table('rate_codes').where({ id: reservation.rate_code_id }).first();
+  const overrides = await trx
+    .table('rate_calendar')
+    .where({ rate_code_id: reservation.rate_code_id, room_type_id: reservation.room_type_id })
+    .whereIn('stay_date', addedStayDates);
+  const overrideByDate = new Map(overrides.map((o) => [String(o.stay_date), o]));
+
+  await trx.table('reservation_daily_rates').insert(
+    addedStayDates.map((stayDate) => ({
+      reservation_id: id,
+      stay_date: stayDate,
+      rate: resolveRate(rateCode, overrideByDate.get(stayDate)),
+      currency: rateCode.currency,
+    }))
+  );
+
+  await trx.table('reservations').where({ id }).update({ departure_date: newDepartureDate });
+  return trx.table('reservations').where({ id }).first();
+}
+
 // ---------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------
@@ -741,21 +865,185 @@ async function propertyBusinessDate({ context }) {
   return property?.current_business_date ?? null;
 }
 
+/**
+ * Gap closure (user-reported): PRODUCT_REQUIREMENTS.md §3.3 names "guest
+ * name, room, rate, folio balance, status pill" for these three boards —
+ * this pass closes the guest-name/phone half of that gap (room/rate/folio
+ * balance remain a separate, not-yet-built follow-on). `guests` is
+ * TENANT_SCOPED (`table-scopes.js`), so the join goes through the scoped
+ * accessor's own `joinScoped`, not a bare `.join()` — the same mechanism
+ * `findInHouseForCharge` (PLAN.md Phase 4 POS) already established for a
+ * reservations→guests join.
+ */
+function selectReservationWithGuest(query) {
+  return query
+    .joinScoped('guests', (join) => join.on('guests.id', '=', 'reservations.guest_id'))
+    .select(
+      'reservations.*',
+      'guests.first_name as guest_first_name',
+      'guests.last_name as guest_last_name',
+      'guests.phone as guest_phone'
+    );
+}
+
+/**
+ * Gap closure (user-reported follow-up): Departures and In-House are both
+ * filtered to `status: 'checked_in'` — a real physical room DOES exist for
+ * every row on these two boards specifically (unlike Arrivals, still
+ * pre-check-in, which stays on `selectReservationWithGuest` alone — there
+ * is no room to show yet). LEFT JOIN, not inner: `reservation_rooms`'s own
+ * `effective_to IS NULL` condition is a real predicate that could
+ * legitimately match nothing for a row this query wasn't expecting (a
+ * defensive choice, not because it should ever actually happen for a
+ * checked_in reservation) — an inner join here would silently drop such a
+ * row off the board entirely rather than showing it with no room number.
+ *
+ * Gap closure (user-reported): the folio balance too — specifically the
+ * OPEN folio, the exact same row `checkOut`'s own precondition (`Number(
+ * folio.balance) !== 0`) checks, so what this board shows is always the
+ * number checkout will actually gate on, never a different one. LEFT JOIN
+ * again — a checked_in reservation should always have one (opened at
+ * check-in), but showing "—" for a row this query didn't expect to lack
+ * one beats silently dropping it from the board.
+ */
+function selectReservationWithGuestAndRoom(query) {
+  return selectReservationWithGuest(query)
+    .joinScoped(
+      'reservation_rooms',
+      (join) => join.on('reservation_rooms.reservation_id', '=', 'reservations.id').onNull('reservation_rooms.effective_to'),
+      { type: 'left' }
+    )
+    .joinScoped('rooms', (join) => join.on('rooms.id', '=', 'reservation_rooms.room_id'), { type: 'left' })
+    .joinScoped(
+      'folios',
+      (join) => join.on('folios.reservation_id', '=', 'reservations.id').andOnVal('folios.status', '=', 'open'),
+      { type: 'left' }
+    )
+    .select('rooms.room_number as room_number', 'folios.balance as folio_balance', 'folios.currency as folio_currency');
+}
+
+/**
+ * Gap closure (user-reported follow-up): Arrivals has no ACTUAL room yet —
+ * that stays true, per every earlier note in this file — but a reservation
+ * may carry a `preferred_room_id` (a request, never a lock — see
+ * `createReservation`'s own header), which front desk genuinely wants to
+ * see before opening the check-in dialog. LEFT JOIN directly on
+ * `reservations.preferred_room_id = rooms.id`, not through
+ * `reservation_rooms` at all — there is no assignment row to join through
+ * pre-check-in; a preference is a plain column on the reservation itself.
+ * Selected under its own name (`preferred_room_number`), never
+ * `room_number`, so the frontend cannot conflate "requested" with
+ * "assigned" — the same distinction `FrontDeskTab`'s own check-in dialog
+ * already draws when it pre-fills from this same column.
+ */
+function selectReservationWithGuestAndPreferredRoom(query) {
+  return selectReservationWithGuest(query)
+    .joinScoped('rooms', (join) => join.on('rooms.id', '=', 'reservations.preferred_room_id'), { type: 'left' })
+    .select('rooms.room_number as preferred_room_number');
+}
+
 async function listArrivals({ context }) {
   const db = scopedDb().for(context);
   const businessDate = await propertyBusinessDate({ context });
-  return db.table('reservations').where({ arrival_date: businessDate, status: 'confirmed' }).orderBy('id');
+  return selectReservationWithGuestAndPreferredRoom(
+    db.table('reservations').where({ 'reservations.arrival_date': businessDate, 'reservations.status': 'confirmed' })
+  ).orderBy('reservations.id');
 }
 
 async function listDepartures({ context }) {
   const db = scopedDb().for(context);
   const businessDate = await propertyBusinessDate({ context });
-  return db.table('reservations').where({ departure_date: businessDate, status: 'checked_in' }).orderBy('id');
+  return selectReservationWithGuestAndRoom(
+    db.table('reservations').where({ 'reservations.departure_date': businessDate, 'reservations.status': 'checked_in' })
+  ).orderBy('reservations.id');
 }
 
 async function listInHouse({ context }) {
   const db = scopedDb().for(context);
-  return db.table('reservations').where({ status: 'checked_in' }).orderBy('id');
+  return selectReservationWithGuestAndRoom(db.table('reservations').where({ 'reservations.status': 'checked_in' })).orderBy(
+    'reservations.id'
+  );
+}
+
+/**
+ * Gap closure: "which actual room numbers are free right now," for a room
+ * type — a genuinely different question from `checkAvailability`'s
+ * sellable-count-vs-threshold, and answerable only as of the property's
+ * CURRENT business date (see `room-availability.js`'s own header for why a
+ * future date can't be). Serves both the walk-in path (§3.3's "surface
+ * tonight's oversell position... before allowing the sale," shown alongside
+ * it) and the check-in room picker.
+ */
+async function listFreeRoomsNow({ context, roomTypeId }) {
+  const db = scopedDb().for(context);
+  const stayDate = await propertyBusinessDate({ context });
+  return sharedListFreeRoomsNow({ db, roomTypeId, stayDate });
+}
+
+/**
+ * Gap closure (user-reported): the "Preferred room" picker on the booking
+ * form used to source from every room of the type, unfiltered, so a room
+ * already earmarked for one guest's stay could be offered — and picked
+ * again — as the preference for a second, overlapping-dates guest. This
+ * narrows that list, WITHOUT turning a preference into a lock: `checkIn`
+ * still accepts any room, and this only changes what the picker OFFERS,
+ * never what a caller may explicitly submit.
+ *
+ * Confirmed with the user: exclusion is DATE-OVERLAP aware, not a blanket
+ * "hide until this other stay ends" rule — a room preferred for next week
+ * must still be offered for a December booking, since there is no real
+ * conflict. A room is excluded from `[arrivalDate, departureDate)` when:
+ *
+ * 1. It is the `preferred_room_id` of another reservation whose own stay
+ *    overlaps this range and whose status is still "open" (tentative,
+ *    confirmed, or checked_in) — a cancelled/no_show/checked_out
+ *    reservation's preference no longer means anything.
+ * 2. It is the room an ongoing `checked_in` reservation is ACTUALLY
+ *    assigned to (via `reservation_rooms`, `effective_to IS NULL`) for an
+ *    overlapping stay — covers the case where that guest never expressed a
+ *    preference of their own but is demonstrably in the room.
+ * 3. It is not yet marked clean by housekeeping AND the new booking's
+ *    arrival is the property's own CURRENT business date — the "checked
+ *    out and clean" half of the user's request: once a reservation is
+ *    checked_out it drops out of (1)/(2) entirely (there is no longer an
+ *    open assignment or an "open" status), so the only way a same-day
+ *    turnover still excludes the room is this real-time housekeeping
+ *    check, which naturally stops applying to a future-dated booking
+ *    (housekeeping will have caught up by then).
+ */
+async function listEligiblePreferredRooms({ context, roomTypeId, arrivalDate, departureDate }) {
+  const db = scopedDb().for(context);
+  const oooRoomIds = await outOfOrderRoomIds({ db, stayDate: arrivalDate });
+
+  let roomsQuery = db.table('rooms').where({ status: 'active', has_discrepancy: false, room_type_id: roomTypeId });
+  if (oooRoomIds.length > 0) roomsQuery = roomsQuery.whereNotIn('id', oooRoomIds);
+  const candidateRooms = await roomsQuery.select('id', 'room_number', 'floor', 'housekeeping_reported_status');
+
+  const preferenceCommits = await db
+    .table('reservations')
+    .whereNotNull('preferred_room_id')
+    .whereIn('status', ['tentative', 'confirmed', 'checked_in'])
+    .select('preferred_room_id as room_id', 'arrival_date', 'departure_date');
+
+  const assignmentCommits = await db
+    .table('reservation_rooms')
+    .joinScoped('reservations', (join) => join.on('reservations.id', '=', 'reservation_rooms.reservation_id'))
+    .whereNull('reservation_rooms.effective_to')
+    .select('reservation_rooms.room_id as room_id', 'reservations.arrival_date', 'reservations.departure_date');
+
+  const overlapsRange = (commit) => arrivalDate < commit.departure_date && commit.arrival_date < departureDate;
+  const committedRoomIds = new Set(
+    [...preferenceCommits, ...assignmentCommits].filter(overlapsRange).map((commit) => String(commit.room_id))
+  );
+
+  const businessDate = await propertyBusinessDate({ context });
+  const isArrivingNow = businessDate != null && arrivalDate === businessDate;
+
+  return candidateRooms.filter((room) => {
+    if (committedRoomIds.has(String(room.id))) return false;
+    if (isArrivingNow && room.housekeeping_reported_status !== 'clean') return false;
+    return true;
+  });
 }
 
 /**
@@ -806,6 +1094,7 @@ module.exports = {
   releaseInventoryForDates,
   configureOverbookingThreshold,
   createReservation,
+  openBookingFolio,
   confirmReservation,
   promoteWaitlist,
   cancelReservation,
@@ -813,6 +1102,7 @@ module.exports = {
   checkIn,
   checkOut,
   roomMove,
+  extendStay,
   getReservation,
   listReservations,
   listWaitlist,
@@ -821,5 +1111,7 @@ module.exports = {
   listArrivals,
   listDepartures,
   listInHouse,
+  listFreeRoomsNow,
+  listEligiblePreferredRooms,
   findInHouseForCharge,
 };
