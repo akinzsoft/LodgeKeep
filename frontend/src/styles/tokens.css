@@ -82,6 +82,7 @@
   --topbar-h: 64px;
   --control-h: 40px; /* inputs, buttons — 44px on touch screens, see --control-h-touch */
   --control-h-touch: 44px; /* DESIGN_SYSTEM.md §1 "Touch targets": min 44x44px wherever a housekeeper or front-desk agent works on a tablet/phone (3.18) */
+  --control-h-pos: 64px; /* PLAN.md Phase 4: the POS order screen's own bigger touch targets — PRODUCT_REQUIREMENTS.md §3.4 names this the one place the admin design language bends ("used standing up, at speed, often one-handed... aim for 64px+"). Scoped to app/pos/ only, never used elsewhere. */
 
   /* ---- typography ---- */
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;

@@ -10,19 +10,8 @@
  */
 
 const { scopedDb } = require('../../db');
-const { DuplicateEntryError, InvalidBulkRangeError, TaxEffectiveDateOverlapError } = require('./errors');
-
-/** Wraps a write that can hit a UNIQUE constraint, mapping MySQL's raw error to a real AppError (see errors.js's own note on why this exists). */
-async function withDuplicateMapping(resource, message, fn) {
-  try {
-    return await fn();
-  } catch (error) {
-    if (error && error.code === 'ER_DUP_ENTRY') {
-      throw new DuplicateEntryError(resource, message);
-    }
-    throw error;
-  }
-}
+const { withDuplicateMapping } = require('../../shared/errors');
+const { InvalidBulkRangeError, TaxEffectiveDateOverlapError } = require('./errors');
 
 // ---------------------------------------------------------------------
 // Properties
