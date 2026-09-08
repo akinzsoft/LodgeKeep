@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Gap closure: clicking a room type on the Rooms page now shows its actual rooms, with real occupancy/housekeeping status
+
+**User-reported**: "on Rooms page on list of rooms add if i click on any roomtype it shld bring all rooms associated to that room type with status if availsble,dirty." A new "View rooms" action on each `RoomTypesTab` row (`onViewRooms`, optional — only supplied by `RoomsScreen`, so `SetupScreen`'s own unrelated use of this same tab is unaffected) switches `RoomsScreen`'s Rooms tab and pre-filters it to that type; the filter itself lives in `RoomsScreen` (the thing that actually ties the two otherwise-independent tabs together), not in either tab.
+
+**A second, smaller gap found while wiring the "status" half of the request**: `RoomsTab`'s own table had always shown a `Status` column reading `rooms.status` (active/archived) — but `listRooms` already excludes archived rooms server-side, so that column showed the literal word "active" on every single row, never anything else. Replaced with the two real signals the request actually asked for — occupancy (`front_desk_status`: vacant/occupied) and housekeeping (`housekeeping_reported_status`: clean/dirty) — both already returned by `GET /rooms` (confirmed by reading the service function directly: `SELECT *`, no column allowlist), just never rendered anywhere in this tab. Each renders as a real `StatusPill` (DESIGN_SYSTEM.md §1: "status is always a filled pill, never colour alone") — `vacant`→success/"Available", `occupied`→info/"Occupied", `clean`→success/"Clean", `dirty`→warning/"Dirty". No backend change was needed at all — this was a read-side rendering gap, not a missing endpoint.
+
+**Tests**: no backend change. 6 new frontend tests: 2 in `RoomTypesTab.test.jsx` (the "View rooms" action calls back with the clicked row; it doesn't render at all when the caller — `SetupScreen` — supplies no handler), 4 in a new `RoomsTab.test.jsx` (real status pills render instead of the old always-"active" column; filtering to one room type works; "Clear filter" calls back; unfiltered use under `SetupScreen` is unaffected), plus 1 in `RoomsScreen.test.jsx` proving the cross-tab flow end to end (click "View rooms" → Rooms tab becomes active → filtered correctly). Frontend 300/300 passing (up from 293), both lints clean, build clean.
+
+**Live-verified against the real dev database**: confirmed `GET /rooms` for the real seeded property already returns real, varied `front_desk_status`/`housekeeping_reported_status` combinations across its 11 rooms (a mix of vacant/occupied and clean/dirty) — the new UI will show genuinely different statuses immediately, not a uniform placeholder.
+
 ## Gap closure: editing a room type (including its base rate) is now super_admin-only, and the Edit UI itself never existed until this pass
 
 **User-reported**: "update room type and Base rate only super admin." Confirmed the exact scope with the user before building — three options offered (whole update restricted, base-rate field only restricted, or the entire create/update/archive set restricted); the user picked the first: editing ANY field of an existing room type requires `super_admin`, while `admin` keeps create/archive (`setup.manage`, unchanged).

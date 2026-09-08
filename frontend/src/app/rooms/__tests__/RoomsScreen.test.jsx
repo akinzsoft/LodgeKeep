@@ -47,4 +47,27 @@ describe('<RoomsScreen>', () => {
     render(<RoomsScreen activeProperty={null} />);
     expect(await screen.findByText(/create a property first/i)).toBeInTheDocument();
   });
+
+  /**
+   * Gap closure (user-reported): "on Rooms page on list of rooms add if i
+   * click on any roomtype it shld bring all rooms associated to that room
+   * type with status" — clicking "View rooms" switches to the Rooms tab,
+   * pre-filtered.
+   */
+  it('clicking "View rooms" on a room type switches to Rooms, filtered to that type', async () => {
+    mocks.listRoomTypes.mockResolvedValue([{ id: '1', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00' }]);
+    mocks.listRooms.mockResolvedValue([
+      { id: '10', room_number: '101', floor: '1', room_type_id: '1', front_desk_status: 'vacant', housekeeping_reported_status: 'clean' },
+      { id: '11', room_number: '201', floor: '2', room_type_id: '2', front_desk_status: 'vacant', housekeeping_reported_status: 'clean' },
+    ]);
+    render(<RoomsScreen activeProperty={ACTIVE_PROPERTY} />);
+    await screen.findByText('DLX');
+
+    await userEvent.click(screen.getByRole('button', { name: 'View rooms' }));
+
+    expect(await screen.findByRole('tab', { name: 'Rooms' })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByText('101')).toBeInTheDocument();
+    expect(screen.queryByText('201')).not.toBeInTheDocument();
+    expect(screen.getByText(/Showing rooms for/)).toBeInTheDocument();
+  });
 });

@@ -21,7 +21,7 @@ import formStyles from './SetupForm.module.css';
  * button and gets the real backend 403, surfaced through the same error
  * banner every other action here already uses.
  */
-export function RoomTypesTab({ activeProperty, disabled }) {
+export function RoomTypesTab({ activeProperty, disabled, onViewRooms }) {
   const [roomTypes, setRoomTypes] = useState(null);
   const [form, setForm] = useState({ code: '', name: '', default_occupancy: '2', base_rate: '', description: '' });
   const [submitting, setSubmitting] = useState(false);
@@ -135,9 +135,16 @@ export function RoomTypesTab({ activeProperty, disabled }) {
         rows={roomTypes ?? []}
         rowKey={(row) => row.id}
         actions={(row) => (
-          <Button size="compact" variant="secondary" onClick={() => startEdit(row)}>
-            Edit
-          </Button>
+          <div className={formStyles.actionsRow}>
+            {onViewRooms && (
+              <Button size="compact" variant="secondary" onClick={() => onViewRooms(row)}>
+                View rooms
+              </Button>
+            )}
+            <Button size="compact" variant="secondary" onClick={() => startEdit(row)}>
+              Edit
+            </Button>
+          </div>
         )}
       />
 
