@@ -1112,6 +1112,7 @@ async function seedTwoTenants(trx) {
     ['night_audit.run', 'night_audit'],
     ['pos.operate', 'pos'],
     ['pos.manage', 'pos'],
+    ['room_types.update', 'setup'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -1157,6 +1158,12 @@ async function seedTwoTenants(trx) {
   // Manager gets read-only Setup access, Admin/Super-admin get full access.
   // Real fixture data, not test-file-local, so every setup-module test gets
   // it for free the same way the cashiering grant above already works.
+  //
+  // Gap closure (user-reported): `room_types.update` (editing an existing
+  // room type, base rate included) is narrower than the rest of Setup —
+  // super_admin only, NOT admin, the first place in this matrix admin and
+  // super_admin genuinely diverge on a single action rather than
+  // super_admin simply holding an extra, separate capability.
   for (const t of both) {
     await trx('role_permissions').insert([
       { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['setup.view'] },
@@ -1164,6 +1171,7 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['setup.manage'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['setup.view'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['setup.manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['room_types.update'] },
     ]);
   }
 

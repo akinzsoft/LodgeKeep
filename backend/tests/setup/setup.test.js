@@ -221,6 +221,74 @@ describe('Setup module (PLAN.md Phase 1)', () => {
       expect(res.status).toBe(403);
       expect(res.body.error.code).toBe('FORBIDDEN_NO_ACTIVE_PROPERTY');
     });
+
+    /**
+     * Gap closure (user-reported): "update room type and Base rate only
+     * super admin" — editing an existing room type is narrower than the
+     * rest of `setup.manage`; admin keeps create (proven above) but loses
+     * edit.
+     */
+    it('admin (setup.manage but not room_types.update) cannot edit an existing room type', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'admin' });
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+
+      const res = await t.request
+        .patch(`/api/v1/room-types/${ctx.a.roomTypes[0].id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ base_rate: '999.00' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+
+    it('super_admin (room_types.update) can edit an existing room type, including its base rate', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'super_admin' });
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+
+      const res = await t.request
+        .patch(`/api/v1/room-types/${ctx.a.roomTypes[0].id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ base_rate: '999.00', name: 'Renamed Deluxe' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.base_rate).toBe('999.00');
+      expect(res.body.data.name).toBe('Renamed Deluxe');
+    });
+
+    /**
+     * Gap closure (found while wiring the fix above, not by inspection):
+     * `updateRoomType` used to pass `req.body` straight through to a raw
+     * `.update()` with no field allowlist at all — anything in the request
+     * body, `tenant_id`/`property_id`/`status`/`id` included, would have
+     * been applied directly to the row.
+     */
+    it('ignores an unsafe/unknown field in the update body rather than applying it to the row', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'super_admin' });
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+
+      const res = await t.request
+        .patch(`/api/v1/room-types/${ctx.a.roomTypes[0].id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Allowlist Check', tenant_id: '999999', status: 'archived', id: '999999' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.name).toBe('Allowlist Check');
+      expect(String(res.body.data.tenant_id)).toBe(String(ctx.a.id));
+      expect(res.body.data.status).toBe('active');
+      expect(String(res.body.data.id)).toBe(String(ctx.a.roomTypes[0].id));
+    });
   });
 
   // ====================================================================
@@ -523,6 +591,12 @@ describe('Setup module (PLAN.md Phase 1)', () => {
   // ====================================================================
   describe('cross-tenant isolation at the route level', () => {
     it('tenant A cannot read tenant B\'s room type by id — 404, never 403', async () => {
+      // Gap closure (user-reported): PATCH /room-types/:id is now gated on
+      // `room_types.update` (super_admin only), narrower than the
+      // `setup.manage` this test originally exercised — reassign users[1]
+      // to `super_admin` so this test still proves the thing it's actually
+      // for (tenant isolation on the update route), not permission gating.
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'super_admin' });
       const token = signAccessToken({
         aud: 'staff',
         sub: String(ctx.a.users[1].id),

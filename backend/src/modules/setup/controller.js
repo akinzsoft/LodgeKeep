@@ -116,12 +116,34 @@ async function createRoomType(req, res, next) {
   }
 }
 
+/**
+ * Gap closure (user-reported): `changes` used to be `req.body` passed
+ * straight through to a raw `.update()` — before this pass, this endpoint
+ * had no real caller anywhere (`updateRoomType` existed in
+ * `shared/api/setup.js` but nothing ever called it), so the gap was latent
+ * dead code, not yet a live vulnerability. Now that a real "Edit" form
+ * calls it, an unvalidated passthrough would accept ANY column name in the
+ * request body — `tenant_id`, `property_id`, `status`, `id` included.
+ * Allowlisted to the same real, editable fields `createRoomType`'s own
+ * controller already extracts explicitly, never a caller-supplied field.
+ */
+function pickRoomTypeChanges(body) {
+  const changes = {};
+  if (body?.code !== undefined) changes.code = body.code;
+  if (body?.name !== undefined) changes.name = body.name;
+  if (body?.description !== undefined) changes.description = body.description;
+  if (body?.default_occupancy !== undefined) changes.default_occupancy = Number(body.default_occupancy);
+  if (body?.base_rate !== undefined) changes.base_rate = body.base_rate;
+  if (body?.photos !== undefined) changes.photos = body.photos;
+  return changes;
+}
+
 async function updateRoomType(req, res, next) {
   try {
     const { id } = req.params;
     const before = await service.getRoomType({ context: req.context, id });
     if (!before) return notFound(res);
-    const roomType = await service.updateRoomType({ context: req.context, id, changes: req.body ?? {} });
+    const roomType = await service.updateRoomType({ context: req.context, id, changes: pickRoomTypeChanges(req.body) });
     await req.audit({ entityType: 'room_types', entityId: id, action: 'update', beforeState: before, afterState: roomType });
     res.status(200).json(ok(roomType));
   } catch (error) {

@@ -40,7 +40,12 @@ function setupRouter() {
 
   router.get('/room-types', requirePermission('setup.view'), controller.listRoomTypes);
   router.post('/room-types', requirePermission('setup.manage'), controller.createRoomType);
-  router.patch('/room-types/:id', requirePermission('setup.manage'), controller.updateRoomType);
+  // Gap closure (user-reported): editing an existing room type (including
+  // its base rate) is narrower than the rest of Setup's `setup.manage` —
+  // super_admin only. Create/archive stay on `setup.manage` (admin +
+  // super_admin), unchanged — see the migration seeding this key for the
+  // full reasoning.
+  router.patch('/room-types/:id', requirePermission('room_types.update'), controller.updateRoomType);
   router.post('/room-types/:id/archive', requirePermission('setup.manage'), controller.archiveRoomType);
 
   router.get('/rooms', requirePermission('setup.view'), controller.listRooms);

@@ -314,14 +314,26 @@ exports.seed = async function seed(knex) {
    * notice (see file header). Idempotent the same way every other grant
    * function here is.
    */
+  /**
+   * Gap closure (user-reported): `room_types.update` is the first
+   * permission key this blanket grant must NOT give to `admin` — editing an
+   * existing room type (base rate included) is super_admin-only, the first
+   * place this dev seed's own "give admin/super_admin every catalogue
+   * permission" convenience has ever needed a real exception rather than
+   * genuinely meaning "every permission."
+   */
+  const ADMIN_EXCLUDED_PERMISSIONS = new Set(['room_types.update']);
+
   async function ensureAdminSuperAdminFullAccess(tenantId) {
-    const allPermissions = await knex('permissions').select('id');
+    const allPermissions = await knex('permissions').select('id', 'permission_key');
     if (!allPermissions.length) return; // no permission catalogue seeded yet
-    const roles = await knex('roles').where({ tenant_id: tenantId }).whereIn('code', ['admin', 'super_admin']).select('id');
+    const roles = await knex('roles').where({ tenant_id: tenantId }).whereIn('code', ['admin', 'super_admin']).select('id', 'code');
     for (const role of roles) {
+      const grantable =
+        role.code === 'admin' ? allPermissions.filter((p) => !ADMIN_EXCLUDED_PERMISSIONS.has(p.permission_key)) : allPermissions;
       const existingGrants = await knex('role_permissions').where({ tenant_id: tenantId, role_id: role.id }).select('permission_id');
       const alreadyGranted = new Set(existingGrants.map((g) => String(g.permission_id)));
-      const toGrant = allPermissions.filter((p) => !alreadyGranted.has(String(p.id)));
+      const toGrant = grantable.filter((p) => !alreadyGranted.has(String(p.id)));
       if (toGrant.length) {
         await knex('role_permissions').insert(toGrant.map((p) => ({ tenant_id: tenantId, role_id: role.id, permission_id: p.id })));
       }
