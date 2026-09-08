@@ -146,4 +146,27 @@ describe('<RoomTypesTab>', () => {
     expect(screen.queryByRole('heading', { name: 'Edit room type' })).not.toBeInTheDocument();
     expect(mocks.updateRoomType).not.toHaveBeenCalled();
   });
+
+  /**
+   * Gap closure (user-reported): "click on any roomtype it shld bring all
+   * rooms associated to that room type" — the "View rooms" action calls
+   * back up to the caller (`RoomsScreen`) with the clicked row; this tab
+   * has no opinion on what happens next.
+   */
+  it('calls onViewRooms with the clicked row when supplied', async () => {
+    const onViewRooms = vi.fn();
+    mocks.listRoomTypes.mockResolvedValue([{ id: '5', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00' }]);
+    render(<RoomTypesTab activeProperty={PROPERTY} disabled={false} onViewRooms={onViewRooms} />);
+    await screen.findByText('DLX');
+
+    await userEvent.click(screen.getByRole('button', { name: 'View rooms' }));
+    expect(onViewRooms).toHaveBeenCalledWith(expect.objectContaining({ id: '5', code: 'DLX' }));
+  });
+
+  it('does not show a "View rooms" action when the caller supplies no handler (e.g. under SetupScreen)', async () => {
+    mocks.listRoomTypes.mockResolvedValue([{ id: '5', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00' }]);
+    render(<RoomTypesTab activeProperty={PROPERTY} disabled={false} />);
+    await screen.findByText('DLX');
+    expect(screen.queryByRole('button', { name: 'View rooms' })).not.toBeInTheDocument();
+  });
 });

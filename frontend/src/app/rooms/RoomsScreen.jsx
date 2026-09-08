@@ -29,6 +29,14 @@ import styles from './RoomsScreen.module.css';
  * fix is in those two tabs themselves, a pre-existing gap this pass did
  * not introduce and is out of scope to silently paper over with a banner
  * that doesn't match real behaviour.
+ *
+ * Gap closure (user-reported): "on Rooms page on list of rooms add if i
+ * click on any roomtype it shld bring all rooms associated to that room
+ * type with status" — clicking "View rooms" on a Room Types row switches to
+ * the Rooms tab pre-filtered to that type. `roomTypeFilter` lives here, not
+ * in either tab, since it's the thing that ties the two tabs together;
+ * `RoomTypesTab`/`RoomsTab` themselves stay unaware of each other, same as
+ * they are under `SetupScreen`.
  */
 const TABS = [
   { key: 'room-types', label: 'Room Types' },
@@ -37,6 +45,7 @@ const TABS = [
 
 export function RoomsScreen({ activeProperty }) {
   const [tab, setTab] = useState('room-types');
+  const [roomTypeFilter, setRoomTypeFilter] = useState(null);
 
   return (
     <div className={styles.page}>
@@ -58,8 +67,24 @@ export function RoomsScreen({ activeProperty }) {
       </div>
 
       <div className={styles.panel}>
-        {tab === 'room-types' && <RoomTypesTab activeProperty={activeProperty} disabled={!activeProperty} />}
-        {tab === 'rooms' && <RoomsTab activeProperty={activeProperty} disabled={!activeProperty} />}
+        {tab === 'room-types' && (
+          <RoomTypesTab
+            activeProperty={activeProperty}
+            disabled={!activeProperty}
+            onViewRooms={(roomType) => {
+              setRoomTypeFilter(roomType.id);
+              setTab('rooms');
+            }}
+          />
+        )}
+        {tab === 'rooms' && (
+          <RoomsTab
+            activeProperty={activeProperty}
+            disabled={!activeProperty}
+            filterRoomTypeId={roomTypeFilter}
+            onClearFilter={() => setRoomTypeFilter(null)}
+          />
+        )}
       </div>
     </div>
   );
