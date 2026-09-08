@@ -766,6 +766,40 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
         process.env.NODE_ENV = originalNodeEnv;
       }
     });
+
+    // Gap closure (user-reported, live-tested): "i want the verification
+    // code shld be send to account email not to show on the screen." The
+    // dev-only disclosure existed purely to cover "no real inbox exists to
+    // check" — once a real adapter is actually configured, disclosing the
+    // code anywhere but the email it was just sent to defeats the point.
+    it('never discloses dev_only_code once a real email adapter (not console) is configured, even outside production', async () => {
+      const originalProvider = process.env.EMAIL_PROVIDER;
+      process.env.EMAIL_PROVIDER = 'smtp';
+      try {
+        // The real code still exists and is still really emailed via the
+        // outbox — this login call only enqueues that event, it never
+        // opens a real SMTP connection itself (that's the dispatcher's
+        // job), so no SMTP_HOST/credentials are needed for this test.
+        const loginRes = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+          email: adminNoMfa.email,
+          password: STRONG_PASSWORD,
+        });
+        expect(loginRes.body.data.dev_only_code).toBeNull();
+
+        const stored = await t.trx('mfa_login_codes').where({ user_id: adminNoMfa.id }).whereNull('used_at').orderBy('id', 'desc').first();
+        const outboxEvent = await t.trx('outbox_events').where({ event_type: 'staff.mfa_code_requested' }).orderBy('id', 'desc').first();
+        const payload = typeof outboxEvent.payload === 'string' ? JSON.parse(outboxEvent.payload) : outboxEvent.payload;
+        expect(stored.code_hash).toBe(hashMfaCode(payload.code));
+
+        const verifyRes = await t.request
+          .post('/api/v1/auth/mfa/verify')
+          .send({ challenge_token: loginRes.body.data.challengeToken, code: payload.code });
+        expect(verifyRes.status).toBe(200);
+      } finally {
+        if (originalProvider === undefined) delete process.env.EMAIL_PROVIDER;
+        else process.env.EMAIL_PROVIDER = originalProvider;
+      }
+    });
   });
 
   // ==================================================================

@@ -26,6 +26,7 @@ const { writeAuthEvent } = require('./events');
 const { writeOutboxEvent } = require('../shared/outbox');
 const { checkStaffLockout } = require('./lockout');
 const { listPropertyAccess, roleAtProperty, roleRequiresMfa } = require('./roles');
+const { isEmailDeliveryReal } = require('../modules/notifications/service');
 const {
   signMfaChallengeToken,
   verifyMfaChallengeToken,
@@ -158,7 +159,14 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
         expires_at: minutesFromNow(MFA_CODE_TTL_MINUTES),
       });
 
-      if (process.env.NODE_ENV !== 'production') devOnlyCode = code;
+      // Gap closure (user-reported, live-tested): "the verification code
+      // shld be send to account email not to show on the screen." A
+      // dev-only disclosure existed purely to cover "no real inbox exists
+      // to check" — once a real adapter (SMTP or otherwise) is actually
+      // configured, disclosing the code anywhere but the real email it was
+      // just sent to would defeat the point of sending it. Non-production
+      // still gates this outright; a real adapter narrows it further.
+      if (process.env.NODE_ENV !== 'production' && !isEmailDeliveryReal()) devOnlyCode = code;
 
       // The outbox/notifications pipeline is PROPERTY_SCOPED end to end
       // (`email_templates`/`notification_log`) — but a staff login

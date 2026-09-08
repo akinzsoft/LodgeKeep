@@ -2,7 +2,7 @@
   "name": "lodgekeep-backend",
   "version": "0.1.0",
   "private": true,
-  "description": "Lodgekeep PMS \u2014 REST API. Multi-tenant SaaS hotel property management system.",
+  "description": "Lodgekeep PMS — REST API. Multi-tenant SaaS hotel property management system.",
   "license": "UNLICENSED",
   "type": "commonjs",
   "engines": {
@@ -31,6 +31,7 @@
     "jsonwebtoken": "^9.0.3",
     "knex": "^3.3.0",
     "mysql2": "^3.24.3",
+    "nodemailer": "^10.0.1",
     "rate-limit-redis": "^6.0.1"
   },
   "devDependencies": {
