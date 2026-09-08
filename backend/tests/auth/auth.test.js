@@ -619,6 +619,27 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
       const events = await authEventsFor(adminNoMfa.id);
       expect(events.some((e) => e.event_type === 'mfa_challenge_issued')).toBe(true);
     });
+
+    // Gap closure (user-reported): "enable or disable mfa verication code
+    // on the setup" — user-confirmed decision (AskUserQuestion): a
+    // per-property toggle overriding the unconditional admin/super_admin
+    // default proven above, not replacing it.
+    it('skips the MFA challenge entirely when the property has turned it off', async () => {
+      await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ mfa_required_for_admin_roles: false });
+      try {
+        const res = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+          email: adminNoMfa.email,
+          password: STRONG_PASSWORD,
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body.data.status).toBe('ok');
+        expect(typeof res.body.data.accessToken).toBe('string');
+        expect(res.body.data.role).toBe('admin');
+      } finally {
+        await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ mfa_required_for_admin_roles: true });
+      }
+    });
   });
 
   // ==================================================================

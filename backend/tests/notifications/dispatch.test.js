@@ -25,25 +25,32 @@ const { workerContext } = require('../../src/modules/tenancy');
 const { writeOutboxEvent } = require('../../src/shared/outbox');
 const { scopedDb } = require('../../src/db');
 
+// `resolveEmailAdapter` (real elsewhere) is the one `dispatchOne`/
+// `resendNotification`/`isEmailDeliveryReal` actually call now (the
+// per-property `email_settings` gap closure) — mocked here at that
+// boundary instead of `getEmailAdapter` directly, since `resolveEmailAdapter`
+// calls `getEmailAdapter` as a plain in-module function reference, which a
+// mock on the exported `getEmailAdapter` binding alone would not intercept.
 jest.mock('../../src/modules/notifications/email-adapter', () => ({
-  getEmailAdapter: jest.fn(),
+  ...jest.requireActual('../../src/modules/notifications/email-adapter'),
+  resolveEmailAdapter: jest.fn(),
 }));
-const { getEmailAdapter } = require('../../src/modules/notifications/email-adapter');
+const { resolveEmailAdapter } = require('../../src/modules/notifications/email-adapter');
 const { dispatchPendingOutboxEventsForTenant, isEmailDeliveryReal } = require('../../src/modules/notifications/service');
 
 describe('isEmailDeliveryReal', () => {
   afterEach(() => {
-    getEmailAdapter.mockReset();
+    resolveEmailAdapter.mockReset();
   });
 
-  it('is false while the console adapter is active — no real inbox, a dev-only disclosure is still honest', () => {
-    getEmailAdapter.mockReturnValue({ name: 'console' });
-    expect(isEmailDeliveryReal()).toBe(false);
+  it('is false while the console adapter is active — no real inbox, a dev-only disclosure is still honest', async () => {
+    resolveEmailAdapter.mockResolvedValue({ name: 'console' });
+    expect(await isEmailDeliveryReal()).toBe(false);
   });
 
-  it('is true once a real adapter (e.g. smtp) is configured — a dev-only disclosure would now be redundant and confusing', () => {
-    getEmailAdapter.mockReturnValue({ name: 'smtp' });
-    expect(isEmailDeliveryReal()).toBe(true);
+  it('is true once a real adapter (e.g. smtp) is configured — a dev-only disclosure would now be redundant and confusing', async () => {
+    resolveEmailAdapter.mockResolvedValue({ name: 'smtp' });
+    expect(await isEmailDeliveryReal()).toBe(true);
   });
 });
 
@@ -56,7 +63,7 @@ describe('Notifications dispatch (PLAN.md Phase 3)', () => {
   });
 
   afterEach(() => {
-    getEmailAdapter.mockReset();
+    resolveEmailAdapter.mockReset();
   });
 
   function context() {
@@ -106,7 +113,7 @@ describe('Notifications dispatch (PLAN.md Phase 3)', () => {
 
   it('sends an email-worthy event and records it in the delivery log', async () => {
     const { reservationId } = await seedGuestReservation();
-    getEmailAdapter.mockReturnValue({
+    resolveEmailAdapter.mockResolvedValue({
       send: jest.fn().mockResolvedValue({ providerRef: 'test-ref-1', status: 'sent' }),
     });
 
@@ -139,7 +146,7 @@ describe('Notifications dispatch (PLAN.md Phase 3)', () => {
   it('retries a transient failure — stays pending with an incremented attempt count, then succeeds on the next dispatch', async () => {
     const { reservationId } = await seedGuestReservation();
     const send = jest.fn().mockRejectedValueOnce(new Error('Temporary provider outage')).mockResolvedValueOnce({ providerRef: 'test-ref-2', status: 'sent' });
-    getEmailAdapter.mockReturnValue({ send });
+    resolveEmailAdapter.mockResolvedValue({ send });
 
     const eventId = await writeOutboxEvent({
       trx: scopedDb().for(context()),
@@ -163,7 +170,7 @@ describe('Notifications dispatch (PLAN.md Phase 3)', () => {
 
   it('marks a hard-failing event as failed after exhausting retries, and surfaces it in the delivery log', async () => {
     const { reservationId } = await seedGuestReservation();
-    getEmailAdapter.mockReturnValue({ send: jest.fn().mockRejectedValue(new Error('Permanent bounce')) });
+    resolveEmailAdapter.mockResolvedValue({ send: jest.fn().mockRejectedValue(new Error('Permanent bounce')) });
 
     const eventId = await writeOutboxEvent({
       trx: scopedDb().for(context()),
@@ -199,7 +206,7 @@ describe('Notifications dispatch (PLAN.md Phase 3)', () => {
       body_html: '<p>Custom body.</p>',
     });
     const send = jest.fn().mockResolvedValue({ providerRef: 'test-ref-3', status: 'sent' });
-    getEmailAdapter.mockReturnValue({ send });
+    resolveEmailAdapter.mockResolvedValue({ send });
 
     await writeOutboxEvent({
       trx: scopedDb().for(context()),
@@ -215,7 +222,7 @@ describe('Notifications dispatch (PLAN.md Phase 3)', () => {
   });
 
   it('marks an event with no guest email as sent — nothing to deliver — without calling the adapter', async () => {
-    getEmailAdapter.mockReturnValue({ send: jest.fn() });
+    resolveEmailAdapter.mockResolvedValue({ send: jest.fn() });
     const eventId = await writeOutboxEvent({
       trx: scopedDb().for(context()),
       eventType: 'reservation.confirmed',

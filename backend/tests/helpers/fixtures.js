@@ -133,6 +133,7 @@ async function seedTwoTenants(trx) {
     housekeepingDiscrepancies: [],
     outboxEvents: [],
     emailTemplates: [],
+    emailSettings: [],
     notificationLog: [],
     inAppNotifications: [],
     folioLineItems: [],
@@ -869,6 +870,15 @@ async function seedTwoTenants(trx) {
         locale: 'en',
         subject: 'Fixture subject',
         body_html: '<p>Fixture body.</p>',
+      }),
+      property_id: property.id,
+    });
+
+    t.emailSettings.push({
+      id: await insertReturningId(trx, 'email_settings', {
+        tenant_id: t.id,
+        property_id: property.id,
+        provider: 'console',
       }),
       property_id: property.id,
     });

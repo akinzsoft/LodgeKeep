@@ -53,12 +53,34 @@ async function createProperty(req, res, next) {
   }
 }
 
+/**
+ * Field allowlist, closing the gap CLAUDE.md's own "room type update"
+ * pass flagged and deliberately left open on every OTHER `update*`
+ * function in this file: "the next time any of them gets a live caller ...
+ * should get the identical allowlist treatment." `mfa_required_for_admin_roles`
+ * (gap closure: "enable or disable mfa verification code on the setup") is
+ * exactly that live caller for `updateProperty` — a raw `req.body`
+ * passthrough would otherwise let a request also silently set
+ * `tenant_id`/`status`/`id`, the same class of gap `pickRoomTypeChanges`
+ * already closed for room types.
+ */
+function pickPropertyChanges(body) {
+  const changes = {};
+  if (body?.name !== undefined) changes.name = body.name;
+  if (body?.timezone !== undefined) changes.timezone = body.timezone;
+  if (body?.base_currency !== undefined) changes.base_currency = body.base_currency;
+  if (body?.address !== undefined) changes.address = body.address;
+  if (body?.current_business_date !== undefined) changes.current_business_date = body.current_business_date;
+  if (body?.mfa_required_for_admin_roles !== undefined) changes.mfa_required_for_admin_roles = Boolean(body.mfa_required_for_admin_roles);
+  return changes;
+}
+
 async function updateProperty(req, res, next) {
   try {
     const { id } = req.params;
     const before = await service.getProperty({ context: req.context, id });
     if (!before) return notFound(res);
-    const property = await service.updateProperty({ context: req.context, id, changes: req.body ?? {} });
+    const property = await service.updateProperty({ context: req.context, id, changes: pickPropertyChanges(req.body) });
     await req.audit({ entityType: 'properties', entityId: id, action: 'update', beforeState: before, afterState: property });
     res.status(200).json(ok(property));
   } catch (error) {
@@ -80,6 +102,56 @@ async function getProperty(req, res, next) {
     const property = await service.getProperty({ context: req.context, id: req.params.id });
     if (!property) return notFound(res);
     res.status(200).json(ok(property));
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Email settings — gap closure: "add the mail setup on in SETUP menu"
+// ---------------------------------------------------------------------
+
+async function getEmailSettings(req, res, next) {
+  try {
+    const settings = await service.getEmailSettings({ context: req.context });
+    // Not `notFound` — "no settings configured yet" is a normal, real state
+    // for a property that has never set this up, not a missing resource.
+    res.status(200).json(ok(settings));
+  } catch (error) {
+    next(error);
+  }
+}
+
+function pickEmailSettingsChanges(body) {
+  const provider = body?.provider === 'smtp' ? 'smtp' : 'console';
+  return {
+    provider,
+    smtpHost: body?.smtp_host || null,
+    smtpPort: body?.smtp_port !== undefined && body?.smtp_port !== null && body?.smtp_port !== '' ? Number(body.smtp_port) : null,
+    smtpUser: body?.smtp_user || null,
+    // Blank/omitted preserves the existing encrypted password — see
+    // `upsertEmailSettings`'s own header for why.
+    smtpPassword: body?.smtp_password || null,
+    smtpFrom: body?.smtp_from || null,
+    smtpFromName: body?.smtp_from_name || null,
+  };
+}
+
+async function upsertEmailSettings(req, res, next) {
+  try {
+    const settings = await service.upsertEmailSettings({ context: req.context, ...pickEmailSettingsChanges(req.body) });
+    await req.audit({ entityType: 'email_settings', entityId: req.context.propertyId, action: 'update', afterState: settings });
+    res.status(200).json(ok(settings));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function sendTestEmail(req, res, next) {
+  try {
+    const to = require_(req.body, 'to');
+    const result = await service.sendTestEmail({ context: req.context, to });
+    res.status(200).json(ok(result));
   } catch (error) {
     next(error);
   }
@@ -615,6 +687,9 @@ module.exports = {
   updateProperty,
   listProperties,
   getProperty,
+  getEmailSettings,
+  upsertEmailSettings,
+  sendTestEmail,
   createRoomType,
   updateRoomType,
   archiveRoomType,

@@ -129,13 +129,39 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
   const activePropertyId = defaultActiveProperty(access);
   const role = activePropertyId ? await roleAtProperty(scoped, context, user.id, activePropertyId) : null;
 
+  // Gap closure: "enable or disable mfa verification code on the setup" —
+  // user-confirmed decision (AskUserQuestion, "per-property toggle:
+  // require MFA for admin/super_admin or not"). `roleRequiresMfa` itself
+  // stays the unconditional Phase 0 default (PRODUCT_REQUIREMENTS.md
+  // §3.16) — this is a per-property OVERRIDE checked alongside it, not a
+  // replacement. Fetched per grant's own property (not just the resolved
+  // active one) since a multi-property user can hold admin at one property
+  // with MFA required and another where it has been turned off — each
+  // grant's contribution to `mfaRequired` is judged against its OWN
+  // property's setting. A property with no row (impossible after this
+  // migration — the column is NOT NULL DEFAULT true) or a lookup miss
+  // fails safe to `true`, the same "assume the stricter default" instinct
+  // `resolveEmailAdapter`'s own console fallback uses in the other
+  // direction (never assume a real send silently exists).
+  const propertyIds = [...new Set(access.map((grant) => grant.property_id))];
+  const mfaOverrides = propertyIds.length
+    ? await scoped.table('properties').whereIn('id', propertyIds).select('id', 'mfa_required_for_admin_roles')
+    : [];
+  // MySQL/mysql2 returns a BOOLEAN column as a plain 0/1 number, not a real
+  // JS boolean — `Boolean(...)` normalizes it; a strict `!== false` here
+  // would silently always be true (0 !== false in JS), the exact toggle
+  // this test exists to catch.
+  const mfaRequiredAt = new Map(mfaOverrides.map((row) => [row.id, Boolean(row.mfa_required_for_admin_roles)]));
+
   // TESTING.md AUTH-9: a role that mandates MFA (PRODUCT_REQUIREMENTS.md
-  // §3.16 — admin/super_admin, unconditionally) or a user who has opted in
-  // gets a challenge, not tokens. `challengeToken` is what `verifyStaffMfa`
-  // below resumes this specific login with, once the real, emailed code
-  // (or, outside production, the same `devOnlyCode` disclosure this
-  // codebase's other credential flows already use) is submitted for it.
-  const mfaRequired = user.mfa_enabled || access.some((grant) => roleRequiresMfa(grant.role));
+  // §3.16 — admin/super_admin, unless the property has turned it off) or a
+  // user who has opted in gets a challenge, not tokens. `challengeToken` is
+  // what `verifyStaffMfa` below resumes this specific login with, once the
+  // real, emailed code (or, outside production, the same `devOnlyCode`
+  // disclosure this codebase's other credential flows already use) is
+  // submitted for it.
+  const mfaRequired =
+    user.mfa_enabled || access.some((grant) => roleRequiresMfa(grant.role) && (mfaRequiredAt.get(grant.property_id) ?? true));
   if (mfaRequired) {
     // Gap closure (user-reported, live-tested): "the verification code
     // shld be send to the account email to login not a static code." A
@@ -155,6 +181,13 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
     // property they are signing into. Hoisted above the transaction since
     // the reactive dispatch trigger below needs it too, after commit.
     const notifyPropertyId = activePropertyId ?? access[0]?.property_id ?? null;
+    // Computed ahead of the transaction — a plain read with no need for
+    // transactional consistency with the code insert below. Needs a
+    // property-BOUND accessor (`email_settings` is PROPERTY_SCOPED); `scoped`
+    // itself carries no active property yet at this point in login.
+    const emailDeliveryReal = notifyPropertyId
+      ? await isEmailDeliveryReal({ db: db.for(withActiveProperty(context, notifyPropertyId)), propertyId: notifyPropertyId })
+      : await isEmailDeliveryReal({});
     await scoped.transaction(async (trx) => {
       // Supersede any still-outstanding code for this user — a repeat
       // login attempt while already mid-challenge should invalidate the
@@ -177,7 +210,7 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
       // configured, disclosing the code anywhere but the real email it was
       // just sent to would defeat the point of sending it. Non-production
       // still gates this outright; a real adapter narrows it further.
-      if (process.env.NODE_ENV !== 'production' && !isEmailDeliveryReal()) devOnlyCode = code;
+      if (process.env.NODE_ENV !== 'production' && !emailDeliveryReal) devOnlyCode = code;
 
       if (notifyPropertyId) {
         await writeOutboxEvent({

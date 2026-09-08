@@ -17,7 +17,7 @@
 
 const { scopedDb } = require('../../db');
 const { workerContext } = require('../tenancy');
-const { getEmailAdapter } = require('./email-adapter');
+const { resolveEmailAdapter } = require('./email-adapter');
 
 const MAX_ATTEMPTS = 5;
 
@@ -120,7 +120,11 @@ async function dispatchOne({ tenantDb, propertyDb, event }) {
 
   try {
     const { subject, html } = await renderTemplate({ db: propertyDb, propertyId: event.property_id, templateKey, variables: payload });
-    const adapter = getEmailAdapter();
+    // Gap closure: "add the mail setup on in SETUP menu" — a property's own
+    // email_settings row, when configured, overrides the process-level
+    // adapter, the same override-else-default shape `renderTemplate` above
+    // already uses for the template content itself.
+    const adapter = await resolveEmailAdapter({ db: propertyDb, propertyId: event.property_id });
     const { providerRef, status } = await adapter.send({ to: payload.guestEmail, subject, html });
 
     await propertyDb.table('notification_log').insert({
@@ -245,7 +249,9 @@ async function resendNotification({ context, id }) {
   };
 
   const { subject, html } = await renderTemplate({ db, propertyId: reservation?.property_id, templateKey: failed.template_key, variables });
-  const adapter = getEmailAdapter();
+  // Consistency with `dispatchOne`: a resend honors the same property-level
+  // `email_settings` override, not silently the process-level default.
+  const adapter = await resolveEmailAdapter({ db, propertyId: context.propertyId });
   const { providerRef, status } = await adapter.send({ to: failed.recipient_email, subject, html });
 
   const [newId] = await db.table('notification_log').insert({
@@ -281,16 +287,22 @@ async function markNotificationRead({ context, id, userId }) {
 
 /**
  * Whether an outbox email genuinely reaches a real inbox right now — the
- * `console` adapter (the default with no `EMAIL_PROVIDER` configured) never
- * does. Other modules use this to decide whether a "dev-only" disclosure
- * (a code/token also returned directly in the API response, outside
- * production, for local testing with no real inbox) is still honest to
- * show — once a real adapter is wired up, the whole reason that disclosure
- * existed is gone, and showing it alongside a genuinely working email would
- * defeat the point of sending the email at all.
+ * `console` adapter (the default with no `EMAIL_PROVIDER` configured, and
+ * no property-level `email_settings` override) never does. Other modules
+ * use this to decide whether a "dev-only" disclosure (a code/token also
+ * returned directly in the API response, outside production, for local
+ * testing with no real inbox) is still honest to show — once a real
+ * adapter is wired up, the whole reason that disclosure existed is gone,
+ * and showing it alongside a genuinely working email would defeat the
+ * point of sending the email at all.
+ *
+ * `propertyId`/`db` are both optional, matching `resolveEmailAdapter`'s own
+ * guard — omit both to check only the process-level default (the shape
+ * every caller used before the per-property `email_settings` gap closure).
  */
-function isEmailDeliveryReal() {
-  return getEmailAdapter().name !== 'console';
+async function isEmailDeliveryReal({ db, propertyId } = {}) {
+  const adapter = await resolveEmailAdapter({ db, propertyId });
+  return adapter.name !== 'console';
 }
 
 module.exports = {

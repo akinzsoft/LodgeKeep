@@ -13,6 +13,11 @@ import formStyles from './SetupForm.module.css';
  * theme — logo_url/theme exist in the schema but no upload flow was built
  * this pass) — this form covers exactly what `POST/PATCH /properties`
  * accepts today.
+ *
+ * The MFA checkbox (gap closure, user-reported: "enable or disable mfa
+ * verication code on the setup") only appears while editing — it has no
+ * meaning at creation time, the same reasoning the slug/business-date
+ * fields already apply for the opposite case.
  */
 export function PropertyTab({ properties, onPropertiesChanged }) {
   const [editingId, setEditingId] = useState(null);
@@ -22,7 +27,7 @@ export function PropertyTab({ properties, onPropertiesChanged }) {
   const [toast, setToast] = useState(null);
 
   function emptyForm() {
-    return { name: '', slug: '', timezone: '', base_currency: '', address: '', business_date: '' };
+    return { name: '', slug: '', timezone: '', base_currency: '', address: '', business_date: '', mfa_required_for_admin_roles: true };
   }
 
   function startEdit(property) {
@@ -34,6 +39,10 @@ export function PropertyTab({ properties, onPropertiesChanged }) {
       base_currency: property.base_currency,
       address: property.address ?? '',
       business_date: property.current_business_date ?? '',
+      // Gap closure (user-reported): "enable or disable mfa verication
+      // code on the setup." Defaults true (matches the column's own
+      // NOT NULL DEFAULT true) if a caller somehow lacks the field.
+      mfa_required_for_admin_roles: property.mfa_required_for_admin_roles ?? true,
     });
   }
 
@@ -54,6 +63,7 @@ export function PropertyTab({ properties, onPropertiesChanged }) {
           base_currency: form.base_currency,
           address: form.address || null,
           current_business_date: form.business_date || null,
+          mfa_required_for_admin_roles: form.mfa_required_for_admin_roles,
         });
         setToast('Property updated');
       } else {
@@ -169,6 +179,18 @@ export function PropertyTab({ properties, onPropertiesChanged }) {
               onChange={(event) => setForm({ ...form, business_date: event.target.value })}
             />
           </label>
+
+          {editingId && (
+            <label className={formStyles.checkboxField}>
+              <input
+                type="checkbox"
+                className={formStyles.checkbox}
+                checked={form.mfa_required_for_admin_roles}
+                onChange={(event) => setForm({ ...form, mfa_required_for_admin_roles: event.target.checked })}
+              />
+              <span className={formStyles.label}>Require a verification code (MFA) for admin/super admin sign-in</span>
+            </label>
+          )}
 
           <div className={formStyles.actionsRow}>
             <Button type="submit" loading={submitting}>

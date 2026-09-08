@@ -38,6 +38,13 @@ function setupRouter() {
 
   router.get('/setup/progress', controller.getSetupProgress);
 
+  // Gap closure: "add the mail setup on in SETUP menu" — per-property email
+  // settings. `setup.view`/`setup.manage`, matching every other Setup screen;
+  // no stricter gate was asked for, despite the SMTP password these carry.
+  router.get('/email-settings', requirePermission('setup.view'), controller.getEmailSettings);
+  router.put('/email-settings', requirePermission('setup.manage'), controller.upsertEmailSettings);
+  router.post('/email-settings/test', requirePermission('setup.manage'), controller.sendTestEmail);
+
   router.get('/room-types', requirePermission('setup.view'), controller.listRoomTypes);
   router.post('/room-types', requirePermission('setup.manage'), controller.createRoomType);
   // Gap closure (user-reported): editing an existing room type (including

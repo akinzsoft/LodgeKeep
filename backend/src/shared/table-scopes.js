@@ -187,6 +187,9 @@ const TABLE_SCOPES = Object.freeze({
   outbox_events: { scope: SCOPES.TENANT, attributionColumns: ['property_id'] },
   email_templates: { scope: SCOPES.PROPERTY },
   notification_log: { scope: SCOPES.PROPERTY },
+  // Gap closure: "add the mail setup on in SETUP menu" — one row per
+  // property (UNIQUE(tenant_id, property_id) on the migration itself).
+  email_settings: { scope: SCOPES.PROPERTY },
   // TENANT_SCOPED, following `users` — a notification belongs to one staff
   // member, not one property (see that migration's own header).
   in_app_notifications: { scope: SCOPES.TENANT },

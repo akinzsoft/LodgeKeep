@@ -11,7 +11,9 @@
 
 const { scopedDb } = require('../../db');
 const { withDuplicateMapping } = require('../../shared/errors');
-const { InvalidBulkRangeError, TaxEffectiveDateOverlapError } = require('./errors');
+const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError } = require('./errors');
+const { encrypt } = require('../../shared/encryption');
+const { resolveEmailAdapter } = require('../notifications/email-adapter');
 
 // ---------------------------------------------------------------------
 // Properties
@@ -66,6 +68,87 @@ async function getProperty({ context, id }) {
 async function listProperties({ context }) {
   const db = scopedDb().for(context);
   return db.acrossProperties().table('properties').where({ status: 'active' }).orderBy('name');
+}
+
+// ---------------------------------------------------------------------
+// Email settings — gap closure: "add the mail setup on in SETUP menu"
+// (AskUserQuestion-confirmed: per-property, stored in the database)
+// ---------------------------------------------------------------------
+
+/**
+ * A property's own email/SMTP configuration — never returns the decrypted
+ * password (`smtp_password_set` is the boolean signal a form uses to show
+ * a masked placeholder instead), the same "show that a secret exists,
+ * never the secret itself" shape every dev-only-token disclosure in this
+ * codebase already avoids in the OTHER direction (showing a real secret
+ * only outside production, and only the once).
+ */
+async function getEmailSettings({ context }) {
+  const db = scopedDb().for(context);
+  const row = await db.table('email_settings').first();
+  if (!row) return null;
+  const { smtp_password_encrypted: _passwordEncrypted, ...rest } = row;
+  return { ...rest, smtp_password_set: Boolean(row.smtp_password_encrypted) };
+}
+
+/**
+ * Insert-if-missing / update-if-present — one row per property, the
+ * migration's own `UNIQUE(tenant_id, property_id)`. `smtpPassword`
+ * omitted or blank PRESERVES the existing encrypted password rather than
+ * clearing it, since the real value is never sent back to the client to
+ * resubmit unchanged — the standard "blank means unchanged" convention a
+ * masked-password field needs.
+ */
+async function upsertEmailSettings({ context, provider, smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpFromName }) {
+  const db = scopedDb().for(context);
+  const changes = {
+    provider,
+    smtp_host: smtpHost ?? null,
+    smtp_port: smtpPort ?? null,
+    smtp_user: smtpUser ?? null,
+    smtp_from: smtpFrom ?? null,
+    smtp_from_name: smtpFromName ?? null,
+  };
+  if (smtpPassword) {
+    changes.smtp_password_encrypted = encrypt(smtpPassword);
+  }
+
+  const existing = await db.table('email_settings').first();
+  if (existing) {
+    await db.table('email_settings').where({ id: existing.id }).update(changes);
+  } else {
+    await withDuplicateMapping(
+      'email_settings',
+      'Email settings for this property were just created by another request — reload and try again.',
+      () => db.table('email_settings').insert(changes)
+    );
+  }
+  return getEmailSettings({ context });
+}
+
+/**
+ * Sends a real test message through the property's currently-SAVED
+ * configuration — via the exact same `resolveEmailAdapter` a real outbox
+ * dispatch uses, so a passing test genuinely proves what a real send would
+ * do, not a separate, parallel path that could quietly diverge from it.
+ * Requires `upsertEmailSettings` to have already run at least once (there
+ * is nothing to test against otherwise) — the frontend's own "Save, then
+ * Send test email" two-step flow enforces this, matching how a masked
+ * password field can only ever describe an already-saved secret.
+ */
+async function sendTestEmail({ context, to }) {
+  const db = scopedDb().for(context);
+  const adapter = await resolveEmailAdapter({ db, propertyId: context.propertyId });
+  try {
+    const result = await adapter.send({
+      to,
+      subject: 'LodgeKeep test email',
+      html: '<p>This is a test email from your LodgeKeep email settings. If you received this, your configuration works.</p>',
+    });
+    return { sent: true, provider: adapter.name, providerRef: result.providerRef };
+  } catch (error) {
+    throw new EmailTestSendFailedError(String(error?.message ?? error));
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -565,6 +648,9 @@ module.exports = {
   updateProperty,
   getProperty,
   listProperties,
+  getEmailSettings,
+  upsertEmailSettings,
+  sendTestEmail,
   createRoomType,
   updateRoomType,
   archiveRoomType,

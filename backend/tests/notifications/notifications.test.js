@@ -7,7 +7,11 @@
  *
  * The email adapter is mocked here too (see `dispatch.test.js`'s own
  * header for why) so `resendNotification`'s real send attempt does not
- * depend on the `console` adapter's exact log output.
+ * depend on the `console` adapter's exact log output. Mocked at
+ * `resolveEmailAdapter` — the function `resendNotification` actually calls
+ * since the per-property `email_settings` gap closure — not `getEmailAdapter`
+ * directly, matching `dispatch.test.js`'s own note on why that binding
+ * alone would not be intercepted.
  */
 
 const { useTestApp } = require('../helpers/app');
@@ -15,7 +19,8 @@ const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 
 jest.mock('../../src/modules/notifications/email-adapter', () => ({
-  getEmailAdapter: jest.fn(() => ({ send: jest.fn().mockResolvedValue({ providerRef: 'resend-ref', status: 'sent' }) })),
+  ...jest.requireActual('../../src/modules/notifications/email-adapter'),
+  resolveEmailAdapter: jest.fn(() => Promise.resolve({ send: jest.fn().mockResolvedValue({ providerRef: 'resend-ref', status: 'sent' }) })),
 }));
 
 describe('Notifications (PLAN.md Phase 3)', () => {

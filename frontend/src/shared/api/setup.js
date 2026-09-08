@@ -29,6 +29,24 @@ export function getSetupProgress() {
 }
 
 // ---------------------------------------------------------------------
+// Email settings — gap closure: "add the mail setup on in SETUP menu"
+// ---------------------------------------------------------------------
+
+/** @returns {Promise<null | {provider: string, smtp_host: string|null, smtp_port: number|null, smtp_user: string|null, smtp_from: string|null, smtp_from_name: string|null, smtp_password_set: boolean}>} `null` when the property has never configured this. */
+export function getEmailSettings() {
+  return request('/email-settings');
+}
+
+export function updateEmailSettings(body) {
+  return request('/email-settings', { method: 'PUT', body });
+}
+
+/** @returns {Promise<{sent: true, provider: string, providerRef: string}>} Throws (real ApiError) on a genuine send failure. */
+export function sendTestEmail(to) {
+  return request('/email-settings/test', { method: 'POST', body: { to } });
+}
+
+// ---------------------------------------------------------------------
 // Room types
 // ---------------------------------------------------------------------
 
