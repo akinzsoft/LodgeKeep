@@ -278,7 +278,31 @@ describe('<AvailabilityTab>', () => {
     await searchAndBook();
 
     expect(mocks.openBookingFolio).toHaveBeenCalledWith('10');
-    expect(await screen.findByText('Balance due: 150.00 NGN')).toBeInTheDocument();
+    expect(await screen.findByText(/₦150\.00/)).toBeInTheDocument();
+  });
+
+  /**
+   * Gap closure (user-reported): "wen payment is done disable the book
+   * button ... " — disabled the instant a reservation exists this search
+   * cycle (not only once payment settles), since a booked-but-unpaid
+   * reservation is still one real booking and a second Book click before
+   * paying would create a genuine duplicate. A fresh Search is the only
+   * thing that re-enables it.
+   */
+  it('disables Book after a successful booking, re-enabled only by a new Search', async () => {
+    mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
+    mocks.openBookingFolio.mockResolvedValue({ id: '20', balance: '150.00', currency: 'NGN', status: 'open' });
+
+    await searchAndBook();
+
+    expect(screen.getByRole('button', { name: 'Book' })).toBeDisabled();
+    expect(screen.getByText('Run a new search to make another booking.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    expect(await screen.findByText('2027-01-01')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Book' })).not.toBeDisabled();
+    expect(screen.queryByText(/₦150\.00/)).not.toBeInTheDocument();
   });
 
   it('does not open a folio for a waitlisted booking — no room to bill yet', async () => {
@@ -307,19 +331,44 @@ describe('<AvailabilityTab>', () => {
     expect(screen.queryByText(/Balance due/)).not.toBeInTheDocument();
   });
 
-  it('captures a cash payment and refreshes the balance', async () => {
+  it('captures a cash payment for the folio’s real balance, and shows the settled state once it zeroes', async () => {
     mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
     mocks.openBookingFolio.mockResolvedValue({ id: '20', balance: '150.00', currency: 'NGN', status: 'open' });
     mocks.captureCashPayment.mockResolvedValue({ id: '30', status: 'CAPTURED' });
     mocks.getFolio.mockResolvedValue({ id: '20', balance: '0.00', currency: 'NGN', status: 'open' });
 
     await searchAndBook();
-    await screen.findByText('Balance due: 150.00 NGN');
+    await screen.findByText(/₦150\.00/);
     await userEvent.click(screen.getByRole('button', { name: 'Cash' }));
 
     expect(mocks.captureCashPayment).toHaveBeenCalledWith('20', { amount: '150.00', currency: 'NGN' });
-    expect(await screen.findByText('Cash payment captured.')).toBeInTheDocument();
-    expect(await screen.findByText('Balance due: 0.00 NGN')).toBeInTheDocument();
+
+    /**
+     * Gap closure (user-reported): "wen payment is done disable the ...
+     * payment buttons" — once settled, the form controls are replaced by a
+     * positive-state summary rather than left as disabled buttons with no
+     * explanation.
+     */
+    expect(await screen.findByText('Paid in full')).toBeInTheDocument();
+    expect(screen.getByText(/No balance due/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cash' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Card' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * Gap closure (user-reported): "the form textfield amt is editable pls
+   * correct it."
+   */
+  it('renders the payment Amount field as read-only, locked to the real balance', async () => {
+    mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
+    mocks.openBookingFolio.mockResolvedValue({ id: '20', balance: '150.00', currency: 'NGN', status: 'open' });
+
+    await searchAndBook();
+    await screen.findByText(/₦150\.00/);
+
+    const amountInput = screen.getByLabelText('Amount');
+    expect(amountInput).toHaveAttribute('readonly');
+    expect(amountInput).toHaveValue('150.00');
   });
 
   it('disables the Card button when the selected guest has no email on file', async () => {
@@ -327,7 +376,7 @@ describe('<AvailabilityTab>', () => {
     mocks.openBookingFolio.mockResolvedValue({ id: '20', balance: '150.00', currency: 'NGN', status: 'open' });
 
     await searchAndBook();
-    await screen.findByText('Balance due: 150.00 NGN');
+    await screen.findByText(/₦150\.00/);
 
     expect(screen.getByRole('button', { name: 'Card' })).toBeDisabled();
     expect(screen.getByText('Add an email to this guest to accept card payment.')).toBeInTheDocument();
@@ -355,7 +404,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '2'); // GUEST_WITH_EMAIL
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
     await userEvent.click(screen.getByRole('button', { name: 'Book' }));
-    await screen.findByText('Balance due: 150.00 NGN');
+    await screen.findByText(/₦150\.00/);
 
     await userEvent.click(screen.getByRole('button', { name: 'Card' }));
 
@@ -364,10 +413,11 @@ describe('<AvailabilityTab>', () => {
       currency: 'NGN',
       guestEmail: 'sam@example.com',
     });
-    expect(await screen.findByRole('link', { name: 'Open the card payment page' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: 'Open payment page in a new tab' })).toHaveAttribute(
       'href',
       'https://paystack.test/pay/abc'
     );
+    expect(screen.queryByText('https://paystack.test/pay/abc')).not.toBeInTheDocument();
   });
 
   /**
@@ -408,19 +458,19 @@ describe('<AvailabilityTab>', () => {
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '2');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
     await userEvent.click(screen.getByRole('button', { name: 'Book' }));
-    await screen.findByText('Balance due: 150.00 NGN');
+    await screen.findByText(/₦150\.00/);
 
     await userEvent.click(screen.getByRole('button', { name: 'Card' }));
-    await screen.findByRole('link', { name: 'Open the card payment page' });
+    await screen.findByRole('link', { name: 'Open payment page in a new tab' });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Pay now (same page)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Pay now' }));
 
     expect(mocks.openPaystackPopup).toHaveBeenCalledWith(
       expect.objectContaining({ accessCode: 'access-abc', onClose: expect.any(Function) })
     );
     expect(mocks.verifyPayment).toHaveBeenCalledWith('31');
-    expect(await screen.findByText('Balance due: 0.00 NGN')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Pay now (same page)' })).not.toBeInTheDocument();
+    expect(await screen.findByText('Paid in full')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pay now' })).not.toBeInTheDocument();
   });
 
   it('shows the honest partial-success message when the gateway is not configured', async () => {
@@ -449,11 +499,11 @@ describe('<AvailabilityTab>', () => {
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '2');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
     await userEvent.click(screen.getByRole('button', { name: 'Book' }));
-    await screen.findByText('Balance due: 150.00 NGN');
+    await screen.findByText(/₦150\.00/);
 
     await userEvent.click(screen.getByRole('button', { name: 'Card' }));
 
     expect(await screen.findByText('PAYMENT_GATEWAY_NOT_CONFIGURED')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Open the card payment page' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open payment page in a new tab' })).not.toBeInTheDocument();
   });
 });

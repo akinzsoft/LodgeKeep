@@ -66,3 +66,36 @@ export function formatMoney(amount, currencyCode, locale) {
 export function Money({ amount, currencyCode, locale, className = '' }) {
   return <span className={`tabular-nums ${className}`.trim()}>{formatMoney(amount, currencyCode, locale)}</span>;
 }
+
+/**
+ * Gap closure (user-reported): "wen payment is done disable the book button
+ * and payment buttons." A folio's own `status` column never reflects this —
+ * it only ever becomes `'closed'` at check-out (`reservations/service.js`'s
+ * `checkOut`), so it stays `'open'` indefinitely even at a zero balance,
+ * especially for a folio opened before check-in ("pay at the point of
+ * booking"). The balance itself is the only real signal.
+ *
+ * String identity only, never a numeric parse used for a decision
+ * (ARCHITECTURE.md §1: money is exact, always, never float) — a leading
+ * "-" means a credit owed back to the guest (e.g. from an adjustment),
+ * which is just as much "nothing currently owed" as an exact zero.
+ */
+export function isBalanceSettled(balance) {
+  if (balance == null) return false;
+  const trimmed = String(balance).trim();
+  return trimmed === '0.00' || trimmed.startsWith('-');
+}
+
+/**
+ * The positive-state complement to disabling payment controls
+ * (DESIGN_SYSTEM.md §1: status is never colour alone) — `null` while a
+ * balance is still owing, since the existing owing-balance amount text is
+ * that state's own signal and doesn't need a pill too.
+ */
+export function describeBalanceState(balance) {
+  if (balance == null) return null;
+  const trimmed = String(balance).trim();
+  if (trimmed === '0.00') return { tone: 'success', label: 'Paid in full' };
+  if (trimmed.startsWith('-')) return { tone: 'info', label: 'Credit balance' };
+  return null;
+}
