@@ -16,6 +16,14 @@ export function getBoard(businessDate) {
   return request(`/housekeeping/board${query ? `?${query}` : ''}`);
 }
 
+/**
+ * Gap closure (user-reported): "all houseppers shld show" — a real,
+ * pickable list of housekeeping-role users at the active property.
+ */
+export function listAttendants() {
+  return request('/housekeeping/attendants');
+}
+
 /** @param {{roomId: string, attendantUserId: string, businessDate: string}} params */
 export function createAssignment({ roomId, attendantUserId, businessDate }) {
   return request('/housekeeping/assignments', {

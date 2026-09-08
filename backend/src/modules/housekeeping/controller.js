@@ -68,6 +68,19 @@ async function listBoard(req, res, next) {
   }
 }
 
+/**
+ * Gap closure (user-reported): "all houseppers shld show" — see
+ * `service.listAttendants`'s own header for why this is a dedicated,
+ * `housekeeping.view`-gated read rather than reusing `GET /users`.
+ */
+async function listAttendants(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listAttendants({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 // ---------------------------------------------------------------------
 // Status reports & discrepancies
 // ---------------------------------------------------------------------
@@ -179,6 +192,7 @@ module.exports = {
   createAssignment,
   updateAssignment,
   listBoard,
+  listAttendants,
   reportRoomStatus,
   listDiscrepancies,
   resolveDiscrepancy,
