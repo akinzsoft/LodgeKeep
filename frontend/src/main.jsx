@@ -18,6 +18,7 @@ import { NightAuditScreen } from './app/night-audit/NightAuditScreen.jsx';
 import { ProfilesScreen } from './app/profiles/ProfilesScreen.jsx';
 import { POSScreen } from './app/pos/POSScreen.jsx';
 import { ARScreen } from './app/ar/ARScreen.jsx';
+import { GroupBlocksScreen } from './app/group-blocks/GroupBlocksScreen.jsx';
 import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { notificationsApi, setupApi } from './shared/api/index.js';
@@ -215,6 +216,8 @@ function Demo() {
           'pos.manage',
           'ar.view',
           'ar.manage',
+          'group_blocks.view',
+          'group_blocks.manage',
         ])
       }
       activeItemKey={activeItemKey}
@@ -263,6 +266,8 @@ function Demo() {
         <POSScreen isOffline={!isOnline} />
       ) : activeItemKey === 'ar' ? (
         <ARScreen isOffline={!isOnline} />
+      ) : activeItemKey === 'group_blocks' ? (
+        <GroupBlocksScreen isOffline={!isOnline} />
       ) : (
         <HomeDashboard
           greetingName={displayName}

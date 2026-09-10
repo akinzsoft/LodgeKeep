@@ -64,10 +64,11 @@ export function getInvoice(id) {
   return request(`/ar/invoices/${id}`);
 }
 
-export function generateInvoice(accountId) {
+/** @param {string} accountId @param {{groupBlockId?: string}} [params] PLAN.md Phase 4 (Group Blocks) — optionally scopes the generated invoice to one block's own charges. */
+export function generateInvoice(accountId, { groupBlockId } = {}) {
   return request(`/ar/accounts/${accountId}/invoices`, {
     method: 'POST',
-    body: {},
+    body: { group_block_id: groupBlockId },
     headers: { 'Idempotency-Key': idempotencyKey() },
   });
 }

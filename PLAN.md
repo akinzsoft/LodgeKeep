@@ -134,7 +134,7 @@ Phase 2 works in a demo. This phase is what makes staff trust it during a busy s
 - **Guest accounts** — separate credential store (3.16), online check-in
 - **POS integration (3.4) — core only**: outlets, terminals, menu, order flow, cash-up, charge-to-room. QR self-ordering and inventory/stock control are deferred to Phase 6 (§3.4 covers both in full; they're real scope, not an afterthought — see the note below)
 - **Accounts receivable (3.9)** — company invoicing, credit, ageing — ✅ **shipped**, see CLAUDE.md's "Phase 4 — Accounts Receivable" status section (the "3.8" citation in this bullet's original text was a typo; §3.8 is Group Blocks)
-- **Group blocks (3.7)** — blocks, rooming lists, pickup tracking, group billing
+- **Group blocks (3.8)** — blocks, rooming lists, pickup tracking, group billing — ✅ **shipped**, see CLAUDE.md's "Phase 4 — Group Blocks" status section (the "3.7" citation in this bullet's original text was a typo, the identical class the AR bullet's own "3.8" typo above already was; §3.7 is Rooms Management)
 
 **Tests required to close:**
 - **A guest session cannot satisfy any PMS route** (the highest-value test in this phase)
@@ -142,10 +142,10 @@ Phase 2 works in a demo. This phase is what makes staff trust it during a busy s
 - Payment failure mid-booking leaves no orphaned reservation and no orphaned charge
 - POS charge-to-room lands on the correct open folio; a closed folio rejects it
 - AR: invoice generation from folios, ageing buckets, credit limit enforcement
-- Group block pickup count matches reservations actually made against the block
+- Group block pickup count matches reservations actually made against the block — ✅ covered (`tests/group-blocks/group-blocks.test.js`)
 - Tenant theming: portal renders with tenant colours and logo, with no admin styling leaking in
 
-**Exit:** the hotel earns revenue through the product, not just records it.
+**Exit:** the hotel earns revenue through the product, not just records it. **Met** — every bullet in this phase is now shipped.
 
 ---
 

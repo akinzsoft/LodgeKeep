@@ -179,6 +179,7 @@ async function createReservation(req, res, next) {
           bookingSourceId: req.body?.booking_source_id,
           cancellationPolicyId: req.body?.cancellation_policy_id,
           preferredRoomId: req.body?.preferred_room_id,
+          groupBlockId: req.body?.group_block_id,
         });
         return { status: 201, body: ok(reservation) };
       },
@@ -206,6 +207,7 @@ async function listReservations(req, res, next) {
       arrivalDateFrom: req.query?.arrival_date_from,
       arrivalDateTo: req.query?.arrival_date_to,
       roomTypeId: req.query?.room_type_id,
+      groupBlockId: req.query?.group_block_id,
     });
     res.status(200).json(ok(reservations));
   } catch (error) {

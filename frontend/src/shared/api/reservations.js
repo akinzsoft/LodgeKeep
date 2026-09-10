@@ -86,13 +86,14 @@ export function getReservation(id) {
   return request(`/reservations/${id}`);
 }
 
-/** @param {{status?: string, arrivalDateFrom?: string, arrivalDateTo?: string, roomTypeId?: string}} [filters] */
+/** @param {{status?: string, arrivalDateFrom?: string, arrivalDateTo?: string, roomTypeId?: string, groupBlockId?: string}} [filters] */
 export function listReservations(filters = {}) {
   const params = new URLSearchParams();
   if (filters.status) params.set('status', filters.status);
   if (filters.arrivalDateFrom) params.set('arrival_date_from', filters.arrivalDateFrom);
   if (filters.arrivalDateTo) params.set('arrival_date_to', filters.arrivalDateTo);
   if (filters.roomTypeId) params.set('room_type_id', filters.roomTypeId);
+  if (filters.groupBlockId) params.set('group_block_id', filters.groupBlockId);
   const query = params.toString();
   return request(`/reservations${query ? `?${query}` : ''}`);
 }

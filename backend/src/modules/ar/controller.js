@@ -122,7 +122,12 @@ async function generateInvoice(req, res, next) {
       entityType: 'ar_invoices',
       action: 'generate',
       handler: async (trx) => {
-        const invoice = await service.generateInvoice({ trx, arAccountId: req.params.id, userId: req.context.userId });
+        const invoice = await service.generateInvoice({
+          trx,
+          arAccountId: req.params.id,
+          userId: req.context.userId,
+          groupBlockId: req.body?.group_block_id,
+        });
         return { status: 201, body: ok(invoice) };
       },
     });
