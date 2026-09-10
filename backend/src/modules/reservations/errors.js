@@ -81,10 +81,17 @@ class RoomOutOfOrderError extends AppError {
   }
 }
 
-/** ARCHITECTURE.md §11: check-out requires the folio balance to be zero (no AR-owing checkout supported in this pass). */
+/**
+ * ARCHITECTURE.md §11: check-out requires every folio the guest owes
+ * directly to carry a zero balance. PLAN.md Phase 4 (Accounts Receivable):
+ * a folio billed to a company account is exempt — see `checkOut`'s own
+ * comment in `service.js` — so this error only ever fires for a folio that
+ * genuinely is the guest's own responsibility. `folioId` identifies which
+ * of a reservation's (possibly several, split-billed) open folios is owing.
+ */
 class FolioBalanceOwingError extends AppError {
-  constructor(balance) {
-    super('BUSINESS_RULE_FOLIO_BALANCE_OWING', `Cannot check out — folio balance of ${balance} is still owing.`, 422, { balance });
+  constructor(balance, folioId) {
+    super('BUSINESS_RULE_FOLIO_BALANCE_OWING', `Cannot check out — folio balance of ${balance} is still owing.`, 422, { balance, folioId });
   }
 }
 

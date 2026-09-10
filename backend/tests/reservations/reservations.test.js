@@ -1383,6 +1383,91 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       await t.trx('folios').where({ id: folio.id }).update({ balance: '0.00' });
     });
 
+    it('PLAN.md Phase 4 (Accounts Receivable): check-out is not blocked by a nonzero balance on a folio billed to a company AR account, while a non-AR folio on the same reservation still must be zero', async () => {
+      const roomTypeId = await createRoomType(ctx.a, { code: 'ARFD' });
+      const arRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'ARFD1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'ARFDRATE' });
+      const created = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-12-01',
+          departure_date: '2027-12-03',
+        });
+      const arReservationId = created.body.data.id;
+      await t.request
+        .post(`/api/v1/reservations/${arReservationId}/check-in`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ room_id: String(arRoomId) });
+
+      const primaryFolio = await t.trx('folios').where({ reservation_id: arReservationId, status: 'open' }).first();
+      await t.trx('folios').where({ id: primaryFolio.id }).update({ balance: '0.00' });
+
+      const [companyProfileId] = await t.trx('company_profiles').insert({ tenant_id: ctx.a.id, name: 'FD Multi-Folio Co' });
+      await t.trx('ar_accounts').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        company_profile_id: companyProfileId,
+        credit_limit: '500.00',
+        currency: 'NGN',
+        enforcement_mode: 'block',
+      });
+      const [splitFolioId] = await t.trx('folios').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        reservation_id: arReservationId,
+        folio_number: 'ARFDSPLITFOLIO',
+        status: 'open',
+        balance: '0.00',
+        currency: 'NGN',
+        billed_to: 'FD Multi-Folio Co',
+        company_profile_id: companyProfileId,
+      });
+      await t.trx('folio_line_items').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        folio_id: splitFolioId,
+        type: 'adjustment',
+        description: 'Company-billed charge',
+        amount: '80.00',
+        currency: 'NGN',
+        business_date: '2027-12-01',
+      });
+      await t.trx('folios').where({ id: splitFolioId }).update({ balance: '80.00' });
+
+      // With the guest folio owing, checkout is still blocked — the AR
+      // folio's nonzero balance alone must not be enough to let it through.
+      await t.trx('folios').where({ id: primaryFolio.id }).update({ balance: '15.00' });
+      const blockedRes = await t.request
+        .post(`/api/v1/reservations/${arReservationId}/check-out`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({});
+      expect(blockedRes.status).toBe(422);
+      expect(blockedRes.body.error.code).toBe('BUSINESS_RULE_FOLIO_BALANCE_OWING');
+      expect(String(blockedRes.body.error.details.folioId)).toBe(String(primaryFolio.id));
+
+      // Once the guest's own folio is settled, the AR-billed folio's own
+      // ₦80.00 balance does not block checkout at all.
+      await t.trx('folios').where({ id: primaryFolio.id }).update({ balance: '0.00' });
+      const res = await t.request
+        .post(`/api/v1/reservations/${arReservationId}/check-out`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('checked_out');
+
+      const closedSplitFolio = await t.trx('folios').where({ id: splitFolioId }).first();
+      expect(closedSplitFolio.status).toBe('closed');
+      expect(closedSplitFolio.balance).toBe('80.00');
+    });
+
     it('FD-6/FD-5: an early or late checkout time posts the configured fee, and check-out completes', async () => {
       const res = await t.request
         .post(`/api/v1/reservations/${reservationId}/check-out`)

@@ -14,15 +14,23 @@ const mocks = vi.hoisted(() => ({
   capturePaystackPayment: vi.fn(),
   refundPayment: vi.fn(),
   openAdditionalFolio: vi.fn(),
+  billFolioToCompany: vi.fn(),
   verifyPayment: vi.fn(),
   listOutstandingBalances: vi.fn(),
   getOutstandingBalancesCsv: vi.fn(),
   openPaystackPopup: vi.fn(),
+  listCompanyProfiles: vi.fn(),
+  listAccounts: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
-  return { ...actual, cashieringApi: mocks };
+  return {
+    ...actual,
+    cashieringApi: mocks,
+    profilesApi: { ...actual.profilesApi, listCompanyProfiles: mocks.listCompanyProfiles },
+    arApi: { ...actual.arApi, listAccounts: mocks.listAccounts },
+  };
 });
 
 vi.mock('../../../shared/paystack.js', () => ({
@@ -37,6 +45,8 @@ describe('<CashieringScreen>', () => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.getFolio.mockResolvedValue({ ...FOLIO, lineItems: [LINE_ITEM], payments: [] });
     mocks.listOutstandingBalances.mockResolvedValue([]);
+    mocks.listCompanyProfiles.mockResolvedValue([{ id: '50', name: 'Acme Corp' }]);
+    mocks.listAccounts.mockResolvedValue([]);
   });
 
   // The screen now defaults to the Balances tab (PRODUCT_REQUIREMENTS.md's
@@ -302,6 +312,95 @@ describe('<CashieringScreen>', () => {
       mocks.listOutstandingBalances.mockResolvedValue([]);
       render(<CashieringScreen />);
       expect(await screen.findByText(/every in-house folio is settled/i)).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * PLAN.md Phase 4 (Accounts Receivable) — gap closure: `billed_to` used
+   * to be set via a raw `window.prompt`; there is now a real company
+   * picker wired to the backend's bill-to-account endpoint.
+   */
+  describe('Accounts Receivable — billing a folio to a company', () => {
+    it('bills a folio to a company through a real picker, never window.prompt', async () => {
+      mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+      mocks.billFolioToCompany.mockResolvedValue({ ...FOLIO, company_profile_id: '50', billed_to: 'Acme Corp' });
+      const promptSpy = vi.spyOn(window, 'prompt');
+      await loadReservation();
+      await screen.findByText('Room 101');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Bill to company' }));
+      await userEvent.selectOptions(screen.getByRole('combobox'), '50');
+      await userEvent.click(screen.getByRole('button', { name: 'Bill this folio' }));
+
+      expect(mocks.billFolioToCompany).toHaveBeenCalledWith('1', '50');
+      expect(promptSpy).not.toHaveBeenCalled();
+    });
+
+    it('shows a settled-through-AR notice and hides Cash/Card capture for a folio billed to a company', async () => {
+      const AR_FOLIO = { ...FOLIO, company_profile_id: '50', billed_to: 'Acme Corp' };
+      mocks.listFoliosForReservation.mockResolvedValue([AR_FOLIO]);
+      mocks.getFolio.mockResolvedValue({ ...AR_FOLIO, lineItems: [LINE_ITEM], payments: [] });
+      mocks.listAccounts.mockResolvedValue([
+        { id: '900', company_profile_id: '50', credit_limit: '500.00', current_balance: '100.00', currency: 'NGN', is_over_limit: false },
+      ]);
+      await loadReservation();
+      await screen.findByText('Room 101');
+
+      expect(await screen.findByText(/settled through Accounts Receivable/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Capture a payment' })).not.toBeInTheDocument();
+    });
+
+    it('shows an "AR account over limit" pill when the billed company is over its credit limit', async () => {
+      const AR_FOLIO = { ...FOLIO, company_profile_id: '50', billed_to: 'Acme Corp' };
+      mocks.listFoliosForReservation.mockResolvedValue([AR_FOLIO]);
+      mocks.getFolio.mockResolvedValue({ ...AR_FOLIO, lineItems: [LINE_ITEM], payments: [] });
+      mocks.listAccounts.mockResolvedValue([
+        { id: '900', company_profile_id: '50', credit_limit: '50.00', current_balance: '100.00', currency: 'NGN', is_over_limit: true },
+      ]);
+      await loadReservation();
+      await screen.findByText('Room 101');
+
+      expect(await screen.findByText('AR account over limit')).toBeInTheDocument();
+    });
+
+    it('un-bills a folio back to the guest', async () => {
+      const AR_FOLIO = { ...FOLIO, company_profile_id: '50', billed_to: 'Acme Corp' };
+      mocks.listFoliosForReservation.mockResolvedValue([AR_FOLIO]);
+      mocks.getFolio.mockResolvedValue({ ...AR_FOLIO, lineItems: [LINE_ITEM], payments: [] });
+      mocks.listAccounts.mockResolvedValue([
+        { id: '900', company_profile_id: '50', credit_limit: '500.00', current_balance: '0.00', currency: 'NGN', is_over_limit: false },
+      ]);
+      mocks.billFolioToCompany.mockResolvedValue({ ...FOLIO, company_profile_id: null, billed_to: 'Guest' });
+      await loadReservation();
+      await screen.findByText('Room 101');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Un-bill (settle with guest instead)' }));
+
+      expect(mocks.billFolioToCompany).toHaveBeenCalledWith('1', null);
+    });
+
+    it('offers a credit-limit override checkbox and reason field on the charge form for an AR-billed folio', async () => {
+      const AR_FOLIO = { ...FOLIO, company_profile_id: '50', billed_to: 'Acme Corp' };
+      mocks.listFoliosForReservation.mockResolvedValue([AR_FOLIO]);
+      mocks.getFolio.mockResolvedValue({ ...AR_FOLIO, lineItems: [LINE_ITEM], payments: [] });
+      mocks.listAccounts.mockResolvedValue([
+        { id: '900', company_profile_id: '50', credit_limit: '50.00', current_balance: '100.00', currency: 'NGN', is_over_limit: true },
+      ]);
+      mocks.postCharge.mockResolvedValue({ chargeLine: LINE_ITEM, taxLines: [] });
+      await loadReservation();
+      await screen.findByText('Room 101');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Post a charge' }));
+      await userEvent.type(screen.getByLabelText('Description'), 'Extra charge');
+      await userEvent.type(screen.getByLabelText('Amount'), '10.00');
+      await userEvent.click(screen.getByLabelText('Override credit limit if this would exceed it'));
+      await userEvent.type(screen.getByLabelText('Override reason'), 'Manager approved');
+      await userEvent.click(screen.getByRole('button', { name: 'Post charge' }));
+
+      expect(mocks.postCharge).toHaveBeenCalledWith(
+        '1',
+        expect.objectContaining({ overrideCreditLimit: true, overrideReason: 'Manager approved' })
+      );
     });
   });
 });

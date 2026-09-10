@@ -31,6 +31,18 @@ function profilesRouter() {
   router.get('/guests/:id/stay-history', requirePermission('reservations.view'), controller.getGuestStayHistory);
   router.get('/guests/:id', requirePermission('reservations.view'), controller.getGuest);
 
+  // PLAN.md Phase 4 (Accounts Receivable). Reads reuse `reservations.view`,
+  // matching every other Profiles read above — writes require `ar.manage`,
+  // not a Profiles-only key: even though this table lives in the Profiles
+  // module (DATABASE.md's own filing), its fields exist primarily to serve
+  // AR risk decisions (credit terms, billing contact), so write access
+  // follows AR's own permission domain. See SECURITY.md §5's AR section.
+  router.get('/companies', requirePermission('reservations.view'), controller.listCompanyProfiles);
+  router.post('/companies', requirePermission('ar.manage'), controller.createCompanyProfile);
+  router.get('/companies/:id', requirePermission('reservations.view'), controller.getCompanyProfile);
+  router.patch('/companies/:id', requirePermission('ar.manage'), controller.updateCompanyProfile);
+  router.post('/companies/:id/archive', requirePermission('ar.manage'), controller.archiveCompanyProfile);
+
   return router;
 }
 

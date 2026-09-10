@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   getGuestStayHistory: vi.fn(),
   getGuestActivitySummary: vi.fn(),
   listGuests: vi.fn(),
+  listCompanyProfiles: vi.fn(),
+  linkGuestToCompany: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -19,8 +21,9 @@ vi.mock('../../../shared/api/index.js', async () => {
       searchGuests: mocks.searchGuests,
       getGuestStayHistory: mocks.getGuestStayHistory,
       getGuestActivitySummary: mocks.getGuestActivitySummary,
+      listCompanyProfiles: mocks.listCompanyProfiles,
     },
-    reservationsApi: { listGuests: mocks.listGuests },
+    reservationsApi: { listGuests: mocks.listGuests, linkGuestToCompany: mocks.linkGuestToCompany },
   };
 });
 
@@ -32,6 +35,7 @@ describe('<ProfilesScreen>', () => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listGuests.mockResolvedValue([]);
     mocks.getGuestActivitySummary.mockResolvedValue({ active: 0, inactive: 0 });
+    mocks.listCompanyProfiles.mockResolvedValue([]);
   });
 
   /**
@@ -211,6 +215,46 @@ describe('<ProfilesScreen>', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Show all guests' }));
       expect(await screen.findByText('All guests')).toBeInTheDocument();
       expect(screen.getByText('ada@example.com')).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * PLAN.md Phase 4 (Accounts Receivable) — a "Companies" tab, alongside
+   * the pre-existing Guests view (unchanged, tested above).
+   */
+  describe('Companies tab and linked-company picker', () => {
+    it('defaults to the Guests tab', async () => {
+      render(<ProfilesScreen />);
+      expect(await screen.findByRole('tab', { name: 'Guests' })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('tab', { name: 'Companies' })).toHaveAttribute('aria-selected', 'false');
+    });
+
+    it('switching to the Companies tab renders company-profile management, not the guest list', async () => {
+      mocks.listCompanyProfiles.mockResolvedValue([{ id: '50', name: 'Acme Corp', type: 'company', billing_email: 'ap@acme.test' }]);
+      render(<ProfilesScreen />);
+      await screen.findByText('All guests');
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Companies' }));
+
+      expect(await screen.findByText('Acme Corp')).toBeInTheDocument();
+      expect(screen.queryByText('All guests')).not.toBeInTheDocument();
+    });
+
+    it('shows a "Linked company" picker on a selected guest and saves the link', async () => {
+      mocks.listGuests.mockResolvedValue([GUEST]);
+      mocks.listCompanyProfiles.mockResolvedValue([{ id: '50', name: 'Acme Corp' }]);
+      mocks.getGuestStayHistory.mockResolvedValue([]);
+      mocks.linkGuestToCompany.mockResolvedValue({ ...GUEST, company_profile_id: '50' });
+      render(<ProfilesScreen />);
+      await screen.findByText('jordan@example.com');
+
+      await userEvent.click(screen.getByRole('button', { name: 'View profile' }));
+      await screen.findByLabelText('Linked company');
+
+      await userEvent.selectOptions(screen.getByLabelText('Linked company'), '50');
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+      expect(mocks.linkGuestToCompany).toHaveBeenCalledWith('1', '50');
     });
   });
 });

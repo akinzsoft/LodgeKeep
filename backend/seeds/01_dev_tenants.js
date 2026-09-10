@@ -215,6 +215,34 @@ exports.seed = async function seed(knex) {
   }
 
   /**
+   * PLAN.md Phase 4 (Accounts Receivable) — the seeded manager gets both
+   * `ar.view`/`ar.manage`, matching SECURITY.md §5's AR column: credit and
+   * collections decisions are manager-tier, following Night Audit's own
+   * precedent (`ensureManagerPhase25Access`). `admin`/`super_admin` already
+   * get both automatically via `ensureAdminSuperAdminFullAccess` below,
+   * since the AR keys are real, migration-seeded catalogue entries by the
+   * time this runs.
+   */
+  async function ensureManagerArAccess(tenantId) {
+    const keys = ['ar.view', 'ar.manage'];
+    const permissions = await knex('permissions').whereIn('permission_key', keys).select('id', 'permission_key');
+    if (permissions.length !== keys.length) return; // migrations not yet run — nothing to grant
+    const managerRole = await knex('roles').where({ tenant_id: tenantId, code: 'manager' }).first('id');
+    if (!managerRole) return;
+
+    const existingGrants = await knex('role_permissions')
+      .where({ tenant_id: tenantId, role_id: managerRole.id })
+      .whereIn('permission_id', permissions.map((p) => p.id))
+      .select('permission_id');
+    const alreadyGranted = new Set(existingGrants.map((g) => String(g.permission_id)));
+
+    const toGrant = permissions.filter((p) => !alreadyGranted.has(String(p.id)));
+    if (toGrant.length) {
+      await knex('role_permissions').insert(toGrant.map((p) => ({ tenant_id: tenantId, role_id: managerRole.id, permission_id: p.id })));
+    }
+  }
+
+  /**
    * `pos_operator` has existed as a system role since Phase 0 but held ZERO
    * permission grants until now — invisible for the same reason
    * `admin`/`super_admin` were before the MFA cross-cutting fix: no POS
@@ -415,6 +443,7 @@ exports.seed = async function seed(knex) {
       await ensureManagerPhase3Access(existingTenant.id);
       await ensureManagerPhase25Access(existingTenant.id);
       await ensureManagerPosAccess(existingTenant.id);
+      await ensureManagerArAccess(existingTenant.id);
       await ensurePosOperatorRoleAccess(existingTenant.id);
       // src/auth/mfa.js's dev-only bypass: backfill the admin account and
       // its full-access grant onto a pre-existing dev tenant too, same
@@ -501,6 +530,9 @@ exports.seed = async function seed(knex) {
     await ensurePosOperatorRoleAccess(tenantId);
     await ensurePosOperatorAccount(tenantId, propertyId, spec);
     await ensurePosReferenceData(tenantId, propertyId);
+
+    // PLAN.md Phase 4's Accounts Receivable — see `ensureManagerArAccess`'s own header.
+    await ensureManagerArAccess(tenantId);
 
     // PLAN.md Phase 1 gap closure — see `ensureReferenceData`'s own header.
     await ensureReferenceData(tenantId, propertyId);

@@ -18,6 +18,45 @@
   gap: var(--space-5);
 }
 
+/* PLAN.md Phase 4 (Accounts Receivable) — the two-tab shell (Guests /
+   Companies), same tab styling as `POSScreen.module.css`/`CashieringScreen.module.css`,
+   `--domain-guest` accent matching this screen's own existing summary-stat
+   accent above rather than `--domain-money` (a company profile is CRM
+   reference data owned by this module, even though its fields exist to
+   serve AR risk decisions). */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+}
+
+.tabActive {
+  color: var(--domain-guest);
+  border-bottom-color: var(--domain-guest);
+}
+
+.panel {
+  min-width: 0;
+}
+
 /* Gap closure: "add summary report ... num of active and inactive
    customer ... click to see active or inactive customers" — each stat
    doubles as a filter toggle button, `--domain-guest` (tokens.css:

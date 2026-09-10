@@ -43,6 +43,9 @@ function reservationsRouter() {
   // in this pass.
   router.get('/guests', requirePermission('reservations.view'), controller.listGuests);
   router.post('/guests', requirePermission('reservations.manage'), controller.createGuest);
+  // PLAN.md Phase 4 (Accounts Receivable) — same permission as createGuest,
+  // matching the "guest write" shape this endpoint is.
+  router.post('/guests/:id/link-company', requirePermission('reservations.manage'), controller.linkGuestToCompany);
 
   router.get('/availability', requirePermission('reservations.view'), controller.checkAvailability);
 

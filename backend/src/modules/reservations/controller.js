@@ -58,6 +58,19 @@ async function createGuest(req, res, next) {
   }
 }
 
+/** PLAN.md Phase 4 (Accounts Receivable) — links (or unlinks, `company_profile_id: null`) a guest's own company/travel-agent profile. */
+async function linkGuestToCompany(req, res, next) {
+  try {
+    const before = await service.getGuest({ context: req.context, id: req.params.id });
+    if (!before) return notFound(res);
+    const guest = await service.linkGuestToCompany({ context: req.context, id: req.params.id, companyProfileId: req.body?.company_profile_id ?? null });
+    await req.audit({ entityType: 'guests', entityId: guest.id, action: 'link_company', beforeState: before, afterState: guest });
+    res.status(200).json(ok(guest));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function listGuests(req, res, next) {
   try {
     const activity = req.query?.activity;
@@ -400,7 +413,7 @@ async function checkOut(req, res, next) {
           lateCheckoutFee: req.body?.late_checkout_fee,
           userId: req.context.userId,
         });
-        return { status: 200, body: ok(result.reservation, { fee: result.fee }) };
+        return { status: 200, body: ok(result.reservation, { fee: result.fee, arAccountOverLimit: result.arAccountOverLimit }) };
       },
     });
   } catch (error) {
@@ -461,6 +474,7 @@ async function extendStay(req, res, next) {
 
 module.exports = {
   createGuest,
+  linkGuestToCompany,
   listGuests,
   checkAvailability,
   listEligiblePreferredRooms,

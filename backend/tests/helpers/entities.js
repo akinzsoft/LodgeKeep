@@ -1826,6 +1826,286 @@ const ENTITIES = [
       },
     ],
   },
+
+  // -----------------------------------------------------------------
+  // Accounts Receivable — PLAN.md Phase 4
+  // -----------------------------------------------------------------
+
+  {
+    table: 'company_profiles',
+    // TENANT_SCOPED, no unique constraint — see the migration's own header
+    // (two real companies can share a display name), the same reasoning
+    // `guests` declares none.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      name: 'New Fixture Company',
+      type: 'company',
+      billing_email: `new-company-${t.slug}@example.com`,
+      payment_terms_days: 30,
+    }),
+    // No duplicateRow: nothing about this table is unique.
+    restrictDelete: {
+      name: 'a company profile an AR account still references',
+      id: (ctx, t) => t.companyProfiles[0].id,
+    },
+  },
+
+  {
+    table: 'ar_accounts',
+    uniqueKeys: [['tenant_id', 'property_id', 'company_profile_id']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      // properties[1], not [0] — seedTwoTenants' own fixture account
+      // already claims (properties[0], companyProfiles[0]).
+      property_id: t.properties[1].id,
+      company_profile_id: t.companyProfiles[0].id,
+      credit_limit: '500.00',
+      currency: 'NGN',
+      enforcement_mode: 'flag_only',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      company_profile_id: t.companyProfiles[0].id,
+      credit_limit: '999.00',
+      currency: 'NGN',
+      enforcement_mode: 'block',
+    }),
+    crossTenant: [
+      {
+        name: "opens an AR account against another tenant's company profile",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          company_profile_id: other.companyProfiles[0].id,
+          credit_limit: '500.00',
+          currency: 'NGN',
+        }),
+      },
+      {
+        name: "opens an AR account against another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          company_profile_id: own.companyProfiles[0].id,
+          credit_limit: '500.00',
+          currency: 'NGN',
+        }),
+      },
+    ],
+    restrictDelete: {
+      name: 'an AR account that an invoice/payment still references',
+      id: (ctx, t) => t.arAccounts[0].id,
+    },
+  },
+
+  {
+    table: 'ar_invoice_sequences',
+    uniqueKeys: [['tenant_id', 'property_id']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[1].id,
+      next_number: 1,
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      next_number: 1,
+    }),
+    crossTenant: [
+      {
+        name: "creates an invoice sequence for another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          next_number: 1,
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'ar_invoices',
+    uniqueKeys: [['tenant_id', 'property_id', 'invoice_number']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      ar_account_id: t.arAccounts[0].id,
+      invoice_number: `NEWINV-${t.slug}`,
+      currency: 'NGN',
+      total_amount: '10.00',
+      status: 'issued',
+      issued_at: '2026-12-01',
+      due_at: '2026-12-31',
+      business_date: '2026-12-01',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      ar_account_id: t.arAccounts[0].id,
+      invoice_number: t.arInvoices[0].invoice_number ?? `INV-FIXTURE-${t.slug}`, // matches seedTwoTenants' own fixture invoice
+      currency: 'NGN',
+      total_amount: '10.00',
+      status: 'issued',
+      issued_at: '2026-12-01',
+      due_at: '2026-12-31',
+      business_date: '2026-12-01',
+    }),
+    crossTenant: [
+      {
+        name: "generates an invoice against another tenant's AR account",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          ar_account_id: other.arAccounts[0].id,
+          invoice_number: `CROSSINV-${own.slug}`,
+          currency: 'NGN',
+          total_amount: '10.00',
+          status: 'issued',
+          issued_at: '2026-12-01',
+          due_at: '2026-12-31',
+          business_date: '2026-12-01',
+        }),
+      },
+    ],
+    restrictDelete: {
+      name: 'an AR invoice an invoice line still references',
+      id: (ctx, t) => t.arInvoices[0].id,
+    },
+  },
+
+  {
+    table: 'ar_invoice_lines',
+    uniqueKeys: [['tenant_id', 'property_id', 'folio_line_item_id']],
+    // `folioLineItems[0]` is the line seedTwoTenants' own fixture invoice
+    // already bills (see fixtures.js's own comment) — `folioLineItems[1]`
+    // is the deliberately-left-un-invoiced line this newRow case uses.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      ar_invoice_id: t.arInvoices[0].id,
+      folio_line_item_id: t.folioLineItems[1].id,
+      amount: '75.00',
+      currency: 'NGN',
+      business_date: '2026-12-25',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      ar_invoice_id: t.arInvoices[0].id,
+      folio_line_item_id: t.folioLineItems[0].id, // already invoiced by seedTwoTenants' own fixture — collides
+      amount: '150.00',
+      currency: 'NGN',
+      business_date: '2026-12-24',
+    }),
+    crossTenant: [
+      {
+        name: "invoices another tenant's folio line item",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          ar_invoice_id: own.arInvoices[0].id,
+          folio_line_item_id: other.folioLineItems[1].id,
+          amount: '75.00',
+          currency: 'NGN',
+          business_date: '2026-12-25',
+        }),
+      },
+      {
+        name: "invoices a folio line item onto another tenant's invoice",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          ar_invoice_id: other.arInvoices[0].id,
+          folio_line_item_id: own.folioLineItems[1].id,
+          amount: '75.00',
+          currency: 'NGN',
+          business_date: '2026-12-25',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'ar_payments',
+    // No natural business unique key — a company can legitimately make two
+    // wire payments of the same amount on the same day, the same reasoning
+    // `folio_line_items` declares none.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      ar_account_id: t.arAccounts[0].id,
+      amount: '25.00',
+      currency: 'NGN',
+      method_label: 'cheque',
+      received_at: '2026-12-10',
+      business_date: '2026-12-10',
+    }),
+    crossTenant: [
+      {
+        name: "records a payment against another tenant's AR account",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          ar_account_id: other.arAccounts[0].id,
+          amount: '25.00',
+          currency: 'NGN',
+          method_label: 'cheque',
+          received_at: '2026-12-10',
+          business_date: '2026-12-10',
+        }),
+      },
+    ],
+    restrictDelete: {
+      name: 'an AR payment an application still references',
+      id: (ctx, t) => t.arPayments[0].id,
+    },
+  },
+
+  {
+    table: 'ar_payment_applications',
+    uniqueKeys: [],
+    // No duplicateRow here, deliberately, matching auth_events' own precedent: applying the same payment to the same
+    // invoice more than once (a partial application followed by another, or a corrected
+    // re-application after voiding an earlier one) is a legitimate, expected sequence, not a
+    // duplicate — see the migration's own header for why this table carries no UNIQUE
+    // constraint on the (payment, invoice) pair.
+    // `arPayments[0]` is already (partially) applied to `arInvoices[0]` by
+    // seedTwoTenants' own fixture — `arPayments[1]` is the deliberately
+    // unapplied second payment that fixture also seeds, for this newRow
+    // case to use a genuinely fresh pair.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      ar_payment_id: t.arPayments[1].id,
+      ar_invoice_id: t.arInvoices[0].id,
+      amount: '5.00',
+    }),
+    crossTenant: [
+      {
+        name: "applies another tenant's payment to this tenant's invoice",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          ar_payment_id: other.arPayments[0].id,
+          ar_invoice_id: own.arInvoices[0].id,
+          amount: '5.00',
+        }),
+      },
+      {
+        name: "applies this tenant's payment to another tenant's invoice",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          ar_payment_id: own.arPayments[0].id,
+          ar_invoice_id: other.arInvoices[0].id,
+          amount: '5.00',
+        }),
+      },
+    ],
+  },
 ];
 
 const byTable = (table) => ENTITIES.find((e) => e.table === table);

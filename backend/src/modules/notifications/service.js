@@ -38,6 +38,14 @@ const EVENT_TEMPLATE_KEYS = {
   // recipient is staff, not a guest, the same borrowed-field reuse
   // `staff.invited` already established.
   'staff.mfa_code_requested': 'staff_mfa_code',
+  // PLAN.md Phase 4 (Accounts Receivable) — the recipient is a company's own
+  // billing contact, not a guest at all. Rather than borrowing `guestEmail`
+  // a third time, these two events use the new, correctly-named
+  // `recipientEmail` payload key instead (see `dispatchOne`'s own comment
+  // below) — a real fix, not a further instance of the same borrowed-field
+  // pattern.
+  'ar.invoice_generated': 'ar_invoice_generated',
+  'ar.payment_received': 'ar_payment_received',
 };
 
 /**
@@ -81,6 +89,14 @@ const DEFAULT_TEMPLATES = {
       '<p style="font-size: 24px; font-weight: bold; letter-spacing: 4px;">{{code}}</p>' +
       '<p>This code expires in {{expiresInMinutes}} minute(s). If you did not attempt to sign in, you can safely ignore this email.</p>',
   },
+  ar_invoice_generated: {
+    subject: 'New invoice {{invoiceNumber}}',
+    body_html: '<p>Hi {{companyName}},</p><p>A new invoice ({{invoiceNumber}}) for {{totalAmount}} {{currency}} has been generated, due {{dueAt}}.</p>',
+  },
+  ar_payment_received: {
+    subject: 'Payment received — thank you',
+    body_html: '<p>Hi {{companyName}},</p><p>We have recorded your payment of {{amount}} {{currency}}. Thank you.</p>',
+  },
 };
 
 function substitute(template, variables) {
@@ -109,8 +125,15 @@ async function renderTemplate({ db, propertyId, templateKey, variables }) {
 async function dispatchOne({ tenantDb, propertyDb, event }) {
   const payload = typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
   const templateKey = EVENT_TEMPLATE_KEYS[event.event_type];
+  // PLAN.md Phase 4 (Accounts Receivable): `recipientEmail` is the
+  // correctly-named payload key `ar.invoice_generated`/`ar.payment_received`
+  // use — a company's own billing contact, never a guest at all. Falls
+  // back to `guestEmail` so every existing event (`staff.invited`,
+  // `staff.mfa_code_requested`, the guest-lifecycle events) is completely
+  // unaffected — none of them are touched or need to be.
+  const recipientEmail = payload.recipientEmail ?? payload.guestEmail;
 
-  if (!templateKey || !payload.guestEmail || !propertyDb) {
+  if (!templateKey || !recipientEmail || !propertyDb) {
     // Not an email-worthy event (or malformed payload, or no property to
     // dispatch against) — mark sent so it never wedges the queue; nothing
     // to deliver.
@@ -125,10 +148,10 @@ async function dispatchOne({ tenantDb, propertyDb, event }) {
     // adapter, the same override-else-default shape `renderTemplate` above
     // already uses for the template content itself.
     const adapter = await resolveEmailAdapter({ db: propertyDb, propertyId: event.property_id });
-    const { providerRef, status } = await adapter.send({ to: payload.guestEmail, subject, html });
+    const { providerRef, status } = await adapter.send({ to: recipientEmail, subject, html });
 
     await propertyDb.table('notification_log').insert({
-      recipient_email: payload.guestEmail,
+      recipient_email: recipientEmail,
       template_key: templateKey,
       channel: 'email',
       status,
@@ -147,7 +170,7 @@ async function dispatchOne({ tenantDb, propertyDb, event }) {
     });
     if (exhausted) {
       await propertyDb.table('notification_log').insert({
-        recipient_email: payload.guestEmail,
+        recipient_email: recipientEmail,
         template_key: templateKey,
         channel: 'email',
         status: 'failed',

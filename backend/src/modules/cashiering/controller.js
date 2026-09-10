@@ -18,6 +18,9 @@ const { ok, notFound } = require('../../shared/response');
 const { ValidationError } = require('../../shared/errors');
 const { withIdempotency } = require('../../shared/idempotency');
 const { runIdempotentMutation, requireIdempotencyKey } = require('../../shared/mutation');
+const { scopedDb } = require('../../db');
+const { hasPermission } = require('../../auth/rbac');
+const { PermissionDeniedError } = require('../../auth/errors');
 const service = require('./service');
 
 function require_(body, field) {
@@ -26,6 +29,20 @@ function require_(body, field) {
     throw new ValidationError('MISSING_FIELD', `"${field}" is required.`, [{ field, issue: 'missing' }]);
   }
   return value;
+}
+
+/**
+ * PLAN.md Phase 4 (Accounts Receivable) — overriding a block-mode credit
+ * limit rejection is a manager-tier decision (`ar.manage`), not merely
+ * whatever cashiering permission the caller already holds to post the
+ * charge/adjustment itself (`cashiering.post_charge` alone reaches
+ * front_desk). Checked here, before the service layer ever sees
+ * `overrideCreditLimit: true`, rather than trusted from the request body.
+ */
+async function assertCanOverrideCreditLimit(req) {
+  const db = scopedDb().for(req.context);
+  const granted = await hasPermission(db, req.role, 'ar.manage');
+  if (!granted) throw new PermissionDeniedError('ar.manage', req.role);
 }
 
 // ---------------------------------------------------------------------
@@ -71,6 +88,28 @@ async function openAdditionalFolio(req, res, next) {
   }
 }
 
+/** PLAN.md Phase 4 (Accounts Receivable) — routes (or un-routes, `company_profile_id: null`) an open folio to a company AR account. */
+async function billFolioToCompany(req, res, next) {
+  try {
+    await runIdempotentMutation(req, res, {
+      operationType: 'cashiering.bill_folio_to_account',
+      entityType: 'folios',
+      entityId: req.params.folioId,
+      action: 'bill_to_account',
+      handler: async (trx) => {
+        const folio = await service.billFolioToCompany({
+          trx,
+          folioId: req.params.folioId,
+          companyProfileId: req.body?.company_profile_id ?? null,
+        });
+        return { status: 200, body: ok(folio) };
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function moveLineItem(req, res, next) {
   try {
     const destinationFolioId = require_(req.body, 'destination_folio_id');
@@ -98,6 +137,7 @@ async function postCharge(req, res, next) {
     const type = require_(req.body, 'type');
     const description = require_(req.body, 'description');
     const amount = require_(req.body, 'amount');
+    if (req.body?.override_credit_limit) await assertCanOverrideCreditLimit(req);
     await runIdempotentMutation(req, res, {
       operationType: 'cashiering.post_charge',
       entityType: 'folio_line_items',
@@ -111,6 +151,8 @@ async function postCharge(req, res, next) {
           amount,
           businessDate: req.body?.business_date,
           userId: req.context.userId,
+          overrideCreditLimit: Boolean(req.body?.override_credit_limit),
+          overrideReason: req.body?.override_reason,
         });
         return { status: 201, body: ok(result.chargeLine, { taxLines: result.taxLines }) };
       },
@@ -125,6 +167,7 @@ async function postAdjustment(req, res, next) {
     const description = require_(req.body, 'description');
     const amount = require_(req.body, 'amount');
     const reason = require_(req.body, 'reason');
+    if (req.body?.override_credit_limit) await assertCanOverrideCreditLimit(req);
     await runIdempotentMutation(req, res, {
       operationType: 'cashiering.post_adjustment',
       entityType: 'folio_line_items',
@@ -139,6 +182,8 @@ async function postAdjustment(req, res, next) {
           businessDate: req.body?.business_date,
           userId: req.context.userId,
           reason,
+          overrideCreditLimit: Boolean(req.body?.override_credit_limit),
+          overrideReason: req.body?.override_reason,
         });
         return { status: 201, body: ok(line) };
       },
@@ -330,6 +375,7 @@ module.exports = {
   getFolio,
   listFoliosForReservation,
   openAdditionalFolio,
+  billFolioToCompany,
   moveLineItem,
   postCharge,
   postAdjustment,

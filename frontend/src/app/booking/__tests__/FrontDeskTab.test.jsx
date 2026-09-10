@@ -133,6 +133,51 @@ describe('<FrontDeskTab>', () => {
     expect(screen.queryByText(/Outstanding balance of/)).not.toBeInTheDocument();
   });
 
+  /**
+   * PLAN.md Phase 4 (Accounts Receivable) — a folio billed to a company can
+   * carry any nonzero balance without blocking checkout at all
+   * (ARCHITECTURE.md §11's "or the property permits checkout with balance
+   * owing to AR"). This must be a non-blocking informational note, distinct
+   * from the blocking guest-owing banner above.
+   */
+  it('shows a non-blocking "via Accounts Receivable" note, not the blocking banner, for an AR-billed folio with a balance', async () => {
+    mocks.listDepartures.mockResolvedValue([
+      { ...RESERVATION, status: 'checked_in', folio_balance: '75.00', folio_currency: 'NGN', folio_company_profile_id: '50', folio_billed_to: 'Acme Corp' },
+    ]);
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('tab', { name: 'Departures' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Check Out' }));
+
+    expect(await screen.findByText(/Owing to Acme Corp via Accounts Receivable/)).toBeInTheDocument();
+    expect(screen.queryByText(/Outstanding balance of/)).not.toBeInTheDocument();
+  });
+
+  it('marks an AR-billed balance on the board with a "via AR" pill instead of the owing-balance highlight', async () => {
+    mocks.listDepartures.mockResolvedValue([
+      { ...RESERVATION, status: 'checked_in', folio_balance: '75.00', folio_currency: 'NGN', folio_company_profile_id: '50', folio_billed_to: 'Acme Corp' },
+    ]);
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('tab', { name: 'Departures' }));
+
+    expect(await screen.findByText('via AR')).toBeInTheDocument();
+  });
+
+  it('surfaces an over-limit note after checkout when the billed company is over its credit limit', async () => {
+    mocks.listDepartures.mockResolvedValue([
+      { ...RESERVATION, status: 'checked_in', folio_balance: '75.00', folio_currency: 'NGN', folio_company_profile_id: '50', folio_billed_to: 'Acme Corp' },
+    ]);
+    mocks.checkOut.mockResolvedValue({ status: 'checked_out', arAccountOverLimit: true });
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('tab', { name: 'Departures' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Check Out' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm check-out' }));
+
+    expect(await screen.findByText(/AR account is over its credit limit/)).toBeInTheDocument();
+  });
+
   it('shows the real backend error, not a blank failure, when a checkout attempt is rejected for an owing balance', async () => {
     const { ApiError } = await import('../../../shared/api/ApiError.js');
     mocks.listDepartures.mockResolvedValue([{ ...RESERVATION, status: 'checked_in', folio_balance: '75.00', folio_currency: 'NGN' }]);
