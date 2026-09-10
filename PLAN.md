@@ -133,7 +133,7 @@ Phase 2 works in a demo. This phase is what makes staff trust it during a busy s
 - **Guest booking portal (3.14)** — tenant-themed, availability, booking, payment, confirmation
 - **Guest accounts** — separate credential store (3.16), online check-in
 - **POS integration (3.4) — core only**: outlets, terminals, menu, order flow, cash-up, charge-to-room. QR self-ordering and inventory/stock control are deferred to Phase 6 (§3.4 covers both in full; they're real scope, not an afterthought — see the note below)
-- **Accounts receivable (3.8)** — company invoicing, credit, ageing
+- **Accounts receivable (3.9)** — company invoicing, credit, ageing — ✅ **shipped**, see CLAUDE.md's "Phase 4 — Accounts Receivable" status section (the "3.8" citation in this bullet's original text was a typo; §3.8 is Group Blocks)
 - **Group blocks (3.7)** — blocks, rooming lists, pickup tracking, group billing
 
 **Tests required to close:**

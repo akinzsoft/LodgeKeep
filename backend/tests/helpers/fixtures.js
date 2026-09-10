@@ -150,6 +150,10 @@ async function seedTwoTenants(trx) {
     posOrderItems: [],
     posOrderSettlements: [],
     posShifts: [],
+    companyProfiles: [],
+    arAccounts: [],
+    arInvoices: [],
+    arPayments: [],
   });
 
   // Two symmetric example hotels, not one reference customer
@@ -336,6 +340,40 @@ async function seedTwoTenants(trx) {
   }
 
   // ------------------------------------------------------------------
+  // Accounts Receivable (PLAN.md Phase 4) — `company_profiles` is
+  // TENANT_SCOPED (interleaved with every other tenant-scoped fixture
+  // table); `ar_accounts` follows `properties[0]`, matching every other
+  // reference-data fixture above.
+  // ------------------------------------------------------------------
+  for (const t of both) {
+    const property = t.properties[0];
+
+    t.companyProfiles.push({
+      id: await insertReturningId(trx, 'company_profiles', {
+        tenant_id: t.id,
+        name: 'Acme Corp',
+        type: 'company',
+        billing_email: `billing@${t.slug}-acme.example.com`,
+        payment_terms_days: 30,
+      }),
+    });
+
+    t.arAccounts.push({
+      id: await insertReturningId(trx, 'ar_accounts', {
+        tenant_id: t.id,
+        property_id: property.id,
+        company_profile_id: t.companyProfiles[0].id,
+        credit_limit: '1000.00',
+        currency: 'NGN',
+        enforcement_mode: 'block',
+      }),
+      property_id: property.id,
+    });
+
+    await trx('ar_invoice_sequences').insert({ tenant_id: t.id, property_id: property.id, next_number: 1 });
+  }
+
+  // ------------------------------------------------------------------
   // Idempotency infra (PLAN.md Phase 2) — TENANT_SCOPED, no property
   // dimension, seeded before the property-scoped tables below since it
   // depends on nothing but the tenant itself.
@@ -519,6 +557,108 @@ async function seedTwoTenants(trx) {
       }),
       property_id: property.id,
       folio_id: folio.id,
+    });
+  }
+
+  // Accounts Receivable, continued (PLAN.md Phase 4) — one issued invoice
+  // (billing the fixture's own room-charge line above) and one recorded
+  // payment per tenant, against the `ar_accounts[0]` row seeded earlier. A
+  // SECOND, still-un-invoiced folio_line_item is seeded here too, purely so
+  // `tests/helpers/entities.js`'s own `ar_invoice_lines` newRow case has a
+  // real, not-already-billed line to invoice — `folioLineItems[0]` above is
+  // deliberately left as the one this fixture invoice already claims, so
+  // `ar_invoice_lines`'s own `duplicateRow` case (colliding on
+  // `UNIQUE(tenant_id, property_id, folio_line_item_id)`) has a real,
+  // pre-existing row to collide with, the same "collide with a genuine
+  // fixture row, not a same-file test's own side effect" convention
+  // `payments`' own duplicateRow above already follows.
+  for (const t of both) {
+    const property = t.properties[0];
+    const folio = t.folios[0];
+    const account = t.arAccounts[0];
+
+    t.arInvoices.push({
+      id: await insertReturningId(trx, 'ar_invoices', {
+        tenant_id: t.id,
+        property_id: property.id,
+        ar_account_id: account.id,
+        invoice_number: `INV-FIXTURE-${t.slug}`,
+        currency: 'NGN',
+        total_amount: '150.00',
+        status: 'issued',
+        issued_at: '2026-12-01',
+        due_at: '2026-12-31',
+        business_date: '2026-12-01',
+      }),
+      property_id: property.id,
+    });
+
+    await trx('ar_invoice_lines').insert({
+      tenant_id: t.id,
+      property_id: property.id,
+      ar_invoice_id: t.arInvoices[0].id,
+      folio_line_item_id: t.folioLineItems[0].id,
+      amount: '150.00',
+      currency: 'NGN',
+      business_date: '2026-12-24',
+    });
+
+    const additionalLineId = await insertReturningId(trx, 'folio_line_items', {
+      tenant_id: t.id,
+      property_id: property.id,
+      folio_id: folio.id,
+      type: 'room_charge',
+      description: 'Fixture un-invoiced room charge',
+      amount: '75.00',
+      currency: 'NGN',
+      business_date: '2026-12-25',
+    });
+    t.folioLineItems.push({ id: additionalLineId, property_id: property.id, folio_id: folio.id });
+
+    t.arPayments.push({
+      id: await insertReturningId(trx, 'ar_payments', {
+        tenant_id: t.id,
+        property_id: property.id,
+        ar_account_id: account.id,
+        amount: '50.00',
+        currency: 'NGN',
+        method_label: 'wire',
+        reference: `FIXTURE-WIRE-${t.slug}`,
+        received_at: '2026-12-05',
+        business_date: '2026-12-05',
+      }),
+      property_id: property.id,
+    });
+
+    // Partially applies the fixture payment above to the fixture invoice —
+    // real data for `ar_payment_applications`' own duplicateRow case
+    // (colliding on `UNIQUE(tenant_id, property_id, ar_payment_id,
+    // ar_invoice_id)`) to collide with.
+    await trx('ar_payment_applications').insert({
+      tenant_id: t.id,
+      property_id: property.id,
+      ar_payment_id: t.arPayments[0].id,
+      ar_invoice_id: t.arInvoices[0].id,
+      amount: '25.00',
+    });
+
+    // A second, deliberately UNAPPLIED payment — so
+    // `tests/helpers/entities.js`'s own `ar_payment_applications` newRow
+    // case has a genuinely fresh (payment, invoice) pair to apply, distinct
+    // from the one the application above already claims.
+    t.arPayments.push({
+      id: await insertReturningId(trx, 'ar_payments', {
+        tenant_id: t.id,
+        property_id: property.id,
+        ar_account_id: account.id,
+        amount: '10.00',
+        currency: 'NGN',
+        method_label: 'bank_transfer',
+        reference: `FIXTURE-TRANSFER-${t.slug}`,
+        received_at: '2026-12-06',
+        business_date: '2026-12-06',
+      }),
+      property_id: property.id,
     });
   }
 
@@ -1177,6 +1317,8 @@ async function seedTwoTenants(trx) {
     ['pos.operate', 'pos'],
     ['pos.manage', 'pos'],
     ['room_types.update', 'setup'],
+    ['ar.view', 'ar'],
+    ['ar.manage', 'ar'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -1334,6 +1476,28 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.manage'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.operate'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.manage'] },
+    ]);
+  }
+
+  // Accounts Receivable (PLAN.md Phase 4) — SECURITY.md §5's matrix has a
+  // new AR column: `ar.view` (front_desk, cashier, manager, admin,
+  // super_admin) — see a company's balance/invoices/payment history/ageing,
+  // and the over-limit/AR-owing informational state at checkout. `ar.manage`
+  // (manager, admin, super_admin only, NOT cashier) — account configuration,
+  // billing a folio to an account, credit-limit overrides, invoice
+  // generation/void, payment recording/apply/void. Following Night Audit's
+  // own precedent: credit and collections decisions are manager-tier, not
+  // operational — housekeeping/pos_operator get neither key.
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.front_desk, permission_id: permissions['ar.view'] },
+      { tenant_id: t.id, role_id: t.roles.cashier, permission_id: permissions['ar.view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['ar.view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['ar.manage'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['ar.view'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['ar.manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['ar.view'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['ar.manage'] },
     ]);
   }
 

@@ -225,6 +225,24 @@ const TABLE_SCOPES = Object.freeze({
   pos_order_items: { scope: SCOPES.PROPERTY },
   pos_order_settlements: { scope: SCOPES.PROPERTY },
   pos_shifts: { scope: SCOPES.PROPERTY },
+
+  // Accounts Receivable — PLAN.md Phase 4, 20260918090000_create_company_profiles
+  // through 20260918097000_alter_folios_for_ar.
+  //
+  // `company_profiles` is TENANT_SCOPED, following `guests`' own reasoning:
+  // a company/travel agent does business across every property a tenant
+  // runs, not just one. Every other AR table is PROPERTY_SCOPED, following
+  // `ar_accounts` (their root) — a credit limit is a per-property risk
+  // decision, the same reasoning every other money-bearing ledger table in
+  // this codebase (folios, payments, folio_line_items, pos_orders) is
+  // PROPERTY_SCOPED even though a company/guest identity above it is not.
+  company_profiles: { scope: SCOPES.TENANT },
+  ar_accounts: { scope: SCOPES.PROPERTY },
+  ar_invoice_sequences: { scope: SCOPES.PROPERTY },
+  ar_invoices: { scope: SCOPES.PROPERTY },
+  ar_invoice_lines: { scope: SCOPES.PROPERTY },
+  ar_payments: { scope: SCOPES.PROPERTY },
+  ar_payment_applications: { scope: SCOPES.PROPERTY },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

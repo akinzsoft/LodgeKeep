@@ -17,6 +17,7 @@ import { CashieringScreen } from './app/cashiering/CashieringScreen.jsx';
 import { NightAuditScreen } from './app/night-audit/NightAuditScreen.jsx';
 import { ProfilesScreen } from './app/profiles/ProfilesScreen.jsx';
 import { POSScreen } from './app/pos/POSScreen.jsx';
+import { ARScreen } from './app/ar/ARScreen.jsx';
 import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { notificationsApi, setupApi } from './shared/api/index.js';
@@ -212,6 +213,8 @@ function Demo() {
           'night_audit.run',
           'pos.operate',
           'pos.manage',
+          'ar.view',
+          'ar.manage',
         ])
       }
       activeItemKey={activeItemKey}
@@ -255,9 +258,11 @@ function Demo() {
       ) : activeItemKey === 'night_audit' ? (
         <NightAuditScreen isOffline={!isOnline} />
       ) : activeItemKey === 'profiles' ? (
-        <ProfilesScreen />
+        <ProfilesScreen isOffline={!isOnline} />
       ) : activeItemKey === 'pos' ? (
         <POSScreen isOffline={!isOnline} />
+      ) : activeItemKey === 'ar' ? (
+        <ARScreen isOffline={!isOnline} />
       ) : (
         <HomeDashboard
           greetingName={displayName}

@@ -1,4 +1,4 @@
-import { request } from './client.js';
+import { request, requestWithMeta } from './client.js';
 
 /**
  * PLAN.md Phase 2's reservations + front desk module. Same shape as
@@ -164,9 +164,23 @@ export function checkIn(id, { roomId, overrideDirty }) {
   });
 }
 
-/** @param {string} id @param {{scheduledCheckoutTime?: string, actualCheckoutTime?: string, earlyCutoffTime?: string, earlyDepartureFee?: string, lateCheckoutFee?: string}} [params] */
-export function checkOut(id, params = {}) {
-  return request(`/reservations/${id}/check-out`, {
+/**
+ * Gap closure (found while wiring Accounts Receivable's `arAccountOverLimit`
+ * flag — PLAN.md Phase 4): `checkOut`'s own `fee`/`arAccountOverLimit`
+ * fields travel in the response envelope's `meta`, never `data`
+ * (`reservations/controller.js`'s `checkOut` handler), the same "a field
+ * genuinely isn't a property of the resource itself" shape
+ * `capturePaystackPayment`/`portal.js` already needed `requestWithMeta` for.
+ * This function used plain `request()` until now, which silently discards
+ * `meta` — meaning `result?.fee`, read by `FrontDeskTab.jsx`'s own
+ * `handleCheckOut` since Phase 2, could never actually have been populated.
+ * Flattened the same way, so a caller never has to know which half of the
+ * envelope a field came from.
+ *
+ * @param {string} id @param {{scheduledCheckoutTime?: string, actualCheckoutTime?: string, earlyCutoffTime?: string, earlyDepartureFee?: string, lateCheckoutFee?: string}} [params]
+ */
+export async function checkOut(id, params = {}) {
+  const { data, meta } = await requestWithMeta(`/reservations/${id}/check-out`, {
     method: 'POST',
     body: {
       scheduled_checkout_time: params.scheduledCheckoutTime,
@@ -177,6 +191,7 @@ export function checkOut(id, params = {}) {
     },
     headers: { 'Idempotency-Key': idempotencyKey() },
   });
+  return { ...data, ...meta };
 }
 
 /** @param {string} id @param {{newRoomId: string, reason: string}} params */
@@ -200,5 +215,23 @@ export function extendStay(id, { newDepartureDate }) {
     method: 'POST',
     body: { new_departure_date: newDepartureDate },
     headers: { 'Idempotency-Key': idempotencyKey() },
+  });
+}
+
+/**
+ * PLAN.md Phase 4 (Accounts Receivable) — links (or unlinks, pass `null`) a
+ * guest's own company/travel-agent profile (`reservations/routes.js`'s
+ * `POST /guests/:id/link-company`, gated on `reservations.manage`, matching
+ * `createGuest`'s own permission). No `Idempotency-Key` — the backend
+ * handler isn't `runIdempotentMutation`-wrapped, matching the plain
+ * `req.audit`-only shape `profiles/controller.js`'s company-profile CRUD
+ * already uses, since this is a reference-data link, not a financial
+ * posting.
+ * @param {string} id @param {string|null} companyProfileId
+ */
+export function linkGuestToCompany(id, companyProfileId) {
+  return request(`/guests/${id}/link-company`, {
+    method: 'POST',
+    body: { company_profile_id: companyProfileId },
   });
 }

@@ -50,6 +50,18 @@ export function openAdditionalFolio(reservationId, billedTo) {
   });
 }
 
+/**
+ * PLAN.md Phase 4 (Accounts Receivable) — routes (or un-routes, pass `null`)
+ * an open folio to a company AR account (`ar.manage`-gated on the backend).
+ */
+export function billFolioToCompany(folioId, companyProfileId) {
+  return request(`/cashiering/folios/${folioId}/bill-to-account`, {
+    method: 'POST',
+    body: { company_profile_id: companyProfileId },
+    headers: { 'Idempotency-Key': idempotencyKey() },
+  });
+}
+
 export function moveLineItem(lineItemId, destinationFolioId) {
   return request(`/cashiering/line-items/${lineItemId}/move`, {
     method: 'POST',
@@ -62,20 +74,45 @@ export function moveLineItem(lineItemId, destinationFolioId) {
 // Charges & adjustments
 // ---------------------------------------------------------------------
 
-/** @param {string} folioId @param {{type: 'room_charge'|'pos_charge', description: string, amount: string, businessDate?: string}} params */
-export function postCharge(folioId, { type, description, amount, businessDate }) {
+/**
+ * PLAN.md Phase 4 (Accounts Receivable): `overrideCreditLimit`/`overrideReason`
+ * are optional and only meaningful when the target folio is billed to a
+ * company account in `block` enforcement mode — the backend re-checks the
+ * caller actually holds `ar.manage` before honoring an override
+ * (`cashiering/controller.js`'s `assertCanOverrideCreditLimit`), so passing
+ * these from a caller without that permission simply gets a real 403, never
+ * a silent bypass.
+ *
+ * @param {string} folioId @param {{type: 'room_charge'|'pos_charge', description: string, amount: string, businessDate?: string, overrideCreditLimit?: boolean, overrideReason?: string}} params
+ */
+export function postCharge(folioId, { type, description, amount, businessDate, overrideCreditLimit, overrideReason }) {
   return request(`/cashiering/folios/${folioId}/charges`, {
     method: 'POST',
-    body: { type, description, amount, business_date: businessDate },
+    body: {
+      type,
+      description,
+      amount,
+      business_date: businessDate,
+      override_credit_limit: overrideCreditLimit,
+      override_reason: overrideReason,
+    },
     headers: { 'Idempotency-Key': idempotencyKey() },
   });
 }
 
-/** @param {string} folioId @param {{description: string, amount: string, reason: string, relatedLineItemId?: string, businessDate?: string}} params */
-export function postAdjustment(folioId, { description, amount, reason, relatedLineItemId, businessDate }) {
+/** @param {string} folioId @param {{description: string, amount: string, reason: string, relatedLineItemId?: string, businessDate?: string, overrideCreditLimit?: boolean, overrideReason?: string}} params */
+export function postAdjustment(folioId, { description, amount, reason, relatedLineItemId, businessDate, overrideCreditLimit, overrideReason }) {
   return request(`/cashiering/folios/${folioId}/adjustments`, {
     method: 'POST',
-    body: { description, amount, reason, related_line_item_id: relatedLineItemId, business_date: businessDate },
+    body: {
+      description,
+      amount,
+      reason,
+      related_line_item_id: relatedLineItemId,
+      business_date: businessDate,
+      override_credit_limit: overrideCreditLimit,
+      override_reason: overrideReason,
+    },
     headers: { 'Idempotency-Key': idempotencyKey() },
   });
 }

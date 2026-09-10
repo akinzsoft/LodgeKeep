@@ -96,4 +96,64 @@ async function getGuestActivitySummary({ context }) {
   return { active, inactive: guests.length - active };
 }
 
-module.exports = { getGuest, searchGuests, getGuestStayHistory, getGuestActivitySummary };
+// ---------------------------------------------------------------------
+// Company profiles — PLAN.md Phase 4 (Accounts Receivable). DATABASE.md
+// files `company_profiles` under this module (Guests & CRM) even though
+// the module that actually bills against it (`src/modules/ar`) lives
+// elsewhere — the same cross-module split `getGuest` above already models,
+// just in the other direction: AR calls into this module for a company's
+// name/billing_email rather than duplicating that lookup.
+// ---------------------------------------------------------------------
+
+async function createCompanyProfile({ context, name, type, billingEmail, billingPhone, billingAddress, paymentTermsDays }) {
+  const db = scopedDb().for(context);
+  const [id] = await db.table('company_profiles').insert({
+    name,
+    type: type ?? 'company',
+    billing_email: billingEmail ?? null,
+    billing_phone: billingPhone ?? null,
+    billing_address: billingAddress ?? null,
+    payment_terms_days: paymentTermsDays ?? 30,
+  });
+  return getCompanyProfile({ context, id });
+}
+
+/** Allowlisted at the controller layer (`pickCompanyProfileChanges`) — this session's confirmed decision to use the allowlist pattern from day one, since this endpoint has a real UI caller immediately (CLAUDE.md's own repeatedly-flagged lesson on raw `req.body` passthrough). */
+async function updateCompanyProfile({ context, id, changes }) {
+  const db = scopedDb().for(context);
+  await db.table('company_profiles').where({ id }).update(changes);
+  return getCompanyProfile({ context, id });
+}
+
+async function archiveCompanyProfile({ context, id }) {
+  return updateCompanyProfile({ context, id, changes: { status: 'archived' } });
+}
+
+async function getCompanyProfile({ context, id }) {
+  const db = scopedDb().for(context);
+  return db.table('company_profiles').where({ id }).first();
+}
+
+async function listCompanyProfiles({ context }) {
+  const db = scopedDb().for(context);
+  return db.table('company_profiles').where({ status: 'active' }).orderBy('name');
+}
+
+/** Substring match on name — the same disjunction-free single-column search `searchGuests` above needs a full OR-group for; a company name search does not. */
+async function searchCompanyProfiles({ context, query }) {
+  const db = scopedDb().for(context);
+  return db.table('company_profiles').where({ status: 'active' }).where('name', 'like', `%${query}%`).orderBy('name').limit(50);
+}
+
+module.exports = {
+  getGuest,
+  searchGuests,
+  getGuestStayHistory,
+  getGuestActivitySummary,
+  createCompanyProfile,
+  updateCompanyProfile,
+  archiveCompanyProfile,
+  getCompanyProfile,
+  listCompanyProfiles,
+  searchCompanyProfiles,
+};

@@ -98,6 +98,15 @@ export const DEFAULT_NAV_GROUPS = [
       // business date is a manager/admin action, not an operational one —
       // gated on `night_audit.view`.
       { key: 'night_audit', label: 'Night Audit', requiredPermission: 'night_audit.view' },
+      // PLAN.md Phase 4 (Accounts Receivable) — PRODUCT_REQUIREMENTS.md
+      // files this under "Back-office screens," alongside Night Audit/
+      // Reporting, not a front-line operational screen — filed under
+      // SETUP to match. Gated on `ar.view` (front_desk/cashier/manager/
+      // admin/super_admin per SECURITY.md §5's own AR column; `ar.manage`
+      // is checked separately, per-action, by the screen's own mutating
+      // calls, matching every other module's "broader key gates the nav
+      // item, narrower key gates the write" convention).
+      { key: 'ar', label: 'Accounts Receivable', requiredPermission: 'ar.view' },
     ],
   },
 ];

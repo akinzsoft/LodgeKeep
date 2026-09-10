@@ -23,6 +23,7 @@
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { writeOutboxEvent } = require('../../shared/outbox');
+const { sumMoney } = require('../../shared/money');
 const {
   livePhysicalCount: sharedLivePhysicalCount,
   listFreeRoomsNow: sharedListFreeRoomsNow,
@@ -167,6 +168,22 @@ async function createGuest({ context, firstName, lastName, email, phone }) {
 async function getGuest({ context, id }) {
   const db = scopedDb().for(context);
   return db.table('guests').where({ id }).first();
+}
+
+/**
+ * PLAN.md Phase 4 (Accounts Receivable): sets (or clears, `companyProfileId:
+ * null`) the guest's own linked company/travel-agent profile —
+ * PRODUCT_REQUIREMENTS.md's profile detail screen spec names this
+ * explicitly. Deliberately narrow — a dedicated endpoint, not a general
+ * guest-update route (none exists yet) — and does not itself decide
+ * whether any of the guest's folios bill to that company; that is
+ * `cashiering/service.js`'s own `billFolioToCompany`, a separate decision
+ * made per-folio, per-stay.
+ */
+async function linkGuestToCompany({ context, id, companyProfileId }) {
+  const db = scopedDb().for(context);
+  await db.table('guests').where({ id }).update({ company_profile_id: companyProfileId ?? null });
+  return getGuest({ context, id });
 }
 
 /**
@@ -675,13 +692,32 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
     throw new InvalidReservationTransitionError(reservation.status, 'checked_out');
   }
 
-  const folio = await trx.table('folios').where({ reservation_id: id, status: 'open' }).first();
-  if (!folio) {
+  // PLAN.md Phase 4 (Accounts Receivable): a reservation can hold more than
+  // one open folio (split billing) — every one of them must be considered,
+  // not only the first, closing a previously-flagged gap this AR pass makes
+  // load-bearing for the first time (see CLAUDE.md's Cashiering section on
+  // the identical multi-folio checkout gap). A folio billed to a company AR
+  // account (`company_profile_id` set) may carry any nonzero balance —
+  // ARCHITECTURE.md §11's "or the property permits checkout with balance
+  // owing to AR" — its own credit-limit compliance was already enforced at
+  // charge-posting time (`cashiering/service.js`'s `postCharge`/
+  // `postAdjustment`), so no re-check is needed here. A folio the guest
+  // owes directly must still be exactly zero, unchanged.
+  const openFolios = await trx.table('folios').where({ reservation_id: id, status: 'open' }).orderBy('id');
+  if (openFolios.length === 0) {
     throw new ValidationError('FOLIO_NOT_FOUND', 'No open folio for this reservation.');
   }
-  if (Number(folio.balance) !== 0) {
-    throw new FolioBalanceOwingError(folio.balance);
+  for (const openFolio of openFolios) {
+    if (!openFolio.company_profile_id && Number(openFolio.balance) !== 0) {
+      throw new FolioBalanceOwingError(openFolio.balance, openFolio.id);
+    }
   }
+  // The fee below always posts to the PRIMARY folio — the one
+  // `ensurePrimaryFolio` opened at check-in — never a split one, matching
+  // this codebase's own "a fee is the reservation's own charge, not any one
+  // split folio's" convention. Ordered by id, so the first-ever-opened
+  // folio is always first regardless of how many split folios exist.
+  const folio = openFolios[0];
 
   const property = await trx.table('properties').where({ id: reservation.property_id }).first();
   // MySQL's TIME columns come back as 'HH:MM:SS' — truncated to 'HH:MM' so
@@ -722,8 +758,19 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
   }
 
   const now = new Date();
-  await trx.table('folios').where({ id: folio.id }).update({ status: 'closed', closed_at: now });
-  const finalBalance = (await trx.table('folios').where({ id: folio.id }).first()).balance;
+  let arAccountOverLimit = false;
+  for (const openFolio of openFolios) {
+    await trx.table('folios').where({ id: openFolio.id }).update({ status: 'closed', closed_at: now });
+    if (openFolio.company_profile_id) {
+      const account = await trx.table('ar_accounts').where({ company_profile_id: openFolio.company_profile_id }).first();
+      if (account?.is_over_limit) arAccountOverLimit = true;
+    }
+  }
+  const closedFolios = await trx.table('folios').whereIn(
+    'id',
+    openFolios.map((openFolio) => openFolio.id)
+  );
+  const finalBalance = sumMoney(closedFolios.map((closedFolio) => closedFolio.balance));
 
   const assignment = await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).first();
   await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).update({ effective_to: now });
@@ -747,7 +794,7 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
   const updated = await trx.table('reservations').where({ id }).first();
   await emitReservationEvent({ trx, eventType: 'guest.checked_out', reservation: updated, extra: { folioBalance: finalBalance } });
 
-  return { reservation: updated, fee };
+  return { reservation: updated, fee, arAccountOverLimit };
 }
 
 /**
@@ -962,7 +1009,17 @@ function selectReservationWithGuestAndRoom(query) {
       (join) => join.on('folios.reservation_id', '=', 'reservations.id').andOnVal('folios.status', '=', 'open'),
       { type: 'left' }
     )
-    .select('rooms.room_number as room_number', 'folios.balance as folio_balance', 'folios.currency as folio_currency');
+    .select(
+      'rooms.room_number as room_number',
+      'folios.balance as folio_balance',
+      'folios.currency as folio_currency',
+      // PLAN.md Phase 4 (Accounts Receivable): lets a board tell "owing to
+      // the guest" (blocking at checkout) apart from "owing to a company
+      // account" (informational only) without a second query — see
+      // `checkOut`'s own AR-aware balance check in this same file.
+      'folios.company_profile_id as folio_company_profile_id',
+      'folios.billed_to as folio_billed_to'
+    );
 }
 
 /**
@@ -1175,6 +1232,7 @@ module.exports = {
   createGuest,
   getGuest,
   listGuests,
+  linkGuestToCompany,
   activityCutoffDate,
   getActiveGuestIds,
   checkAvailability,

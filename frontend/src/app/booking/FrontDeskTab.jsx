@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, DataTable, Button } from '../../shared/components/index.js';
+import { Card, DataTable, Button, StatusPill } from '../../shared/components/index.js';
 import { reservationsApi, ApiError } from '../../shared/api/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import formStyles from './BookingForm.module.css';
@@ -135,7 +135,12 @@ export function FrontDeskTab({ isOffline = false } = {}) {
       });
       setCheckingOut(null);
       setCheckoutForm({ scheduled_checkout_time: '', actual_checkout_time: '', late_checkout_fee: '', early_cutoff_time: '', early_departure_fee: '' });
-      setCheckoutSuccess(result?.fee ? `Checked out — ${result.fee.type.replace('_', ' ')} fee of ${result.fee.amount} posted to the folio.` : 'Checked out.');
+      const feeMessage = result?.fee ? `Checked out — ${result.fee.type.replace('_', ' ')} fee of ${result.fee.amount} posted to the folio.` : 'Checked out.';
+      // PLAN.md Phase 4 (Accounts Receivable) — `arAccountOverLimit` only
+      // reaches here now that `reservationsApi.checkOut` actually reads the
+      // response envelope's `meta` (see that function's own header for the
+      // pre-existing bug this also fixed, for `fee` too).
+      setCheckoutSuccess(result?.arAccountOverLimit ? `${feeMessage} Note: the billed company's AR account is over its credit limit.` : feeMessage);
       await reloadBoard();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not check out this reservation — the folio balance may not be settled.');
@@ -235,9 +240,21 @@ export function FrontDeskTab({ isOffline = false } = {}) {
                   key: 'folio_balance',
                   label: 'Balance',
                   align: 'right',
+                  // PLAN.md Phase 4 (Accounts Receivable) — a nonzero balance
+                  // on a folio billed to a company (`folio_company_profile_id`,
+                  // from `selectReservationWithGuestAndRoom`'s additive
+                  // SELECT) is owed to that company, not the guest at the
+                  // desk — the same red "owing" highlight here would
+                  // misleadingly suggest checkout is blocked on it, which it
+                  // isn't (`reservations/service.js`'s `checkOut` header).
                   render: (row) =>
                     row.folio_balance == null ? (
                       '—'
+                    ) : row.folio_company_profile_id ? (
+                      <span className={formStyles.balanceCell}>
+                        <Money amount={row.folio_balance} currencyCode={row.folio_currency} />
+                        {Number(row.folio_balance) !== 0 && <StatusPill tone="info" label="via AR" />}
+                      </span>
                     ) : (
                       <span className={Number(row.folio_balance) !== 0 ? formStyles.balanceOwing : undefined}>
                         <Money amount={row.folio_balance} currencyCode={row.folio_currency} />
@@ -366,8 +383,23 @@ export function FrontDeskTab({ isOffline = false } = {}) {
               where the action happens — not just the board's own toolbar
               banner above, easy to miss once this dialog is open below it.
               Backend still gates the real check — this is a proactive
-              heads-up, not a substitute for it. */}
-          {checkingOut.folio_balance != null && Number(checkingOut.folio_balance) !== 0 && (
+              heads-up, not a substitute for it.
+
+              PLAN.md Phase 4 (Accounts Receivable): a folio billed to a
+              company (`folio_company_profile_id`) may carry any nonzero
+              balance without blocking checkout at all
+              (`reservations/service.js`'s `checkOut` header,
+              ARCHITECTURE.md §11's "or the property permits checkout with
+              balance owing to AR") — this gets its own, non-blocking
+              informational note (`role="status"`, not `role="alert"`)
+              instead of the guest-owing banner, which would otherwise
+              misstate that checkout is about to fail. */}
+          {checkingOut.folio_balance != null && Number(checkingOut.folio_balance) !== 0 && checkingOut.folio_company_profile_id && (
+            <p role="status" className={formStyles.disabledNotice}>
+              Owing to {checkingOut.folio_billed_to} via Accounts Receivable — checkout is not blocked by this balance.
+            </p>
+          )}
+          {checkingOut.folio_balance != null && Number(checkingOut.folio_balance) !== 0 && !checkingOut.folio_company_profile_id && (
             <p role="alert" className={formStyles.errorBanner}>
               Outstanding balance of <Money amount={checkingOut.folio_balance} currencyCode={checkingOut.folio_currency} /> —
               checkout will be blocked until this is cleared (Cashiering).

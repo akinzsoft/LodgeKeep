@@ -27,6 +27,11 @@ function cashieringRouter() {
   router.post('/cashiering/reservations/:reservationId/folios', requirePermission('cashiering.void_line'), controller.openAdditionalFolio);
 
   router.get('/cashiering/folios/:folioId', requirePermission('cashiering.post_charge'), controller.getFolio);
+  // PLAN.md Phase 4 (Accounts Receivable): billing a folio to a company
+  // account is an AR-routing decision, not a cashiering one — gated on
+  // `ar.manage`, not either cashiering key. See CLAUDE.md/SECURITY.md §5's
+  // AR section for the full reasoning.
+  router.post('/cashiering/folios/:folioId/bill-to-account', requirePermission('ar.manage'), controller.billFolioToCompany);
   router.post('/cashiering/folios/:folioId/charges', requirePermission('cashiering.post_charge'), controller.postCharge);
   router.post('/cashiering/folios/:folioId/adjustments', requirePermission('cashiering.void_line'), controller.postAdjustment);
   router.post('/cashiering/folios/:folioId/payments/cash', requirePermission('cashiering.void_line'), controller.captureCashPayment);

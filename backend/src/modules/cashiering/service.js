@@ -38,6 +38,12 @@ const { generateUlid } = require('../../shared/ulid');
 const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('./tax-engine');
 const paystack = require('./paystack-adapter');
+// PLAN.md Phase 4 (Accounts Receivable) — a one-way dependency: this module
+// calls into `ar/service.js`, never the other way, so there is no import
+// cycle. See that module's own header for the credit-limit lock this
+// wiring relies on.
+const arService = require('../ar/service');
+const { ArAccountNotFoundError } = require('../ar/errors');
 const {
   FolioClosedError,
   LineItemAlreadyVoidedError,
@@ -45,6 +51,8 @@ const {
   RefundExceedsCapturedAmountError,
   CrossReservationFolioMoveError,
   LineItemNotFoundError,
+  CannotVoidInvoicedLineError,
+  CannotPayArBilledFolioDirectlyError,
 } = require('./errors');
 
 const CHARGE_TYPES = new Set(['room_charge', 'pos_charge']);
@@ -182,6 +190,53 @@ async function moveLineItem({ trx, lineItemId, destinationFolioId }) {
   return trx.table('folio_line_items').where({ id: lineItemId }).first();
 }
 
+/**
+ * PLAN.md Phase 4 (Accounts Receivable) — routes an open folio to a
+ * company's AR account instead of (or back away from, when
+ * `companyProfileId` is null) settlement by the guest directly. Requires an
+ * already-active `ar_accounts` row (created explicitly via `POST
+ * /ar/accounts`) — a folio can never implicitly acquire a zero-credit-limit
+ * account by accident. `billed_to` (the existing free-text label) is set to
+ * the company's own name so the two never disagree.
+ *
+ * Un-billing (`companyProfileId: null`) is only allowed once no line on
+ * this folio has ever been invoiced — reversing AR billing after a real
+ * invoice already summarized those charges would silently orphan that
+ * invoice's own accounting.
+ */
+async function billFolioToCompany({ trx, folioId, companyProfileId }) {
+  const folio = await trx.table('folios').where({ id: folioId }).first();
+  if (!folio) throw new ValidationError('FOLIO_NOT_FOUND', 'The specified folio does not exist.');
+  if (folio.status !== 'open') throw new FolioClosedError(folioId);
+
+  if (companyProfileId) {
+    const account = await arService.getActiveAccountForCompanyAtProperty({ trx, companyProfileId });
+    if (!account) throw new ArAccountNotFoundError();
+    const company = await trx.table('company_profiles').where({ id: companyProfileId }).first();
+    await trx.table('folios').where({ id: folioId }).update({ company_profile_id: companyProfileId, billed_to: company.name });
+  } else {
+    // A locking read (`.forUpdate()`), not a plain SELECT — the same reason
+    // `ar/service.js`'s `recomputeArAccountBalance`/`generateInvoice` use one:
+    // this bypasses a stale REPEATABLE READ snapshot AND takes the same row
+    // locks `generateInvoice`'s own eligibility query takes on these exact
+    // `folio_line_items`/`ar_invoice_lines` rows, so a concurrent
+    // "generate invoice" for this folio's account and this un-bill attempt
+    // genuinely serialize against each other rather than racing.
+    const anyInvoiced = await trx
+      .table('folio_line_items')
+      .joinScoped('ar_invoice_lines', (join) => join.on('ar_invoice_lines.folio_line_item_id', '=', 'folio_line_items.id'))
+      .where('folio_line_items.folio_id', folioId)
+      .forUpdate()
+      .first('folio_line_items.id');
+    if (anyInvoiced) {
+      throw new ValidationError('CANNOT_UNBILL_INVOICED_FOLIO', 'This folio has already had one or more charges invoiced through Accounts Receivable and cannot be un-billed.');
+    }
+    await trx.table('folios').where({ id: folioId }).update({ company_profile_id: null, billed_to: 'Guest' });
+  }
+
+  return trx.table('folios').where({ id: folioId }).first();
+}
+
 // ---------------------------------------------------------------------
 // Charges & tax (ARCHITECTURE.md §12.1)
 // ---------------------------------------------------------------------
@@ -193,8 +248,17 @@ async function moveLineItem({ trx, lineItemId, destinationFolioId }) {
  * `type` is `room_charge` or `pos_charge` (the two real charge-generating
  * events this codebase has); a correction/discount/comp goes through
  * `postAdjustment` instead, which does not recompute tax.
+ *
+ * PLAN.md Phase 4 (Accounts Receivable): when the target folio is billed to
+ * a company (`folio.company_profile_id`), the charge plus its own tax is
+ * checked against that account's credit limit BEFORE either is inserted —
+ * `arService.assertWithinCreditLimit` takes the account's row lock, so this
+ * is also this account's own serialization point against a concurrent
+ * `generateInvoice` call (see `ar/service.js`'s file header). `overrideCreditLimit`/
+ * `overrideReason` are optional and only meaningful when a folio is
+ * AR-billed — every existing caller of this function is unaffected.
  */
-async function postCharge({ trx, folioId, type, description, amount, businessDate, userId }) {
+async function postCharge({ trx, folioId, type, description, amount, businessDate, userId, overrideCreditLimit, overrideReason }) {
   if (!CHARGE_TYPES.has(type)) {
     throw new ValidationError('INVALID_CHARGE_TYPE', `"${type}" is not a postable charge type — use "room_charge" or "pos_charge".`);
   }
@@ -208,6 +272,18 @@ async function postCharge({ trx, folioId, type, description, amount, businessDat
   const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate: effectiveBusinessDate, chargeType: type });
   const { netAmount, taxLines } = computeChargeWithTax({ baseAmount: amount, taxVersions });
   const totalTax = sumMoney(taxLines.map((t) => t.amount));
+
+  let arCheck = null;
+  if (folio.company_profile_id) {
+    arCheck = await arService.assertWithinCreditLimit({
+      trx,
+      companyProfileId: folio.company_profile_id,
+      additionalAmount: sumMoney([netAmount, totalTax]),
+      overrideCreditLimit,
+      overrideReason,
+      userId,
+    });
+  }
 
   const [chargeLineId] = await trx.table('folio_line_items').insert({
     folio_id: folioId,
@@ -234,6 +310,7 @@ async function postCharge({ trx, folioId, type, description, amount, businessDat
   }
 
   await recomputeFolioBalance({ trx, folioId });
+  if (arCheck) await arService.recomputeArAccountBalance({ trx, arAccountId: arCheck.arAccountId });
   const chargeLine = await trx.table('folio_line_items').where({ id: chargeLineId }).first();
   const postedTaxLines = await trx.table('folio_line_items').where({ related_line_item_id: chargeLineId, type: 'tax' });
   return { chargeLine, taxLines: postedTaxLines };
@@ -286,14 +363,31 @@ async function postRoomChargesForStay({ trx, reservationId, folioId, userId }) {
  * job, not something this function infers). `reason` is mandatory —
  * CLAUDE.md's own frontend rule: "money confirmations require a reason
  * field that feeds the audit trail."
+ *
+ * PLAN.md Phase 4 (Accounts Receivable): the identical credit-limit check
+ * `postCharge` applies — an adjustment on an AR-billed folio can move the
+ * balance either way, and a negative (credit/discount) amount naturally
+ * satisfies the check regardless of enforcement mode.
  */
-async function postAdjustment({ trx, folioId, description, amount, relatedLineItemId, businessDate, userId, reason }) {
+async function postAdjustment({ trx, folioId, description, amount, relatedLineItemId, businessDate, userId, reason, overrideCreditLimit, overrideReason }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required for a folio adjustment.', [{ field: 'reason', issue: 'missing' }]);
   const folio = await trx.table('folios').where({ id: folioId }).first();
   if (!folio) throw new ValidationError('FOLIO_NOT_FOUND', 'The specified folio does not exist.');
   if (folio.status !== 'open') throw new FolioClosedError(folioId);
 
   const effectiveBusinessDate = businessDate ?? (await propertyBusinessDate({ trx, propertyId: folio.property_id }));
+
+  let arCheck = null;
+  if (folio.company_profile_id) {
+    arCheck = await arService.assertWithinCreditLimit({
+      trx,
+      companyProfileId: folio.company_profile_id,
+      additionalAmount: amount,
+      overrideCreditLimit,
+      overrideReason,
+      userId,
+    });
+  }
 
   const [id] = await trx.table('folio_line_items').insert({
     folio_id: folioId,
@@ -307,6 +401,7 @@ async function postAdjustment({ trx, folioId, description, amount, relatedLineIt
   });
 
   await recomputeFolioBalance({ trx, folioId });
+  if (arCheck) await arService.recomputeArAccountBalance({ trx, arAccountId: arCheck.arAccountId });
   return trx.table('folio_line_items').where({ id }).first();
 }
 
@@ -318,6 +413,13 @@ async function postAdjustment({ trx, folioId, description, amount, relatedLineIt
  * `payment`/`refund` line cannot be voided directly — those follow the
  * `payments` state machine instead (`refundPayment`), since a payment
  * carries external-gateway state a bare line-item void cannot express.
+ *
+ * PLAN.md Phase 4 (Accounts Receivable): a line already present in
+ * `ar_invoice_lines` (already invoiced) cannot be voided directly — doing
+ * so would silently invalidate an already-issued invoice's own immutable
+ * `total_amount`. The correction path is a fresh offsetting `postAdjustment`
+ * on the same folio (ARCHITECTURE.md §8), which the next invoice run picks
+ * up as its own new line.
  */
 async function voidLineItem({ trx, lineItemId, reason, userId }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to void a folio line.', [{ field: 'reason', issue: 'missing' }]);
@@ -327,6 +429,12 @@ async function voidLineItem({ trx, lineItemId, reason, userId }) {
   if (line.type === 'payment' || line.type === 'refund') {
     throw new ValidationError('CANNOT_VOID_PAYMENT_LINE', 'A payment or refund line cannot be voided directly — use the refund action instead.');
   }
+  // A locking read, not a plain SELECT — see `billFolioToCompany`'s identical
+  // comment above for why: this contends for the same row `generateInvoice`'s
+  // own eligibility query locks, so a concurrent invoice-generation and a void
+  // attempt against the same line genuinely serialize rather than race.
+  const invoicedAs = await trx.table('ar_invoice_lines').where({ folio_line_item_id: lineItemId }).forUpdate().first();
+  if (invoicedAs) throw new CannotVoidInvoicedLineError(lineItemId);
 
   const now = new Date();
   await trx.table('folio_line_items').where({ id: lineItemId }).update({ voided_at: now, voided_by_user_id: userId, void_reason: reason });
@@ -337,6 +445,11 @@ async function voidLineItem({ trx, lineItemId, reason, userId }) {
   }
 
   await recomputeFolioBalance({ trx, folioId: line.folio_id });
+  const folio = await trx.table('folios').where({ id: line.folio_id }).first();
+  if (folio.company_profile_id) {
+    const account = await arService.getActiveAccountForCompanyAtProperty({ trx, companyProfileId: folio.company_profile_id });
+    if (account) await arService.recomputeArAccountBalance({ trx, arAccountId: account.id });
+  }
   return trx.table('folio_line_items').where({ id: lineItemId }).first();
 }
 
@@ -344,10 +457,19 @@ async function voidLineItem({ trx, lineItemId, reason, userId }) {
 // Payments — cash (real, synchronous) — ARCHITECTURE.md §7
 // ---------------------------------------------------------------------
 
+/**
+ * PLAN.md Phase 4 (Accounts Receivable): a folio billed to a company
+ * account (`folio.company_profile_id`) is rejected here outright — cash and
+ * Paystack payment capture both route through this one guard, so neither
+ * gateway path can settle part of what is meant to be collected through
+ * Accounts Receivable instead. Allowing both would create two disagreeing
+ * notions of what the company owes with no clean reconciliation rule.
+ */
 async function assertFolioOpenForPayment({ trx, folioId }) {
   const folio = await trx.table('folios').where({ id: folioId }).first();
   if (!folio) throw new ValidationError('FOLIO_NOT_FOUND', 'The specified folio does not exist.');
   if (folio.status !== 'open') throw new FolioClosedError(folioId);
+  if (folio.company_profile_id) throw new CannotPayArBilledFolioDirectlyError(folioId);
   return folio;
 }
 
@@ -697,6 +819,7 @@ module.exports = {
   ensurePrimaryFolio,
   openAdditionalFolio,
   moveLineItem,
+  billFolioToCompany,
   postCharge,
   postRoomChargesForStay,
   postAdjustment,

@@ -42,6 +42,7 @@ const { nightAuditRouter } = require('./modules/night-audit');
 const { profilesRouter } = require('./modules/profiles');
 const { portalPublicRouter, portalAccountRouter } = require('./modules/portal');
 const { posRouter } = require('./modules/pos');
+const { arRouter } = require('./modules/ar');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -65,6 +66,7 @@ function buildStaffRouter() {
   router.use(cashieringRouter());
   router.use(nightAuditRouter());
   router.use(posRouter());
+  router.use(arRouter());
   router.use((req, res) => notFound(res));
   return router;
 }

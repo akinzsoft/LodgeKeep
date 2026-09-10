@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Card, DataTable, Button, StatusPill, ConfirmDialog } from '../../shared/components/index.js';
 import { Money, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
-import { cashieringApi, ApiError } from '../../shared/api/index.js';
+import { cashieringApi, arApi, profilesApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { OutstandingBalancesTab } from './OutstandingBalancesTab.jsx';
 import formStyles from './CashieringForm.module.css';
@@ -47,6 +47,14 @@ export function CashieringScreen({ isOffline = false }) {
   const [folios, setFolios] = useState(null);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  // PLAN.md Phase 4 (Accounts Receivable) — the company list for the "Bill
+  // to company" picker (below), fetched once here rather than per folio
+  // panel, since every panel on this screen shares the same list.
+  const [companies, setCompanies] = useState([]);
+
+  useEffect(() => {
+    profilesApi.listCompanyProfiles().then(setCompanies).catch(() => setCompanies([]));
+  }, []);
 
   async function loadFolios(id) {
     setError(null);
@@ -155,6 +163,7 @@ export function CashieringScreen({ isOffline = false }) {
                   key={folio.id}
                   folio={folio}
                   otherFolios={folios.filter((f) => f.id !== folio.id)}
+                  companies={companies}
                   isOffline={isOffline}
                   submitting={submitting}
                   onAction={withSubmitting}
@@ -175,7 +184,7 @@ export function CashieringScreen({ isOffline = false }) {
   );
 }
 
-function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
+function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAction }) {
   const [lineItems, setLineItems] = useState(null);
   const [payments, setPayments] = useState(null);
   const [showChargeForm, setShowChargeForm] = useState(false);
@@ -191,6 +200,17 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
   const [openingPopup, setOpeningPopup] = useState(false);
   const isSettled = isBalanceSettled(folio.balance);
   const balanceState = describeBalanceState(folio.balance);
+
+  // PLAN.md Phase 4 (Accounts Receivable) — `undefined` = not applicable
+  // (no company billed to this folio) or not yet loaded; `null` = billed to
+  // a company but that company has no AR account at this property (a real,
+  // if unusual, state — `billFolioToCompany` itself requires an active
+  // account to exist, but nothing prevents the account being closed
+  // afterward).
+  const [arAccount, setArAccount] = useState(undefined);
+  const [arAccountError, setArAccountError] = useState(null);
+  const [showBillPicker, setShowBillPicker] = useState(false);
+  const [billCompanyId, setBillCompanyId] = useState('');
 
   async function reload() {
     try {
@@ -209,15 +229,92 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload is redefined every render and only needs to run once per folio.id (this panel is remounted, not re-propped, when the folio list changes — see CashieringScreen's key={folio.id} usage).
   }, [folio.id]);
 
+  useEffect(() => {
+    if (!folio.company_profile_id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing state as `folio.company_profile_id` changes (e.g. an un-bill action), not a fetch
+      setArAccount(undefined);
+      return;
+    }
+    setArAccountError(null);
+    arApi
+      .listAccounts()
+      .then((accounts) => {
+        setArAccount(accounts.find((a) => String(a.company_profile_id) === String(folio.company_profile_id)) ?? null);
+      })
+      .catch((caught) => {
+        setArAccount(null);
+        setArAccountError(caught instanceof ApiError ? caught.message : 'Could not load this folio’s AR account.');
+      });
+  }, [folio.company_profile_id]);
+
+  async function handleBillToCompany(companyProfileId) {
+    await onAction(() => cashieringApi.billFolioToCompany(folio.id, companyProfileId || null));
+    setShowBillPicker(false);
+    setBillCompanyId('');
+  }
+
   return (
     <Card title={`Folio ${folio.folio_number} — ${folio.billed_to}`}>
       <div className={styles.folioHeader}>
         <StatusPill tone={folio.status === 'open' ? 'success' : 'neutral'} label={folio.status === 'open' ? 'Open' : 'Closed'} />
         {folio.status === 'open' && balanceState && <StatusPill tone={balanceState.tone} label={balanceState.label} />}
+        {arAccount?.is_over_limit && <StatusPill tone="danger" label="AR account over limit" />}
         <span className={styles.balance}>
           Balance: <Money amount={folio.balance} currencyCode={folio.currency} />
         </span>
       </div>
+
+      {/*
+        Gap closure (PLAN.md Phase 4, Accounts Receivable): replaces the
+        raw `window.prompt`-driven `billed_to` label with a real company
+        picker wired to the backend's `bill-to-account` endpoint. `billed_to`
+        itself is unchanged as a plain display label (auto-set to the
+        company's name by the backend once billed) — this is purely about
+        which folios settle through Accounts Receivable instead of a direct
+        guest payment.
+      */}
+      {folio.status === 'open' && (
+        <div className={formStyles.actionsRow}>
+          {arAccountError && (
+            <p role="alert" className={formStyles.errorBanner}>
+              {arAccountError}
+            </p>
+          )}
+          {folio.company_profile_id && arAccount && (
+            <span className={styles.balance}>
+              AR limit: <Money amount={arAccount.credit_limit} currencyCode={arAccount.currency} /> · AR balance:{' '}
+              <Money amount={arAccount.current_balance} currencyCode={arAccount.currency} />
+            </span>
+          )}
+          <Button size="compact" variant="secondary" disabled={isOffline || submitting} onClick={() => setShowBillPicker((v) => !v)}>
+            {folio.company_profile_id ? 'Change company billing' : 'Bill to company'}
+          </Button>
+          {folio.company_profile_id && (
+            <Button size="compact" variant="secondary" disabled={isOffline || submitting} onClick={() => handleBillToCompany(null)}>
+              Un-bill (settle with guest instead)
+            </Button>
+          )}
+        </div>
+      )}
+
+      {showBillPicker && (
+        <div className={formStyles.actionsRow}>
+          <select className={formStyles.select} value={billCompanyId} onChange={(event) => setBillCompanyId(event.target.value)}>
+            <option value="">Select a company</option>
+            {(companies ?? []).map((company) => (
+              <option key={company.id} value={company.id}>
+                {company.name}
+              </option>
+            ))}
+          </select>
+          <Button size="compact" disabled={!billCompanyId || isOffline || submitting} onClick={() => handleBillToCompany(billCompanyId)}>
+            Bill this folio
+          </Button>
+          <Button size="compact" variant="ghost" onClick={() => setShowBillPicker(false)}>
+            Cancel
+          </Button>
+        </div>
+      )}
 
       <DataTable
         title="Line items"
@@ -317,15 +414,29 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
           <Button variant="secondary" size="compact" disabled={isOffline} onClick={() => setShowAdjustmentForm((v) => !v)}>
             Post an adjustment
           </Button>
-          <Button variant="secondary" size="compact" disabled={isOffline || isSettled} onClick={() => setShowPaymentForm((v) => !v)}>
-            Capture a payment
-          </Button>
+          {/*
+            Gap closure (PLAN.md Phase 4, Accounts Receivable): a folio
+            billed to a company settles only through Accounts Receivable's
+            own payment recording — the backend rejects a direct guest
+            payment against it outright
+            (`CANNOT_PAY_AR_BILLED_FOLIO_DIRECTLY`), so the button that
+            would only ever fail is replaced with a plain notice rather
+            than left for a person to click and be told no.
+          */}
+          {folio.company_profile_id ? (
+            <p className={formStyles.disabledNotice}>Billed to {folio.billed_to} — settled through Accounts Receivable.</p>
+          ) : (
+            <Button variant="secondary" size="compact" disabled={isOffline || isSettled} onClick={() => setShowPaymentForm((v) => !v)}>
+              Capture a payment
+            </Button>
+          )}
         </div>
       )}
 
       {showChargeForm && (
         <ChargeForm
           disabled={isOffline || submitting}
+          isArBilled={Boolean(folio.company_profile_id)}
           onSubmit={async (values) => {
             await onAction(() => cashieringApi.postCharge(folio.id, values));
             setShowChargeForm(false);
@@ -338,6 +449,7 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
       {showAdjustmentForm && (
         <AdjustmentForm
           disabled={isOffline || submitting}
+          isArBilled={Boolean(folio.company_profile_id)}
           onSubmit={async (values) => {
             await onAction(() => cashieringApi.postAdjustment(folio.id, values));
             setShowAdjustmentForm(false);
@@ -347,7 +459,7 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
         />
       )}
 
-      {showPaymentForm && !isSettled && (
+      {showPaymentForm && !isSettled && !folio.company_profile_id && (
         <PaymentForm
           currency={folio.currency}
           balance={folio.balance}
@@ -484,17 +596,46 @@ function FolioPanel({ folio, otherFolios, isOffline, submitting, onAction }) {
   );
 }
 
-function ChargeForm({ disabled, onSubmit, onCancel }) {
+/**
+ * PLAN.md Phase 4 (Accounts Receivable) — shown only on an AR-billed folio's
+ * forms, since the backend's `overrideCreditLimit` path is only meaningful
+ * there (`cashiering/service.js`'s `postCharge`/`postAdjustment`). No
+ * client-side permission check gates this checkbox — per this codebase's
+ * own "UI-level RBAC ... is convenience only, the API check ... is the real
+ * one" rule, the backend re-verifies the caller actually holds `ar.manage`
+ * before honoring it (`assertCanOverrideCreditLimit`), so a caller without
+ * that permission simply gets a real 403 on submit.
+ */
+function CreditLimitOverrideFields({ overrideCreditLimit, onToggle, overrideReason, onReasonChange }) {
+  return (
+    <>
+      <label className={formStyles.checkboxField}>
+        <input type="checkbox" checked={overrideCreditLimit} onChange={(event) => onToggle(event.target.checked)} />
+        <span className={formStyles.label}>Override credit limit if this would exceed it</span>
+      </label>
+      {overrideCreditLimit && (
+        <label className={formStyles.field}>
+          <span className={formStyles.label}>Override reason</span>
+          <input className={formStyles.input} value={overrideReason} onChange={(event) => onReasonChange(event.target.value)} required />
+        </label>
+      )}
+    </>
+  );
+}
+
+function ChargeForm({ disabled, isArBilled = false, onSubmit, onCancel }) {
   const [type, setType] = useState('room_charge');
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
+  const [overrideCreditLimit, setOverrideCreditLimit] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
 
   return (
     <form
       className={formStyles.form}
       onSubmit={(event) => {
         event.preventDefault();
-        onSubmit({ type, description, amount });
+        onSubmit({ type, description, amount, overrideCreditLimit, overrideReason: overrideCreditLimit ? overrideReason : undefined });
       }}
     >
       <div className={formStyles.row}>
@@ -514,6 +655,14 @@ function ChargeForm({ disabled, onSubmit, onCancel }) {
           <input className={formStyles.input} value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required />
         </label>
       </div>
+      {isArBilled && (
+        <CreditLimitOverrideFields
+          overrideCreditLimit={overrideCreditLimit}
+          onToggle={setOverrideCreditLimit}
+          overrideReason={overrideReason}
+          onReasonChange={setOverrideReason}
+        />
+      )}
       <div className={formStyles.actionsRow}>
         <Button type="submit" disabled={disabled}>
           Post charge
@@ -526,17 +675,19 @@ function ChargeForm({ disabled, onSubmit, onCancel }) {
   );
 }
 
-function AdjustmentForm({ disabled, onSubmit, onCancel }) {
+function AdjustmentForm({ disabled, isArBilled = false, onSubmit, onCancel }) {
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
+  const [overrideCreditLimit, setOverrideCreditLimit] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
 
   return (
     <form
       className={formStyles.form}
       onSubmit={(event) => {
         event.preventDefault();
-        onSubmit({ description, amount, reason });
+        onSubmit({ description, amount, reason, overrideCreditLimit, overrideReason: overrideCreditLimit ? overrideReason : undefined });
       }}
     >
       <div className={formStyles.row}>
@@ -553,6 +704,14 @@ function AdjustmentForm({ disabled, onSubmit, onCancel }) {
           <input className={formStyles.input} value={reason} onChange={(event) => setReason(event.target.value)} required />
         </label>
       </div>
+      {isArBilled && (
+        <CreditLimitOverrideFields
+          overrideCreditLimit={overrideCreditLimit}
+          onToggle={setOverrideCreditLimit}
+          overrideReason={overrideReason}
+          onReasonChange={setOverrideReason}
+        />
+      )}
       <div className={formStyles.actionsRow}>
         <Button type="submit" disabled={disabled}>
           Post adjustment

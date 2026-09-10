@@ -65,3 +65,23 @@
   color: var(--text-primary);
   font-size: var(--text-label-size);
 }
+
+/* PLAN.md Phase 4 (Accounts Receivable) — the read-only AR-account summary
+   on `CompanyProfilesTab`. */
+.summaryList {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.summaryList dt {
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
+.summaryList dd {
+  margin: 0;
+  font-size: var(--text-body-size);
+  color: var(--text-primary);
+}

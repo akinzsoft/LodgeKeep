@@ -59,6 +59,30 @@ class LineItemNotFoundError extends ValidationError {
   }
 }
 
+/** PLAN.md Phase 4 (Accounts Receivable): once a charge has been invoiced (`ar_invoice_lines`), voiding the source line directly would silently invalidate an already-issued invoice total. The correction path is a fresh offsetting `postAdjustment`, not a void — see ARCHITECTURE.md §8. */
+class CannotVoidInvoicedLineError extends AppError {
+  constructor(lineItemId) {
+    super(
+      'BUSINESS_RULE_CANNOT_VOID_INVOICED_LINE',
+      `Folio line item ${lineItemId} has already been invoiced through Accounts Receivable and cannot be voided directly — post an offsetting adjustment instead.`,
+      422,
+      { lineItemId }
+    );
+  }
+}
+
+/** PLAN.md Phase 4 (Accounts Receivable): a folio billed to a company account settles only through Accounts Receivable's own payment recording, never a direct guest payment — otherwise the folio balance and the invoiced/owed total could permanently disagree. */
+class CannotPayArBilledFolioDirectlyError extends AppError {
+  constructor(folioId) {
+    super(
+      'BUSINESS_RULE_CANNOT_PAY_AR_BILLED_FOLIO_DIRECTLY',
+      `Folio ${folioId} is billed to a company account — record payment through Accounts Receivable instead of a direct guest payment.`,
+      422,
+      { folioId }
+    );
+  }
+}
+
 module.exports = {
   FolioClosedError,
   LineItemAlreadyVoidedError,
@@ -67,4 +91,6 @@ module.exports = {
   CrossReservationFolioMoveError,
   WebhookSignatureInvalidError,
   LineItemNotFoundError,
+  CannotVoidInvoicedLineError,
+  CannotPayArBilledFolioDirectlyError,
 };
