@@ -243,6 +243,13 @@ const TABLE_SCOPES = Object.freeze({
   ar_invoice_lines: { scope: SCOPES.PROPERTY },
   ar_payments: { scope: SCOPES.PROPERTY },
   ar_payment_applications: { scope: SCOPES.PROPERTY },
+
+  // Group Blocks — PLAN.md Phase 4, 20260920090000_create_group_blocks and
+  // 20260920091000_create_group_block_rooms. PROPERTY_SCOPED, following
+  // `room_types`/`ar_accounts` — a block is negotiated against one
+  // property's own inventory, not shared across a tenant's properties.
+  group_blocks: { scope: SCOPES.PROPERTY },
+  group_block_rooms: { scope: SCOPES.PROPERTY },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

@@ -2106,6 +2106,101 @@ const ENTITIES = [
       },
     ],
   },
+
+  // -----------------------------------------------------------------
+  // Group Blocks — PLAN.md Phase 4
+  // -----------------------------------------------------------------
+
+  {
+    table: 'group_blocks',
+    // No natural business unique key — two different events can share a
+    // block_name, the same reasoning `company_profiles` declares none.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      // properties[1], not [0] — seedTwoTenants' own fixture block already
+      // claims properties[0].
+      property_id: t.properties[1].id,
+      block_name: 'New Fixture Retreat',
+      start_date: '2027-01-05',
+      end_date: '2027-01-08',
+      status: 'active',
+    }),
+    crossTenant: [
+      {
+        name: "creates a group block sponsored by another tenant's company profile",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          company_profile_id: other.companyProfiles[0].id,
+          block_name: 'Cross-Tenant Block',
+          start_date: '2027-01-05',
+          end_date: '2027-01-08',
+          status: 'active',
+        }),
+      },
+      {
+        name: "creates a group block against another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          block_name: 'Cross-Tenant Block',
+          start_date: '2027-01-05',
+          end_date: '2027-01-08',
+          status: 'active',
+        }),
+      },
+    ],
+    restrictDelete: {
+      name: 'a group block a room-allocation row still references',
+      id: (ctx, t) => t.groupBlocks[0].id,
+    },
+  },
+
+  {
+    table: 'group_block_rooms',
+    uniqueKeys: [['tenant_id', 'property_id', 'group_block_id', 'room_type_id', 'stay_date']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      group_block_id: t.groupBlocks[0].id,
+      room_type_id: t.roomTypes[0].id,
+      stay_date: '2026-12-11', // a different night than seedTwoTenants' own fixture row (2026-12-10)
+      rooms_blocked: 3,
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      group_block_id: t.groupBlocks[0].id,
+      room_type_id: t.roomTypes[0].id,
+      stay_date: '2026-12-10', // matches seedTwoTenants' own fixture row exactly — collides
+      rooms_blocked: 9,
+    }),
+    crossTenant: [
+      {
+        name: "allocates rooms against another tenant's group block",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          group_block_id: other.groupBlocks[0].id,
+          room_type_id: own.roomTypes[0].id,
+          stay_date: '2026-12-11',
+          rooms_blocked: 3,
+        }),
+      },
+      {
+        name: "allocates another tenant's room type against this tenant's block",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          group_block_id: own.groupBlocks[0].id,
+          room_type_id: other.roomTypes[0].id,
+          stay_date: '2026-12-11',
+          rooms_blocked: 3,
+        }),
+      },
+    ],
+  },
 ];
 
 const byTable = (table) => ENTITIES.find((e) => e.table === table);

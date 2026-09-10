@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, Button, DataTable, StatusPill } from '../../shared/components/index.js';
-import { setupApi, reservationsApi, cashieringApi, ApiError } from '../../shared/api/index.js';
+import { setupApi, reservationsApi, cashieringApi, groupBlocksApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { Money, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import formStyles from './BookingForm.module.css';
@@ -56,6 +56,12 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const [roomTypes, setRoomTypes] = useState(null);
   const [rateCodes, setRateCodes] = useState(null);
   const [guests, setGuests] = useState(null);
+  // PLAN.md Phase 4 (Group Blocks) — an optional picker sourced separately
+  // from the reference-data trio above, and deliberately soft-failing (see
+  // `reloadGroupBlocks` below): a group_blocks.view fetch failure must never
+  // block the whole booking form, since a group-block tag is an optional
+  // enhancement to booking, not a required field.
+  const [groupBlocks, setGroupBlocks] = useState(null);
 
   const [search, setSearch] = useState({ room_type_id: '', arrival_date: '', departure_date: '' });
   const [availability, setAvailability] = useState(null);
@@ -72,6 +78,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     as_hold: false,
     allow_waitlist: false,
     preferred_room_id: '',
+    group_block_id: '',
   });
   const [newGuest, setNewGuest] = useState({ first_name: '', last_name: '', email: '', phone: '' });
   const [addingGuest, setAddingGuest] = useState(false);
@@ -104,9 +111,20 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     }
   }
 
+  async function reloadGroupBlocks() {
+    try {
+      setGroupBlocks(await groupBlocksApi.listGroupBlocks('active'));
+    } catch {
+      // Soft-fail: an optional enhancement to booking, never a reason to
+      // block the rest of the form — see the state declaration's own note.
+      setGroupBlocks([]);
+    }
+  }
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     reloadReferenceData();
+    reloadGroupBlocks();
   }, []);
 
   async function reloadFreeRoomsNow(roomTypeId) {
@@ -213,6 +231,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
         as_hold: booking.as_hold,
         allow_waitlist: booking.allow_waitlist,
         ...(booking.preferred_room_id ? { preferred_room_id: booking.preferred_room_id } : {}),
+        ...(booking.group_block_id ? { group_block_id: booking.group_block_id } : {}),
       });
       setBookSuccess(
         reservation.status === 'waitlisted'
@@ -241,7 +260,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
       if (search.arrival_date === activeProperty?.current_business_date) {
         await reloadFreeRoomsNow(search.room_type_id);
       }
-      setBooking((current) => ({ ...current, preferred_room_id: '' }));
+      setBooking((current) => ({ ...current, preferred_room_id: '', group_block_id: '' }));
       await reloadEligiblePreferredRooms();
     } catch (caught) {
       setBookError(caught instanceof ApiError ? caught.message : 'Could not create the reservation.');
@@ -547,6 +566,21 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                   {(eligiblePreferredRooms ?? []).map((room) => (
                     <option key={room.id} value={room.id}>
                       {room.room_number}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={formStyles.field}>
+                <span className={formStyles.label}>Group block (optional)</span>
+                <select
+                  className={formStyles.select}
+                  value={booking.group_block_id}
+                  onChange={(event) => setBooking({ ...booking, group_block_id: event.target.value })}
+                >
+                  <option value="">Not part of a group</option>
+                  {(groupBlocks ?? []).map((block) => (
+                    <option key={block.id} value={block.id}>
+                      {block.block_name}
                     </option>
                   ))}
                 </select>

@@ -154,6 +154,8 @@ async function seedTwoTenants(trx) {
     arAccounts: [],
     arInvoices: [],
     arPayments: [],
+    groupBlocks: [],
+    groupBlockRooms: [],
   });
 
   // Two symmetric example hotels, not one reference customer
@@ -371,6 +373,39 @@ async function seedTwoTenants(trx) {
     });
 
     await trx('ar_invoice_sequences').insert({ tenant_id: t.id, property_id: property.id, next_number: 1 });
+  }
+
+  // ------------------------------------------------------------------
+  // Group Blocks (PLAN.md Phase 4) — one unsponsored block plus one
+  // room-allocation row per tenant, on properties[0]/roomTypes[0],
+  // interleaved with the AR fixtures above.
+  // ------------------------------------------------------------------
+  for (const t of both) {
+    const property = t.properties[0];
+
+    t.groupBlocks.push({
+      id: await insertReturningId(trx, 'group_blocks', {
+        tenant_id: t.id,
+        property_id: property.id,
+        block_name: 'Fixture Conference',
+        start_date: '2026-12-10',
+        end_date: '2026-12-12',
+        status: 'active',
+      }),
+      property_id: property.id,
+    });
+
+    t.groupBlockRooms.push({
+      id: await insertReturningId(trx, 'group_block_rooms', {
+        tenant_id: t.id,
+        property_id: property.id,
+        group_block_id: t.groupBlocks[0].id,
+        room_type_id: t.roomTypes[0].id,
+        stay_date: '2026-12-10',
+        rooms_blocked: 5,
+      }),
+      property_id: property.id,
+    });
   }
 
   // ------------------------------------------------------------------
@@ -1319,6 +1354,8 @@ async function seedTwoTenants(trx) {
     ['room_types.update', 'setup'],
     ['ar.view', 'ar'],
     ['ar.manage', 'ar'],
+    ['group_blocks.view', 'group_blocks'],
+    ['group_blocks.manage', 'group_blocks'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -1498,6 +1535,26 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['ar.manage'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['ar.view'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['ar.manage'] },
+    ]);
+  }
+
+  // Group Blocks (PLAN.md Phase 4) — SECURITY.md §5's Group Blocks column:
+  // `group_blocks.view` (front_desk, cashier, manager, admin, super_admin) —
+  // see a block, its rooming list, and its pickup progress. `group_blocks.manage`
+  // (manager, admin, super_admin only) — create/edit a block, configure room
+  // allocations. Mirrors the AR grant block immediately above verbatim — the
+  // same role split, the same reasoning (a negotiated room commitment is a
+  // manager-tier judgment call, not an operational front-desk/cashier action).
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.front_desk, permission_id: permissions['group_blocks.view'] },
+      { tenant_id: t.id, role_id: t.roles.cashier, permission_id: permissions['group_blocks.view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['group_blocks.view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['group_blocks.manage'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['group_blocks.view'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['group_blocks.manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['group_blocks.view'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['group_blocks.manage'] },
     ]);
   }
 

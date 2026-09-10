@@ -107,6 +107,16 @@ export const DEFAULT_NAV_GROUPS = [
       // calls, matching every other module's "broader key gates the nav
       // item, narrower key gates the write" convention).
       { key: 'ar', label: 'Accounts Receivable', requiredPermission: 'ar.view' },
+      // PLAN.md Phase 4 (Group Blocks) — PRODUCT_REQUIREMENTS.md's own
+      // "Back-office screens" line files this alongside AR/Night Audit/
+      // Reporting, not a front-line operational screen — filed under SETUP
+      // to match, next to AR. Gated on `group_blocks.view` (front_desk/
+      // cashier/manager/admin/super_admin per SECURITY.md §5's own Group
+      // Blocks column; `group_blocks.manage` is checked separately, per-
+      // action, by the screen's own mutating calls, the same "broader key
+      // gates the nav item, narrower key gates the write" convention AR's
+      // own item above already established).
+      { key: 'group_blocks', label: 'Group Blocks', requiredPermission: 'group_blocks.view' },
     ],
   },
 ];

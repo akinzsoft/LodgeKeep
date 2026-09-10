@@ -374,6 +374,7 @@ async function createReservation({
   bookingSourceId,
   cancellationPolicyId,
   preferredRoomId,
+  groupBlockId,
 }) {
   if (!(departureDate > arrivalDate)) {
     throw new ArrivalAfterDepartureError();
@@ -421,6 +422,26 @@ async function createReservation({
     }
   }
 
+  // PLAN.md Phase 4 (Group Blocks) — the same friendly existence check as
+  // the reference-data ids above, plus one real enforcement point: a
+  // cancelled block cannot accept a new reservation (a stale-client
+  // mistake, not a legitimate exception). Deliberately NOT checked against
+  // the block's own start_date/end_date or its per-room-type allocation —
+  // a group block is tracking-only (this session's confirmed decision),
+  // the same "a request, never a lock" reasoning preferredRoomId above
+  // already established; an out-of-range or unallocated night simply
+  // surfaces as visible over-pickup in the block's own pickup report
+  // rather than being silently rejected here.
+  if (groupBlockId != null) {
+    const groupBlock = await trx.table('group_blocks').where({ id: groupBlockId }).first();
+    if (!groupBlock) {
+      throw new ValidationError('GROUP_BLOCK_NOT_FOUND', 'The specified group block does not exist at this property.');
+    }
+    if (groupBlock.status === 'cancelled') {
+      throw new ValidationError('GROUP_BLOCK_CANCELLED', 'This group block has been cancelled and cannot accept new reservations.');
+    }
+  }
+
   let status = asHold ? 'tentative' : 'confirmed';
   try {
     await reserveInventoryForDates({ trx, roomTypeId, stayDates });
@@ -446,6 +467,7 @@ async function createReservation({
     booking_source_id: bookingSourceId ?? null,
     cancellation_policy_id: cancellationPolicyId ?? null,
     preferred_room_id: preferredRoomId ?? null,
+    group_block_id: groupBlockId ?? null,
   });
 
   // TESTING.md RES-7/RES-8: resolve and snapshot the rate for every night
@@ -922,12 +944,13 @@ async function getReservation({ context, id }) {
   return db.table('reservations').where({ id }).first();
 }
 
-/** Allow-listed filters only (API.md's own rule): status, arrival date range, room type. */
-async function listReservations({ context, status, arrivalDateFrom, arrivalDateTo, roomTypeId }) {
+/** Allow-listed filters only (API.md's own rule): status, arrival date range, room type, group block. */
+async function listReservations({ context, status, arrivalDateFrom, arrivalDateTo, roomTypeId, groupBlockId }) {
   const db = scopedDb().for(context);
   let query = db.table('reservations');
   if (status) query = query.where({ status });
   if (roomTypeId) query = query.where({ room_type_id: roomTypeId });
+  if (groupBlockId) query = query.where({ group_block_id: groupBlockId });
   if (arrivalDateFrom && arrivalDateTo) query = query.whereBetween('arrival_date', [arrivalDateFrom, arrivalDateTo]);
   return query.orderBy('arrival_date');
 }

@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   verifyPayment: vi.fn(),
   getFolio: vi.fn(),
   openPaystackPopup: vi.fn(),
+  listGroupBlocks: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -40,6 +41,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       verifyPayment: mocks.verifyPayment,
       getFolio: mocks.getFolio,
     },
+    groupBlocksApi: { listGroupBlocks: mocks.listGroupBlocks },
   };
 });
 
@@ -61,6 +63,7 @@ describe('<AvailabilityTab>', () => {
     mocks.listGuests.mockResolvedValue([GUEST, GUEST_WITH_EMAIL]);
     mocks.listFreeRooms.mockResolvedValue([ROOM]);
     mocks.listEligiblePreferredRooms.mockResolvedValue([ROOM]);
+    mocks.listGroupBlocks.mockResolvedValue([]);
   });
 
   it('searches availability and shows the sellable count per night', async () => {
@@ -186,6 +189,63 @@ describe('<AvailabilityTab>', () => {
 
     expect(await screen.findByText(/Booked — confirmation ABC123/)).toBeInTheDocument();
     expect(mocks.createReservation).toHaveBeenCalledWith(expect.objectContaining({ preferred_room_id: '5' }));
+  });
+
+  it('books a reservation carrying an optional group_block_id — PLAN.md Phase 4', async () => {
+    mocks.listGroupBlocks.mockResolvedValue([{ id: '7', block_name: 'Acme Conference' }]);
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    mocks.createReservation.mockResolvedValue({ id: '11', status: 'confirmed', confirmation_number: 'GRP123' });
+
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2027-01-01');
+
+    await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
+    await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
+    expect(await screen.findByRole('option', { name: 'Acme Conference' })).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('Group block (optional)'), '7');
+    await userEvent.click(screen.getByRole('button', { name: 'Book' }));
+
+    expect(await screen.findByText(/Booked — confirmation GRP123/)).toBeInTheDocument();
+    expect(mocks.createReservation).toHaveBeenCalledWith(expect.objectContaining({ group_block_id: '7' }));
+  });
+
+  it('omits group_block_id from the request when left as "Not part of a group"', async () => {
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    mocks.createReservation.mockResolvedValue({ id: '12', status: 'confirmed', confirmation_number: 'NOGRP1' });
+
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2027-01-01');
+
+    await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
+    await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
+    await userEvent.click(screen.getByRole('button', { name: 'Book' }));
+
+    await screen.findByText(/Booked — confirmation NOGRP1/);
+    expect(mocks.createReservation).toHaveBeenCalledWith(expect.not.objectContaining({ group_block_id: expect.anything() }));
   });
 
   it('fetches only the eligible preferred rooms for the searched date range, not every room of the type', async () => {

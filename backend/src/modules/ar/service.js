@@ -243,8 +243,15 @@ async function nextInvoiceNumber({ trx, propertyId }) {
  * `UNIQUE(tenant_id, property_id, folio_line_item_id)` is the structural
  * belt-and-suspenders backstop (a bug that ever tried inserting the same
  * source line twice gets a real 409, never a silent double-bill).
+ *
+ * PLAN.md Phase 4 (Group Blocks): an optional `groupBlockId` narrows
+ * eligible lines to folios whose reservation is tagged with that block —
+ * lets a company that both sponsors a group AND has separate, ongoing
+ * direct-bill activity get a block-scoped invoice rather than one mixed
+ * invoice. Omitted, the query is byte-for-byte what it was before this
+ * filter existed — the default (no-filter) behaviour is unchanged.
  */
-async function generateInvoice({ trx, arAccountId, userId }) {
+async function generateInvoice({ trx, arAccountId, userId, groupBlockId }) {
   const account = await trx.table('ar_accounts').where({ id: arAccountId }).forUpdate().first();
   if (!account || account.status !== 'active') throw new ArAccountNotFoundError();
 
@@ -253,16 +260,22 @@ async function generateInvoice({ trx, arAccountId, userId }) {
   // this transaction may have started before a concurrent committer's
   // invoice landed, and only a locking read bypasses that stale
   // REPEATABLE READ snapshot to see its real, latest `ar_invoice_lines` row.
-  const eligibleLines = await trx
+  let eligibleLinesQuery = trx
     .table('folio_line_items')
     .joinScoped('folios', (join) => join.on('folio_line_items.folio_id', '=', 'folios.id'))
     .joinScoped('ar_invoice_lines', (join) => join.on('ar_invoice_lines.folio_line_item_id', '=', 'folio_line_items.id'), { type: 'left' })
     .where('folios.company_profile_id', account.company_profile_id)
     .whereNull('folio_line_items.voided_at')
     .whereIn('folio_line_items.type', INVOICEABLE_TYPES)
-    .whereNull('ar_invoice_lines.id')
-    .forUpdate()
-    .select('folio_line_items.*');
+    .whereNull('ar_invoice_lines.id');
+
+  if (groupBlockId) {
+    eligibleLinesQuery = eligibleLinesQuery
+      .joinScoped('reservations', (join) => join.on('reservations.id', '=', 'folios.reservation_id'))
+      .where('reservations.group_block_id', groupBlockId);
+  }
+
+  const eligibleLines = await eligibleLinesQuery.forUpdate().select('folio_line_items.*');
 
   if (eligibleLines.length === 0) throw new NoChargesToInvoiceError();
 
