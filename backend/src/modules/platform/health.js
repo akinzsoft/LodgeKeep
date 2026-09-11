@@ -29,10 +29,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * `trial_ends_at` set (`tenant-lifecycle.js`'s own "no expiry set — usable
  * indefinitely" case — there is no meaningful "remaining" figure for that).
  * Otherwise the integer number of days until expiry, ceil'd: a trial
- * ending in 3 hours reads as 0 (not -1), and a lapsed trial not yet swept
- * by the background job reads as a genuine negative integer — a raw fact,
- * never clamped to 0, per this pass's own confirmed "raw facts, no
- * computed judgment" scope. The UI decides how to word a negative value.
+ * ending in 3 hours reads as 1, not 0 or a fractional day — any real time
+ * still left in the current day counts as a day remaining, rounding up
+ * rather than truncating. A lapsed trial not yet swept by the background
+ * job reads as a genuine negative integer — a raw fact, never clamped to
+ * 0, per this pass's own confirmed "raw facts, no computed judgment"
+ * scope. The UI decides how to word a negative value.
  *
  * @param {{status: string, trial_ends_at: (string|Date|null)}} tenant
  * @param {Date} [now]
@@ -45,15 +47,22 @@ function trialDaysRemaining(tenant, now = new Date()) {
 
 /**
  * Resolves which plan actually governs a tenant right now — mirrors
- * `billing/service.js`'s `resolvePlanFor` / `src/shared/entitlements.js`'s
- * `resolveActivePlanId` null-`plan_id` fallback (first active plan,
- * ordered by id) exactly, duplicated rather than imported. The same
- * precedented divergence `entitlements.js`'s own header documents for this
- * identical one-line query: no `platform -> billing` (or
- * `platform -> shared/entitlements`) dependency direction exists in this
- * codebase's module layering to reuse either directly for a single
- * read-only display, and this module's own header already states it never
- * reaches beyond the platform's own account-roster metadata.
+ * `billing/service.js`'s `resolvePlanFor` specifically (not
+ * `src/shared/entitlements.js`'s `resolveActivePlanId`, which returns a
+ * set `plan_id` verbatim with no existence check): a `plan_id` referencing
+ * a row no longer in the catalogue falls back to the default active plan
+ * here, the identical `resolvePlanFor` behaviour, rather than surfacing a
+ * dangling id the way `resolveActivePlanId` would. Duplicated rather than
+ * imported — the same precedented divergence `entitlements.js`'s own
+ * header documents for this identical one-line query: no
+ * `platform -> billing` dependency direction exists in this codebase's
+ * module layering to reuse it directly for a single read-only display.
+ * Currently untriggerable either way (no `plans` delete/deactivate
+ * endpoint exists yet, so no dangling `plan_id` can occur today) — flagged
+ * as a real, if dormant, divergence should that gap ever close: this
+ * console would then show a resolved fallback plan for a tenant whose
+ * real entitlement check (`hasEntitlement`) fails closed against the same
+ * dangling id.
  *
  * @param {object[]} plans   Every row from `plans` (small catalogue, fetched once per roster/detail call).
  * @param {{plan_id: (string|number|null)}} tenant
