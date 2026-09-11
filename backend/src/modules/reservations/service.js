@@ -220,7 +220,7 @@ function activityCutoffDate(now = new Date()) {
  */
 async function getActiveGuestIds({ context }) {
   const db = scopedDb().for(context);
-  const rows = await db.acrossProperties().table('reservations').where('arrival_date', '>=', activityCutoffDate()).select('guest_id');
+  const rows = await (context.isImpersonation ? db : db.acrossProperties()).table('reservations').where('arrival_date', '>=', activityCutoffDate()).select('guest_id');
   return new Set(rows.map((r) => String(r.guest_id)));
 }
 

@@ -28,11 +28,16 @@
  * real emailed code, not a QR-code/authenticator flow; that remains
  * separate, larger, deferred scope, unchanged by this pass.
  *
- * Platform login (`platformLogin`) never calls `signMfaChallengeToken` — it
- * has no token-issuance path to resume into once "verified" at all yet (see
- * that function's own header), so a platform MFA-verify attempt still
- * falls through to `MfaNotImplementedError`, entirely unchanged by this
- * pass — only the staff path gains real verification.
+ * PLAN.md Phase 5 (Platform Foundation) closes the platform half of this
+ * file's own former header note ("platform login never calls
+ * signMfaChallengeToken, no token-issuance path to resume into") —
+ * `platformLogin` now issues real tokens too: an enrollment token (no
+ * `mfa_secret` set yet) or a challenge token (one already is), verified
+ * against real TOTP (`src/auth/totp.js`), not an emailed code.
+ * `signChallengeToken`/`verifyChallengeToken` below are the one generic
+ * implementation both the staff (email-code) and platform (TOTP) challenge
+ * flows now share — only the credential being challenged for differs, not
+ * the token shape or its verification.
  */
 
 const jwt = require('jsonwebtoken');
@@ -40,6 +45,9 @@ const crypto = require('crypto');
 
 const CHALLENGE_TTL = '5m';
 const CHALLENGE_AUD = 'staff_mfa_challenge';
+const PLATFORM_CHALLENGE_AUD = 'platform_mfa_challenge';
+const PLATFORM_ENROLLMENT_AUD = 'platform_mfa_enrollment';
+const PLATFORM_ENROLLMENT_TTL = '10m';
 
 /** How long an emailed code stays valid — shorter than a password-reset link (1h), matching the "use it right away" nature of an OTP. */
 const MFA_CODE_TTL_MINUTES = 10;
@@ -79,6 +87,48 @@ function verifyMfaChallengeToken(token) {
   return payload;
 }
 
+/** The platform analogue of `signMfaChallengeToken` — issued once a platform_users row already has an enrolled `mfa_secret`. */
+function signPlatformMfaChallengeToken({ platformUserId }) {
+  return jwt.sign({ aud: PLATFORM_CHALLENGE_AUD, sub: String(platformUserId) }, secret(), {
+    expiresIn: CHALLENGE_TTL,
+    jwtid: crypto.randomUUID(),
+  });
+}
+
+function verifyPlatformMfaChallengeToken(token) {
+  const payload = jwt.verify(token, secret());
+  if (payload.aud !== PLATFORM_CHALLENGE_AUD) {
+    throw new jwt.JsonWebTokenError('Not a platform MFA challenge token.');
+  }
+  return payload;
+}
+
+/**
+ * Issued the FIRST time a platform_users row logs in with no `mfa_secret`
+ * enrolled yet. Carries the freshly-generated plaintext secret itself,
+ * short-lived and signed — deliberately not staged in a database column:
+ * an abandoned, never-confirmed enrollment attempt is simply inert (the
+ * token expires) rather than needing its own cleanup, and the real,
+ * encrypted `mfa_secret` is only ever written once a code proves the admin
+ * genuinely saved it in an authenticator app (`confirmPlatformMfaEnrollment`,
+ * `service.js`).
+ */
+function signPlatformMfaEnrollmentToken({ platformUserId, secretPlaintext }) {
+  return jwt.sign(
+    { aud: PLATFORM_ENROLLMENT_AUD, sub: String(platformUserId), secret: secretPlaintext },
+    secret(),
+    { expiresIn: PLATFORM_ENROLLMENT_TTL, jwtid: crypto.randomUUID() }
+  );
+}
+
+function verifyPlatformMfaEnrollmentToken(token) {
+  const payload = jwt.verify(token, secret());
+  if (payload.aud !== PLATFORM_ENROLLMENT_AUD) {
+    throw new jwt.JsonWebTokenError('Not a platform MFA enrollment token.');
+  }
+  return payload;
+}
+
 /**
  * A real 6-digit numeric code — `crypto.randomInt`, not `Math.random`, for
  * the same "cryptographically strong, not merely plausible-looking"
@@ -100,6 +150,10 @@ function hashMfaCode(code) {
 module.exports = {
   signMfaChallengeToken,
   verifyMfaChallengeToken,
+  signPlatformMfaChallengeToken,
+  verifyPlatformMfaChallengeToken,
+  signPlatformMfaEnrollmentToken,
+  verifyPlatformMfaEnrollmentToken,
   generateMfaCode,
   hashMfaCode,
   MFA_CODE_TTL_MINUTES,

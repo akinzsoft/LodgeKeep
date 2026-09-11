@@ -23,6 +23,7 @@ import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { notificationsApi, setupApi } from './shared/api/index.js';
 import { PortalApp } from './portal/PortalApp.jsx';
+import { PlatformApp } from './platform/PlatformApp.jsx';
 
 /**
  * Gap closure: shown only while `AuthContext.jsx` is probing the HttpOnly
@@ -286,18 +287,22 @@ function Demo() {
 }
 
 /**
- * The guest portal and the staff app are two separate trees, never mounted
- * together in one page load (`PortalApp.jsx`'s own header explains why this
- * matters beyond routing: it's what makes reusing `shared/api/client.js`'s
- * single token/refresh-handler registration safe for both). A pathname
- * check here, ahead of `<AuthProvider>`, is this app's only "router" at the
- * top level — `PortalApp` owns real `react-router-dom` routing underneath
- * its own `/portal/*` subtree, but nothing above it needs to know that.
+ * The guest portal, the platform console, and the staff app are three
+ * separate trees, never mounted together in one page load (`PortalApp.jsx`'s
+ * own header explains why this matters beyond routing: it's what makes
+ * reusing `shared/api/client.js`'s single token/refresh-handler registration
+ * safe for all three). A pathname check here, ahead of `<AuthProvider>`, is
+ * this app's only "router" at the top level — `PortalApp` owns real
+ * `react-router-dom` routing underneath its own `/portal/*` subtree,
+ * `PlatformApp` (PLAN.md Phase 5) is router-free like the staff app itself,
+ * but nothing above either needs to know that.
  */
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     {window.location.pathname.startsWith('/portal') ? (
       <PortalApp />
+    ) : window.location.pathname.startsWith('/platform') ? (
+      <PlatformApp />
     ) : (
       <AuthProvider>
         <Demo />

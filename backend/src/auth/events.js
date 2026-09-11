@@ -31,8 +31,7 @@ const { systemContext } = require('../modules/tenancy');
  * @param {string} [event.userAgent]
  * @param {string} [event.requestId]
  */
-async function writeAuthEvent(event) {
-  const db = scopedDb().for(systemContext());
+async function writeAuthEvent(event, db = scopedDb().for(systemContext())) {
   return db.platform().table('auth_events').insert({
     audience: event.audience,
     event_type: event.eventType,

@@ -40,15 +40,28 @@
  *
  * ── ACCESS-TOKEN CLAIMS BY AUDIENCE (API.md §4) ────────────────────────────
  *
- *   staff      { aud: 'staff',    sub: userId,         tenant_id, property_id (nullable) }
- *   guest      { aud: 'guest',    sub: guestAccountId,  tenant_id, property_id }
- *   platform   { aud: 'platform', sub: platformUserId }
+ *   staff                { aud: 'staff',               sub: userId,         tenant_id, property_id (nullable) }
+ *   guest                { aud: 'guest',               sub: guestAccountId,  tenant_id, property_id }
+ *   platform             { aud: 'platform',            sub: platformUserId }
+ *   staff_impersonation  { aud: 'staff_impersonation', sub: platformUserId, impersonation_session_id }
  *
  * `property_id` on a staff token is the active property (SECURITY.md §3) at
  * the moment the token was issued — re-verified against `user_property_access`
  * on every property-scoped request regardless, never trusted from the claim
  * alone for authorization; it exists on the token so the frontend can render
  * without a round trip.
+ *
+ * `staff_impersonation` (PLAN.md Phase 5) is deliberately its own audience
+ * value, never literally `aud: 'staff'` — `sub` here is a `platform_users.id`,
+ * not a `users.id`, and the two id spaces are independently auto-incrementing
+ * with no reason not to collide. Overloading `aud: 'staff'` would mean `sub`
+ * silently lying about what it names to every existing piece of code that
+ * trusts `tokens.js`'s own documented contract. `authenticate('staff')`
+ * (`middleware.js`) accepts this one additional audience value, narrowly and
+ * explicitly, and re-derives `tenant_id`/`property_id` fresh from the live
+ * `impersonation_sessions` row on every single request rather than trusting
+ * them as claims at all — the token itself carries neither, which is why
+ * they are absent from the shape above.
  */
 
 const jwt = require('jsonwebtoken');
@@ -64,6 +77,8 @@ function secret() {
 
 const ACCESS_TTL = process.env.JWT_ACCESS_TTL || '15m';
 const REFRESH_TTL_HOURS = ttlToHours(process.env.JWT_REFRESH_TTL || '30d');
+/** Platform staff have no refresh path (Pass-1 simplification, see auth/service.js's issuePlatformSession) — a longer-than-staff but still access-token-only-and-modest TTL, re-authenticating on expiry. */
+const PLATFORM_ACCESS_TTL = process.env.JWT_PLATFORM_ACCESS_TTL || '30m';
 
 /** Parses the simple "<n><unit>" shape .env.example uses (m/h/d) into hours. */
 function ttlToHours(ttl) {
@@ -74,8 +89,15 @@ function ttlToHours(ttl) {
   return Number(amount) * perHour[unit];
 }
 
-function signAccessToken(claims) {
-  return jwt.sign(claims, secret(), { expiresIn: ACCESS_TTL, jwtid: crypto.randomUUID() });
+/**
+ * @param {object} claims
+ * @param {{expiresIn?: string}} [options]  Overrides the default staff TTL —
+ *   used for a platform session (`PLATFORM_ACCESS_TTL`) and for an
+ *   impersonation-derived token, whose lifetime is pinned to its own grant's
+ *   remaining `expires_at` rather than any fixed default.
+ */
+function signAccessToken(claims, { expiresIn } = {}) {
+  return jwt.sign(claims, secret(), { expiresIn: expiresIn ?? ACCESS_TTL, jwtid: crypto.randomUUID() });
 }
 
 /** Ordinary verification — rejects an expired or tampered token (AUTH-5). */
@@ -99,4 +121,5 @@ module.exports = {
   issueRefreshToken,
   hashRefreshToken,
   REFRESH_TTL_HOURS,
+  PLATFORM_ACCESS_TTL,
 };

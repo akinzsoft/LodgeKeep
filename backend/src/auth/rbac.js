@@ -89,6 +89,23 @@ function requirePermission(permissionKey) {
   return async function requirePermissionMiddleware(req, res, next) {
     try {
       const context = req.context;
+
+      // PLAN.md Phase 5 (Platform Foundation): an impersonating platform
+      // admin holds no `user_property_access` row in the impersonated
+      // tenant at all — there is nothing for `roleAtProperty` to find, by
+      // design (SECURITY.md §2: never a real tenant grant). Every GET is
+      // allowed through unconditionally rather than 403ing on a lookup that
+      // can never succeed; every mutation is already rejected earlier, at
+      // the HTTP-method layer (`impersonation-guard.js`), before this
+      // middleware ever runs. Granting blanket read visibility here is a
+      // deliberate trade-off, not an oversight: it cannot mutate anything
+      // regardless, so which specific screen it can see is not a real
+      // security boundary in the way write access would be.
+      if (context.isImpersonation) {
+        req.role = 'platform_impersonation';
+        return next();
+      }
+
       if (!context.propertyId) throw new NoActivePropertyError();
 
       const db = scopedDb().for(context);

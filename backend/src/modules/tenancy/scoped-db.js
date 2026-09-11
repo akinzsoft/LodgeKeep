@@ -92,6 +92,13 @@ const BOOTSTRAP_TABLES = Object.freeze({
   password_resets: ['token_hash'],
   user_invitations: ['token_hash'],
 });
+/**
+ * PLAN.md Phase 5 (Platform Foundation) — the two tables `platformDirectory()`
+ * (below) is allowed to read: the platform's own roster of its customers
+ * (name/slug/status/plan, and the property rows under them), never a
+ * tenant's own operational data.
+ */
+const PLATFORM_DIRECTORY_TABLES = Object.freeze(['tenants', 'properties']);
 const { AUDIENCES } = require('./context');
 const {
   ScopeContextError,
@@ -137,7 +144,7 @@ function scopeRequirements(table, context, { acrossProperties }) {
     { column: scopeRoot === 'tenant' ? 'id' : 'tenant_id', value: context.tenantId },
   ];
 
-  if (scope === SCOPES.PROPERTY && scopeRoot !== 'property' && !acrossProperties) {
+  if (scope === SCOPES.PROPERTY && (context.isImpersonation || (scopeRoot !== 'property' && !acrossProperties))) {
     if (!context.propertyId) {
       // TESTING.md ISO-6 at the data layer: no active property means no
       // property-scoped data, rather than all of the tenant's property-scoped
@@ -149,7 +156,7 @@ function scopeRequirements(table, context, { acrossProperties }) {
         { table }
       );
     }
-    required.push({ column: 'property_id', value: context.propertyId });
+    required.push({ column: scopeRoot === 'property' ? 'id' : 'property_id', value: context.propertyId });
   }
 
   return required;
@@ -468,7 +475,10 @@ function accessorFor(connection, context) {
      * visible in review: `db.for(ctx).acrossProperties().table('reservations')`
      * is a claim that the query is meant to span properties.
      */
-    acrossProperties: () => ({ table: build({ acrossProperties: true }) }),
+    acrossProperties: () => {
+      if (context.isImpersonation) throw new ScopeContextError('An impersonation grant cannot span properties.');
+      return { table: build({ acrossProperties: true }) };
+    },
 
     /**
      * PLATFORM_SCOPED tables — `platform_users`, and later `plans` and
@@ -505,6 +515,57 @@ function accessorFor(connection, context) {
     },
 
     /**
+     * PLAN.md Phase 5 (Platform Foundation) — the platform console's own
+     * tenant roster read (`tenants`/`properties`), narrowly named and
+     * read-only, following `BOOTSTRAP_TABLES`'/`.reference()`'s own "a
+     * reviewable, one-line diff naming a real table, not an open door"
+     * discipline. Requires a real PLATFORM context (not SYSTEM — there is
+     * no job/bootstrap use case for browsing arbitrary tenants), and
+     * applies NO injected predicate at all: the caller filters by hand
+     * (e.g. `.where({ tenant_id })` for one tenant's own properties),
+     * exactly like `.platform()` already requires for its own tables.
+     *
+     * This is the platform's own account roster — name, slug, status, plan
+     * — not tenant-generated operational data. Nothing about this entry
+     * point reaches `reservations`/`guests`/`folios`/any other tenant
+     * table; reaching those still requires the audited impersonation path
+     * unconditionally (SECURITY.md §2), with zero exception carved out
+     * here.
+     */
+    platformDirectory: () => {
+      if (context.audience !== AUDIENCES.PLATFORM) {
+        throw new ScopeContextError(
+          'The platform directory (tenants/properties roster) requires a real platform context (SECURITY.md §2).',
+          { audience: context.audience }
+        );
+      }
+      return {
+        table: (table) => {
+          if (!PLATFORM_DIRECTORY_TABLES.includes(table)) {
+            throw new ScopeContextError(
+              `"${table}" is not a declared platform-directory table. Add it to PLATFORM_DIRECTORY_TABLES in ` +
+                'scoped-db.js only if it is genuinely platform account-roster metadata, never tenant-generated data.',
+              { table }
+            );
+          }
+          const query = guardedQuery({ connection, table, required: [], context, scope: scopeOf(table).scope });
+          const refuse = (verb) => () => {
+            throw new ScopeContextError(
+              `"${table}" is read-only through the platform directory; ${verb} it through the tenant's own ` +
+                'authenticated flow (signup, setup) instead.',
+              { table }
+            );
+          };
+          return Object.assign(query, {
+            insert: refuse('insert into'),
+            update: refuse('update'),
+            delete: refuse('delete from'),
+          });
+        },
+      };
+    },
+
+    /**
      * GLOBAL_REFERENCE tables — the seeded, tenant-independent catalogues.
      * Read-only: ARCHITECTURE.md §3 reserves this scope for data "never editable
      * by a tenant", so the accessor offers no write path to it at all. Seeding
@@ -527,7 +588,7 @@ function accessorFor(connection, context) {
             { table }
           );
         };
-        return Object.assign(Object.create(query), {
+        return Object.assign(query, {
           insert: refuse('insert into'),
           update: refuse('update'),
           delete: refuse('delete from'),

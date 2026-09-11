@@ -8,6 +8,7 @@ import { TaxesTab } from './TaxesTab.jsx';
 import { ReferenceDataTab } from './ReferenceDataTab.jsx';
 import { UsersTab } from './UsersTab.jsx';
 import { EmailSettingsTab } from './EmailSettingsTab.jsx';
+import { ImpersonationHistory } from './ImpersonationHistory.jsx';
 import { SetupWizard } from './SetupWizard.jsx';
 import styles from './SetupScreen.module.css';
 
@@ -30,6 +31,9 @@ import styles from './SetupScreen.module.css';
  * as built. The individual tabs after it stay reachable directly for
  * editing after initial setup — the wizard is a guided path through the
  * same tabs, not a separate set of forms (see `SetupWizard`'s own header).
+ * "Support access" (Phase 5 platform-foundation hardening) is the read-only
+ * tenant side of SECURITY.md §2's "visible to the tenant" requirement for
+ * platform-staff impersonation — see `ImpersonationHistory`'s own header.
  *
  * Fetches the tenant's properties itself, rather than trusting
  * `activeProperty` passed down from `main.jsx` (which — per
@@ -48,6 +52,7 @@ const TABS = [
   { key: 'reference-data', label: 'Reference Data' },
   { key: 'users', label: 'Users' },
   { key: 'email', label: 'Email' },
+  { key: 'support-access', label: 'Support access' },
 ];
 
 export function SetupScreen({ activePropertyId, isOffline = false }) {
@@ -130,6 +135,7 @@ export function SetupScreen({ activePropertyId, isOffline = false }) {
         {tab === 'reference-data' && <ReferenceDataTab disabled={!activeProperty} />}
         {tab === 'users' && <UsersTab disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'email' && <EmailSettingsTab disabled={!activeProperty} isOffline={isOffline} />}
+        {tab === 'support-access' && <ImpersonationHistory />}
       </div>
     </div>
   );

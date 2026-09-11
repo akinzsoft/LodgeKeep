@@ -29,7 +29,13 @@ const { errorHandler } = require('./shared/error-handler');
 const { scopedDb } = require('./db');
 const { systemContext } = require('./modules/tenancy');
 const { resolveTenant } = require('./auth/tenant-resolution');
-const { staffAuthRouter, portalAuthRouter, platformAuthRouter, authenticate } = require('./auth');
+const {
+  staffAuthRouter,
+  portalAuthRouter,
+  platformAuthRouter,
+  authenticate,
+  rejectMutationDuringImpersonation,
+} = require('./auth');
 const { attachAudit } = require('./audit');
 const { setupRouter } = require('./modules/setup');
 const { usersRouter } = require('./modules/users');
@@ -44,6 +50,7 @@ const { portalPublicRouter, portalAccountRouter } = require('./modules/portal');
 const { posRouter } = require('./modules/pos');
 const { arRouter } = require('./modules/ar');
 const { groupBlocksRouter } = require('./modules/group-blocks');
+const { platformConsoleRouter, staffImpersonationRouter } = require('./modules/platform');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -53,6 +60,16 @@ function buildStaffRouter() {
   // mounted here, before authenticate('staff'), same as /auth above.
   router.use(paystackWebhookRouter());
   router.use(authenticate('staff'));
+  // PLAN.md Phase 5 (Platform Foundation) — mounted BEFORE the read-only
+  // guard below: "end my own impersonation grant" is the one mutation an
+  // impersonation-derived token IS allowed to perform (SECURITY.md §2's own
+  // exit action), gated by the token's own identity, not a business
+  // permission. See routes.js's own header for the full reasoning.
+  router.use(staffImpersonationRouter());
+  // The actual read-only boundary (SECURITY.md §2) — every other mutation
+  // under an active impersonation grant is rejected here, structurally,
+  // before any business router below ever sees the request.
+  router.use(rejectMutationDuringImpersonation());
   // req.audit(...) — PLAN.md Phase 0's audit trail (SECURITY.md §6). After
   // authenticate() specifically: it reads req.context for who/tenant/property.
   router.use(attachAudit());
@@ -102,6 +119,7 @@ function buildPlatformRouter() {
   const router = express.Router();
   router.use('/auth', platformAuthRouter());
   router.use(authenticate('platform'));
+  router.use(platformConsoleRouter());
   router.use((req, res) => notFound(res));
   return router;
 }

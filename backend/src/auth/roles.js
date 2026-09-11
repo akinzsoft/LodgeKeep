@@ -14,7 +14,7 @@
 
 /** Every property (and role at each) a user may work at, tenant-wide. */
 async function listPropertyAccess(db, context, userId) {
-  return db.acrossProperties().table('user_property_access').where({ user_id: userId });
+  return (context.isImpersonation ? db : db.acrossProperties()).table('user_property_access').where({ user_id: userId });
 }
 
 /**
@@ -31,8 +31,7 @@ async function roleAtProperty(db, context, userId, propertyId) {
   // resolving); during switch-property, the context still carries the OLD
   // active property while `propertyId` here is the NEW one being checked, and
   // the two predicates would never agree.
-  const grant = await db
-    .acrossProperties()
+  const grant = await (context.isImpersonation ? db : db.acrossProperties())
     .table('user_property_access')
     .where({ user_id: userId, property_id: propertyId })
     .first();

@@ -250,6 +250,21 @@ const TABLE_SCOPES = Object.freeze({
   // property's own inventory, not shared across a tenant's properties.
   group_blocks: { scope: SCOPES.PROPERTY },
   group_block_rooms: { scope: SCOPES.PROPERTY },
+
+  // Platform Foundation — PLAN.md Phase 5, 20260921090000_create_impersonation_sessions.
+  // PLATFORM_SCOPED. `tenant_id`/`property_id` are real, mandatory,
+  // known-at-creation business columns — NOT `attributionColumns` (that
+  // mechanism specifically models a column that may be absent, e.g.
+  // `auth_events`' "no tenant resolved yet"; these two are never null).
+  // `unscopedColumns` declares the same "this table legitimately carries a
+  // column named like a scope column, but the accessor never uses it for
+  // scoping" fact for exactly that mandatory-not-attribution case — the
+  // isolation suite's own generic column-shape assertion
+  // (tests/isolation/entity-scope.test.js) reads this the same way it
+  // reads attributionColumns, minus the nullability requirement. Reached
+  // only through hand-written queries in src/modules/platform/service.js,
+  // never the accessor's table() path.
+  impersonation_sessions: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id', 'property_id'] },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

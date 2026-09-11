@@ -67,7 +67,7 @@ async function getProperty({ context, id }) {
 /** Tenant-wide — deliberately not pinned to the active property (there may be none yet), matching the property switcher's own "which properties may I work at" query. */
 async function listProperties({ context }) {
   const db = scopedDb().for(context);
-  return db.acrossProperties().table('properties').where({ status: 'active' }).orderBy('name');
+  return (context.isImpersonation ? db : db.acrossProperties()).table('properties').where({ status: 'active' }).orderBy('name');
 }
 
 // ---------------------------------------------------------------------

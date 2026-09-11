@@ -34,24 +34,42 @@ import { ApiError } from './ApiError.js';
  * once, after a successful refresh — never for any other 401 (`AUTH_INVALID_CREDENTIALS`,
  * `AUTH_WRONG_AUDIENCE`, `AUTH_SESSION_INVALID`, `AUTH_UNAUTHENTICATED`), each
  * of which means something a silent retry cannot fix.
+ *
+ * ── AN UNRECOVERABLE AUTH FAILURE, FOR A CALLER WITH NO REFRESH PATH ─────
+ *
+ * `accessTokenExpiredHandler` presupposes a way to get a new token (the
+ * staff app's HttpOnly refresh cookie). A population with no refresh path
+ * at all (the platform console / an impersonation grant — access-token-only
+ * by design, `PlatformAuthContext.jsx`'s own header) has nothing to retry
+ * with, so any `AUTH_*` rejection there means the session is simply over.
+ * `authenticationFailedHandler`, when registered, is called (best-effort,
+ * never awaited, never allowed to mask the original error) on any `AUTH_*`
+ * failure that a retry cannot or did not resolve — the caller still receives
+ * the thrown `ApiError` to show its own message; this is purely the
+ * "the session itself is gone, tear it down" side effect, decoupled from
+ * any one call site's own error handling.
  */
 
 let getAccessToken = () => null;
 let onAccessTokenExpired = null;
+let onAuthenticationFailed = null;
 
 /**
  * @param {() => string|null} accessTokenGetter
  * @param {() => Promise<string>} accessTokenExpiredHandler   Resolves with a new access token, or throws/rejects if the session cannot be refreshed.
+ * @param {(error: import('./ApiError.js').ApiError) => void} [authenticationFailedHandler]   Best-effort session teardown for an AUTH_* failure a retry cannot fix (no refresh path, or the refresh itself failed).
  */
-export function configureApiClient({ accessTokenGetter, accessTokenExpiredHandler }) {
+export function configureApiClient({ accessTokenGetter, accessTokenExpiredHandler, authenticationFailedHandler }) {
   getAccessToken = accessTokenGetter;
   onAccessTokenExpired = accessTokenExpiredHandler;
+  onAuthenticationFailed = authenticationFailedHandler ?? null;
 }
 
 /** Test-only reset, so one test file's registration cannot leak into the next. */
 export function _resetApiClientForTesting() {
   getAccessToken = () => null;
   onAccessTokenExpired = null;
+  onAuthenticationFailed = null;
 }
 
 const BASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) || '/api/v1';
@@ -134,8 +152,16 @@ async function requestEnvelope(path, { method = 'GET', body, auth = true, header
     return await doFetch(path, { method, body, token, headers });
   } catch (error) {
     if (auth && error instanceof ApiError && error.code === 'AUTH_TOKEN_EXPIRED' && onAccessTokenExpired) {
-      const refreshedToken = await onAccessTokenExpired();
-      return doFetch(path, { method, body, token: refreshedToken, headers });
+      return await doFetch(path, { method, body, token: await onAccessTokenExpired(), headers });
+    }
+    // Reached either because there was nothing to retry with (no expired-token
+    // handler at all — the platform/impersonation case) or the retry branch
+    // above never matched (a non-expiry AUTH_* code, e.g. AUTH_SESSION_INVALID
+    // for a deactivated account or an ended impersonation grant). Either way
+    // the session itself is unusable; tear it down, then still let the
+    // original error reach this call's own catch block.
+    if (auth && error instanceof ApiError && typeof error.code === 'string' && error.code.startsWith('AUTH_') && onAuthenticationFailed) {
+      onAuthenticationFailed(error);
     }
     throw error;
   }
