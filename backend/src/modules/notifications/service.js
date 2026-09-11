@@ -46,6 +46,16 @@ const EVENT_TEMPLATE_KEYS = {
   // pattern.
   'ar.invoice_generated': 'ar_invoice_generated',
   'ar.payment_received': 'ar_payment_received',
+  // PLAN.md Phase 5 (subscription billing dunning) — the recipient is the
+  // tenant's own billing contact, not a guest or a company. Uses the same
+  // `recipientEmail` payload key `ar.*` above already established, since
+  // this is the identical "not a guest at all" shape. `billing.payment_failed`
+  // covers every escalating retry-stage notification (the urgency itself
+  // is DATA the payload carries — `urgencyLabel`/`message` — not a
+  // separate template per stage); `billing.subscription_suspended` is the
+  // final, distinct notice once the retry schedule is exhausted.
+  'billing.payment_failed': 'billing_payment_failed',
+  'billing.subscription_suspended': 'billing_subscription_suspended',
 };
 
 /**
@@ -96,6 +106,20 @@ const DEFAULT_TEMPLATES = {
   ar_payment_received: {
     subject: 'Payment received — thank you',
     body_html: '<p>Hi {{companyName}},</p><p>We have recorded your payment of {{amount}} {{currency}}. Thank you.</p>',
+  },
+  billing_payment_failed: {
+    subject: '{{urgencyLabel}}: your {{tenantName}} subscription payment failed',
+    body_html:
+      '<p>{{message}}</p>' +
+      '<p>Amount due: {{amount}} {{currency}}. Next automatic retry: {{nextRetryDate}}.</p>' +
+      '<p>Your account remains fully usable while this is being resolved — updating your payment method at any point before the retry schedule ends will restore normal billing immediately.</p>',
+  },
+  billing_subscription_suspended: {
+    subject: 'Your {{tenantName}} subscription has been suspended',
+    body_html:
+      '<p>After {{attemptCount}} failed payment attempts over the last two weeks, your account has been suspended for non-payment.</p>' +
+      '<p>Your data is safe and untouched — this only pauses new bookings and other changes; nothing already in your account is lost or hidden.</p>' +
+      '<p>Add a valid payment method to restore full access immediately.</p>',
   },
 };
 

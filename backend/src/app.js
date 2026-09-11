@@ -53,6 +53,7 @@ const { arRouter } = require('./modules/ar');
 const { groupBlocksRouter } = require('./modules/group-blocks');
 const { platformConsoleRouter, staffImpersonationRouter } = require('./modules/platform');
 const { signupRouter } = require('./modules/signup');
+const { billingRouter, billingWebhookRouter } = require('./modules/billing');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -61,6 +62,7 @@ function buildStaffRouter() {
   // API.md §7: a webhook authenticates by signature, never a bearer token —
   // mounted here, before authenticate('staff'), same as /auth above.
   router.use(paystackWebhookRouter());
+  router.use(billingWebhookRouter());
   router.use(authenticate('staff'));
   // PLAN.md Phase 5 (Platform Foundation) — mounted BEFORE the read-only
   // guard below: "end my own impersonation grant" is the one mutation an
@@ -95,6 +97,7 @@ function buildStaffRouter() {
   router.use(posRouter());
   router.use(arRouter());
   router.use(groupBlocksRouter());
+  router.use(billingRouter());
   router.use((req, res) => notFound(res));
   return router;
 }

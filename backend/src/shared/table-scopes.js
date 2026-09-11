@@ -274,6 +274,31 @@ const TABLE_SCOPES = Object.freeze({
   // src/modules/signup/service.js, never the accessor's generic table()
   // path.
   tenant_signups: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
+
+  // Subscription billing — PLAN.md Phase 5, PRODUCT_REQUIREMENTS.md §3.22.
+  // 20260924090000_create_plans. GLOBAL_REFERENCE — seeded, read-only
+  // through the accessor, the same catalogue shape `permissions` already
+  // establishes.
+  plans: { scope: SCOPES.GLOBAL },
+
+  // 20260924091000_create_subscriptions, 20260924092000_create_subscription_invoices,
+  // 20260924093000_create_subscription_payments. All three PLATFORM_SCOPED
+  // with `tenant_id` an `unscopedColumns` mandatory business column — the
+  // identical reasoning `impersonation_sessions`/`tenant_signups` already
+  // established: Planmsys' own billing relationship with the tenant, real
+  // and known at creation, not scope-column attribution. Reached only
+  // through hand-written queries in src/modules/billing/service.js, never
+  // the accessor's generic table() path.
+  subscriptions: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
+  subscription_invoices: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
+  subscription_payments: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
+
+  // 20260924094000_create_subscription_webhook_events. PLATFORM_SCOPED
+  // with NULLABLE `tenant_id` attribution — following `payment_webhook_events`'
+  // own precedent exactly (a webhook can arrive before the local
+  // subscription_payments row it corresponds to is even resolved), not
+  // `unscopedColumns` like its three siblings above.
+  subscription_webhook_events: { scope: SCOPES.PLATFORM, attributionColumns: ['tenant_id'] },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

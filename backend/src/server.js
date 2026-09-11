@@ -15,6 +15,7 @@ require('dotenv').config();
 const { createApp } = require('./app');
 const { startOutboxWorker, scheduleOutboxSweep } = require('./jobs/outbox-dispatcher');
 const { startTrialExpiryWorker, scheduleTrialExpirySweep } = require('./jobs/trial-expiry');
+const { startSubscriptionBillingWorker, scheduleSubscriptionBillingSweep } = require('./jobs/subscription-billing');
 
 const port = Number(process.env.PORT || 3000);
 
@@ -39,4 +40,12 @@ scheduleOutboxSweep().catch((error) => {
 startTrialExpiryWorker();
 scheduleTrialExpirySweep().catch((error) => {
   console.error('Failed to schedule the trial-expiry sweep:', error);
+});
+
+// PLAN.md Phase 5: the subscription-billing sweep's worker and its
+// periodic scheduler (`src/jobs/subscription-billing.js`'s own header).
+// Same unconditional startup as the two jobs above.
+startSubscriptionBillingWorker();
+scheduleSubscriptionBillingSweep().catch((error) => {
+  console.error('Failed to schedule the subscription-billing sweep:', error);
 });

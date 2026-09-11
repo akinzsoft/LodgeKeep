@@ -10,12 +10,13 @@ A multi-tenant SaaS Hotel Property Management System — a lighter, faster, clou
 |---|---|---|
 | 0 — Foundations | Multi-tenant auth, RBAC, audit trail, app shell | ✅ Complete |
 | 1 — Property setup | Room types, rooms, rate codes & calendar, taxes | ✅ Built |
-| 2 — Core operational loop | Reservations, Front Desk, overbooking, availability | ✅ Built |
+| 2 — Core operational loop | Reservations, Front Desk, Rooms, overbooking, availability | ✅ Built |
 | 2.5 — Cashiering, Payments, Night Audit | Real folio ledger, cash/Paystack payments, night audit | ✅ Built |
 | 3 — Daily-use hardening | Housekeeping, Notifications, Reporting | ✅ Built |
-| 4+ | Guest Profiles, Accounts Receivable, POS, guest portal | Not started |
+| 4 — Revenue & guest-facing | Guest booking portal & accounts, POS core, Accounts Receivable, Group Blocks | ✅ Built |
+| 5 — SaaS commercialisation | Self-service signup & trial lifecycle, platform console & impersonation, subscription billing | ✅ Built (plans/entitlements, tenant offboarding & data export, and data migration tooling not yet built) |
 
-A user can today: log in, configure a property, search availability, book/modify/cancel a reservation, run a waitlist, check guests in and out (with room moves and early/late fees), assign housekeeping and track discrepancies, pull live and audited occupancy/revenue reports, post real folio charges and taxes, take a cash or Paystack payment, void or split a folio line, and run night audit to close a business date. Guest Profiles is still a minimal stub, and Accounts Receivable, POS, and the guest booking portal don't exist yet.
+A user can today: **sign up self-service** and land straight in a fresh trial property with no engineer in the loop; log in, configure a property, search availability, book/modify/cancel a reservation, run a waitlist, check guests in and out (with room moves, stay extensions, and early/late fees), assign housekeeping and track discrepancies, pull live and audited occupancy/revenue reports, post real folio charges and taxes, take a cash or Paystack payment, void or split a folio line, bill a company on credit through Accounts Receivable (with ageing and invoicing), negotiate and track a group room block through to pickup and sponsor billing, and run night audit to close a business date. A guest can search, book, and pay through a tenant-themed self-service portal and create an account to see their booking history. Front-of-house staff can ring up a POS sale and charge it straight to a guest's room folio. A platform admin can see the tenant roster, run a time-bounded audited impersonation session for support, and suspend or reactivate a tenant by hand — while a lapsed trial degrades itself to read-only automatically, and a tenant's own subscription now bills and dunns for real against a saved card, with automatic (never abrupt) suspension only once a genuine multi-stage retry-and-notify sequence is exhausted.
 
 Status is derived from [`PLAN.md`](./PLAN.md)'s phase sequencing; the honest, as-built detail for every pass — what shipped, what was deliberately stubbed, and every bug found along the way — lives in [`CLAUDE.md`](./CLAUDE.md).
 
@@ -25,7 +26,8 @@ Status is derived from [`PLAN.md`](./PLAN.md)'s phase sequencing; the honest, as
 
 - **Backend** — Node.js + Express, MySQL via Knex (query builder, not an ORM), Redis + BullMQ for background jobs, JWT/session auth with per-property RBAC.
 - **Frontend** — React, responsive and mobile/tablet-first for front-desk and housekeeping screens.
-- **Payments** — pluggable gateway layer, wired to Cashiering for cash and Paystack (sandbox integration, no live credentials in this environment); Flutterwave not yet wired.
+- **Payments** — pluggable gateway layer, wired to Cashiering for cash and Paystack (sandbox integration; Flutterwave not yet wired), and a genuinely separate Paystack adapter for platform subscription billing (Planmsys charging a tenant, not a guest paying a hotel) — two distinct merchant relationships, two distinct credential pairs, no shared abstraction between them.
+- **Background jobs** — BullMQ-scheduled sweeps for the outbox dispatcher, trial expiry, and subscription billing/dunning, alongside the reactive per-request dispatch trigger.
 - **Infra** — Docker Compose locally (MySQL, Redis, Adminer, phpMyAdmin); one modular monolith, not microservices, deliberately.
 
 ## Getting started
