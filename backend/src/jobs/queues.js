@@ -14,6 +14,11 @@
  * is its own queue, separate from `outbox-dispatch`, for the identical
  * reason `email` is named as its own category there: a stuck/slow sweep in
  * one job class must never back up the other's dispatch work.
+ *
+ * `subscription-billing` (PLAN.md Phase 5) is a fourth, for the same
+ * reason again: a slow real-gateway call while charging one tenant's
+ * subscription must never delay the trial-expiry sweep or the outbox's
+ * own dispatch work, and vice versa.
  */
 
 const { Queue } = require('bullmq');
@@ -21,9 +26,11 @@ const { redisConnection } = require('./redis-connection');
 
 const OUTBOX_DISPATCH_QUEUE = 'outbox-dispatch';
 const TRIAL_EXPIRY_QUEUE = 'trial-expiry';
+const SUBSCRIPTION_BILLING_QUEUE = 'subscription-billing';
 
 let queue = null;
 let trialExpiryQueueInstance = null;
+let subscriptionBillingQueueInstance = null;
 
 function outboxDispatchQueue() {
   if (!queue) {
@@ -39,6 +46,13 @@ function trialExpiryQueue() {
   return trialExpiryQueueInstance;
 }
 
+function subscriptionBillingQueue() {
+  if (!subscriptionBillingQueueInstance) {
+    subscriptionBillingQueueInstance = new Queue(SUBSCRIPTION_BILLING_QUEUE, { connection: redisConnection() });
+  }
+  return subscriptionBillingQueueInstance;
+}
+
 /** Test-only teardown — BullMQ's `Queue` holds its own connection handles beyond the shared `redisConnection()` instance, and both must close for the process to exit without `--forceExit`. */
 async function __closeQueuesForTesting() {
   if (queue) {
@@ -49,6 +63,10 @@ async function __closeQueuesForTesting() {
     await trialExpiryQueueInstance.close();
     trialExpiryQueueInstance = null;
   }
+  if (subscriptionBillingQueueInstance) {
+    await subscriptionBillingQueueInstance.close();
+    subscriptionBillingQueueInstance = null;
+  }
 }
 
 module.exports = {
@@ -56,5 +74,7 @@ module.exports = {
   outboxDispatchQueue,
   TRIAL_EXPIRY_QUEUE,
   trialExpiryQueue,
+  SUBSCRIPTION_BILLING_QUEUE,
+  subscriptionBillingQueue,
   __closeQueuesForTesting,
 };

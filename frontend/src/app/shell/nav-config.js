@@ -117,6 +117,16 @@ export const DEFAULT_NAV_GROUPS = [
       // gates the nav item, narrower key gates the write" convention AR's
       // own item above already established).
       { key: 'group_blocks', label: 'Group Blocks', requiredPermission: 'group_blocks.view' },
+      // PLAN.md Phase 5 (subscription billing) — the tenant's own
+      // commercial relationship with Planmsys, filed under SETUP alongside
+      // AR/Group Blocks/Night Audit/Reporting for the identical
+      // "back-office screen, not a front-line operational one" reasoning.
+      // Gated on `billing.view` — admin/super_admin only, both keys (see
+      // that migration's own header for why this is narrower than every
+      // other module's RBAC split: no operational role has a reason to see
+      // it, unlike AR/Group Blocks' broader "manager + some operational
+      // roles get .view" shape).
+      { key: 'billing', label: 'Billing', requiredPermission: 'billing.view' },
     ],
   },
 ];

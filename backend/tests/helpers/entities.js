@@ -2247,6 +2247,134 @@ const ENTITIES = [
       tenant_id: t.id,
     }),
   },
+
+  {
+    table: 'plans',
+    // GLOBAL_REFERENCE: one catalogue, shared by both tenants (like `permissions`).
+    uniqueKeys: [['code']],
+    newRow: () => ({ code: 'isolation-suite-plan', name: 'Isolation Suite Plan', price: '1.00', currency: 'NGN', billing_interval: 'monthly' }),
+    duplicateRow: () => ({ code: 'standard', name: 'Clashing code', price: '2.00', currency: 'NGN', billing_interval: 'monthly' }),
+  },
+
+  {
+    table: 'subscriptions',
+    // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns) — reached
+    // only through hand-written queries in src/modules/billing/service.js,
+    // never the accessor's generic table() path; no crossTenant shape for
+    // the same reason impersonation_sessions/tenant_signups declare none.
+    //
+    // A bare `UNIQUE(tenant_id)` — the first table in this codebase with
+    // that exact shape (one row per tenant, no second dimension). This
+    // generic runner always inserts `newRow(ctx, ctx.a)` — but
+    // `seedTwoTenants` deliberately gives ONLY tenant `a` a fixture
+    // subscription (for `subscription_invoices`/`subscription_payments`
+    // below to reference by FK), so `newRow`/`duplicateRow` here target
+    // `ctx.b` instead of the passed `t` — `ctx.b` has no pre-existing row
+    // to collide with, and `duplicateRow` collides against the row
+    // `newRow` itself just inserted moments earlier in this same
+    // transaction (the identical "share the same unique-key value" idiom
+    // `tenant_signups` above already uses), not any fixture row.
+    uniqueKeys: [['tenant_id']],
+    newRow: (ctx) => ({
+      tenant_id: ctx.b.id,
+      plan_id: ctx.plans.standard,
+      status: 'active',
+      current_period_start: '2027-02-01',
+      current_period_end: '2027-03-01',
+      payment_method_provider: 'paystack',
+      payment_method_authorization_code: 'AUTH_isolation_new',
+    }),
+    duplicateRow: (ctx) => ({
+      tenant_id: ctx.b.id,
+      plan_id: ctx.plans.standard,
+      status: 'active',
+      current_period_start: '2027-05-01',
+      current_period_end: '2027-06-01',
+      payment_method_provider: 'paystack',
+      payment_method_authorization_code: 'AUTH_isolation_duplicate',
+    }),
+  },
+
+  {
+    table: 'subscription_invoices',
+    // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns). `t.subscriptions[0]`
+    // is tenant `a`'s own fixture subscription (see fixtures.js's own
+    // comment on why only `a` gets one). `UNIQUE(subscription_id, period_start)`
+    // — `newRow` uses a period the fixture invoice below doesn't occupy;
+    // `duplicateRow` reuses the fixture's own period_start to collide.
+    uniqueKeys: [['subscription_id', 'period_start']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      subscription_id: t.subscriptions[0].id,
+      amount: '50000.00',
+      currency: 'NGN',
+      status: 'open',
+      period_start: '2027-01-01',
+      period_end: '2027-02-01',
+      due_at: '2027-01-01',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      subscription_id: t.subscriptions[0].id,
+      amount: '50000.00',
+      currency: 'NGN',
+      status: 'open',
+      period_start: '2026-12-01', // matches seedTwoTenants' own fixture row exactly — collides
+      period_end: '2027-01-01',
+      due_at: '2026-12-01',
+    }),
+  },
+
+  {
+    table: 'subscription_payments',
+    // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns).
+    // `t.subscriptionInvoices[0]` is tenant `a`'s own fixture invoice.
+    // Two real unique keys — `(tenant_id, idempotency_key)` and
+    // `(provider, provider_reference)` — `newRow` avoids both fixture
+    // values, `duplicateRow` collides on the idempotency key.
+    uniqueKeys: [['tenant_id', 'idempotency_key'], ['provider', 'provider_reference']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      subscription_invoice_id: t.subscriptionInvoices[0].id,
+      idempotency_key: 'isolation-suite-payment-new',
+      provider: 'paystack',
+      provider_reference: 'isolation-suite-payment-ref-new',
+      amount: '50000.00',
+      currency: 'NGN',
+      status: 'INITIATED',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      subscription_invoice_id: t.subscriptionInvoices[0].id,
+      idempotency_key: `isolation-fixture-${t.id}`, // matches seedTwoTenants' own fixture row exactly — collides
+      provider: 'paystack',
+      provider_reference: 'isolation-suite-payment-ref-duplicate',
+      amount: '50000.00',
+      currency: 'NGN',
+      status: 'INITIATED',
+    }),
+  },
+
+  {
+    table: 'subscription_webhook_events',
+    // PLATFORM_SCOPED, nullable tenant_id attribution — mirrors
+    // `payment_webhook_events`' own entry exactly, including its "no
+    // crossTenant shape" reasoning (a webhook can arrive before the
+    // tenant it belongs to is even resolved).
+    uniqueKeys: [['provider', 'provider_event_id']],
+    newRow: () => ({
+      provider: 'paystack',
+      provider_event_id: 'isolation-suite-event-new',
+      payload: JSON.stringify({ event: 'charge.success' }),
+      verified: true,
+    }),
+    duplicateRow: () => ({
+      provider: 'paystack',
+      provider_event_id: 'isolation-suite-event-new', // matches newRow exactly — collides
+      payload: JSON.stringify({ event: 'charge.failed' }),
+      verified: true,
+    }),
+  },
 ];
 
 const byTable = (table) => ENTITIES.find((e) => e.table === table);

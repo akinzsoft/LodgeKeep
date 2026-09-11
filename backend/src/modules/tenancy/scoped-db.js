@@ -511,6 +511,22 @@ function accessorFor(connection, context) {
           }
           return guardedQuery({ connection, table, required: [], context, scope });
         },
+        // PLAN.md Phase 5 (Billing) — the same rebind-onto-the-same-connection
+        // mechanism `platformTenantLifecycle()`/`provisionTenant()` already
+        // established, extended to this general-purpose entry point for a
+        // third caller with the identical need: `src/modules/billing/
+        // service.js` writes PLATFORM_SCOPED tables (`subscriptions`,
+        // `subscription_invoices`, `subscription_payments`) under a rebuilt
+        // SYSTEM context (following `platform/service.js`'s own
+        // `listImpersonationSessionsForTenant` precedent for a STAFF caller
+        // reaching an `unscopedColumns` PLATFORM_SCOPED table), but also
+        // needs to write a TENANT_SCOPED `audit_log` row in the SAME
+        // transaction — a second connection for that write would reproduce
+        // the exact cross-connection deadlock class `src/modules/signup/
+        // service.js`'s own header documents finding and fixing once
+        // already (a separate connection's FK check blocking on a row this
+        // transaction still holds locked).
+        withContext: (newContext) => accessorFor(connection, newContext),
       };
     },
 

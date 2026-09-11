@@ -53,6 +53,8 @@ const ALL_PERMISSION_KEYS = Object.freeze([
   'ar.manage',
   'group_blocks.view',
   'group_blocks.manage',
+  'billing.view',
+  'billing.manage',
 ]);
 
 /** Every catalogue key except `room_types.update` — `admin`'s own exact exclusion (SECURITY.md §5). */

@@ -57,10 +57,33 @@ const SWEEP_JOB_NAME = 'sweep';
 const SWEEP_INTERVAL_MS = 60_000;
 const SWEEP_SCHEDULER_ID = 'trial-expiry-sweep';
 
-/** One conditional UPDATE per lapsed trial, each its own transaction — a failure on one tenant must never block the rest. */
+/**
+ * One conditional UPDATE per lapsed trial, each its own transaction — a
+ * failure on one tenant must never block the rest.
+ *
+ * PLAN.md Phase 5 (subscription billing): a tenant that already has a
+ * `subscriptions` row (a payment method on file, whether or not its first
+ * charge has succeeded yet) is deliberately EXCLUDED here, regardless of
+ * that row's own status. Once a subscription exists, `src/jobs/
+ * subscription-billing.js`'s own sweep owns this tenant's status
+ * transitions entirely — a successful first charge converts trial ->
+ * active (`billing/service.js`'s `applyChargeOutcome`), and an exhausted
+ * dunning schedule suspends it. Without this exclusion, a trial lapsing on
+ * the exact day its first billing attempt is due would race this sweep
+ * against that one: this sweep could suspend the tenant for a merely
+ * elapsed trial in the same moment the billing sweep is legitimately
+ * converting it, discarding a real, in-progress payment relationship for
+ * no reason other than unlucky timing.
+ */
 async function runTrialExpirySweep() {
   const now = new Date();
-  const lapsed = await knex()('tenants').where({ status: 'trial' }).andWhere('trial_ends_at', '<=', now).select('id');
+  const lapsed = await knex()('tenants')
+    .where({ status: 'trial' })
+    .andWhere('trial_ends_at', '<=', now)
+    .whereNotExists(function excludeBilled() {
+      this.select('*').from('subscriptions').whereRaw('subscriptions.tenant_id = tenants.id');
+    })
+    .select('id');
 
   let transitioned = 0;
   for (const tenant of lapsed) {

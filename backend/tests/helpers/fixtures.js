@@ -156,6 +156,9 @@ async function seedTwoTenants(trx) {
     arPayments: [],
     groupBlocks: [],
     groupBlockRooms: [],
+    subscriptions: [],
+    subscriptionInvoices: [],
+    subscriptionPayments: [],
   });
 
   // Two symmetric example hotels, not one reference customer
@@ -1356,6 +1359,8 @@ async function seedTwoTenants(trx) {
     ['ar.manage', 'ar'],
     ['group_blocks.view', 'group_blocks'],
     ['group_blocks.manage', 'group_blocks'],
+    ['billing.view', 'billing'],
+    ['billing.manage', 'billing'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -1558,7 +1563,94 @@ async function seedTwoTenants(trx) {
     ]);
   }
 
-  return { a, b, permissions };
+  // Billing (PLAN.md Phase 5) — SECURITY.md §5's Billing column, admin/
+  // super_admin only, both keys — the tenant's own commercial relationship
+  // with Planmsys, not something any operational role (including manager)
+  // has a reason to see. Follows `room_types.update`'s own narrower
+  // precedent, not AR/Group Blocks' broader "manager + some operational
+  // roles get .view" shape.
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['billing.view'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['billing.manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['billing.view'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['billing.manage'] },
+    ]);
+  }
+
+  // Subscription billing (PLAN.md Phase 5) — `plans` is GLOBAL_REFERENCE,
+  // seeded for real by 20260924090000_create_plans.js (the 'standard'
+  // plan), so this is a select-or-insert exactly like the permissions
+  // catalogue above, not a blind insert.
+  //
+  // ONLY tenant `a` gets a fixture `subscriptions` row (plus one invoice
+  // and one payment against it) — deliberately, not both. `subscriptions`
+  // carries a bare `UNIQUE(tenant_id)` (the first table in this codebase
+  // with that exact shape — one row per tenant, no second dimension to
+  // vary), so `tests/helpers/entities.js`'s own generic "accepts a valid
+  // new row" runtime test (which always inserts against `ctx.a`) needs a
+  // tenant with NO pre-existing subscription to target without colliding
+  // — that entity's own `newRow`/`duplicateRow` deliberately target
+  // `ctx.b` instead for exactly this reason (see that file's own comment).
+  // `subscription_invoices`/`subscription_payments`/
+  // `subscription_webhook_events` all reference tenant `a`'s fixture
+  // subscription by FK, matching the generic runner's own `t = ctx.a`
+  // convention every other FK-chained entity here already relies on.
+  const plans = {};
+  {
+    const existing = await trx('plans').where({ code: 'standard' }).first('id');
+    plans.standard = existing
+      ? existing.id
+      : await insertReturningId(trx, 'plans', { code: 'standard', name: 'Standard', price: '50000.00', currency: 'NGN', billing_interval: 'monthly', is_active: true });
+  }
+
+  for (const t of [a]) {
+    t.subscriptions.push({
+      id: await insertReturningId(trx, 'subscriptions', {
+        tenant_id: t.id,
+        plan_id: plans.standard,
+        status: 'active',
+        current_period_start: '2026-12-01',
+        current_period_end: '2027-01-01',
+        payment_method_provider: 'paystack',
+        payment_method_authorization_code: 'AUTH_isolation_fixture',
+        payment_method_last4: '4242',
+        payment_method_brand: 'visa',
+        payment_method_exp_month: 12,
+        payment_method_exp_year: 2030,
+      }),
+    });
+
+    t.subscriptionInvoices.push({
+      id: await insertReturningId(trx, 'subscription_invoices', {
+        tenant_id: t.id,
+        subscription_id: t.subscriptions[0].id,
+        amount: '50000.00',
+        currency: 'NGN',
+        status: 'paid',
+        period_start: '2026-12-01',
+        period_end: '2027-01-01',
+        due_at: '2026-12-01',
+        paid_at: new Date('2026-12-01T00:00:00Z'),
+      }),
+    });
+
+    t.subscriptionPayments.push({
+      id: await insertReturningId(trx, 'subscription_payments', {
+        tenant_id: t.id,
+        subscription_invoice_id: t.subscriptionInvoices[0].id,
+        idempotency_key: `isolation-fixture-${t.id}`,
+        provider: 'paystack',
+        provider_reference: `isolation-fixture-ref-${t.id}`,
+        amount: '50000.00',
+        currency: 'NGN',
+        status: 'CAPTURED',
+        captured_at: new Date('2026-12-01T00:00:00Z'),
+      }),
+    });
+  }
+
+  return { a, b, permissions, plans };
 }
 
 /**
