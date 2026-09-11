@@ -30,6 +30,20 @@
  * possible: `WHERE import_run_id = ? AND row_number IN (...)` tells the
  * job exactly which rows a prior, crashed attempt already finished.
  *
+ * `inventory_reserved` (reservation rows only; always `false` for every
+ * other entity_type) is a code-review finding, added before this branch
+ * ever shipped: rollback originally re-derived "did this reservation
+ * actually hold real room_type_inventory" by comparing its departure_date
+ * against the property's CURRENT business date at rollback time — wrong,
+ * because the business date advances (Night Audit runs daily) between
+ * commit and a later rollback, so a reservation that genuinely held
+ * inventory at commit time could look "historical, never held it" by the
+ * time someone rolls the run back, silently leaking a permanent +1 on
+ * `room_type_inventory.rooms_sold`. This column instead records the true,
+ * frozen fact at the one moment it's actually known — commit time — so
+ * rollback only ever consults its own prior write, never re-derives
+ * anything from a value that can drift out from under it.
+ *
  * Scope: TENANT_SCOPED, following `import_runs`.
  */
 
@@ -56,6 +70,12 @@ exports.up = async function up(knex) {
       .notNullable()
       .defaultTo(true)
       .comment('true: this run INSERTed the row. false: this run merely reused a pre-existing one — rollback never touches these. See migration header.');
+
+    table
+      .boolean('inventory_reserved')
+      .notNullable()
+      .defaultTo(false)
+      .comment('entity_type=reservation only: true iff this row actually incremented room_type_inventory at commit time. Rollback consults this directly rather than re-deriving it from the CURRENT business date. See migration header.');
 
     table.datetime('created_at').notNullable().defaultTo(knex.fn.now());
 

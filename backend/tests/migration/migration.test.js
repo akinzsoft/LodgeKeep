@@ -12,10 +12,15 @@
  * isolation. Rollback has its own dedicated file, `rollback.test.js`.
  */
 
+const fs = require('fs');
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { runImportCommitJob } = require('../../src/jobs/data-import');
+const { sumMoney } = require('../../src/shared/money');
+const { recomputeArAccountBalance } = require('../../src/modules/ar/service');
+const { scopedDb } = require('../../src/db');
+const { workerContext } = require('../../src/modules/tenancy');
 
 describe('Data migration (PLAN.md Phase 5)', () => {
   const t = useTestApp();
@@ -243,6 +248,32 @@ describe('Data migration (PLAN.md Phase 5)', () => {
       expect(guestsNamedFixture).toHaveLength(2); // the original fixture guest, plus this run's own new one
     });
 
+    it('rejects a "use_existing" resolution naming a real guest who is NOT actually one of this row\'s own reported duplicate candidates', async () => {
+      // Code-review finding: the original version only checked that
+      // `matched_guest_id` named SOME real guest in the tenant, never that
+      // it was one of the specific candidates THIS row's own dry run
+      // actually reported.
+      const fixtureGuest = await fixtureGuestOf(ctx.a);
+      const [unrelatedGuestId] = await t.trx('guests').insert({ tenant_id: ctx.a.id, first_name: 'Totally', last_name: 'Unrelated', email: 'totally-unrelated@example.com' });
+
+      const fileContent = csv(['first_name', 'last_name', 'email', 'phone', 'date_of_birth'], [['Jordan', 'Fixture', fixtureGuest.email, '', '']]);
+      const { importRunId } = await uploadAndDryRun({ entityType: 'guests', fileContent, filename: 'guests-wrong-match.csv' });
+
+      const resolveRes = await t.request
+        .patch(`/api/v1/migration/imports/${importRunId}/duplicates/1`)
+        .set('Authorization', `Bearer ${adminToken()}`)
+        .send({ resolution: 'use_existing', matched_guest_id: unrelatedGuestId });
+      expect(resolveRes.status).toBe(400);
+      expect(resolveRes.body.error.code).toBe('VALIDATION_INVALID_DUPLICATE_RESOLUTION');
+
+      // The real candidate itself still works.
+      const correctResolveRes = await t.request
+        .patch(`/api/v1/migration/imports/${importRunId}/duplicates/1`)
+        .set('Authorization', `Bearer ${adminToken()}`)
+        .send({ resolution: 'use_existing', matched_guest_id: fixtureGuest.id });
+      expect(correctResolveRes.status).toBe(200);
+    });
+
     it('a genuinely invalid row is reported and skipped, never blocking commit', async () => {
       const fileContent = csv(
         ['first_name', 'last_name', 'email', 'phone', 'date_of_birth'],
@@ -347,12 +378,50 @@ describe('Data migration (PLAN.md Phase 5)', () => {
       expect(historicalReservation.status).toBe('checked_out');
       const historicalInventory = await t.trx('room_type_inventory').where({ property_id: property.id, room_type_id: roomType.id, stay_date: '2026-06-15' }).first();
       expect(historicalInventory.rooms_sold).toBe(1); // unchanged — the historical row never touched it
+      expect(mapRows[0].inventory_reserved).toBe(0); // historical — recorded as never having reserved anything
 
       const futureConflictInventory = await t.trx('room_type_inventory').where({ property_id: property.id, room_type_id: roomType.id, stay_date: '2027-08-01' }).first();
       expect(futureConflictInventory.rooms_sold).toBe(2); // incremented despite already being "full" — the confirmed bypass
+      expect(mapRows[1].inventory_reserved).toBe(1);
 
       const futureCleanInventory = await t.trx('room_type_inventory').where({ property_id: property.id, room_type_id: roomType.id, stay_date: '2027-09-01' }).first();
       expect(futureCleanInventory.rooms_sold).toBe(1);
+      expect(mapRows[2].inventory_reserved).toBe(1);
+    });
+
+    it('does not reserve inventory for a future-dated row imported with a non-inventory-holding status (waitlisted/cancelled/no_show/expired)', async () => {
+      const property = ctx.a.properties[0];
+      const guest = await reservationsGuest();
+      const roomType = ctx.a.roomTypes[0];
+
+      const fileContent = csv(
+        ['guest_email', 'guest_phone', 'room_type_code', 'rate_code', 'arrival_date', 'departure_date', 'adults', 'children', 'status', 'room_number'],
+        [
+          [guest.email, '', 'DLX', 'BAR', '2027-11-01', '2027-11-02', '2', '0', 'waitlisted', ''],
+          [guest.email, '', 'DLX', 'BAR', '2027-11-05', '2027-11-06', '2', '0', 'cancelled', ''],
+          [guest.email, '', 'DLX', 'BAR', '2027-11-10', '2027-11-11', '2', '0', 'no_show', ''],
+          [guest.email, '', 'DLX', 'BAR', '2027-11-15', '2027-11-16', '2', '0', 'expired', ''],
+        ]
+      );
+
+      const { importRunId } = await uploadAndDryRun({ entityType: 'reservations', propertyId: property.id, fileContent, filename: 'res-non-holding.csv' });
+      const { run } = await commitAndRunJob({ importRunId });
+      expect(run.status).toBe('completed');
+      expect(run.rows_created).toBe(4);
+
+      const mapRows = await t.trx('imported_record_map').where({ import_run_id: importRunId, entity_type: 'reservation' }).orderBy('row_number');
+      expect(mapRows).toHaveLength(4);
+      for (const mapRow of mapRows) {
+        expect(mapRow.inventory_reserved).toBe(0);
+      }
+
+      for (const stayDate of ['2027-11-01', '2027-11-05', '2027-11-10', '2027-11-15']) {
+        const inventory = await t.trx('room_type_inventory').where({ property_id: property.id, room_type_id: roomType.id, stay_date: stayDate }).first();
+        // No row at all is an equally correct outcome to rooms_sold: 0 —
+        // `reserveInventoryForDates` (which creates the row) was never
+        // called for any of these four statuses.
+        expect(!inventory || inventory.rooms_sold === 0).toBe(true);
+      }
     });
 
     it('requires property_id for a reservations import', async () => {
@@ -374,6 +443,22 @@ describe('Data migration (PLAN.md Phase 5)', () => {
       const account = ctx.a.arAccounts[0];
       const company = await fixtureCompanyOf(ctx.a);
 
+      // The fixture's own `ar_accounts[0]` already carries REAL charges
+      // billed to it (fixtures.js's own "AR, continued" block) — this test
+      // exists specifically to prove the opening balance ADDS to that real
+      // activity via `recomputeArAccountBalance`, never overwrites it. But
+      // `fixtures.js` inserts its rows directly, bypassing the normal
+      // recompute path entirely — the account's own stored `current_balance`
+      // is therefore stale (still its inserted default) and not itself a
+      // trustworthy baseline. Recomputing for real establishes the TRUE
+      // pre-import balance to assert against, rather than a hardcoded
+      // literal or a stale stored value that would only coincidentally be
+      // correct.
+      const trueBaseline = await scopedDb()
+        .for(workerContext({ tenantId: ctx.a.id, propertyId: property.id }))
+        .transaction((trx) => recomputeArAccountBalance({ trx, arAccountId: account.id }));
+      const expectedBalance = sumMoney([trueBaseline.current_balance, '500.00']);
+
       const fileContent = csv(
         ['company_email', 'amount', 'currency', 'credit_limit', 'enforcement_mode'],
         [[company.billing_email, '500.00', 'NGN', '', '']]
@@ -391,8 +476,8 @@ describe('Data migration (PLAN.md Phase 5)', () => {
       expect(invoiceMap.created).toBe(1);
 
       const updatedAccount = await t.trx('ar_accounts').where({ id: account.id }).first();
-      expect(updatedAccount.opening_balance_imported).toBe('500.00');
-      expect(updatedAccount.current_balance).toBe('500.00');
+      expect(updatedAccount.opening_balance_imported).toBe(sumMoney([trueBaseline.opening_balance_imported, '500.00']));
+      expect(updatedAccount.current_balance).toBe(expectedBalance); // the real pre-existing charges/payments PLUS the imported balance — never just the imported amount alone
 
       const invoiceLine = await t.trx('ar_invoice_lines').where({ ar_invoice_id: invoiceMap.entity_id }).first();
       expect(invoiceLine.source).toBe('migration_opening_balance');
@@ -447,6 +532,73 @@ describe('Data migration (PLAN.md Phase 5)', () => {
 
       const errors = await t.trx('import_row_errors').where({ import_run_id: importRunId, severity: 'error' }).orderBy('row_number');
       expect(errors.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Code-review finding: a catastrophic failure (not a per-row one) used
+  // to flip the run straight to `failed` on its very first attempt,
+  // silently defeating BullMQ's own configured 3-attempt retry — a
+  // retried attempt saw the terminal `failed` status and no-op'd
+  // immediately. `status` now only becomes terminal on the LAST
+  // configured attempt.
+  // ---------------------------------------------------------------------
+
+  describe('commit job retry behaviour', () => {
+    it('a non-final attempt leaves the run "committing" on catastrophic failure, so a real BullMQ retry can genuinely re-enter it', async () => {
+      const { importRunId } = await uploadAndDryRun({
+        entityType: 'guests',
+        fileContent: csv(['first_name', 'last_name', 'email', 'phone', 'date_of_birth'], [['Retry', 'Attempt', 'retry-attempt-1@example.com', '', '']]),
+        filename: 'retry1.csv',
+      });
+      const commitRes = await t.request.post(`/api/v1/migration/imports/${importRunId}/commit`).set('Authorization', `Bearer ${adminToken()}`).send();
+      expect(commitRes.status).toBe(202);
+
+      const run = await t.trx('import_runs').where({ id: importRunId }).first();
+      fs.unlinkSync(run.file_path); // the catastrophic, whole-job failure this outer catch exists for
+
+      await expect(runImportCommitJob({ tenantId: ctx.a.id, importRunId, attemptsMade: 0, maxAttempts: 3 })).rejects.toThrow();
+
+      const afterFirstAttempt = await t.trx('import_runs').where({ id: importRunId }).first();
+      expect(afterFirstAttempt.status).toBe('committing'); // NOT "failed" — a retry must still be able to re-enter
+      expect(afterFirstAttempt.failed_reason).toBeNull();
+    });
+
+    it('the final configured attempt marks the run "failed" for real, with the actual error recorded', async () => {
+      const { importRunId } = await uploadAndDryRun({
+        entityType: 'guests',
+        fileContent: csv(['first_name', 'last_name', 'email', 'phone', 'date_of_birth'], [['Retry', 'Final', 'retry-attempt-final@example.com', '', '']]),
+        filename: 'retry2.csv',
+      });
+      const commitRes = await t.request.post(`/api/v1/migration/imports/${importRunId}/commit`).set('Authorization', `Bearer ${adminToken()}`).send();
+      expect(commitRes.status).toBe(202);
+
+      const run = await t.trx('import_runs').where({ id: importRunId }).first();
+      fs.unlinkSync(run.file_path);
+
+      await expect(runImportCommitJob({ tenantId: ctx.a.id, importRunId, attemptsMade: 2, maxAttempts: 3 })).rejects.toThrow();
+
+      const afterFinalAttempt = await t.trx('import_runs').where({ id: importRunId }).first();
+      expect(afterFinalAttempt.status).toBe('failed');
+      expect(afterFinalAttempt.failed_reason).toBeTruthy();
+    });
+
+    it('a direct call with no attempt info behaves exactly like a single-attempt job\'s only try (unchanged pre-fix behaviour, and what every OTHER test in this file relies on)', async () => {
+      const { importRunId } = await uploadAndDryRun({
+        entityType: 'guests',
+        fileContent: csv(['first_name', 'last_name', 'email', 'phone', 'date_of_birth'], [['Retry', 'Default', 'retry-attempt-default@example.com', '', '']]),
+        filename: 'retry3.csv',
+      });
+      const commitRes = await t.request.post(`/api/v1/migration/imports/${importRunId}/commit`).set('Authorization', `Bearer ${adminToken()}`).send();
+      expect(commitRes.status).toBe(202);
+
+      const run = await t.trx('import_runs').where({ id: importRunId }).first();
+      fs.unlinkSync(run.file_path);
+
+      await expect(runImportCommitJob({ tenantId: ctx.a.id, importRunId })).rejects.toThrow();
+
+      const after = await t.trx('import_runs').where({ id: importRunId }).first();
+      expect(after.status).toBe('failed');
     });
   });
 

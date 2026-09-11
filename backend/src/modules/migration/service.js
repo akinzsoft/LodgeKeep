@@ -45,8 +45,9 @@ const { parseImportFile } = require('./parse');
 const { columnsForEntityType, ENTITY_TYPES } = require('./templates');
 const { findDuplicateCandidates, matchExistingGuestByContact, matchExistingCompanyByEmail } = require('./dedup');
 const { validateGuestRow, validateCompanyRow, validateReservationRow, validateArBalanceRow } = require('./validate');
-const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
+const { sumMoney, negateMoney } = require('../../shared/money');
 const { expandStayDates, releaseInventoryForDates } = require('../reservations/service');
+const { recomputeArAccountBalance } = require('../ar/service');
 const {
   UnknownEntityTypeError,
   MissingPropertyIdError,
@@ -79,11 +80,6 @@ function codeMap(rows, codeField) {
 /** See file header. `run.property_id` is null for guests/companies runs, which is fine — TENANT_SCOPED tables don't need one. */
 function runScopedDb(context, run) {
   return scopedDb().for(workerContext({ tenantId: context.tenantId, propertyId: run.property_id ?? null }));
-}
-
-async function propertyBusinessDate(db, propertyId) {
-  const property = await db.table('properties').where({ id: propertyId }).first('current_business_date');
-  return property?.current_business_date ?? null;
 }
 
 // ---------------------------------------------------------------------
@@ -272,16 +268,32 @@ async function resolveDuplicateRow({ context, importRunId, rowNumber, resolution
   if (!run) return null;
   if (run.status !== 'dry_run_complete') throw new InvalidImportRunStateError(run.status, ['dry_run_complete']);
 
-  if (resolution === 'use_existing') {
-    const guest = await db.table('guests').where({ id: matchedGuestId }).first();
-    if (!guest) throw new ValidationError('GUEST_NOT_FOUND', 'The specified guest does not exist in this tenant.');
-  }
-
   const row = await db
     .table('import_row_errors')
     .where({ import_run_id: importRunId, row_number: rowNumber, severity: 'duplicate_candidate' })
     .first();
   if (!row) throw new DuplicateRowNotFoundError();
+
+  if (resolution === 'use_existing') {
+    const guest = await db.table('guests').where({ id: matchedGuestId }).first();
+    if (!guest) throw new ValidationError('GUEST_NOT_FOUND', 'The specified guest does not exist in this tenant.');
+
+    // Code-review finding: never trust a client-supplied matchedGuestId
+    // just because it names a real guest somewhere in the tenant — verify
+    // it's actually one of THIS row's own reported duplicate candidates,
+    // recomputed fresh from the real file and the real current guest
+    // roster (never parsed back out of the free-text `message`, which the
+    // frontend only ever uses for display).
+    const rows = parseImportFile(run.file_path);
+    const importedRow = rows.find((candidateRow) => candidateRow.__rowNumber === rowNumber);
+    if (!importedRow) throw new DuplicateRowNotFoundError();
+    const existingGuests = await db.table('guests').select('id', 'first_name', 'last_name', 'email', 'phone', 'date_of_birth');
+    const candidate = findDuplicateCandidates({ importedRow, existingGuests });
+    const validCandidateIds = new Set((candidate?.matches ?? []).map((match) => String(match.id)));
+    if (!validCandidateIds.has(String(matchedGuestId))) {
+      throw new InvalidDuplicateResolutionError();
+    }
+  }
 
   await db.table('import_row_errors').where({ id: row.id }).update({
     resolution,
@@ -332,13 +344,25 @@ async function rollbackOneRow({ context, run, mapRow }) {
       case 'guest': {
         // A guests-entity-type run's own `property_id` is null (guests are
         // TENANT_SCOPED, so a guests import has no single property) — this
-        // trx's context therefore carries no active property either.
-        // `reservations` is PROPERTY_SCOPED and a guest may have a real
-        // reservation at ANY property the tenant runs, not just one, so
-        // this check must genuinely span every property — the same
-        // reasoning `.acrossProperties()` exists for.
-        const referencing = await trx.acrossProperties().table('reservations').where({ guest_id: mapRow.entity_id }).first();
-        if (referencing) return { ok: false, reason: 'A reservation now references this guest.' };
+        // trx's context therefore carries no active property either. Every
+        // PROPERTY_SCOPED check below goes through `.acrossProperties()`
+        // for that reason — a guest may hold real activity at ANY property
+        // the tenant runs, not just one.
+        //
+        // Code-review finding: the original check only looked at
+        // `reservations` — but `guest_accounts.guest_id` (a guest portal
+        // login) and `import_row_errors.resolved_guest_id` (a LATER
+        // import's dry run resolving a duplicate against this guest) are
+        // both real RESTRICT foreign keys too. Missing either meant a
+        // guest that had since registered for the portal, or been matched
+        // by a subsequent import, hit a raw uncaught FK violation instead
+        // of a graceful refusal.
+        const referencingReservation = await trx.acrossProperties().table('reservations').where({ guest_id: mapRow.entity_id }).first();
+        if (referencingReservation) return { ok: false, reason: 'A reservation now references this guest.' };
+        const referencingGuestAccount = await trx.acrossProperties().table('guest_accounts').where({ guest_id: mapRow.entity_id }).first();
+        if (referencingGuestAccount) return { ok: false, reason: 'A guest portal account now references this guest.' };
+        const referencingImportError = await trx.table('import_row_errors').where({ resolved_guest_id: mapRow.entity_id }).first();
+        if (referencingImportError) return { ok: false, reason: "A later import's duplicate-guest resolution now references this guest." };
         await trx.table('guests').where({ id: mapRow.entity_id }).delete();
         return { ok: true };
       }
@@ -349,24 +373,36 @@ async function rollbackOneRow({ context, run, mapRow }) {
         if (['checked_in', 'checked_out'].includes(reservation.status)) {
           return { ok: false, reason: `This reservation is already ${reservation.status} and cannot be removed.` };
         }
-        const folio = await trx.table('folios').where({ reservation_id: reservation.id }).first();
-        if (folio) {
+        // Code-review finding: the original check only inspected the
+        // FIRST folio via `.first()` — a reservation can have more than
+        // one (split billing, cashiering's own `openAdditionalFolio`).
+        // Check every folio, not just one.
+        const folios = await trx.table('folios').where({ reservation_id: reservation.id });
+        for (const folio of folios) {
           const charge = await trx.table('folio_line_items').where({ folio_id: folio.id }).first();
           if (charge) return { ok: false, reason: 'A folio with real charges exists against this reservation.' };
         }
 
-        const businessDate = await propertyBusinessDate(trx, run.property_id);
-        if (!businessDate || reservation.departure_date > businessDate) {
-          // A future-dated row that actually incremented room_type_inventory
-          // at commit time — a historical row never did, so releasing here
-          // is only ever undoing this run's own real hold.
+        // Code-review finding: this used to re-derive "did this row hold
+        // real inventory" from the property's CURRENT business date, which
+        // can have advanced (Night Audit runs daily) between commit and
+        // rollback — a one-directional leak. `inventory_reserved` is the
+        // frozen, true fact recorded at commit time; see the migration's
+        // own header.
+        if (mapRow.inventory_reserved) {
           const dailyRates = await trx.table('reservation_daily_rates').where({ reservation_id: reservation.id });
           await releaseInventoryForDates({ trx, roomTypeId: reservation.room_type_id, stayDates: dailyRates.map((rate) => rate.stay_date) });
         }
 
-        if (folio) await trx.table('folios').where({ id: folio.id }).delete();
+        for (const folio of folios) await trx.table('folios').where({ id: folio.id }).delete();
         await trx.table('reservation_rooms').where({ reservation_id: reservation.id }).delete();
         await trx.table('reservation_daily_rates').where({ reservation_id: reservation.id }).delete();
+        // `reservation_notes` is plain reservation-owned metadata, not
+        // financial or audit-significant history like a folio charge — the
+        // same tier as `reservation_rooms`/`reservation_daily_rates`
+        // above, deleted along with the reservation rather than blocking
+        // its rollback.
+        await trx.table('reservation_notes').where({ reservation_id: reservation.id }).delete();
         await trx.table('reservations').where({ id: reservation.id }).delete();
         return { ok: true };
       }
@@ -374,9 +410,22 @@ async function rollbackOneRow({ context, run, mapRow }) {
       case 'company_profile': {
         // Same reasoning as the 'guest' case above — a companies-entity-
         // type run has no single property either, and a company may hold
-        // an AR account at any property the tenant runs.
-        const referencing = await trx.acrossProperties().table('ar_accounts').where({ company_profile_id: mapRow.entity_id }).first();
-        if (referencing) return { ok: false, reason: 'An AR account now references this company.' };
+        // activity at any property the tenant runs.
+        //
+        // Code-review finding: the original check only looked at
+        // `ar_accounts` — `guests.company_profile_id` (set via the real
+        // `POST /guests/:id/link-company` route), `folios.company_profile_id`
+        // (a folio billed directly to the company), and
+        // `group_blocks.company_profile_id` (the company sponsoring a real
+        // group block) are all real RESTRICT foreign keys too.
+        const referencingArAccount = await trx.acrossProperties().table('ar_accounts').where({ company_profile_id: mapRow.entity_id }).first();
+        if (referencingArAccount) return { ok: false, reason: 'An AR account now references this company.' };
+        const referencingGuest = await trx.table('guests').where({ company_profile_id: mapRow.entity_id }).first();
+        if (referencingGuest) return { ok: false, reason: 'A guest is now linked to this company.' };
+        const referencingFolio = await trx.acrossProperties().table('folios').where({ company_profile_id: mapRow.entity_id }).first();
+        if (referencingFolio) return { ok: false, reason: 'A folio is now billed directly to this company.' };
+        const referencingGroupBlock = await trx.acrossProperties().table('group_blocks').where({ company_profile_id: mapRow.entity_id }).first();
+        if (referencingGroupBlock) return { ok: false, reason: 'A group block is now sponsored by this company.' };
         await trx.table('company_profiles').where({ id: mapRow.entity_id }).delete();
         return { ok: true };
       }
@@ -394,18 +443,20 @@ async function rollbackOneRow({ context, run, mapRow }) {
 
         const account = await trx.table('ar_accounts').where({ id: invoice.ar_account_id }).forUpdate().first();
         if (account) {
-          // Only ever reverses THIS invoice's own contribution — never the
-          // whole opening_balance_imported column, which may also carry a
-          // different run's still-standing contribution. Safe by
-          // construction: `commitImportRun`/the job never let a real
-          // charge or payment land here without first blocking the
-          // account's own rollback via the `ar_account` case below.
-          const newBalance = sumMoney([account.current_balance, negateMoney(totalAmount)]);
+          // Code-review finding: this used to hand-roll the
+          // current_balance/is_over_limit update inline — a second writer
+          // of a column this codebase's own convention (and
+          // `recomputeArAccountBalance`'s own header) says has exactly
+          // one. Only `opening_balance_imported` (this invoice's own real
+          // contribution, reversed — never the whole column, which may
+          // still carry a different run's standing contribution) is
+          // written directly; `current_balance`/`is_over_limit` are always
+          // re-derived from scratch, the same single-source-of-truth
+          // mechanism every other AR mutation in this codebase uses.
           await trx.table('ar_accounts').where({ id: account.id }).update({
             opening_balance_imported: sumMoney([account.opening_balance_imported, negateMoney(totalAmount)]),
-            current_balance: newBalance,
-            is_over_limit: compareMoney(newBalance, account.credit_limit) > 0,
           });
+          await recomputeArAccountBalance({ trx, arAccountId: account.id });
         }
         return { ok: true };
       }
@@ -440,7 +491,21 @@ async function rollbackImportRun({ context, importRunId, userId }) {
   const rowsRefused = [];
 
   for (const mapRow of mapRows) {
-    const result = await rollbackOneRow({ context, run, mapRow });
+    // Code-review finding: an unhandled exception here (e.g. a real FK
+    // constraint the refuse-checks above don't already anticipate) used to
+    // escape the whole loop uncaught — crashing the entire rollback
+    // request with a stale run status and no report, for what §3.20 itself
+    // promises is a "wholesale" rollback that should never just blow up.
+    // Every row's own attempt is now isolated: an unexpected failure is
+    // recorded as an ordinary refusal (this row stays in
+    // `imported_record_map` for a future retry), and the loop — and the
+    // rest of this run's own rollback — continues.
+    let result;
+    try {
+      result = await rollbackOneRow({ context, run, mapRow });
+    } catch (error) {
+      result = { ok: false, reason: `Could not be rolled back: ${error?.message || error}` };
+    }
     if (result.ok) {
       rowsRolledBack += 1;
       await outerDb.table('imported_record_map').where({ id: mapRow.id }).delete();
@@ -470,5 +535,4 @@ module.exports = {
   commitImportRun,
   rollbackImportRun,
   runScopedDb,
-  propertyBusinessDate,
 };

@@ -61,8 +61,23 @@ const { parseImportFile } = require('../modules/migration/parse');
 const { matchExistingGuestByContact, matchExistingCompanyByEmail } = require('../modules/migration/dedup');
 const { expandStayDates, reserveInventoryForDates } = require('../modules/reservations/service');
 const { resolveRate } = require('../modules/setup/service');
+const { recomputeArAccountBalance } = require('../modules/ar/service');
 const { generateUlid } = require('../shared/ulid');
-const { sumMoney, compareMoney } = require('../shared/money');
+const { sumMoney } = require('../shared/money');
+
+/**
+ * Code-review finding: only `tentative`/`confirmed`/`checked_in`/
+ * `checked_out` reservations hold real room_type_inventory anywhere else
+ * in this codebase (`reservations/service.js`'s own cancel/no-show/
+ * waitlist-promotion logic) — a `waitlisted` row holds none by definition,
+ * and `cancelled`/`no_show`/`expired` have already released whatever they
+ * once held. The original version of this job called
+ * `reserveInventoryForDates` for every non-historical row regardless of
+ * its imported status, so a migrated open waitlist would have silently
+ * consumed real, live sellable capacity no other waitlisted reservation in
+ * the system ever does.
+ */
+const NON_INVENTORY_HOLDING_STATUSES = new Set(['waitlisted', 'cancelled', 'no_show', 'expired']);
 
 const IMPORT_JOB_NAME = 'commit';
 
@@ -164,8 +179,9 @@ async function commitReservationRow({ trx, importRunId, run, row, roomTypes, rat
 
   const property = await trx.table('properties').where({ id: run.property_id }).first('current_business_date');
   const isHistorical = property?.current_business_date ? departureDate <= property.current_business_date : false;
+  const holdsInventory = !isHistorical && !NON_INVENTORY_HOLDING_STATUSES.has(status);
 
-  if (!isHistorical) {
+  if (holdsInventory) {
     await reserveInventoryForDates({ trx, roomTypeId: roomType.id, stayDates, bypassThreshold: conflictedRows.has(row.__rowNumber) });
   }
 
@@ -203,7 +219,14 @@ async function commitReservationRow({ trx, importRunId, run, row, roomTypes, rat
     });
   }
 
-  await trx.table('imported_record_map').insert({ import_run_id: importRunId, row_number: row.__rowNumber, entity_type: 'reservation', entity_id: reservationId, created: true });
+  await trx.table('imported_record_map').insert({
+    import_run_id: importRunId,
+    row_number: row.__rowNumber,
+    entity_type: 'reservation',
+    entity_id: reservationId,
+    created: true,
+    inventory_reserved: holdsInventory,
+  });
 }
 
 async function commitArBalanceRow({ trx, importRunId, run, row, companies }) {
@@ -232,7 +255,12 @@ async function commitArBalanceRow({ trx, importRunId, run, row, companies }) {
     created: accountCreated,
   });
 
-  const amount = Number(row.amount).toFixed(2);
+  // Code-review finding: `row.amount` is already validated by
+  // MONEY_PATTERN as a plain, at-most-2-decimal-place string — routing it
+  // through `Number(...).toFixed(2)` is exactly the float round-trip this
+  // codebase's own money rule (`shared/money.js`'s header) warns against.
+  // The trimmed string is used as-is.
+  const amount = trimmed(row.amount);
   const currency = trimmed(row.currency);
   const property = await trx.table('properties').where({ id: run.property_id }).first('current_business_date');
   const businessDate = property?.current_business_date || new Date().toISOString().slice(0, 10);
@@ -263,22 +291,51 @@ async function commitArBalanceRow({ trx, importRunId, run, row, companies }) {
   // of the SAME import file contributing to the SAME account (two
   // ar_balances rows for one company) would otherwise race each other's
   // read-then-write of this column, each starting from a stale snapshot.
+  //
+  // Code-review finding: `current_balance`/`is_over_limit` used to be
+  // hand-rolled here — a second, independent writer of a column this
+  // codebase's own convention says has exactly one (`ar/service.js`'s own
+  // header: "`ar_accounts.current_balance` is never trusted as an
+  // independent running total"). Only `opening_balance_imported` (the real
+  // new data this row actually contributes) is written directly;
+  // `current_balance`/`is_over_limit` are always re-derived from scratch
+  // via the same single writer every other AR mutation in this codebase
+  // already goes through.
   const locked = await trx.table('ar_accounts').where({ id: account.id }).forUpdate().first();
-  const newOpeningBalance = sumMoney([locked.opening_balance_imported, amount]);
-  const newBalance = sumMoney([locked.current_balance, amount]);
   await trx.table('ar_accounts').where({ id: account.id }).update({
-    opening_balance_imported: newOpeningBalance,
-    current_balance: newBalance,
-    is_over_limit: compareMoney(newBalance, locked.credit_limit) > 0,
+    opening_balance_imported: sumMoney([locked.opening_balance_imported, amount]),
     opening_balance_import_run_id: run.id,
   });
+  await recomputeArAccountBalance({ trx, arAccountId: account.id });
 }
 
 // ---------------------------------------------------------------------
 // The job itself
 // ---------------------------------------------------------------------
 
-async function runImportCommitJob({ tenantId, importRunId }) {
+/**
+ * `attemptsMade`/`maxAttempts` — code-review finding. The outer catch below
+ * flips the run to `status: 'failed'` before rethrowing so BullMQ's own
+ * `attempts: 3` retry policy still applies — but `runImportCommitJob`'s own
+ * FIRST guard only proceeds while `status === 'committing'`, so a retried
+ * attempt after the first failure immediately saw `failed` and no-op'd,
+ * silently defeating the very retry it was configured for. `status` is now
+ * only flipped to the terminal `failed` state on the LAST configured
+ * attempt — an earlier failure leaves the run `committing`, so BullMQ's
+ * automatic retry genuinely re-enters and re-attempts the job, the same as
+ * a fresh crash-recovery run would (the per-row `imported_record_map`
+ * dedup above is what makes that safe).
+ *
+ * `attemptsMade` mirrors BullMQ's own `Job#attemptsMade` semantics exactly:
+ * the count of PRIOR, already-finished attempts — `0` on a job's first
+ * execution, only incremented once that execution itself completes or
+ * fails (confirmed directly against `node_modules/bullmq`'s own
+ * `Job#moveToFailed`, not assumed). Defaults (`0`/`1`) make a direct call
+ * — every test in this codebase calls this function directly, never
+ * through a real BullMQ `Job` object — behave exactly like a single-
+ * attempt job's only try, unchanged from before this fix.
+ */
+async function runImportCommitJob({ tenantId, importRunId, attemptsMade = 0, maxAttempts = 1 }) {
   const bootstrapDb = scopedDb().for(workerContext({ tenantId }));
   const run = await bootstrapDb.table('import_runs').where({ id: importRunId }).first();
   if (!run) return;
@@ -349,8 +406,15 @@ async function runImportCommitJob({ tenantId, importRunId }) {
       completed_at: new Date(),
     });
   } catch (error) {
-    await db.table('import_runs').where({ id: importRunId }).update({ status: 'failed', failed_reason: String(error?.message || error).slice(0, 2000) });
-    throw error; // BullMQ's own retry/backoff still applies on top of the row's own terminal state
+    const isFinalAttempt = attemptsMade + 1 >= maxAttempts;
+    if (isFinalAttempt) {
+      await db.table('import_runs').where({ id: importRunId }).update({ status: 'failed', failed_reason: String(error?.message || error).slice(0, 2000) });
+    }
+    // Not the final attempt: status stays `committing` so BullMQ's retry
+    // genuinely re-enters this function rather than seeing a terminal
+    // state and no-opping. Rethrow either way — BullMQ's own retry/backoff
+    // decides whether there's another attempt to schedule.
+    throw error;
   }
 }
 
@@ -358,7 +422,12 @@ function startDataImportWorker() {
   return new Worker(
     DATA_IMPORT_QUEUE,
     async (job) => {
-      await runImportCommitJob({ tenantId: job.data.tenantId, importRunId: job.data.importRunId });
+      await runImportCommitJob({
+        tenantId: job.data.tenantId,
+        importRunId: job.data.importRunId,
+        attemptsMade: job.attemptsMade,
+        maxAttempts: job.opts?.attempts ?? 1,
+      });
     },
     { connection: redisConnection() }
   );
