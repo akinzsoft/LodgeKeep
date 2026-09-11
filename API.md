@@ -68,7 +68,7 @@ A namespaced code per domain, not a generic `VALIDATION_ERROR` for everything �
 |---|---|---|---|
 | 400 | `VALIDATION_` | `VALIDATION_ARRIVAL_AFTER_DEPARTURE` | Request shape is fine, the values aren't |
 | 401 | `AUTH_` | `AUTH_TOKEN_EXPIRED`, `AUTH_INVALID_CREDENTIALS` | Not authenticated, or authentication failed |
-| 403 | `FORBIDDEN_` | `FORBIDDEN_PROPERTY_ACCESS`, `FORBIDDEN_ROLE` | Authenticated, not authorized (SECURITY.md §5's matrix) |
+| 403 | `FORBIDDEN_` | `FORBIDDEN_PROPERTY_ACCESS`, `FORBIDDEN_ROLE`, `FORBIDDEN_PLAN_ENTITLEMENT` | Authenticated, not authorized (SECURITY.md §5's matrix) — `FORBIDDEN_PLAN_ENTITLEMENT` is a distinct, orthogonal axis: the tenant's PLAN doesn't include the capability, regardless of the caller's role (PLAN.md Phase 5) |
 | 404 | — | Bare 404, no body needed beyond the envelope | Resource doesn't exist **or belongs to another tenant** — see §5 below, this is deliberate |
 | 409 | `CONFLICT_` | `CONFLICT_ROOM_UNAVAILABLE`, `CONFLICT_NIGHT_AUDIT_ALREADY_RUN`, `CONFLICT_FOLIO_ALREADY_CLOSED` | A concurrency or state conflict (ARCHITECTURE.md §5) |
 | 402 | `PAYMENT_` | `PAYMENT_DECLINED`, `PAYMENT_GATEWAY_TIMEOUT` | Gateway-level payment failure (ARCHITECTURE.md §7) |
@@ -89,6 +89,7 @@ Three identity populations, three token issuers, three sets of routes — see PR
 - **`/api/v1/signup`** (PLAN.md Phase 5, PRODUCT_REQUIREMENTS.md §3.22) is its own mount, entirely public, on neither the staff nor the platform tree — no tenant, user, or session exists yet at the point it runs, which both of those trees presuppose.
 - The **public allow-list** is small and explicit: login endpoints for all three audiences, password-reset request, guest availability search, guest menu browsing, self-service tenant signup, and webhook receivers (which authenticate by signature, not by bearer token — ARCHITECTURE.md §7). Every other route requires a valid token by default; a route is public because it's on this list, never because a decorator was forgotten (this is what TESTING.md AUTH-15 verifies).
 - **A staff request against a `trial`-expired or `suspended` tenant** (PLAN.md Phase 5) still authenticates normally and every read still succeeds — only a mutating request gets `403 FORBIDDEN_TENANT_READ_ONLY`, enforced once, structurally, by the same kind of HTTP-method gate the impersonation read-only rule already uses (SECURITY.md §2).
+- **A request against a capability the tenant's own PLAN doesn't grant** (PLAN.md Phase 5's own final exit criterion, PRODUCT_REQUIREMENTS.md §3.22) gets `403 FORBIDDEN_PLAN_ENTITLEMENT`, `details: {featureKey, planCode}` — orthogonal to RBAC: this fires regardless of the caller's role, since no role at that tenant can bypass a plan boundary. `src/shared/entitlements.js`'s `hasEntitlement` is the one primitive every such check reads through; today it gates exactly one real capability, `multi_property` (`POST /properties`'s second-and-later property), enforced inside the service layer rather than route middleware since it's inherently count-dependent (a tenant's first property is always creatable, regardless of plan).
 
 ## 5. Resource endpoint conventions
 

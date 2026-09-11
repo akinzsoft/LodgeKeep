@@ -281,6 +281,12 @@ const TABLE_SCOPES = Object.freeze({
   // establishes.
   plans: { scope: SCOPES.GLOBAL },
 
+  // Entitlement gating — PLAN.md Phase 5's own final exit criterion.
+  // 20260926090000_create_plan_entitlements. GLOBAL_REFERENCE, following
+  // `plans` (its own FK parent) exactly — one shared catalogue, no tenant
+  // dimension. Read through src/shared/entitlements.js.
+  plan_entitlements: { scope: SCOPES.GLOBAL },
+
   // 20260924091000_create_subscriptions, 20260924092000_create_subscription_invoices,
   // 20260924093000_create_subscription_payments. All three PLATFORM_SCOPED
   // with `tenant_id` an `unscopedColumns` mandatory business column — the

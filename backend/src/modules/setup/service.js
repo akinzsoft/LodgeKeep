@@ -14,6 +14,22 @@ const { withDuplicateMapping } = require('../../shared/errors');
 const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError } = require('./errors');
 const { encrypt } = require('../../shared/encryption');
 const { resolveEmailAdapter } = require('../notifications/email-adapter');
+const { hasEntitlement, resolveActivePlanId } = require('../../shared/entitlements');
+const { PlanEntitlementDeniedError } = require('../../auth/errors');
+
+/**
+ * PLAN.md Phase 5's own final exit criterion: "a tenant on a lower plan
+ * calling a gated endpoint directly is rejected." A tenant's first active
+ * property is always creatable, unconditionally — "multi-property" has no
+ * meaning below 2 — so this gates only the SECOND and later property.
+ * PRODUCT_REQUIREMENTS.md §3.22 names "multi-property" as a gated
+ * capability and "property count" as one plan-defining dimension;
+ * `plan_entitlements` is a committed boolean (plan_id, feature_key,
+ * enabled) shape with no quantity column (its own forward-declared
+ * design, DATABASE.md), so the faithful mapping onto that shape is this
+ * one threshold, not graduated numeric caps.
+ */
+const MULTI_PROPERTY_FEATURE_KEY = 'multi_property';
 
 // ---------------------------------------------------------------------
 // Properties
@@ -33,6 +49,12 @@ const { resolveEmailAdapter } = require('../notifications/email-adapter');
  * may create a property, which is safe today only because Phase 0 has no
  * self-service signup — every `users` row so far comes from the dev seed
  * script or a fixture, not a stranger.
+ *
+ * The one real gate that DOES apply here, regardless of role: a tenant's
+ * plan may cap it to a single property (PLAN.md Phase 5, above). This is
+ * not a `requirePermission` check — see `MULTI_PROPERTY_FEATURE_KEY`'s own
+ * header for why it's structurally different and lives inside this
+ * function instead of route middleware.
  */
 async function createProperty({ context, name, slug, timezone, baseCurrency, address, businessDate }) {
   const db = scopedDb().for(context);
@@ -40,13 +62,45 @@ async function createProperty({ context, name, slug, timezone, baseCurrency, add
     'properties',
     `A property with slug "${slug}" already exists for this tenant.`,
     async () => {
-      const [id] = await db.table('properties').insert({
-        name,
-        slug,
-        timezone,
-        base_currency: baseCurrency,
-        address: address ?? null,
-        current_business_date: businessDate ?? null,
+      const id = await db.transaction(async (trx) => {
+        // Lock the tenant's own row FIRST, before counting or inserting —
+        // `tenants` is this schema's one natural "exactly one row per
+        // tenant" lock target (scopeRoot: 'tenant'). Without this, two
+        // concurrent creates against a not-yet-multi-property tenant could
+        // both read "0 other active properties" before either commits and
+        // both succeed, silently granting a non-entitled tenant a 2nd
+        // property. See tests/setup/plan-entitlements-concurrency.test.js
+        // for the mutation test proving this closes that race.
+        const tenant = await trx.table('tenants').forUpdate().first();
+
+        // Tenant-wide, deliberately not pinned to one property — unlike
+        // `listProperties`' own identical-looking `acrossProperties()` call,
+        // this one needs no `context.isImpersonation` branch: this route is
+        // a mutation, and `rejectMutationDuringImpersonation()` (mounted in
+        // app.js ahead of every business router, setup's included) already
+        // rejects every non-GET/HEAD request during impersonation before
+        // this function is ever reached, so there is no live-impersonation
+        // case here to special-case.
+        const activeCount = await trx.acrossProperties().table('properties').where({ status: 'active' }).count();
+
+        if (activeCount >= 1) {
+          const granted = await hasEntitlement(trx, tenant, MULTI_PROPERTY_FEATURE_KEY);
+          if (!granted) {
+            const planId = await resolveActivePlanId(trx, tenant);
+            const plan = planId ? await trx.reference().table('plans').where({ id: planId }).first('code') : null;
+            throw new PlanEntitlementDeniedError(MULTI_PROPERTY_FEATURE_KEY, plan ? plan.code : null);
+          }
+        }
+
+        const [insertedId] = await trx.table('properties').insert({
+          name,
+          slug,
+          timezone,
+          base_currency: baseCurrency,
+          address: address ?? null,
+          current_business_date: businessDate ?? null,
+        });
+        return insertedId;
       });
       return getProperty({ context, id });
     }
