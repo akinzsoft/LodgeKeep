@@ -20,7 +20,8 @@
 const jwt = require('jsonwebtoken');
 const { verifyAccessToken } = require('./tokens');
 const { scopedDb } = require('../db');
-const { contextFromSession, guestContextFromSession, platformContext, impersonationContext, systemContext } = require('../modules/tenancy');
+const { contextFromSession, guestContextFromSession, platformContext, impersonationContext, systemContext, withTenantLifecycle } = require('../modules/tenancy');
+const { isTenantWriteBlocked } = require('../shared/tenant-lifecycle');
 const {
   UnauthenticatedError,
   TokenExpiredError,
@@ -79,7 +80,21 @@ async function liveContextFor(claims) {
     });
     const user = await db.for(context).table('users').where({ id: claims.sub }).first();
     if (!user || user.status !== 'active') throw new SessionInvalidError();
-    return context;
+
+    // PLAN.md Phase 5 — the tenant's own live lifecycle status, re-checked
+    // on every request exactly like the user's own status just above it
+    // (never cached from token issuance). A single indexed primary-key read
+    // (`tenants` is `scopeRoot: 'tenant'` — `table()` already injects
+    // `WHERE id = context.tenantId`), so this is one more query of the same
+    // shape and cost as the `users` lookup right next to it, not a new
+    // class of expense. `src/shared/tenant-lifecycle.js` is the ONE place
+    // that decides what "blocked" means from these facts — this file only
+    // fetches them and hands them to it.
+    const tenant = await db.for(context).table('tenants').first();
+    return withTenantLifecycle(context, {
+      status: tenant?.status ?? null,
+      writeBlocked: isTenantWriteBlocked(tenant),
+    });
   }
 
   if (claims.aud === 'guest') {
@@ -121,15 +136,18 @@ async function liveContextFor(claims) {
   }
 
   // platform
-  const context = platformContext({ platformUserId: claims.sub });
+  const bootstrapPlatformContext = platformContext({ platformUserId: claims.sub });
   const platformUser = await db
-    .for(context)
+    .for(bootstrapPlatformContext)
     .platform()
     .table('platform_users')
     .where({ id: claims.sub })
     .first();
   if (!platformUser || platformUser.status !== 'active') throw new SessionInvalidError();
-  return context;
+  // PLAN.md Phase 5 (platform-staff tiering) — the live role, re-checked on
+  // every request like everything else in this file, never trusted from the
+  // token (the token carries no role claim at all, deliberately).
+  return platformContext({ platformUserId: claims.sub, role: platformUser.role });
 }
 
 /** @param {'staff'|'guest'|'platform'} audience */

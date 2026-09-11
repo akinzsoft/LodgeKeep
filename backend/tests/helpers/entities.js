@@ -2227,6 +2227,26 @@ const ENTITIES = [
     // tenant/property over time. No restrictDelete either: this is a leaf
     // table nothing else references.
   },
+
+  {
+    table: 'tenant_signups',
+    // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns, not
+    // attribution — see table-scopes.js) — a real UNIQUE(email) enforcing
+    // "one self-service signup per email" as a genuine database guarantee,
+    // not a check-then-write (see the migration's own header). No
+    // crossTenant shape: reached only through hand-written queries in
+    // src/modules/signup/service.js, never the accessor's generic table()
+    // path.
+    uniqueKeys: [['email']],
+    newRow: (ctx, t) => ({
+      email: 'isolation-suite-signup@example.test',
+      tenant_id: t.id,
+    }),
+    duplicateRow: (ctx, t) => ({
+      email: 'isolation-suite-signup@example.test',
+      tenant_id: t.id,
+    }),
+  },
 ];
 
 const byTable = (table) => ENTITIES.find((e) => e.table === table);

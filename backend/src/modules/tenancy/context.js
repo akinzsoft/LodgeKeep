@@ -166,7 +166,16 @@ function guestContextFromSession(session) {
  * Phase 5), a platform context can reach PLATFORM_SCOPED tables and nothing
  * else — which is what makes AUTH-13 a 403 rather than a quiet read.
  */
-function platformContext({ platformUserId }) {
+/**
+ * @param {string} params.platformUserId
+ * @param {'support'|'admin'} [params.role]  PLAN.md Phase 5's platform-staff
+ *   tiering (SECURITY.md §2) — optional, and deliberately absent rather than
+ *   defaulted to a real value here: a context built with no role reads as
+ *   "unknown," which `requirePlatformRole` treats as insufficient for any
+ *   gated action, never as an accidental grant. `src/auth/middleware.js`
+ *   always supplies the live `platform_users.role` it already queried.
+ */
+function platformContext({ platformUserId, role }) {
   const id = normalizeId(platformUserId, 'platformUserId');
   if (!id) {
     throw new ScopeContextError('A platform context requires a platform_user id.');
@@ -175,6 +184,7 @@ function platformContext({ platformUserId }) {
   return freezeContext({
     audience: AUDIENCES.PLATFORM,
     platformUserId: id,
+    role: role ?? null,
     // Named explicitly rather than omitted, so that reading `ctx.tenantId` and
     // getting `null` is an obvious "no tenant" rather than a typo returning
     // undefined.
@@ -259,6 +269,25 @@ function withActiveProperty(context, propertyId) {
 }
 
 /**
+ * Narrows a STAFF context with the live tenant-lifecycle facts
+ * `src/auth/middleware.js` already fetched — PLAN.md Phase 5's trial/
+ * suspended read-only enforcement (`src/shared/tenant-lifecycle.js`).
+ *
+ * Returns a new frozen context, the same non-mutating shape
+ * `withActiveProperty` above already established, for the same reason: a
+ * request handler must not be able to change what its own context reports
+ * about the tenant it's acting for.
+ *
+ * `tenantWriteBlocked` is the one field `src/auth/tenant-lifecycle-guard.js`
+ * actually reads; `tenantStatus` rides along for error messages and for any
+ * future caller that wants to distinguish *why* (trial vs. suspended)
+ * without a second query.
+ */
+function withTenantLifecycle(context, { status, writeBlocked }) {
+  return freezeContext({ ...context, tenantStatus: status, tenantWriteBlocked: writeBlocked });
+}
+
+/**
  * The system context — internal bookkeeping, not a person.
  *
  * No ids at all: there is nothing to identify, which is exactly the case a
@@ -311,4 +340,5 @@ module.exports = {
   systemContext,
   workerContext,
   withActiveProperty,
+  withTenantLifecycle,
 };

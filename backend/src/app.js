@@ -35,6 +35,7 @@ const {
   platformAuthRouter,
   authenticate,
   rejectMutationDuringImpersonation,
+  rejectMutationForTenantLifecycle,
 } = require('./auth');
 const { attachAudit } = require('./audit');
 const { setupRouter } = require('./modules/setup');
@@ -51,6 +52,7 @@ const { posRouter } = require('./modules/pos');
 const { arRouter } = require('./modules/ar');
 const { groupBlocksRouter } = require('./modules/group-blocks');
 const { platformConsoleRouter, staffImpersonationRouter } = require('./modules/platform');
+const { signupRouter } = require('./modules/signup');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -70,6 +72,13 @@ function buildStaffRouter() {
   // under an active impersonation grant is rejected here, structurally,
   // before any business router below ever sees the request.
   router.use(rejectMutationDuringImpersonation());
+  // PLAN.md Phase 5 — the trial/suspended read-only boundary
+  // (PRODUCT_REQUIREMENTS.md §3.22), the identical shape and placement as
+  // the impersonation guard just above it, for a different read-only
+  // reason. Ordered after `staffImpersonationRouter()` for the same
+  // reason: ending an impersonation session must stay reachable regardless
+  // of the underlying tenant's own lifecycle status.
+  router.use(rejectMutationForTenantLifecycle());
   // req.audit(...) — PLAN.md Phase 0's audit trail (SECURITY.md §6). After
   // authenticate() specifically: it reads req.context for who/tenant/property.
   router.use(attachAudit());
@@ -143,6 +152,12 @@ function createApp() {
   // has no per-route way to swap body-parser configuration once mounted.
   app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
+  // PLAN.md Phase 5 — self-service signup. No tenant exists yet at this
+  // point (that is the whole reason it's a separate mount, not nested
+  // inside `buildStaffRouter()`): it needs neither Host-header tenant
+  // resolution nor `authenticate('staff')`, both of which presuppose a
+  // tenant already exists. See `modules/signup/routes.js`'s own header.
+  app.use('/api/v1', signupRouter());
   app.use('/api/v1/portal', buildPortalRouter());
   app.use('/api/v1/platform', buildPlatformRouter());
   app.use('/api/v1', buildStaffRouter());

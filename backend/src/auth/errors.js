@@ -175,6 +175,42 @@ class ImpersonationReadOnlyError extends AppError {
   }
 }
 
+/**
+ * PLAN.md Phase 5, PRODUCT_REQUIREMENTS.md §3.22: a trial past its
+ * `trial_ends_at`, or a tenant `suspended` for non-payment, keeps every
+ * existing read working but refuses a write — enforced once, structurally,
+ * by `src/auth/tenant-lifecycle-guard.js`, the same shape
+ * `ImpersonationReadOnlyError` above already established for a different
+ * read-only reason. `tenantStatus` rides along so the caller can show the
+ * right message ("your trial has ended" vs. "this account is suspended")
+ * without a second request.
+ */
+class TenantReadOnlyError extends AppError {
+  constructor(tenantStatus) {
+    const message = tenantStatus === 'trial'
+      ? 'Your trial has ended. Reactivate your account to make changes — your data is safe and fully visible in the meantime.'
+      : 'This account is suspended. Reactivate to make changes — your data is safe and fully visible in the meantime.';
+    super('FORBIDDEN_TENANT_READ_ONLY', message, 403, { tenantStatus });
+  }
+}
+
+/**
+ * PLAN.md Phase 5's platform-staff tiering (SECURITY.md §2, revisited once
+ * self-service signup meant impersonation could reach real customer data).
+ * A `support`-tier platform account authenticated fine but the action
+ * (impersonate, suspend, reactivate a tenant) requires `admin`.
+ */
+class PlatformRoleDeniedError extends AppError {
+  constructor(requiredRole, actualRole) {
+    super(
+      'FORBIDDEN_PLATFORM_ROLE',
+      'This action requires a higher platform-staff tier.',
+      403,
+      { requiredRole, role: actualRole }
+    );
+  }
+}
+
 module.exports = {
   InvalidCredentialsError,
   AccountLockedError,
@@ -189,6 +225,8 @@ module.exports = {
   PermissionDeniedError,
   ImpersonationEndedError,
   ImpersonationReadOnlyError,
+  TenantReadOnlyError,
+  PlatformRoleDeniedError,
   ValidationError,
   DuplicateEntryError,
 };

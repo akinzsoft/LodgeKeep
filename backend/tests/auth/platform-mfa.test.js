@@ -212,6 +212,9 @@ describe('platform login + real TOTP MFA (PLAN.md Phase 5)', () => {
       expect(verifyRes.body.data.status).toBe('ok');
       expect(verifyRes.body.data.accessToken).toEqual(expect.any(String));
       expect(String(verifyRes.body.data.platformUserId)).toBe(String(user.id));
+      // PLAN.md Phase 5's platform-staff tiering — the frontend needs the
+      // real role to show/hide admin-only actions sensibly.
+      expect(verifyRes.body.data.role).toBe('support');
 
       const row = await t.trx('platform_users').where({ id: user.id }).first();
       expect(row.last_login_at).not.toBeNull();

@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   getTenant: vi.fn(),
   listImpersonationSessionsForTenant: vi.fn(),
   startImpersonation: vi.fn(),
+  suspendTenant: vi.fn(),
+  reactivateTenant: vi.fn(),
   configureApiClient: vi.fn(),
 }));
 
@@ -20,6 +22,7 @@ vi.mock('../../../shared/api/index.js', async () => {
 const TENANT = {
   id: '1',
   name: 'Acme Hotels',
+  status: 'active',
   properties: [{ id: '20', name: 'Acme Main', slug: 'acme-main', status: 'active' }],
 };
 const SESSION = { id: '5', reason: 'Past support ticket', started_at: '2027-01-01', ended_at: '2027-01-01', platform_user: { email: 'ops@lodgekeep.test' } };
@@ -53,7 +56,7 @@ describe('<TenantDetailScreen>', () => {
     renderScreen();
     await screen.findByRole('heading', { name: 'Acme Hotels' });
 
-    await userEvent.type(screen.getByLabelText(/Reason/), 'Debugging billing issue');
+    await userEvent.type(screen.getByLabelText('Reason (required, visible to the tenant)'), 'Debugging billing issue');
     await userEvent.click(screen.getByRole('button', { name: 'Start impersonation' }));
 
     expect(mocks.startImpersonation).toHaveBeenCalledWith('1', { propertyId: '20', reason: 'Debugging billing issue' });
@@ -64,9 +67,54 @@ describe('<TenantDetailScreen>', () => {
     renderScreen();
     await screen.findByRole('heading', { name: 'Acme Hotels' });
 
-    await userEvent.type(screen.getByLabelText(/Reason/), 'Debugging billing issue');
+    await userEvent.type(screen.getByLabelText('Reason (required, visible to the tenant)'), 'Debugging billing issue');
     await userEvent.click(screen.getByRole('button', { name: 'Start impersonation' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The specified property does not belong to this tenant.');
+  });
+
+  it('shows the real tenant status and a Suspend action for an active tenant', async () => {
+    renderScreen();
+    await screen.findByRole('heading', { name: 'Acme Hotels' });
+    expect(screen.getAllByText('active').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Suspend tenant' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reactivate tenant' })).not.toBeInTheDocument();
+  });
+
+  it('suspending requires a reason and calls the real endpoint, then reloads the tenant', async () => {
+    mocks.suspendTenant.mockResolvedValue({ tenantId: '1', status: 'suspended' });
+    renderScreen();
+    await screen.findByRole('heading', { name: 'Acme Hotels' });
+
+    await userEvent.type(screen.getByLabelText('Reason (required, recorded on the audit trail)'), 'Payment failed');
+    await userEvent.click(screen.getByRole('button', { name: 'Suspend tenant' }));
+
+    expect(mocks.suspendTenant).toHaveBeenCalledWith('1', 'Payment failed');
+    expect(mocks.getTenant).toHaveBeenCalledTimes(2); // once on mount, once after the action
+  });
+
+  it('surfaces a real backend error from suspending, e.g. a support-tier account refused', async () => {
+    mocks.suspendTenant.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PLATFORM_ROLE', message: 'This action requires a higher platform-staff tier.' }));
+    renderScreen();
+    await screen.findByRole('heading', { name: 'Acme Hotels' });
+
+    await userEvent.type(screen.getByLabelText('Reason (required, recorded on the audit trail)'), 'Payment failed');
+    await userEvent.click(screen.getByRole('button', { name: 'Suspend tenant' }));
+
+    expect(await screen.findByText('This action requires a higher platform-staff tier.')).toBeInTheDocument();
+  });
+
+  it('shows a Reactivate action, not Suspend, for a suspended tenant', async () => {
+    mocks.getTenant.mockResolvedValue({ ...TENANT, status: 'suspended' });
+    renderScreen();
+    await screen.findByRole('heading', { name: 'Acme Hotels' });
+
+    expect(screen.getByText('suspended')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reactivate tenant' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Suspend tenant' })).not.toBeInTheDocument();
+
+    mocks.reactivateTenant.mockResolvedValue({ tenantId: '1', status: 'active' });
+    await userEvent.click(screen.getByRole('button', { name: 'Reactivate tenant' }));
+    expect(mocks.reactivateTenant).toHaveBeenCalledWith('1', '');
   });
 });

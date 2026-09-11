@@ -1565,14 +1565,22 @@ async function seedTwoTenants(trx) {
  * Platform staff — PLATFORM_SCOPED, so it belongs to no tenant and is seeded
  * outside `seedTwoTenants`'s per-tenant loop by design.
  */
-async function seedPlatformUser(trx, email = 'ops@planmsys.test') {
+/**
+ * Defaults to `admin` — every existing test written before PLAN.md Phase
+ * 5's platform-staff tiering exercises `startImpersonation`/`suspendTenant`/
+ * `reactivateTenant` expecting them to succeed, and the tiering itself is
+ * exactly what `role: 'support'` (this fixture's own opt-in override) is
+ * for testing separately.
+ */
+async function seedPlatformUser(trx, email = 'ops@planmsys.test', role = 'admin') {
   const id = await insertReturningId(trx, 'platform_users', {
     email,
     password_hash: PASSWORD_HASH,
     first_name: 'Ops',
     last_name: 'Staff',
+    role,
   });
-  return { id, email };
+  return { id, email, role };
 }
 
 /**

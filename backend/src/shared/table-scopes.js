@@ -265,6 +265,15 @@ const TABLE_SCOPES = Object.freeze({
   // only through hand-written queries in src/modules/platform/service.js,
   // never the accessor's table() path.
   impersonation_sessions: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id', 'property_id'] },
+
+  // Platform Foundation — PLAN.md Phase 5, 20260923091000_create_tenant_signups.
+  // PLATFORM_SCOPED, following `impersonation_sessions`' own reasoning
+  // exactly: `tenant_id` here is real, mandatory, known-at-creation data
+  // (which tenant this email founded), not scope-column attribution.
+  // Reached only through hand-written queries in
+  // src/modules/signup/service.js, never the accessor's generic table()
+  // path.
+  tenant_signups: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

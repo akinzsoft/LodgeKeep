@@ -1,0 +1,162 @@
+'use strict';
+
+/**
+ * The trial/suspended read-only enforcement gate — PLAN.md Phase 5,
+ * PRODUCT_REQUIREMENTS.md §3.22 ("read-only degradation with a grace
+ * period is safer than a hard cutoff"). One project-wide policy
+ * (`src/shared/tenant-lifecycle.js`) enforced by one HTTP-level gate
+ * (`src/auth/tenant-lifecycle-guard.js`), mirroring
+ * `src/auth/impersonation-guard.js`'s own proven shape exactly.
+ */
+
+const { useTestApp } = require('../helpers/app');
+const { seedTwoTenants } = require('../helpers/fixtures');
+const { signAccessToken } = require('../../src/auth/tokens');
+
+describe('Tenant lifecycle read-only enforcement (PLAN.md Phase 5)', () => {
+  const t = useTestApp();
+  let ctx;
+
+  beforeAll(async () => {
+    ctx = await seedTwoTenants(t.trx);
+    const setupManage = await t.trx('permissions').where({ permission_key: 'setup.manage' }).first('id');
+    await t.trx('role_permissions').insert({ tenant_id: ctx.a.id, role_id: ctx.a.roles.manager, permission_id: setupManage.id });
+    await t.trx('role_permissions').insert({ tenant_id: ctx.b.id, role_id: ctx.b.roles.manager, permission_id: setupManage.id });
+  });
+
+  function staffToken({ tenant = ctx.a, userId, propertyId } = {}) {
+    return signAccessToken({
+      aud: 'staff',
+      sub: String(userId ?? tenant.users[0].id),
+      tenant_id: String(tenant.id),
+      property_id: String(propertyId ?? tenant.properties[0].id),
+    });
+  }
+
+  async function setStatus(tenant, status, trialEndsAt = null) {
+    await t.trx('tenants').where({ id: tenant.id }).update({ status, trial_ends_at: trialEndsAt });
+  }
+
+  afterEach(async () => {
+    await setStatus(ctx.a, 'active');
+    await setStatus(ctx.b, 'active');
+  });
+
+  function writeRequest(tenant = ctx.a) {
+    return t.request
+      .post('/api/v1/market-segments')
+      .set('Authorization', `Bearer ${staffToken({ tenant })}`)
+      .send({ name: 'Gate test', code: `gate-${Date.now()}-${Math.random().toString(36).slice(2)}` });
+  }
+
+  function readRequest(tenant = ctx.a) {
+    return t.request.get('/api/v1/room-types').set('Authorization', `Bearer ${staffToken({ tenant })}`);
+  }
+
+  it('an active tenant writes and reads normally', async () => {
+    expect((await readRequest()).status).toBe(200);
+    expect((await writeRequest()).status).toBe(201);
+  });
+
+  it('a trial tenant with no expiry set is fully usable — reads and writes both succeed', async () => {
+    await setStatus(ctx.a, 'trial', null);
+    expect((await readRequest()).status).toBe(200);
+    expect((await writeRequest()).status).toBe(201);
+  });
+
+  it('a trial tenant whose trial has not yet ended is fully usable', async () => {
+    await setStatus(ctx.a, 'trial', new Date(Date.now() + 60_000 * 60 * 24 * 7));
+    expect((await readRequest()).status).toBe(200);
+    expect((await writeRequest()).status).toBe(201);
+  });
+
+  it('a trial tenant whose trial has already ended is read-only', async () => {
+    await setStatus(ctx.a, 'trial', new Date(Date.now() - 60_000));
+    const readRes = await readRequest();
+    expect(readRes.status).toBe(200);
+    const writeRes = await writeRequest();
+    expect(writeRes.status).toBe(403);
+    expect(writeRes.body.error.code).toBe('FORBIDDEN_TENANT_READ_ONLY');
+    expect(writeRes.body.error.details.tenantStatus).toBe('trial');
+  });
+
+  it('a suspended tenant is read-only', async () => {
+    await setStatus(ctx.a, 'suspended');
+    expect((await readRequest()).status).toBe(200);
+    const writeRes = await writeRequest();
+    expect(writeRes.status).toBe(403);
+    expect(writeRes.body.error.code).toBe('FORBIDDEN_TENANT_READ_ONLY');
+  });
+
+  it('existing reservation data remains fully readable while suspended', async () => {
+    await setStatus(ctx.a, 'suspended');
+    const listRes = await t.request.get('/api/v1/reservations').set('Authorization', `Bearer ${staffToken()}`);
+    expect(listRes.status).toBe(200);
+    const found = listRes.body.data.find((r) => String(r.id) === String(ctx.a.reservations[0].id));
+    expect(found).toBeTruthy();
+
+    const oneRes = await t.request.get(`/api/v1/reservations/${ctx.a.reservations[0].id}`).set('Authorization', `Bearer ${staffToken()}`);
+    expect(oneRes.status).toBe(200);
+    expect(String(oneRes.body.data.id)).toBe(String(ctx.a.reservations[0].id));
+  });
+
+  it('a suspended reservation cannot be modified (a real business write, not just the reference market-segments one)', async () => {
+    await setStatus(ctx.a, 'suspended');
+    const res = await t.request
+      .post(`/api/v1/reservations/${ctx.a.reservations[0].id}/cancel`)
+      .set('Authorization', `Bearer ${staffToken()}`)
+      .set('Idempotency-Key', `gate-cancel-${Date.now()}`)
+      .send({ reason: 'Should be blocked' });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('FORBIDDEN_TENANT_READ_ONLY');
+  });
+
+  it('suspending tenant A never affects tenant B — cross-tenant isolation holds', async () => {
+    await setStatus(ctx.a, 'suspended');
+    expect((await readRequest(ctx.b)).status).toBe(200);
+    expect((await writeRequest(ctx.b)).status).toBe(201);
+  });
+
+  it('reactivation (status flipped back to active) restores writes on the very next request', async () => {
+    await setStatus(ctx.a, 'suspended');
+    expect((await writeRequest()).status).toBe(403);
+    await setStatus(ctx.a, 'active');
+    expect((await writeRequest()).status).toBe(201);
+  });
+
+  // ------------------------------------------------------------------
+  // tenant-resolution.js gap closure: reachability vs. write access are
+  // separate questions (see that file's own updated header). A trial or
+  // suspended tenant must still be able to log in at all — only
+  // `offboarding` stays a hard block.
+  // ------------------------------------------------------------------
+
+  describe('login reachability by tenant status', () => {
+    const DEV_PASSWORD = 'a fixture password long enough to pass validation';
+
+    async function loginAs(tenant) {
+      return t.request
+        .post('/api/v1/auth/login')
+        .set('X-Tenant-Slug', tenant.slug)
+        .send({ email: tenant.users[0].email, password: DEV_PASSWORD });
+    }
+
+    it('a trial tenant can log in', async () => {
+      await setStatus(ctx.a, 'trial', null);
+      const res = await loginAs(ctx.a);
+      expect(res.status).not.toBe(404);
+    });
+
+    it('a suspended tenant can log in (read-only, but reachable)', async () => {
+      await setStatus(ctx.a, 'suspended');
+      const res = await loginAs(ctx.a);
+      expect(res.status).not.toBe(404);
+    });
+
+    it('an offboarding tenant cannot be resolved at all — the one status that stays a hard block', async () => {
+      await setStatus(ctx.a, 'offboarding');
+      const res = await loginAs(ctx.a);
+      expect(res.status).toBe(404);
+    });
+  });
+});
