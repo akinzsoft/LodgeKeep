@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { request, requestWithMeta, configureApiClient, _resetApiClientForTesting } from '../client.js';
+import { request, requestWithMeta, requestMultipart, configureApiClient, _resetApiClientForTesting } from '../client.js';
 import { ApiError } from '../ApiError.js';
 
 function mockResponse(status, envelope) {
@@ -142,5 +142,55 @@ describe('requestWithMeta()', () => {
     const result = await requestWithMeta('/portal/account/bookings');
     expect(result).toEqual({ data: { id: '1' }, meta: {} });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('requestMultipart()', () => {
+  beforeEach(() => {
+    _resetApiClientForTesting();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends the FormData body with no manually-set Content-Type, letting the browser set the multipart boundary', async () => {
+    configureApiClient({ accessTokenGetter: () => 'the-token', accessTokenExpiredHandler: null });
+    fetch.mockResolvedValueOnce(mockResponse(201, ok({ id: '1', status: 'uploaded' })));
+
+    const formData = new FormData();
+    formData.append('entity_type', 'guests');
+    const data = await requestMultipart('/migration/imports', formData);
+
+    expect(data).toEqual({ id: '1', status: 'uploaded' });
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toContain('/migration/imports');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBe(formData);
+    expect(init.headers['Content-Type']).toBeUndefined();
+    expect(init.headers.Authorization).toBe('Bearer the-token');
+  });
+
+  it('refreshes once and retries on AUTH_TOKEN_EXPIRED, same as request()', async () => {
+    configureApiClient({
+      accessTokenGetter: () => 'expired-token',
+      accessTokenExpiredHandler: async () => 'fresh-token',
+    });
+    fetch
+      .mockResolvedValueOnce(mockResponse(401, fail('AUTH_TOKEN_EXPIRED', 'expired')))
+      .mockResolvedValueOnce(mockResponse(201, ok({ id: '1' })));
+
+    const data = await requestMultipart('/migration/imports', new FormData());
+    expect(data).toEqual({ id: '1' });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws an ApiError carrying the backend error shape on a real validation failure', async () => {
+    fetch.mockResolvedValueOnce(mockResponse(400, fail('VALIDATION_MISSING_FILE', 'A CSV file is required.')));
+    await expect(requestMultipart('/migration/imports', new FormData())).rejects.toMatchObject({
+      code: 'VALIDATION_MISSING_FILE',
+      status: 400,
+    });
   });
 });

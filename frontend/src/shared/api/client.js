@@ -209,3 +209,61 @@ export async function requestBlob(path) {
     throw error;
   }
 }
+
+/**
+ * A multipart file upload — Data Migration's `POST /migration/imports`
+ * (`backend/src/modules/migration/routes.js`'s first-ever `multer` route in
+ * this codebase). Deliberately does NOT set `Content-Type` itself: a
+ * `FormData` body needs the browser's own auto-generated
+ * `multipart/form-data; boundary=...` header, which `doFetch`'s hardcoded
+ * `'Content-Type': 'application/json'` would otherwise stomp — so this is a
+ * third, parallel path alongside `request()`/`requestBlob()` rather than a
+ * new option threaded through `doFetch`, the same "a genuinely different
+ * body shape gets its own function" precedent `requestBlob` already set.
+ * Same auth-header injection and auto-refresh-on-`AUTH_TOKEN_EXPIRED` retry
+ * as every other authenticated call.
+ */
+async function doFetchMultipart(path, formData, token) {
+  let response;
+  try {
+    response = await fetch(`${BASE_URL}${path}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+  } catch {
+    throw new ApiError({ code: 'NETWORK_ERROR', message: 'Could not reach the server. Check your connection.' });
+  }
+
+  let envelope;
+  try {
+    envelope = await response.json();
+  } catch {
+    throw new ApiError({ code: 'NETWORK_ERROR', message: 'The server returned an unreadable response.', status: response.status });
+  }
+
+  if (envelope.error) {
+    throw new ApiError({ ...envelope.error, status: response.status });
+  }
+
+  return envelope;
+}
+
+export async function requestMultipart(path, formData) {
+  const token = getAccessToken();
+  try {
+    const { data } = await doFetchMultipart(path, formData, token);
+    return data;
+  } catch (error) {
+    if (error instanceof ApiError && error.code === 'AUTH_TOKEN_EXPIRED' && onAccessTokenExpired) {
+      const refreshedToken = await onAccessTokenExpired();
+      const { data } = await doFetchMultipart(path, formData, refreshedToken);
+      return data;
+    }
+    if (error instanceof ApiError && typeof error.code === 'string' && error.code.startsWith('AUTH_') && onAuthenticationFailed) {
+      onAuthenticationFailed(error);
+    }
+    throw error;
+  }
+}
