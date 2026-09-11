@@ -136,3 +136,32 @@
   padding: 0;
   margin-bottom: var(--space-4);
 }
+
+/* PLAN.md Phase 5 ("Platform console health") — a plain key/value fact list, not a new shared component: this is the one screen that needs it. */
+.factList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.factRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.factLabel {
+  margin: 0;
+  min-width: 6rem;
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  color: var(--text-secondary);
+}
+
+.factValue {
+  margin: 0;
+  font-size: var(--text-body-size);
+  color: var(--text-primary);
+}
