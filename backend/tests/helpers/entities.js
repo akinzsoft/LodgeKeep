@@ -2408,6 +2408,60 @@ const ENTITIES = [
       reason: 'Isolation-suite fixture row',
     }),
   },
+
+  {
+    table: 'import_runs',
+    // TENANT_SCOPED, property_id a nullable attribution column — see
+    // 20260927091000_create_import_runs.js's own header. No unique
+    // constraint: a tenant can legitimately run several imports of the
+    // same entity_type over time.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: null,
+      entity_type: 'guests',
+      status: 'uploaded',
+      original_filename: 'new-fixture.csv',
+      file_path: `/tmp/isolation-suite-${t.slug}-new-import.csv`,
+      run_by_user_id: t.users[0].id,
+    }),
+  },
+
+  {
+    table: 'import_row_errors',
+    // TENANT_SCOPED, child of import_runs. No unique constraint — a run
+    // can carry any number of per-row findings.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      import_run_id: t.importRuns[0].id,
+      row_number: 99,
+      column_name: 'last_name',
+      severity: 'error',
+      message: 'New isolation-suite fixture finding.',
+    }),
+  },
+
+  {
+    table: 'imported_record_map',
+    uniqueKeys: [['tenant_id', 'import_run_id', 'row_number', 'entity_type']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      import_run_id: t.importRuns[0].id,
+      row_number: 3,
+      entity_type: 'guest',
+      entity_id: t.guests[0].id,
+      created: true,
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      import_run_id: t.importRuns[0].id,
+      row_number: 2, // matches the fixture row's own (import_run_id, row_number, entity_type) — collides
+      entity_type: 'guest',
+      entity_id: t.guests[0].id,
+      created: true,
+    }),
+  },
 ];
 
 const byTable = (table) => ENTITIES.find((e) => e.table === table);

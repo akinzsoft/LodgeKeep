@@ -20,6 +20,7 @@ import { POSScreen } from './app/pos/POSScreen.jsx';
 import { ARScreen } from './app/ar/ARScreen.jsx';
 import { GroupBlocksScreen } from './app/group-blocks/GroupBlocksScreen.jsx';
 import { BillingScreen } from './app/billing/BillingScreen.jsx';
+import { DataMigrationScreen } from './app/migration/DataMigrationScreen.jsx';
 import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { notificationsApi, setupApi } from './shared/api/index.js';
@@ -222,6 +223,7 @@ function Demo() {
           'group_blocks.manage',
           'billing.view',
           'billing.manage',
+          'migration.manage',
         ])
       }
       activeItemKey={activeItemKey}
@@ -274,6 +276,8 @@ function Demo() {
         <GroupBlocksScreen isOffline={!isOnline} />
       ) : activeItemKey === 'billing' ? (
         <BillingScreen isOffline={!isOnline} />
+      ) : activeItemKey === 'migration' ? (
+        <DataMigrationScreen isOffline={!isOnline} />
       ) : (
         <HomeDashboard
           greetingName={displayName}

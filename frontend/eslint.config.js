@@ -72,6 +72,15 @@ export default [
         URLSearchParams: 'readonly',
         URL: 'readonly',
         crypto: 'readonly',
+        // Data Migration (PLAN.md Phase 5, PRODUCT_REQUIREMENTS.md §3.20) is
+        // this codebase's first real file-upload UI and its first
+        // async-job-progress poll — `File`/`FormData`/`Blob` and
+        // `setInterval`/`clearInterval` had no caller before it.
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+        File: 'readonly',
+        FormData: 'readonly',
+        Blob: 'readonly',
       },
     },
     plugins: { react, 'react-hooks': reactHooks },

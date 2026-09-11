@@ -10,3 +10,7 @@ dist/
 # PLAN.md Phase 5 tenant offboarding — generated data-export bundles,
 # never committed (real tenant data, local-disk storage per EXPORT_STORAGE_DIR).
 backend/storage/exports/
+
+# PLAN.md Phase 5 data migration — uploaded customer CSV files, never
+# committed (real customer data, local-disk storage per IMPORT_STORAGE_DIR).
+backend/storage/imports/

@@ -17,6 +17,7 @@ const { startOutboxWorker, scheduleOutboxSweep } = require('./jobs/outbox-dispat
 const { startTrialExpiryWorker, scheduleTrialExpirySweep } = require('./jobs/trial-expiry');
 const { startSubscriptionBillingWorker, scheduleSubscriptionBillingSweep } = require('./jobs/subscription-billing');
 const { startTenantDataExportWorker } = require('./jobs/tenant-data-export');
+const { startDataImportWorker } = require('./jobs/data-import');
 
 const port = Number(process.env.PORT || 3000);
 
@@ -56,3 +57,8 @@ scheduleSubscriptionBillingSweep().catch((error) => {
 // periodic scheduler call here, since nothing sweeps for stuck exports in
 // this pass (that file's own header flags this as a real, narrower gap).
 startTenantDataExportWorker();
+
+// PLAN.md Phase 5 (data migration) — `src/jobs/data-import.js`'s own
+// header. A one-off, reactive-only job, the identical shape the export
+// worker above already established — no periodic scheduler call here.
+startDataImportWorker();

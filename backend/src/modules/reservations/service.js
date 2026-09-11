@@ -266,7 +266,18 @@ async function ensureInventoryRow({ trx, roomTypeId, stayDate }) {
  * failure on any single night aborts the whole transaction — no partial
  * hold across some-but-not-all nights (TESTING.md RES-5's "no partial write").
  */
-async function reserveInventoryForDates({ trx, roomTypeId, stayDates }) {
+/**
+ * `bypassThreshold` (PLAN.md Phase 5, data migration) — additive, defaults
+ * to unchanged behaviour. Data migration's own confirmed decision: an
+ * imported future reservation dry-run already flagged as an oversell
+ * (§3.20: "shown as warnings before commit") still needs its night
+ * genuinely reserved once the operator explicitly confirms commit — the
+ * lock is still taken and `rooms_sold` still increments (so the count
+ * stays honest for every OTHER caller), only the rejection itself is
+ * skipped for that one call. Every other caller (booking, portal,
+ * extend-stay) never passes this and is completely unaffected.
+ */
+async function reserveInventoryForDates({ trx, roomTypeId, stayDates, bypassThreshold = false }) {
   for (const stayDate of stayDates) {
     await ensureInventoryRow({ trx, roomTypeId, stayDate });
 
@@ -274,7 +285,7 @@ async function reserveInventoryForDates({ trx, roomTypeId, stayDates }) {
 
     const physicalCount = await livePhysicalCount({ db: trx, roomTypeId, stayDate });
     const threshold = Math.floor((physicalCount * Number(row.overbooking_threshold_pct)) / 100);
-    if (row.rooms_sold + 1 > threshold) {
+    if (!bypassThreshold && row.rooms_sold + 1 > threshold) {
       throw new OverbookingThresholdExceededError(roomTypeId, stayDate);
     }
 
