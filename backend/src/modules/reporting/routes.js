@@ -10,6 +10,11 @@
  * per that section's own rule; manager/admin/super_admin additionally hold
  * `reports.view_financial` for the revenue report. Housekeeping/pos_operator
  * hold neither key.
+ *
+ * `reports.view_chain` (PLAN.md Phase 6) is `super_admin` only, unlike
+ * every other key in this file — the second place this matrix's Admin `✓`
+ * genuinely diverges from Super-admin's `✓`, after `room_types.update`
+ * (SECURITY.md §5).
  */
 
 const { Router } = require('express');
@@ -23,6 +28,7 @@ function reportingRouter() {
   router.get('/reports/housekeeping', requirePermission('reports.view'), controller.housekeepingSummary);
   router.get('/reports/oversold', requirePermission('reports.view'), controller.oversoldRoomTypes);
   router.get('/reports/revenue', requirePermission('reports.view_financial'), controller.revenue);
+  router.get('/reports/chain-overview', requirePermission('reports.view_chain'), controller.chainOverview);
 
   return router;
 }

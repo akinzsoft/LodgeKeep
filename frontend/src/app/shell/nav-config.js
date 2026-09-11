@@ -137,6 +137,16 @@ export const DEFAULT_NAV_GROUPS = [
       // `migration.manage`, admin/super_admin only, no view/manage split,
       // mirroring `offboarding.manage`'s own precedent exactly.
       { key: 'migration', label: 'Data Migration', requiredPermission: 'migration.manage' },
+      // PLAN.md Phase 6 (Multi-Property Management, first slice) —
+      // PRODUCT_REQUIREMENTS.md §3.13's role-landing table names this as
+      // super_admin's own distinguishing landing experience, but this is an
+      // ordinary permission-gated nav item like every other module screen
+      // here, not a new role-based default-landing mechanism (confirmed
+      // with the user) — super_admin still lands on the normal
+      // HomeDashboard by default. Gated on `reports.view_chain` — the
+      // second place this matrix's admin/super_admin split diverges on a
+      // single action, after `room_types.update` (SECURITY.md §5).
+      { key: 'chain_overview', label: 'Multi-Property Roll-up', requiredPermission: 'reports.view_chain' },
     ],
   },
 ];

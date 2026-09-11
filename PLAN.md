@@ -179,8 +179,8 @@ Until now the product runs for tenants you create by hand. This phase makes it a
 
 Genuinely optional until customers ask. Building these early is the most likely way to over-engineer this product.
 
-- Multi-property (3.12) — cross-property reservations, chain-wide reporting
-- Revenue management (3.11) — dynamic pricing, forecasting, yield
+- Multi-property (3.13) — cross-property reservations (still 🔲), chain-wide reporting (✅ **shipped**: a "Multi-Property Roll-Up" screen, `super_admin`-only per PRODUCT_REQUIREMENTS.md §3.13's own role-landing table, reusing the existing per-property Reporting service functions in a loop — see CLAUDE.md's own status section)
+- Revenue management (3.12) — dynamic pricing, forecasting, yield
 - Channel manager / OTA distribution (3.15)
 - Loyalty programme (3.1)
 - Mobile refinement (3.18), multi-language (3.17)

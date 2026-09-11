@@ -24,6 +24,7 @@
 const { scopedDb } = require('../../db');
 const { livePhysicalCount } = require('../../shared/room-availability');
 const { sumMoney, divideMoney } = require('../../shared/money');
+const { withActiveProperty } = require('../tenancy');
 
 /** Inclusive date range as 'YYYY-MM-DD' strings — occupancy/revenue reports are inclusive of both endpoints, unlike a stay's arrival-inclusive/departure-exclusive convention. */
 function inclusiveDateRange(dateFrom, dateTo) {
@@ -189,6 +190,116 @@ async function computeOversoldRoomTypes({ context, businessDate }) {
   return oversold;
 }
 
+/**
+ * Chain-wide roll-up across every active property in the tenant — PLAN.md
+ * Phase 6's Multi-Property Management (PRODUCT_REQUIREMENTS.md §3.13), the
+ * smallest defensible first slice: TODAY's occupancy/revenue per property,
+ * aggregated, plus the real per-property breakdown a single blended number
+ * can't show ("which property is the problem"). Gated on `reports.view_chain`
+ * (`routes.js`) — `super_admin` only, the second place this matrix's own
+ * Admin `✓` genuinely diverges from Super-admin's, after `room_types.update`
+ * (SECURITY.md §5).
+ *
+ * Each property's own "today" is its own `current_business_date`
+ * (ARCHITECTURE.md §6 — never wall-clock, and every property in a chain can
+ * legitimately be at a different point in time) — this loops one property
+ * at a time via `withActiveProperty`, reusing `computeOccupancy`/
+ * `computeRevenue` completely unmodified rather than forking a
+ * cross-property version of either.
+ *
+ * Revenue is aggregated GROUPED BY CURRENCY, never blended into one number
+ * — `properties.base_currency` is per-property, so a chain can genuinely be
+ * mixed-currency, and summing two currencies together would be silently
+ * wrong (ARCHITECTURE.md §1: "every money column carries its currency").
+ * Occupancy is a plain, UNWEIGHTED average across configured properties,
+ * deliberately not room-count-weighted — a true weighted average would need
+ * `livePhysicalCount` re-queried per property even for an already-audited
+ * date (`computeOccupancy` deliberately returns `physicalCount: null` once
+ * a date is audited, see above), adding real per-request DB load for a KPI
+ * number nobody asked to be exact to the room. The per-property breakdown
+ * this function also returns carries every property's real, un-aggregated
+ * figures regardless, so nothing is hidden — only the single headline
+ * number is a simplification.
+ *
+ * A property with no `current_business_date` configured yet (Phase 1's
+ * nullable default) contributes no occupancy/revenue figures at all — it
+ * appears in the breakdown with `businessDate: null`, excluded from every
+ * aggregate's denominator, rather than crashing the whole roll-up over one
+ * unfinished property.
+ *
+ * Under impersonation, never uses `acrossProperties()` — matches
+ * `setup/service.js`'s own `listProperties` precedent exactly: an
+ * impersonation grant is locked to one tenant AND one property
+ * (`withActiveProperty` itself throws otherwise), so this degrades to a
+ * "chain of one" (the impersonated property only), never a leak of the
+ * rest of that tenant's chain to a platform admin who is only supposed to
+ * see the one property they're impersonating.
+ */
+async function computeChainOverview({ context }) {
+  const db = scopedDb().for(context);
+  const properties = await (context.isImpersonation ? db : db.acrossProperties())
+    .table('properties')
+    .where({ status: 'active' })
+    .orderBy('name');
+
+  const rows = [];
+  for (const property of properties) {
+    if (!property.current_business_date) {
+      rows.push({
+        propertyId: property.id,
+        propertyName: property.name,
+        currencyCode: property.base_currency,
+        businessDate: null,
+        occupancyPct: null,
+        roomsSold: null,
+        roomRevenue: null,
+        audited: false,
+      });
+      continue;
+    }
+    const propertyContext = withActiveProperty(context, property.id);
+    const businessDate = property.current_business_date;
+    const [occupancyDay] = await computeOccupancy({ context: propertyContext, dateFrom: businessDate, dateTo: businessDate });
+    const [revenueDay] = await computeRevenue({ context: propertyContext, dateFrom: businessDate, dateTo: businessDate });
+    rows.push({
+      propertyId: property.id,
+      propertyName: property.name,
+      currencyCode: property.base_currency,
+      businessDate,
+      occupancyPct: occupancyDay.occupancyPct,
+      roomsSold: occupancyDay.roomsSold,
+      roomRevenue: revenueDay.roomRevenue,
+      audited: occupancyDay.audited,
+    });
+  }
+
+  const configured = rows.filter((row) => row.businessDate !== null);
+
+  const revenueByCurrency = new Map();
+  for (const row of configured) {
+    const list = revenueByCurrency.get(row.currencyCode) ?? [];
+    list.push(row.roomRevenue);
+    revenueByCurrency.set(row.currencyCode, list);
+  }
+
+  return {
+    properties: rows,
+    totals: {
+      propertyCount: properties.length,
+      configuredPropertyCount: configured.length,
+      totalRoomsSoldToday: configured.reduce((sum, row) => sum + row.roomsSold, 0),
+      averageOccupancyPctToday:
+        configured.length === 0
+          ? null
+          : Number((configured.reduce((sum, row) => sum + row.occupancyPct, 0) / configured.length).toFixed(2)),
+      revenueByCurrency: Array.from(revenueByCurrency.entries()).map(([currencyCode, amounts]) => ({
+        currencyCode,
+        totalRoomRevenue: sumMoney(amounts),
+      })),
+    },
+  };
+}
+
 /** CSV export (PRODUCT_REQUIREMENTS.md §3.11: "export must reflect the filters currently applied on screen") — no PDF/Excel library exists yet in this codebase; CSV needs none. */
 function toCsv(rows, columns) {
   const header = columns.join(',');
@@ -204,5 +315,6 @@ module.exports = {
   computeRevenue,
   computeHousekeepingSummary,
   computeOversoldRoomTypes,
+  computeChainOverview,
   toCsv,
 };

@@ -376,9 +376,10 @@ exports.seed = async function seed(knex) {
    * existing room type (base rate included) is super_admin-only, the first
    * place this dev seed's own "give admin/super_admin every catalogue
    * permission" convenience has ever needed a real exception rather than
-   * genuinely meaning "every permission."
+   * genuinely meaning "every permission." `reports.view_chain` (PLAN.md
+   * Phase 6's chain-wide roll-up) is the second such exception.
    */
-  const ADMIN_EXCLUDED_PERMISSIONS = new Set(['room_types.update']);
+  const ADMIN_EXCLUDED_PERMISSIONS = new Set(['room_types.update', 'reports.view_chain']);
 
   async function ensureAdminSuperAdminFullAccess(tenantId) {
     const allPermissions = await knex('permissions').select('id', 'permission_key');
