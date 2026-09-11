@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Card, DataTable, Button } from '../../shared/components/index.js';
+import { Card, DataTable, Button, StatusPill } from '../../shared/components/index.js';
 import { platformApi, ApiError } from '../../shared/api/index.js';
 import { usePlatformAuth } from '../auth/PlatformAuthContext.jsx';
 import styles from './PlatformScreens.module.css';
+
+const STATUS_TONE = { trial: 'warning', active: 'success', suspended: 'danger', offboarding: 'neutral' };
 
 /**
  * TenantDetailScreen — PLAN.md Phase 5 (Platform Foundation). Tenant
@@ -14,7 +16,7 @@ import styles from './PlatformScreens.module.css';
  * applied here to an equally consequential action.
  */
 export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
-  const { startImpersonation, error: impersonationError } = usePlatformAuth();
+  const { startImpersonation, error: impersonationError, role } = usePlatformAuth();
   const [tenant, setTenant] = useState(null);
   const [sessions, setSessions] = useState(null);
   const [error, setError] = useState(null);
@@ -22,6 +24,10 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
   const [propertyId, setPropertyId] = useState('');
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const [lifecycleReason, setLifecycleReason] = useState('');
+  const [lifecycleSubmitting, setLifecycleSubmitting] = useState(false);
+  const [lifecycleError, setLifecycleError] = useState(null);
 
   async function reload() {
     setError(null);
@@ -52,10 +58,41 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
     setSubmitting(false);
   }
 
+  async function handleSuspend(event) {
+    event.preventDefault();
+    setLifecycleError(null);
+    setLifecycleSubmitting(true);
+    try {
+      await platformApi.suspendTenant(tenantId, lifecycleReason);
+      setLifecycleReason('');
+      await reload();
+    } catch (caught) {
+      setLifecycleError(caught instanceof ApiError ? caught.message : 'Could not suspend this tenant.');
+    } finally {
+      setLifecycleSubmitting(false);
+    }
+  }
+
+  async function handleReactivate(event) {
+    event.preventDefault();
+    setLifecycleError(null);
+    setLifecycleSubmitting(true);
+    try {
+      await platformApi.reactivateTenant(tenantId, lifecycleReason);
+      setLifecycleReason('');
+      await reload();
+    } catch (caught) {
+      setLifecycleError(caught instanceof ApiError ? caught.message : 'Could not reactivate this tenant.');
+    } finally {
+      setLifecycleSubmitting(false);
+    }
+  }
+
   return (
     <div className={styles.console}>
       <div className={styles.consoleHeader}>
         <h1 className={styles.consoleTitle}>{tenant?.name ?? 'Tenant'}</h1>
+        {tenant?.status && <StatusPill tone={STATUS_TONE[tenant.status] ?? 'neutral'} label={tenant.status} />}
         <Button variant="ghost" onClick={onLogout}>
           Sign out
         </Button>
@@ -67,6 +104,55 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
         <p role="alert" className={styles.errorBanner}>
           {error}
         </p>
+      )}
+
+      {tenant && (
+        <Card title="Tenant lifecycle">
+          {lifecycleError && (
+            <p role="alert" className={styles.errorBanner}>
+              {lifecycleError}
+            </p>
+          )}
+          <p className={styles.hint}>
+            Trial and suspended tenants remain fully readable — every write is blocked until reactivated
+            (PRODUCT_REQUIREMENTS.md §3.22).{' '}
+            {role !== 'admin' && "Suspend/reactivate require the platform admin tier — your account can still try, but the server will refuse it."}
+          </p>
+          {(tenant.status === 'trial' || tenant.status === 'active') && (
+            <form className={styles.form} onSubmit={handleSuspend}>
+              <label className={styles.field}>
+                <span className={styles.label}>Reason (required, recorded on the audit trail)</span>
+                <input
+                  className={styles.input}
+                  value={lifecycleReason}
+                  onChange={(event) => setLifecycleReason(event.target.value)}
+                  required
+                  placeholder="e.g. Payment failed"
+                />
+              </label>
+              <Button type="submit" variant="danger" loading={lifecycleSubmitting}>
+                Suspend tenant
+              </Button>
+            </form>
+          )}
+          {tenant.status === 'suspended' && (
+            <form className={styles.form} onSubmit={handleReactivate}>
+              <label className={styles.field}>
+                <span className={styles.label}>Reason (optional)</span>
+                <input
+                  className={styles.input}
+                  value={lifecycleReason}
+                  onChange={(event) => setLifecycleReason(event.target.value)}
+                  placeholder="e.g. Payment received"
+                />
+              </label>
+              <Button type="submit" loading={lifecycleSubmitting}>
+                Reactivate tenant
+              </Button>
+            </form>
+          )}
+          {tenant.status === 'offboarding' && <p className={styles.hint}>This tenant is offboarding — no lifecycle transition is available yet.</p>}
+        </Card>
       )}
 
       <DataTable

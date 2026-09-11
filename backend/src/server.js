@@ -14,6 +14,7 @@ require('dotenv').config();
 
 const { createApp } = require('./app');
 const { startOutboxWorker, scheduleOutboxSweep } = require('./jobs/outbox-dispatcher');
+const { startTrialExpiryWorker, scheduleTrialExpirySweep } = require('./jobs/trial-expiry');
 
 const port = Number(process.env.PORT || 3000);
 
@@ -29,4 +30,13 @@ createApp().listen(port, () => {
 startOutboxWorker();
 scheduleOutboxSweep().catch((error) => {
   console.error('Failed to schedule the outbox dispatch sweep:', error);
+});
+
+// PLAN.md Phase 5: the trial-expiry sweep's worker and its periodic
+// scheduler (`src/jobs/trial-expiry.js`'s own header). Same unconditional
+// startup as the outbox worker above — Redis is already required
+// infrastructure this stack assumes is up.
+startTrialExpiryWorker();
+scheduleTrialExpirySweep().catch((error) => {
+  console.error('Failed to schedule the trial-expiry sweep:', error);
 });

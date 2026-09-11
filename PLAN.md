@@ -153,21 +153,21 @@ Phase 2 works in a demo. This phase is what makes staff trust it during a busy s
 
 Until now the product runs for tenants you create by hand. This phase makes it a business.
 
-- **Signup and provisioning (3.22)** — self-service, no engineer in the loop
-- **Plans and entitlements** — the single entitlement check, applied to already-built features
-- **Subscription billing** — recurring charges, invoices, dunning, pluggable processor
-- **Trial handling** — read-only degradation, never a hard lockout on a system holding live reservations
-- **Offboarding with full data export**
-- **Platform console** — tenant list, health, audited impersonation
-- **Data migration (3.20)** — import templates, dry run, dedupe, rollback
+- **Signup and provisioning (3.22)** — self-service, no engineer in the loop — ✅ **shipped**: `POST /api/v1/signup` creates the tenant, its first (`super_admin`) admin, an empty property, and the full seven-role SECURITY.md §5 permission matrix, all inside one transaction (see CLAUDE.md's own status section for the exact ordering and the cross-connection deadlock this pass found and fixed). Duplicate tenant slug and duplicate admin email are both rejected by real database constraints, not a check-then-write.
+- **Plans and entitlements** — the single entitlement check, applied to already-built features — 🔲 not built (this pass's own explicit scope boundary; `tenants.plan_id` exists in schema, unused)
+- **Subscription billing** — recurring charges, invoices, dunning, pluggable processor — 🔲 not built (explicitly deferred — see this pass's own scope boundary)
+- **Trial handling** — read-only degradation, never a hard lockout on a system holding live reservations — ✅ **shipped**: one project-wide policy (`src/shared/tenant-lifecycle.js`) enforced by one HTTP-level gate mirroring the impersonation read-only guard's own proven shape, plus a background sweep (`src/jobs/trial-expiry.js`) that transitions a lapsed trial to `suspended` — reads always succeed; only writes are blocked. `suspended` (both causes: lapsed trial and non-payment) and `trial` are both fully reachable at login — only `offboarding` is a hard block.
+- **Offboarding with full data export** — 🔲 not built (explicitly out of this pass's scope; only trial/active/suspended transitions exist)
+- **Platform console** — tenant list, health, audited impersonation — tenant list/impersonation **already shipped** in the prior Phase 5 platform-foundation pass; this pass adds ✅ **suspend/reactivate** and a genuine **platform-staff tiering** (`support`/`admin`, `platform_users.role`) gating impersonate/suspend/reactivate to the `admin` tier — closing this file's own prior "any MFA-verified platform account can impersonate any tenant" gap now that self-service signup means real customer data sits behind it
+- **Data migration (3.20)** — import templates, dry run, dedupe, rollback — 🔲 not built
 
 **Tests required to close:**
-- Entitlement gating enforced at the API, not just hidden in the UI — a tenant on a lower plan calling a gated endpoint directly is rejected
-- Trial expiry degrades to read-only and does not lock a hotel out of live reservations
-- Offboarding export contains the tenant's complete data
-- Impersonation is logged, time-bounded, and visible to the tenant
-- Platform console cannot read tenant data outside the impersonation path
-- Migration: dry run writes nothing, duplicate detection surfaces matches without auto-merging, rollback fully reverses a run
+- Entitlement gating enforced at the API, not just hidden in the UI — a tenant on a lower plan calling a gated endpoint directly is rejected — 🔲 not applicable yet (no entitlement/plan system exists)
+- Trial expiry degrades to read-only and does not lock a hotel out of live reservations — ✅ covered (`tests/auth/tenant-lifecycle.test.js`, `tests/jobs/trial-expiry-sweep.test.js`)
+- Offboarding export contains the tenant's complete data — 🔲 not built
+- Impersonation is logged, time-bounded, and visible to the tenant — ✅ covered (prior pass); platform-staff tiering on top of it — ✅ covered (`tests/platform/lifecycle.test.js`)
+- Platform console cannot read tenant data outside the impersonation path — ✅ covered (prior pass)
+- Migration: dry run writes nothing, duplicate detection surfaces matches without auto-merging, rollback fully reverses a run — 🔲 not built
 
 **Note on migration's placement:** it sits here because it is needed when onboarding real customers at volume, but pull it into Phase 1 for any single customer arriving with existing records.
 

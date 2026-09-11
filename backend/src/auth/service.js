@@ -1188,7 +1188,11 @@ async function completePlatformMfa({ token, code, enrollment, ip, userAgent, req
     await writeAuthEvent({ ...event, eventType: enrollment ? 'mfa_enrolled' : 'mfa_verified' }, trx);
     await writeAuthEvent({ ...event, eventType: 'login_success' }, trx);
     const accessToken = signAccessToken({ aud: 'platform', sub: String(user.id) }, { expiresIn: PLATFORM_ACCESS_TTL });
-    return { status: 'ok', accessToken, platformUserId: String(user.id) };
+    // PLAN.md Phase 5's platform-staff tiering — the frontend needs this to
+    // show or hide the impersonate/suspend/reactivate actions sensibly
+    // (UI-level convenience only; the real check is `requirePlatformRole`
+    // at the route, re-verified from the database on every request).
+    return { status: 'ok', accessToken, platformUserId: String(user.id), role: user.role };
   });
   if (result.error) throw result.error;
   return result;
@@ -1218,4 +1222,10 @@ module.exports = {
   confirmPlatformMfaEnrollment,
   verifyPlatformMfa,
   verifyStaffMfa,
+  // PLAN.md Phase 5 — self-service signup (`src/modules/signup/service.js`)
+  // is the second caller of this: mint the newly-created admin's first
+  // session at the end of the same provisioning transaction, the identical
+  // "hash a password, insert transactionally, sign in immediately" shape
+  // `staffLogin`/`verifyStaffMfa` already use, without duplicating it.
+  issueStaffSession,
 };

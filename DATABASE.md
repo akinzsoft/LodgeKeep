@@ -10,7 +10,8 @@ Reference schema for every module. Column lists are indicative rather than exhau
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `tenants` | name, slug, status (trial/active/suspended/offboarding), plan_id, trial_ends_at | The paying customer |
+| `tenants` | name, slug, status (trial/active/suspended/offboarding), plan_id, trial_ends_at | The paying customer. `status` is now genuinely enforced (PLAN.md Phase 5): a `trial` past `trial_ends_at`, or `suspended` (non-payment or a lapsed trial — both land in the same status), blocks every write but never a read (`src/shared/tenant-lifecycle.js`, `src/auth/tenant-lifecycle-guard.js`); only `offboarding` blocks reachability outright (`src/auth/tenant-resolution.js`) |
+| `tenant_signups` | email (UNIQUE), tenant_id | PLATFORM_SCOPED. Not a business table — one narrow job: enforce "one self-service signup per email, ever" as a real database constraint the signup transaction inserts into, not a check-then-write (`users.email` is unique only per tenant, so it cannot itself catch a repeat signup — every signup mints a brand-new `tenant_id`) |
 | `plans` | code, name, price, billing_interval, limits (JSON: properties, rooms, users) | |
 | `plan_entitlements` | plan_id, feature_key, enabled | One entitlement check reads this (3.22) |
 | `subscriptions` | tenant_id, plan_id, status, current_period_start/end, payment_method_ref | Never store card data — provider token only |
@@ -28,8 +29,8 @@ Reference schema for every module. Column lists are indicative rather than exhau
 | `mfa_devices` | tenant_id, user_id, type, secret, confirmed_at | UNIQUE(tenant_id, user_id, type) — one device per type per user. Replacing a device is remove-then-enrol, accepting a brief window without that factor, in exchange for never having two secrets of ambiguous precedence for the same type |
 | `password_resets` | tenant_id, user_id, token_hash, expires_at, used_at | Single-use, enforced as a conditional `UPDATE ... WHERE used_at IS NULL` with an affected-row check — never read-then-write, which would race |
 | `user_invitations` | tenant_id, property_id, email, role, invited_by_user_id, token_hash, expires_at, accepted_at | **PROPERTY_SCOPED, not tenant-scoped.** The property and role are fixed by whoever sends the invitation, not chosen by the invitee on acceptance — letting the invitee pick their own scope is a privilege-escalation path, not a minor omission (SECURITY.md §4: role is never global). Acceptance writes the corresponding `user_property_access` row. `invited_by_user_id` satisfies the audit requirement on permission grants (SECURITY.md §1.1) |
-| `platform_users` | email, password_hash, mfa_secret | Planmsys staff. **Separate table — no tenant_id** |
-| `impersonation_sessions` | platform_user_id, tenant_id, reason, started_at, ended_at | The audited access path (SECURITY.md §2) |
+| `platform_users` | email, password_hash, mfa_secret, role (support/admin) | Planmsys staff. **Separate table — no tenant_id**. `role` (PLAN.md Phase 5, added once self-service signup meant real customer data sat behind impersonation) gates impersonate/suspend/reactivate to `admin`; `support` can still read the roster and impersonation history. New rows default to `support` — an engineer provisioning one opts it INTO `admin` explicitly |
+| `impersonation_sessions` | platform_user_id, tenant_id, property_id, reason, started_at, ended_at | The audited access path (SECURITY.md §2) |
 | `guest_accounts` | property_id, guest_id, email, password_hash | **Separate from `users`** — a guest session must never satisfy a PMS route |
 
 **Property & configuration (3.19)**

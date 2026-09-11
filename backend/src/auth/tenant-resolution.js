@@ -57,9 +57,23 @@ async function resolveByCustomDomain(scoped, hostname) {
 /**
  * Resolves `req.tenantId` from the Host header (or the dev override) before
  * any route handler runs. A request whose host resolves to no tenant, or
- * resolves to one that is not `active`, gets the bare 404 API.md §5 uses for
+ * resolves to one that is `offboarding`, gets the bare 404 API.md §5 uses for
  * "does not exist" — deliberately indistinguishable from any other unresolved
  * lookup, so probing hostnames reveals nothing.
+ *
+ * PLAN.md Phase 5 gap closure: this used to require `status === 'active'`,
+ * which meant a `trial`-status tenant — the schema's own default, so every
+ * tenant that has EVER existed the moment it's created — could not reach
+ * login at all. That directly contradicted PRODUCT_REQUIREMENTS.md §3.22's
+ * "trial tenants must be fully usable while the trial is valid" and
+ * `tenants.status`'s own migration comment ("degrades to read-only, never a
+ * hard lockout"). `trial` and `suspended` must both resolve normally here —
+ * reachability and write access are separate questions; WHICH writes a
+ * suspended or trial-expired tenant may perform is
+ * `src/auth/tenant-lifecycle-guard.js`'s job, checked per-request after
+ * authentication, not this one-time Host-header lookup. `offboarding` alone
+ * stays a hard block — this pass builds no transition into that status, and
+ * the existing "cannot reach it at all" behaviour for it is left unchanged.
  */
 function resolveTenant({ db, systemContext }) {
   return async function resolveTenantMiddleware(req, res, next) {
@@ -77,7 +91,7 @@ function resolveTenant({ db, systemContext }) {
           : await resolveByCustomDomain(scoped, req.hostname);
       }
 
-      if (!tenantRow || tenantRow.status !== 'active') {
+      if (!tenantRow || tenantRow.status === 'offboarding') {
         res.status(404).json(fail(null, 'Not found.', { requestId: req.requestId }));
         return;
       }

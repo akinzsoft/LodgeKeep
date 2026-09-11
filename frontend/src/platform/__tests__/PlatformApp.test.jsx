@@ -68,7 +68,7 @@ describe('<PlatformApp> — the full state-machine wiring', () => {
 
     // Tenant detail — start impersonation.
     await screen.findByRole('heading', { name: 'Acme Hotels' });
-    await userEvent.type(screen.getByLabelText(/Reason/), 'Support ticket #1');
+    await userEvent.type(screen.getByLabelText('Reason (required, visible to the tenant)'), 'Support ticket #1');
     await userEvent.click(screen.getByRole('button', { name: 'Start impersonation' }));
 
     // Impersonated view — the real AppShell + banner, no dev-facing console chrome.

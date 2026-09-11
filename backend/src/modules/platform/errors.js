@@ -23,4 +23,24 @@ class PropertyNotInTenantError extends AppError {
   }
 }
 
-module.exports = { TenantNotFoundError, PropertyNotInTenantError, ValidationError };
+/**
+ * PLAN.md Phase 5's trial/suspend/reactivate lifecycle — `suspendTenant`/
+ * `reactivateTenant` each name the only starting statuses their transition
+ * accepts; a tenant found in any other status (already in the target
+ * state, or `offboarding`, which this pass builds no transition into or
+ * out of) gets this real, specific rejection rather than a silent no-op —
+ * `422`, matching this module's own existing "well-formed request, the
+ * real-world state just doesn't support it" convention.
+ */
+class InvalidTenantLifecycleTransitionError extends AppError {
+  constructor(currentStatus, attemptedTransitionTo) {
+    super(
+      'VALIDATION_INVALID_TENANT_TRANSITION',
+      `Cannot transition a tenant from "${currentStatus}" to "${attemptedTransitionTo}".`,
+      422,
+      { currentStatus, attemptedTransitionTo }
+    );
+  }
+}
+
+module.exports = { TenantNotFoundError, PropertyNotInTenantError, InvalidTenantLifecycleTransitionError, ValidationError };

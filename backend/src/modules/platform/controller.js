@@ -73,6 +73,35 @@ async function listImpersonationSessionsForPlatform(req, res, next) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Tenant lifecycle — PLAN.md Phase 5, admin-tier only (requirePlatformRole
+// at the route)
+// ---------------------------------------------------------------------
+
+async function suspendTenant(req, res, next) {
+  try {
+    const reason = require_(req.body, 'reason');
+    const result = await service.suspendTenant({ context: req.context, tenantId: req.params.id, reason, ...requestMeta(req) });
+    res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function reactivateTenant(req, res, next) {
+  try {
+    const result = await service.reactivateTenant({
+      context: req.context,
+      tenantId: req.params.id,
+      reason: req.body?.reason,
+      ...requestMeta(req),
+    });
+    res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
 /** POST /impersonation/end — mounted on the STAFF tree, ahead of the read-only guard; the caller's own token IS the authorization to end its own grant. A no-op (never an error) for an ordinary staff token, which has no grant to end. */
 async function endImpersonation(req, res, next) {
   try {
@@ -102,4 +131,6 @@ module.exports = {
   listImpersonationSessionsForPlatform,
   endImpersonation,
   listImpersonationSessionsForTenant,
+  suspendTenant,
+  reactivateTenant,
 };

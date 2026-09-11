@@ -21,8 +21,12 @@
 const { staffAuthRouter, portalAuthRouter, platformAuthRouter } = require('./routes');
 const { authenticate } = require('./middleware');
 const { requirePermission } = require('./rbac');
+const { requirePlatformRole } = require('./platform-rbac');
 const { writeAuthEvent } = require('./events');
 const { rejectMutationDuringImpersonation } = require('./impersonation-guard');
+const { rejectMutationForTenantLifecycle } = require('./tenant-lifecycle-guard');
+const { issueStaffSession } = require('./service');
+const { hashPassword, validatePassword } = require('./password');
 
 module.exports = {
   staffAuthRouter,
@@ -30,6 +34,11 @@ module.exports = {
   platformAuthRouter,
   authenticate,
   requirePermission,
+  requirePlatformRole,
   writeAuthEvent,
   rejectMutationDuringImpersonation,
+  rejectMutationForTenantLifecycle,
+  issueStaffSession,
+  hashPassword,
+  validatePassword,
 };

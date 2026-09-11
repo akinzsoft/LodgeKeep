@@ -76,3 +76,18 @@ export function endImpersonation() {
 export function listOwnImpersonationSessions() {
   return request('/impersonation-sessions');
 }
+
+// ---------------------------------------------------------------------
+// Tenant lifecycle — PLAN.md Phase 5. Both `admin`-tier only server-side
+// (`requirePlatformRole('admin')`) — a `support`-tier account gets a real
+// 403 calling either, surfaced through TenantDetailScreen's own existing
+// error-banner pattern, same as any other backend rejection.
+// ---------------------------------------------------------------------
+
+export function suspendTenant(tenantId, reason) {
+  return request(`/platform/tenants/${tenantId}/suspend`, { method: 'POST', body: { reason } });
+}
+
+export function reactivateTenant(tenantId, reason) {
+  return request(`/platform/tenants/${tenantId}/reactivate`, { method: 'POST', body: { reason: reason || undefined } });
+}

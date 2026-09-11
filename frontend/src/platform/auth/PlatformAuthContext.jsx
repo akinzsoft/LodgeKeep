@@ -38,6 +38,12 @@ export function PlatformAuthProvider({ children }) {
   const [enrollment, setEnrollment] = useState(null); // { enrollmentToken, otpAuthUrl, qrCodeDataUrl, manualEntryKey }
   const [challengeToken, setChallengeToken] = useState(null);
   const [impersonation, setImpersonation] = useState(null); // { tenantId, tenantName, propertyId, impersonationSessionId, expiresAt }
+  // PLAN.md Phase 5's platform-staff tiering (SECURITY.md §2) — 'support' or
+  // 'admin', set once login completes. UI-level convenience only (shows/hides
+  // the impersonate/suspend/reactivate actions sensibly); the real check is
+  // `requirePlatformRole('admin')` at the route, re-verified from the
+  // database on every request.
+  const [role, setRole] = useState(null);
 
   const platformTokenRef = useRef(null);
   const impersonationTokenRef = useRef(null);
@@ -55,6 +61,7 @@ export function PlatformAuthProvider({ children }) {
     setEnrollment(null);
     setChallengeToken(null);
     setError(null);
+    setRole(null);
     setStatus('idle');
   }, []);
 
@@ -105,6 +112,7 @@ export function PlatformAuthProvider({ children }) {
         platformTokenRef.current = result.accessToken;
         activatePlatformToken();
         setEnrollment(null);
+        setRole(result.role);
         setStatus('authenticated');
       } catch (caught) {
         setError(caught instanceof ApiError ? caught.message : 'That code did not work. Try again.');
@@ -121,6 +129,7 @@ export function PlatformAuthProvider({ children }) {
         platformTokenRef.current = result.accessToken;
         activatePlatformToken();
         setChallengeToken(null);
+        setRole(result.role);
         setStatus('authenticated');
       } catch (caught) {
         setError(caught instanceof ApiError ? caught.message : 'That code did not work. Try again.');
@@ -181,6 +190,7 @@ export function PlatformAuthProvider({ children }) {
         error,
         enrollment,
         impersonation,
+        role,
         login,
         confirmEnrollment,
         verifyMfa,

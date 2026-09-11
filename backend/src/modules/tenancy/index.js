@@ -20,8 +20,10 @@ const {
   systemContext,
   workerContext,
   withActiveProperty,
+  withTenantLifecycle,
 } = require('./context');
 const { resolvePropertyBySlug } = require('./property-resolution');
+const { SYSTEM_ROLES, ALL_PERMISSION_KEYS, DEFAULT_ROLE_PERMISSIONS } = require('./default-rbac');
 
 module.exports = {
   createScopedDb,
@@ -33,5 +35,9 @@ module.exports = {
   systemContext,
   workerContext,
   withActiveProperty,
+  withTenantLifecycle,
   resolvePropertyBySlug,
+  SYSTEM_ROLES,
+  ALL_PERMISSION_KEYS,
+  DEFAULT_ROLE_PERMISSIONS,
 };

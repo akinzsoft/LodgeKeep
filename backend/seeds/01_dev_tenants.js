@@ -607,6 +607,12 @@ exports.seed = async function seed(knex) {
       password_hash: passwordHash,
       first_name: 'LodgeKeep',
       last_name: 'Support',
+      // PLAN.md Phase 5 gap closure — platform-staff tiering: this is the
+      // one seeded platform account a developer clicks through manually,
+      // so it needs the `admin` tier to exercise impersonate/suspend/
+      // reactivate, not the safer `support` default a real new hire's
+      // account should get.
+      role: 'admin',
     });
     console.log('[seed] Platform console dev login — first login triggers real TOTP enrollment (scan the QR/enter the manual key):');
     console.log(`  email=${PLATFORM_EMAIL}  password=${DEV_PASSWORD}`);

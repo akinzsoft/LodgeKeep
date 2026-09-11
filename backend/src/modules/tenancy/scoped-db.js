@@ -566,6 +566,90 @@ function accessorFor(connection, context) {
     },
 
     /**
+     * PLAN.md Phase 5 — the one write a platform context may make to a
+     * NAMED tenant's own lifecycle status (`trial`/`active`/`suspended`).
+     * Deliberately separate from `platformDirectory()` above, which stays
+     * fully read-only — that refusal is about a platform admin never
+     * touching a tenant's own OPERATIONAL configuration (name, slug, its
+     * properties) through this side door. A tenant's *lifecycle* status is
+     * different in kind: no "tenant's own authenticated flow" can suspend
+     * itself for non-payment or reactivate itself before billing exists
+     * (PLAN.md Phase 5's next pass), so a platform-initiated write is the
+     * only real path. Also deliberately separate from `workerContext()`
+     * (`context.js`) — reserved for a caller with no externally-supplied
+     * tenant id at all (a job's own already-committed fact); this entry
+     * point's `tenantId` legitimately comes from a platform console
+     * request's URL param, the identical shape `startImpersonation`/
+     * `getTenantWithProperties` already use to name which tenant a
+     * platform admin acts on.
+     *
+     * `changeStatus` is a single conditional UPDATE, never read-then-write
+     * (ARCHITECTURE.md §5): `fromStatuses` names the only starting states
+     * the transition accepts, and the returned affected-row count is the
+     * caller's proof of whether it actually happened — zero means the
+     * tenant wasn't in an eligible state, which the caller turns into a
+     * real "invalid transition" error rather than a silent no-op.
+     */
+    platformTenantLifecycle: () => {
+      if (context.audience !== AUDIENCES.PLATFORM) {
+        throw new ScopeContextError(
+          'A tenant lifecycle transition requires a real platform context.',
+          { audience: context.audience }
+        );
+      }
+      return {
+        changeStatus: (tenantId, fromStatuses, changes) =>
+          connection('tenants').where({ id: tenantId }).whereIn('status', fromStatuses).update(changes),
+        // `audit_log` is TENANT_SCOPED and this accessor's own context never
+        // carries a tenantId (a platform context always has `tenantId: null`)
+        // — recording the transition needs a context that does. The SAME
+        // rebind-onto-the-same-connection mechanism `provisionTenant`
+        // already established: a SEPARATE connection writing `audit_log`
+        // while this one still holds the just-updated `tenants` row locked
+        // is the identical cross-connection deadlock class
+        // `src/modules/signup/service.js` found and fixed for
+        // `issueStaffSession` — staying on this connection avoids it
+        // entirely rather than re-discovering it here.
+        withContext: (newContext) => accessorFor(connection, newContext),
+      };
+    },
+
+    /**
+     * PLAN.md Phase 5 — the one write path allowed to create a brand-new
+     * `tenants` row. Every ordinary write requires a `context.tenantId` that
+     * tenant creation itself cannot have yet (`scopeRequirements` above
+     * throws for exactly this reason) — this is the narrow, reviewable
+     * exception `platformDirectory()`'s own refusal message already named
+     * ("through the tenant's own authenticated flow (signup, setup)
+     * instead"). Requires a SYSTEM context — never built from a request,
+     * wired directly into the signup service.
+     *
+     * Returns `{ tenantId, withContext }` rather than just the raw id:
+     * `withContext(newContext)` binds a FRESH context to this SAME
+     * `connection` (the transaction, if the caller is inside one) — so
+     * everything the signup flow inserts next (the property, the seven
+     * roles, the permission grants, the first admin user, their property
+     * access) lands in the identical transaction as the tenant row it
+     * depends on existing, and a failure at any later step rolls all of it
+     * back together (ARCHITECTURE.md §4). Context construction stays in
+     * `context.js`, not here — this file only rebinds an already-trusted
+     * context object onto the connection it was given.
+     */
+    provisionTenant: async (row) => {
+      if (context.audience !== AUDIENCES.SYSTEM) {
+        throw new ScopeContextError(
+          'Tenant provisioning requires a system context (no session exists yet).',
+          { audience: context.audience }
+        );
+      }
+      const [tenantId] = await connection('tenants').insert(row);
+      return {
+        tenantId: String(tenantId),
+        withContext: (newContext) => accessorFor(connection, newContext),
+      };
+    },
+
+    /**
      * GLOBAL_REFERENCE tables — the seeded, tenant-independent catalogues.
      * Read-only: ARCHITECTURE.md §3 reserves this scope for data "never editable
      * by a tenant", so the accessor offers no write path to it at all. Seeding

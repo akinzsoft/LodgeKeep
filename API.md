@@ -85,8 +85,10 @@ Three identity populations, three token issuers, three sets of routes — see PR
 
 - **`/api/v1/*`** (the PMS proper) accepts staff tokens only. A guest or platform token here returns `401 AUTH_WRONG_AUDIENCE`.
 - **`/api/v1/portal/*`** accepts guest tokens only, or no token for public browsing/booking endpoints (availability search, menu browsing).
-- **`/api/v1/platform/*`** accepts platform-staff tokens only, and every route here that touches tenant data requires an active impersonation grant (SECURITY.md §2) — checked per request, not just at token issuance.
-- The **public allow-list** is small and explicit: login endpoints for all three audiences, password-reset request, guest availability search, guest menu browsing, and webhook receivers (which authenticate by signature, not by bearer token — ARCHITECTURE.md §7). Every other route requires a valid token by default; a route is public because it's on this list, never because a decorator was forgotten (this is what TESTING.md AUTH-15 verifies).
+- **`/api/v1/platform/*`** accepts platform-staff tokens only, and every route here that touches tenant data requires an active impersonation grant (SECURITY.md §2) — checked per request, not just at token issuance. Three routes additionally require the `admin` platform tier, not just `support` (PLAN.md Phase 5): `POST /platform/tenants/:id/impersonate`, `/suspend`, `/reactivate` — a `support`-tier token gets `403 FORBIDDEN_PLATFORM_ROLE`.
+- **`/api/v1/signup`** (PLAN.md Phase 5, PRODUCT_REQUIREMENTS.md §3.22) is its own mount, entirely public, on neither the staff nor the platform tree — no tenant, user, or session exists yet at the point it runs, which both of those trees presuppose.
+- The **public allow-list** is small and explicit: login endpoints for all three audiences, password-reset request, guest availability search, guest menu browsing, self-service tenant signup, and webhook receivers (which authenticate by signature, not by bearer token — ARCHITECTURE.md §7). Every other route requires a valid token by default; a route is public because it's on this list, never because a decorator was forgotten (this is what TESTING.md AUTH-15 verifies).
+- **A staff request against a `trial`-expired or `suspended` tenant** (PLAN.md Phase 5) still authenticates normally and every read still succeeds — only a mutating request gets `403 FORBIDDEN_TENANT_READ_ONLY`, enforced once, structurally, by the same kind of HTTP-method gate the impersonation read-only rule already uses (SECURITY.md §2).
 
 ## 5. Resource endpoint conventions
 
