@@ -127,6 +127,16 @@ export const DEFAULT_NAV_GROUPS = [
       // it, unlike AR/Group Blocks' broader "manager + some operational
       // roles get .view" shape).
       { key: 'billing', label: 'Billing', requiredPermission: 'billing.view' },
+      // PLAN.md Phase 5 (data migration) — PRODUCT_REQUIREMENTS.md §3.20's
+      // own UI text: "Admin only, and typically used once." Filed under
+      // SETUP alongside AR/Group Blocks (a genuine multi-step workflow —
+      // upload, dry run, duplicate review, commit/progress, history — the
+      // same "big enough to need several tabs of its own" shape those two
+      // established, not Offboarding's "tuck into an existing screen"
+      // single-action shape). Gated on the one key this module has —
+      // `migration.manage`, admin/super_admin only, no view/manage split,
+      // mirroring `offboarding.manage`'s own precedent exactly.
+      { key: 'migration', label: 'Data Migration', requiredPermission: 'migration.manage' },
     ],
   },
 ];

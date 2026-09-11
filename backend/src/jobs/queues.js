@@ -26,6 +26,15 @@
  * `enqueueTenantDataExportJob`. A slow multi-table export bundling a
  * large tenant's whole history must never delay any of the other four
  * queues' own work, and vice versa.
+ *
+ * `imports` (PLAN.md Phase 5's last unbuilt bullet, data migration,
+ * PRODUCT_REQUIREMENTS.md §3.20) is the sixth — ARCHITECTURE.md §14 named
+ * this queue from the start; it finally has a real job category behind
+ * it. One-off/reactive only, the same shape `tenant-data-export` already
+ * established (no scheduler, only `enqueueDataImportJob` right after an
+ * operator confirms commit) — a slow row-by-row import committing
+ * thousands of historical reservations must never delay any other queue's
+ * work, and vice versa.
  */
 
 const { Queue } = require('bullmq');
@@ -35,11 +44,13 @@ const OUTBOX_DISPATCH_QUEUE = 'outbox-dispatch';
 const TRIAL_EXPIRY_QUEUE = 'trial-expiry';
 const SUBSCRIPTION_BILLING_QUEUE = 'subscription-billing';
 const TENANT_DATA_EXPORT_QUEUE = 'tenant-data-export';
+const DATA_IMPORT_QUEUE = 'imports';
 
 let queue = null;
 let trialExpiryQueueInstance = null;
 let subscriptionBillingQueueInstance = null;
 let tenantDataExportQueueInstance = null;
+let dataImportQueueInstance = null;
 
 function outboxDispatchQueue() {
   if (!queue) {
@@ -69,6 +80,13 @@ function tenantDataExportQueue() {
   return tenantDataExportQueueInstance;
 }
 
+function dataImportQueue() {
+  if (!dataImportQueueInstance) {
+    dataImportQueueInstance = new Queue(DATA_IMPORT_QUEUE, { connection: redisConnection() });
+  }
+  return dataImportQueueInstance;
+}
+
 /** Test-only teardown — BullMQ's `Queue` holds its own connection handles beyond the shared `redisConnection()` instance, and both must close for the process to exit without `--forceExit`. */
 async function __closeQueuesForTesting() {
   if (queue) {
@@ -87,6 +105,10 @@ async function __closeQueuesForTesting() {
     await tenantDataExportQueueInstance.close();
     tenantDataExportQueueInstance = null;
   }
+  if (dataImportQueueInstance) {
+    await dataImportQueueInstance.close();
+    dataImportQueueInstance = null;
+  }
 }
 
 module.exports = {
@@ -98,5 +120,7 @@ module.exports = {
   subscriptionBillingQueue,
   TENANT_DATA_EXPORT_QUEUE,
   tenantDataExportQueue,
+  DATA_IMPORT_QUEUE,
+  dataImportQueue,
   __closeQueuesForTesting,
 };

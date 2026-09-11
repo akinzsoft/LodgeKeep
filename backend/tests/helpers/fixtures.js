@@ -159,6 +159,7 @@ async function seedTwoTenants(trx) {
     subscriptions: [],
     subscriptionInvoices: [],
     subscriptionPayments: [],
+    importRuns: [],
   });
 
   // Two symmetric example hotels, not one reference customer
@@ -1362,6 +1363,7 @@ async function seedTwoTenants(trx) {
     ['billing.view', 'billing'],
     ['billing.manage', 'billing'],
     ['offboarding.manage', 'offboarding'],
+    ['migration.manage', 'migration'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -1589,6 +1591,17 @@ async function seedTwoTenants(trx) {
     ]);
   }
 
+  // Data migration (PLAN.md Phase 5's last unbuilt bullet) — a single key,
+  // admin/super_admin only, mirroring `offboarding.manage` immediately
+  // above verbatim (see `20260927095000_seed_migration_permissions.js`'s
+  // own header).
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['migration.manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['migration.manage'] },
+    ]);
+  }
+
   // Subscription billing (PLAN.md Phase 5) — `plans` is GLOBAL_REFERENCE,
   // seeded for real by 20260924090000_create_plans.js (the 'standard'
   // plan), so this is a select-or-insert exactly like the permissions
@@ -1658,6 +1671,53 @@ async function seedTwoTenants(trx) {
         status: 'CAPTURED',
         captured_at: new Date('2026-12-01T00:00:00Z'),
       }),
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Data migration (PLAN.md Phase 5's last unbuilt bullet) — one
+  // completed `import_runs` row per tenant (a `guests` entity_type run,
+  // property_id null, matching that entity type's own real shape) plus
+  // one `import_row_errors` and one `imported_record_map` row hanging off
+  // it, so `tests/helpers/entities.js`'s own `import_row_errors`/
+  // `imported_record_map` newRow cases have a real parent run to
+  // reference — the same "child table needs its own parent fixture row"
+  // shape `ar_invoice_lines`/`ar_payment_applications` above already
+  // established for their own parents.
+  // ------------------------------------------------------------------
+  for (const t of both) {
+    t.importRuns.push({
+      id: await insertReturningId(trx, 'import_runs', {
+        tenant_id: t.id,
+        property_id: null,
+        entity_type: 'guests',
+        status: 'completed',
+        original_filename: 'fixture-guests.csv',
+        file_path: `/tmp/isolation-fixture-${t.slug}-import.csv`,
+        rows_total: 1,
+        rows_created: 1,
+        rows_skipped: 0,
+        run_by_user_id: t.users[0].id,
+        completed_at: new Date('2026-12-01T00:00:00Z'),
+      }),
+    });
+
+    await trx('import_row_errors').insert({
+      tenant_id: t.id,
+      import_run_id: t.importRuns[0].id,
+      row_number: 1,
+      column_name: 'email',
+      severity: 'error',
+      message: 'Fixture row — "email" is required.',
+    });
+
+    await trx('imported_record_map').insert({
+      tenant_id: t.id,
+      import_run_id: t.importRuns[0].id,
+      row_number: 2,
+      entity_type: 'guest',
+      entity_id: t.guests[0].id,
+      created: true,
     });
   }
 

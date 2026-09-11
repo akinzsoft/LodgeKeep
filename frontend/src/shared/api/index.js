@@ -17,3 +17,4 @@ export * as groupBlocksApi from './group-blocks.js';
 export * as platformApi from './platform.js';
 export * as billingApi from './billing.js';
 export * as offboardingApi from './offboarding.js';
+export * as migrationApi from './migration.js';

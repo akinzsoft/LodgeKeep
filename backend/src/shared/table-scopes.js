@@ -313,6 +313,23 @@ const TABLE_SCOPES = Object.freeze({
   // already established. Reached only through hand-written queries in
   // src/modules/offboarding/service.js and the export job.
   tenant_data_exports: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
+
+  // Data migration — PLAN.md Phase 5's last unbuilt bullet,
+  // PRODUCT_REQUIREMENTS.md §3.20. 20260927091000_create_import_runs
+  // through 20260927093000_create_imported_record_map.
+  //
+  // All three TENANT_SCOPED — an import run (and the row-level findings and
+  // rollback map hanging off it) is real tenant-owned migration history
+  // ("what was imported, what was skipped, and why" — §3.20's own
+  // "migration report" requirement), not Planmsys-internal bookkeeping the
+  // way `tenant_data_exports`/`subscriptions` above are. `import_runs`
+  // carries a nullable `property_id` ATTRIBUTION column (following
+  // `audit_log`'s own precedent) — real data for the two entity types that
+  // need one (reservations, ar_balances), never required or injected by
+  // the accessor.
+  import_runs: { scope: SCOPES.TENANT, attributionColumns: ['property_id'] },
+  import_row_errors: { scope: SCOPES.TENANT },
+  imported_record_map: { scope: SCOPES.TENANT },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

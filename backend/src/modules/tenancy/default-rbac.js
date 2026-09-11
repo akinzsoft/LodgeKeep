@@ -56,6 +56,7 @@ const ALL_PERMISSION_KEYS = Object.freeze([
   'billing.view',
   'billing.manage',
   'offboarding.manage',
+  'migration.manage',
 ]);
 
 /** Every catalogue key except `room_types.update` — `admin`'s own exact exclusion (SECURITY.md §5). */
