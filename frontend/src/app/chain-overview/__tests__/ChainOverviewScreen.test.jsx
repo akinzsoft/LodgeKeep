@@ -97,10 +97,16 @@ describe('<ChainOverviewScreen>', () => {
     expect(await screen.findByText(/no active properties in this tenant yet/i)).toBeInTheDocument();
   });
 
-  it('shows the real backend error when the load fails', async () => {
+  it('shows the real backend error when the load fails, in the top banner AND the property table (never the generic "no properties" message)', async () => {
     mocks.getChainOverview.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'You do not have access to this report.' }));
     render(<ChainOverviewScreen />);
     expect(await screen.findByRole('alert')).toHaveTextContent('You do not have access to this report.');
+    // The property breakdown table must surface the same real error too —
+    // never the generic "No active properties" message, which would be
+    // actively misleading on a genuine load failure rather than a real
+    // zero-property tenant.
+    expect(screen.getAllByText('You do not have access to this report.').length).toBeGreaterThan(1);
+    expect(screen.queryByText(/no active properties in this tenant yet/i)).not.toBeInTheDocument();
   });
 
   it('Refresh re-fetches the overview', async () => {

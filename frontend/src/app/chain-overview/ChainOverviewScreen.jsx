@@ -147,7 +147,7 @@ export function ChainOverviewScreen({ isOffline = false }) {
       <DataTable
         title="Property breakdown"
         state={loading ? 'loading' : properties.length === 0 ? 'empty' : 'success'}
-        emptyMessage="No active properties in this tenant yet."
+        emptyMessage={error ?? 'No active properties in this tenant yet.'}
         columns={[
           { key: 'propertyName', label: 'Property' },
           { key: 'businessDate', label: 'Business date', render: (row) => row.businessDate ?? 'Not yet configured' },
