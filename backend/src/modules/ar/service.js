@@ -124,7 +124,14 @@ async function recomputeArAccountBalance({ trx, arAccountId }) {
   const payments = await trx.table('ar_payments').where({ ar_account_id: arAccountId }).whereNull('voided_at').forUpdate();
   const paymentTotal = sumMoney(payments.map((payment) => payment.amount));
 
-  const balance = sumMoney([chargeTotal, negateMoney(paymentTotal)]);
+  // PLAN.md Phase 5 (data migration): `opening_balance_imported` is the
+  // third additive term — a migrated opening balance has no real
+  // `folio_line_items` behind it (§3.20: "bring balances forward as
+  // opening AR entries rather than reconstructing closed folios"), so it
+  // cannot be summed via the `charges` query above. Defaults to '0.00' for
+  // every account nothing has ever migrated into — a genuine no-op for
+  // every account that predates this pass.
+  const balance = sumMoney([chargeTotal, negateMoney(paymentTotal), account.opening_balance_imported]);
   const isOverLimit = compareMoney(balance, account.credit_limit) > 0;
 
   await trx.table('ar_accounts').where({ id: arAccountId }).update({ current_balance: balance, is_over_limit: isOverLimit });

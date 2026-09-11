@@ -55,6 +55,7 @@ const { platformConsoleRouter, staffImpersonationRouter } = require('./modules/p
 const { signupRouter } = require('./modules/signup');
 const { billingRouter, billingWebhookRouter } = require('./modules/billing');
 const { offboardingRouter } = require('./modules/offboarding');
+const { migrationRouter } = require('./modules/migration');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -110,6 +111,11 @@ function buildStaffRouter() {
   router.use(arRouter());
   router.use(groupBlocksRouter());
   router.use(billingRouter());
+  // PLAN.md Phase 5's last unbuilt bullet — data migration
+  // (PRODUCT_REQUIREMENTS.md §3.20). No special ordering need, unlike
+  // offboarding/impersonation above — a migration run never has to survive
+  // a read-only tenant-lifecycle state or an impersonation grant.
+  router.use(migrationRouter());
   router.use((req, res) => notFound(res));
   return router;
 }
