@@ -8,13 +8,15 @@ const mocks = vi.hoisted(() => ({
   listInvoices: vi.fn(),
   startPaymentMethodCheckout: vi.fn(),
   completePaymentMethod: vi.fn(),
+  getOffboardingStatus: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return {
     ...actual,
-    billingApi: { ...actual.billingApi, ...mocks },
+    billingApi: { ...actual.billingApi, getOverview: mocks.getOverview, listInvoices: mocks.listInvoices, startPaymentMethodCheckout: mocks.startPaymentMethodCheckout, completePaymentMethod: mocks.completePaymentMethod },
+    offboardingApi: { ...actual.offboardingApi, getOffboardingStatus: mocks.getOffboardingStatus },
   };
 });
 
@@ -48,6 +50,7 @@ describe('<BillingScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listInvoices.mockResolvedValue([]);
+    mocks.getOffboardingStatus.mockResolvedValue({ status: 'active', offboardingRequestedAt: null, retentionExpiresAt: null, latestExport: null });
   });
 
   it('shows no active subscription and the default plan when none exists yet', async () => {

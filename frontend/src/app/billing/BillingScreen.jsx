@@ -3,6 +3,7 @@ import { Card, DataTable, Button, StatusPill } from '../../shared/components/ind
 import { Money } from '../../shared/format/money.jsx';
 import { billingApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
+import { OffboardingSection } from './OffboardingSection.jsx';
 import styles from './BillingScreen.module.css';
 
 /** DESIGN_SYSTEM.md §1: status is always a filled pill with a text label, never colour alone. `subscriptions.status` -> tone/label, owned here since this is the one screen that reads it. */
@@ -221,6 +222,8 @@ export function BillingScreen({ isOffline = false }) {
         rows={invoices ?? []}
         rowKey={(row) => row.id}
       />
+
+      <OffboardingSection isOffline={isOffline} />
     </div>
   );
 }

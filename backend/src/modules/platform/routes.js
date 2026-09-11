@@ -21,9 +21,10 @@
  *
  * PLAN.md Phase 5's platform-staff tiering (SECURITY.md §2, revisited once
  * self-service signup meant real customer data sat behind these routes):
- * `requirePlatformRole('admin')` gates exactly the three actions that
- * reach or change a tenant's real state — impersonate, suspend, reactivate.
- * The tenant roster and impersonation-history reads stay open to both
+ * `requirePlatformRole('admin')` gates exactly the actions that reach or
+ * change a tenant's real state — impersonate, suspend, reactivate, and
+ * (PLAN.md Phase 5 offboarding) offboard. The tenant roster and
+ * impersonation-history reads stay open to both
  * tiers (`support` and `admin`) — a support account can still see account
  * info for triage without being able to act on it.
  */
@@ -44,6 +45,7 @@ function platformConsoleRouter() {
   router.post('/tenants/:id/impersonate', requirePlatformRole('admin'), controller.startImpersonation);
   router.post('/tenants/:id/suspend', requirePlatformRole('admin'), controller.suspendTenant);
   router.post('/tenants/:id/reactivate', requirePlatformRole('admin'), controller.reactivateTenant);
+  router.post('/tenants/:id/offboard', requirePlatformRole('admin'), controller.offboardTenant);
 
   return router;
 }

@@ -16,6 +16,7 @@ const { createApp } = require('./app');
 const { startOutboxWorker, scheduleOutboxSweep } = require('./jobs/outbox-dispatcher');
 const { startTrialExpiryWorker, scheduleTrialExpirySweep } = require('./jobs/trial-expiry');
 const { startSubscriptionBillingWorker, scheduleSubscriptionBillingSweep } = require('./jobs/subscription-billing');
+const { startTenantDataExportWorker } = require('./jobs/tenant-data-export');
 
 const port = Number(process.env.PORT || 3000);
 
@@ -49,3 +50,9 @@ startSubscriptionBillingWorker();
 scheduleSubscriptionBillingSweep().catch((error) => {
   console.error('Failed to schedule the subscription-billing sweep:', error);
 });
+
+// PLAN.md Phase 5 (tenant offboarding) — `src/jobs/tenant-data-export.js`'s
+// own header. A one-off, reactive-only job (unlike the three above) — no
+// periodic scheduler call here, since nothing sweeps for stuck exports in
+// this pass (that file's own header flags this as a real, narrower gap).
+startTenantDataExportWorker();

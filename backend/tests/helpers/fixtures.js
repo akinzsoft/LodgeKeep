@@ -1361,6 +1361,7 @@ async function seedTwoTenants(trx) {
     ['group_blocks.manage', 'group_blocks'],
     ['billing.view', 'billing'],
     ['billing.manage', 'billing'],
+    ['offboarding.manage', 'offboarding'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -1575,6 +1576,16 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['billing.manage'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['billing.view'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['billing.manage'] },
+    ]);
+  }
+
+  // Tenant offboarding (PLAN.md Phase 5) — a single key, admin/super_admin
+  // only, no operational role has a reason to even view this (see
+  // `20260925092000_seed_offboarding_permissions.js`'s own header).
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['offboarding.manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['offboarding.manage'] },
     ]);
   }
 

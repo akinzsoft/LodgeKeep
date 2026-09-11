@@ -102,6 +102,20 @@ async function reactivateTenant(req, res, next) {
   }
 }
 
+async function offboardTenant(req, res, next) {
+  try {
+    const result = await service.offboardTenant({
+      context: req.context,
+      tenantId: req.params.id,
+      reason: req.body?.reason,
+      ...requestMeta(req),
+    });
+    res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
 /** POST /impersonation/end — mounted on the STAFF tree, ahead of the read-only guard; the caller's own token IS the authorization to end its own grant. A no-op (never an error) for an ordinary staff token, which has no grant to end. */
 async function endImpersonation(req, res, next) {
   try {
@@ -133,4 +147,5 @@ module.exports = {
   listImpersonationSessionsForTenant,
   suspendTenant,
   reactivateTenant,
+  offboardTenant,
 };

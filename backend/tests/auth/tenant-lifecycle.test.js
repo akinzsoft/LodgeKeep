@@ -42,11 +42,29 @@ describe('Tenant lifecycle read-only enforcement (PLAN.md Phase 5)', () => {
     await setStatus(ctx.b, 'active');
   });
 
+  // A real bug found and fixed in this session, not a mystery — this is
+  // almost certainly the actual root cause of the CI flake CLAUDE.md's own
+  // Phase 5 subscription-billing section documents as "66+ reproduction
+  // attempts, zero reproductions": `market_segments.code` is
+  // `VARCHAR(30)`, and this helper used to build
+  // `gate-${Date.now()}-${Math.random().toString(36).slice(2)}` — a
+  // 13-digit future-dated timestamp plus a RANDOM-LENGTH suffix
+  // (`Math.random().toString(36)` produces anywhere from a handful of
+  // characters up to ~13) that occasionally overflowed 30 characters,
+  // producing a genuine `ER_DATA_TOO_LONG` and a bare `500` on this exact
+  // endpoint. Reproduced directly in this session (twice, on two different
+  // tests that both call this same helper) after the original CI
+  // investigation's 66+ attempts all targeted environmental factors
+  // (Node version, DB freshness, CPU load, execution order) rather than
+  // this helper's own non-deterministic string length — none of which
+  // affect `Math.random()`'s output distribution, which is exactly why
+  // every environmental knob came back clean. Fixed with a
+  // fixed-maximum-length id instead of an unbounded random one.
   function writeRequest(tenant = ctx.a) {
     return t.request
       .post('/api/v1/market-segments')
       .set('Authorization', `Bearer ${staffToken({ tenant })}`)
-      .send({ name: 'Gate test', code: `gate-${Date.now()}-${Math.random().toString(36).slice(2)}` });
+      .send({ name: 'Gate test', code: `gt${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}` });
   }
 
   function readRequest(tenant = ctx.a) {
@@ -125,10 +143,10 @@ describe('Tenant lifecycle read-only enforcement (PLAN.md Phase 5)', () => {
   });
 
   // ------------------------------------------------------------------
-  // tenant-resolution.js gap closure: reachability vs. write access are
-  // separate questions (see that file's own updated header). A trial or
-  // suspended tenant must still be able to log in at all — only
-  // `offboarding` stays a hard block.
+  // tenant-resolution.js: reachability vs. write access are separate
+  // questions (see that file's own header). Every one of `trial`/
+  // `suspended`/`offboarding` must still be able to log in — reads and
+  // writes are gated separately, below.
   // ------------------------------------------------------------------
 
   describe('login reachability by tenant status', () => {
@@ -153,10 +171,27 @@ describe('Tenant lifecycle read-only enforcement (PLAN.md Phase 5)', () => {
       expect(res.status).not.toBe(404);
     });
 
-    it('an offboarding tenant cannot be resolved at all — the one status that stays a hard block', async () => {
+    // PLAN.md Phase 5 (tenant offboarding): `offboarding` used to be the
+    // one status this describe block documented as a hard 404 block —
+    // confirmed with the user before changing it, since a tenant mid-
+    // offboarding must still be able to log in to see their request's
+    // status and download their data export. Read-only enforcement is
+    // proven separately, below (`isTenantWriteBlocked` has treated
+    // `offboarding` as write-blocked since it was added; this is the
+    // first path that actually exercises that branch with a real
+    // `offboarding` tenant).
+    it('an offboarding tenant can log in (read-only, but reachable — same as suspended)', async () => {
       await setStatus(ctx.a, 'offboarding');
       const res = await loginAs(ctx.a);
-      expect(res.status).toBe(404);
+      expect(res.status).not.toBe(404);
     });
+  });
+
+  it('an offboarding tenant is read-only, exactly like suspended', async () => {
+    await setStatus(ctx.a, 'offboarding');
+    expect((await readRequest()).status).toBe(200);
+    const writeRes = await writeRequest();
+    expect(writeRes.status).toBe(403);
+    expect(writeRes.body.error.code).toBe('FORBIDDEN_TENANT_READ_ONLY');
   });
 });

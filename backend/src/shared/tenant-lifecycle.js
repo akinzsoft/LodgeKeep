@@ -25,11 +25,16 @@
  *                 lapses, not only after the next sweep interval.
  *   active      — full read/write, unconditionally.
  *   suspended   — read-only (non-payment, or a lapsed trial).
- *   offboarding — read-only here too (this pass builds no transition INTO
- *                 this status — see `tenant-resolution.js`'s own header for
- *                 the separate, stricter "unreachable at all" rule that
- *                 status carries) — included for completeness, not because
- *                 any code path produces it yet.
+ *   offboarding — read-only, exactly like `suspended`. A tenant that has
+ *                 requested (or been assigned) offboarding
+ *                 (`src/modules/offboarding/service.js`) stays fully
+ *                 reachable — see `tenant-resolution.js`'s own header for
+ *                 why this status used to be a hard 404 there and no
+ *                 longer is — so it can still view its own request status
+ *                 and download its data export; only writes are blocked.
+ *                 A platform admin can reverse it back to `active`
+ *                 (`platform/service.js`'s `reactivateTenant`, widened for
+ *                 this status too).
  */
 
 function isTenantWriteBlocked(tenant) {

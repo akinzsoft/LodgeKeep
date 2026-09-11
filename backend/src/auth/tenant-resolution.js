@@ -56,10 +56,10 @@ async function resolveByCustomDomain(scoped, hostname) {
 
 /**
  * Resolves `req.tenantId` from the Host header (or the dev override) before
- * any route handler runs. A request whose host resolves to no tenant, or
- * resolves to one that is `offboarding`, gets the bare 404 API.md §5 uses for
- * "does not exist" — deliberately indistinguishable from any other unresolved
- * lookup, so probing hostnames reveals nothing.
+ * any route handler runs. A request whose host resolves to no tenant at all
+ * gets the bare 404 API.md §5 uses for "does not exist" — deliberately
+ * indistinguishable from any other unresolved lookup, so probing hostnames
+ * reveals nothing.
  *
  * PLAN.md Phase 5 gap closure: this used to require `status === 'active'`,
  * which meant a `trial`-status tenant — the schema's own default, so every
@@ -71,9 +71,24 @@ async function resolveByCustomDomain(scoped, hostname) {
  * reachability and write access are separate questions; WHICH writes a
  * suspended or trial-expired tenant may perform is
  * `src/auth/tenant-lifecycle-guard.js`'s job, checked per-request after
- * authentication, not this one-time Host-header lookup. `offboarding` alone
- * stays a hard block — this pass builds no transition into that status, and
- * the existing "cannot reach it at all" behaviour for it is left unchanged.
+ * authentication, not this one-time Host-header lookup.
+ *
+ * PLAN.md Phase 5 (tenant offboarding): `offboarding` used to be the one
+ * status that stayed a hard 404 here — confirmed with the user before
+ * changing it, the same "check what a status currently does before
+ * building on it" discipline the signup pass applied to `trial`. That
+ * blanket block predates any real offboarding flow ever existing (nothing
+ * transitioned into the status until this pass), and it is actively wrong
+ * for the flow this pass builds: a tenant who has just requested their own
+ * account closure must still be able to log in to see their request's
+ * status and download the data export PRODUCT_REQUIREMENTS.md §3.22
+ * requires — a bare 404 would make that self-service screen unreachable by
+ * the very account it belongs to. `offboarding` now resolves exactly like
+ * `trial`/`suspended`: reachable, with WRITE access blocked by
+ * `isTenantWriteBlocked`/`tenant-lifecycle-guard.js` exactly like those two
+ * (that function has treated `offboarding` as write-blocked since the
+ * signup pass — see its own header — this is the first request path that
+ * can actually reach that branch with a real `offboarding` tenant).
  */
 function resolveTenant({ db, systemContext }) {
   return async function resolveTenantMiddleware(req, res, next) {
@@ -91,7 +106,7 @@ function resolveTenant({ db, systemContext }) {
           : await resolveByCustomDomain(scoped, req.hostname);
       }
 
-      if (!tenantRow || tenantRow.status === 'offboarding') {
+      if (!tenantRow) {
         res.status(404).json(fail(null, 'Not found.', { requestId: req.requestId }));
         return;
       }

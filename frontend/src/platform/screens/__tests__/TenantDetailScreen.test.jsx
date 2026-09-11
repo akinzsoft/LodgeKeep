@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   startImpersonation: vi.fn(),
   suspendTenant: vi.fn(),
   reactivateTenant: vi.fn(),
+  offboardTenant: vi.fn(),
   configureApiClient: vi.fn(),
 }));
 
@@ -112,6 +113,38 @@ describe('<TenantDetailScreen>', () => {
     expect(screen.getByText('suspended')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reactivate tenant' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Suspend tenant' })).not.toBeInTheDocument();
+
+    mocks.reactivateTenant.mockResolvedValue({ tenantId: '1', status: 'active' });
+    await userEvent.click(screen.getByRole('button', { name: 'Reactivate tenant' }));
+    expect(mocks.reactivateTenant).toHaveBeenCalledWith('1', '');
+  });
+
+  it('an active tenant also offers an Offboard action, which calls the real endpoint', async () => {
+    mocks.offboardTenant.mockResolvedValue({ tenantId: '1', status: 'offboarding', exportId: '1' });
+    renderScreen();
+    await screen.findByRole('heading', { name: 'Acme Hotels' });
+
+    await userEvent.type(screen.getByLabelText('Reason (recorded on the audit trail)'), 'Customer requested cancellation');
+    await userEvent.click(screen.getByRole('button', { name: 'Offboard tenant' }));
+
+    expect(mocks.offboardTenant).toHaveBeenCalledWith('1', 'Customer requested cancellation');
+  });
+
+  it('an offboarding tenant shows its retention info, a Reactivate action, and no Offboard action', async () => {
+    mocks.getTenant.mockResolvedValue({
+      ...TENANT,
+      status: 'offboarding',
+      offboarding_requested_at: '2026-09-11T00:00:00.000Z',
+      retention_expires_at: '2026-10-11T00:00:00.000Z',
+    });
+    renderScreen();
+    await screen.findByRole('heading', { name: 'Acme Hotels' });
+
+    expect(screen.getByText('offboarding')).toBeInTheDocument();
+    expect(screen.getByText(/2026-09-11T00:00:00.000Z/)).toBeInTheDocument();
+    expect(screen.getByText(/2026-10-11T00:00:00.000Z/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reactivate tenant' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Offboard tenant' })).not.toBeInTheDocument();
 
     mocks.reactivateTenant.mockResolvedValue({ tenantId: '1', status: 'active' });
     await userEvent.click(screen.getByRole('button', { name: 'Reactivate tenant' }));

@@ -44,7 +44,7 @@ describe('Tenant lifecycle + platform-staff tiering (PLAN.md Phase 5)', () => {
   }
 
   async function resetTenantStatus(tenantId, status = 'active') {
-    await t.trx('tenants').where({ id: tenantId }).update({ status, trial_ends_at: null });
+    await t.trx('tenants').where({ id: tenantId }).update({ status, trial_ends_at: null, offboarding_requested_at: null, retention_expires_at: null });
   }
 
   afterEach(async () => {
@@ -96,7 +96,7 @@ describe('Tenant lifecycle + platform-staff tiering (PLAN.md Phase 5)', () => {
       expect(historyRes.status).toBe(200);
     });
 
-    it('an admin-tier account can do all three', async () => {
+    it('an admin-tier account can do all four', async () => {
       const impersonateRes = await t.request
         .post(`/api/v1/platform/tenants/${ctx.a.id}/impersonate`)
         .set('Authorization', `Bearer ${platformToken(ctx.platformAdmin)}`)
@@ -114,6 +114,12 @@ describe('Tenant lifecycle + platform-staff tiering (PLAN.md Phase 5)', () => {
         .set('Authorization', `Bearer ${platformToken(ctx.platformAdmin)}`)
         .send({});
       expect(reactivateRes.status).toBe(200);
+
+      const offboardRes = await t.request
+        .post(`/api/v1/platform/tenants/${ctx.a.id}/offboard`)
+        .set('Authorization', `Bearer ${platformToken(ctx.platformAdmin)}`)
+        .send({ reason: 'Admin can do this too' });
+      expect(offboardRes.status).toBe(200);
     });
   });
 
@@ -229,14 +235,27 @@ describe('Tenant lifecycle + platform-staff tiering (PLAN.md Phase 5)', () => {
       expect(res.body.error.code).toBe('VALIDATION_INVALID_TENANT_TRANSITION');
     });
 
-    it('an offboarding tenant cannot be reactivated — invalid transition', async () => {
-      await resetTenantStatus(ctx.a.id, 'offboarding');
+    // PLAN.md Phase 5 (tenant offboarding): `offboarding` was widened into
+    // `reactivateTenant`'s own fromStatuses list — deliberately, not an
+    // oversight — so a platform admin has a real way to undo an
+    // accidental or reconsidered offboarding request. See that function's
+    // own comment for the full reasoning.
+    it('an offboarding tenant can be reactivated, clearing the offboarding-specific dates', async () => {
+      await t.trx('tenants').where({ id: ctx.a.id }).update({
+        status: 'offboarding',
+        offboarding_requested_at: new Date(),
+        retention_expires_at: new Date(Date.now() + 60_000 * 60 * 24 * 30),
+      });
       const res = await t.request
         .post(`/api/v1/platform/tenants/${ctx.a.id}/reactivate`)
         .set('Authorization', `Bearer ${platformToken()}`)
         .send({});
-      expect(res.status).toBe(422);
-      expect(res.body.error.code).toBe('VALIDATION_INVALID_TENANT_TRANSITION');
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('active');
+      const row = await t.trx('tenants').where({ id: ctx.a.id }).first();
+      expect(row.status).toBe('active');
+      expect(row.offboarding_requested_at).toBeNull();
+      expect(row.retention_expires_at).toBeNull();
     });
 
     it('reactivation restores write access on the very next staff request', async () => {
@@ -258,6 +277,73 @@ describe('Tenant lifecycle + platform-staff tiering (PLAN.md Phase 5)', () => {
         .set('Authorization', `Bearer ${staffToken()}`)
         .send({ name: 'Should be allowed now', code: `allowed-${Date.now()}` });
       expect(allowedRes.status).toBe(201);
+    });
+  });
+
+  describe('offboard (PLAN.md Phase 5 — tenant offboarding, platform-initiated)', () => {
+    it('an active tenant can be platform-offboarded, sets the retention date, and creates an export attempt', async () => {
+      const res = await t.request
+        .post(`/api/v1/platform/tenants/${ctx.a.id}/offboard`)
+        .set('Authorization', `Bearer ${platformToken()}`)
+        .send({ reason: 'Customer requested cancellation' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('offboarding');
+      expect(res.body.data.exportId).toBeTruthy();
+
+      const tenant = await t.trx('tenants').where({ id: ctx.a.id }).first();
+      expect(tenant.status).toBe('offboarding');
+      expect(tenant.offboarding_requested_at).toBeTruthy();
+      expect(tenant.retention_expires_at).toBeTruthy();
+      const daysUntilRetention = (new Date(tenant.retention_expires_at).getTime() - new Date(tenant.offboarding_requested_at).getTime()) / (24 * 60 * 60 * 1000);
+      expect(Math.round(daysUntilRetention)).toBe(30);
+
+      const exportRow = await t.trx('tenant_data_exports').where({ id: res.body.data.exportId }).first();
+      expect(String(exportRow.tenant_id)).toBe(String(ctx.a.id));
+      expect(String(exportRow.requested_by_platform_user_id)).toBe(String(ctx.platformAdmin.id));
+      expect(exportRow.requested_by_user_id).toBeNull();
+      expect(exportRow.reason).toBe('Customer requested cancellation');
+
+      const entry = await t.trx('audit_log').where({ tenant_id: ctx.a.id, entity_type: 'tenants', action: 'offboard' }).orderBy('id', 'desc').first();
+      expect(entry).toBeTruthy();
+      expect(entry.before_state).toEqual({ status: 'active' });
+      expect(entry.after_state).toEqual({ status: 'offboarding' });
+    });
+
+    it('a suspended tenant can also be offboarded — it is not stuck fully blocked with no way out', async () => {
+      await resetTenantStatus(ctx.a.id, 'suspended');
+      const res = await t.request
+        .post(`/api/v1/platform/tenants/${ctx.a.id}/offboard`)
+        .set('Authorization', `Bearer ${platformToken()}`)
+        .send({});
+      expect(res.status).toBe(200);
+    });
+
+    it('an already-offboarding tenant cannot be offboarded again — invalid transition', async () => {
+      await resetTenantStatus(ctx.a.id, 'offboarding');
+      const res = await t.request
+        .post(`/api/v1/platform/tenants/${ctx.a.id}/offboard`)
+        .set('Authorization', `Bearer ${platformToken()}`)
+        .send({});
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('VALIDATION_INVALID_TENANT_TRANSITION');
+    });
+
+    it('a support-tier account is refused offboarding a tenant', async () => {
+      const res = await t.request
+        .post(`/api/v1/platform/tenants/${ctx.a.id}/offboard`)
+        .set('Authorization', `Bearer ${platformToken(ctx.platformSupport)}`)
+        .send({});
+      expect(res.status).toBe(403);
+    });
+
+    it('a nonexistent tenant is a real 422, not a bare crash', async () => {
+      const res = await t.request
+        .post('/api/v1/platform/tenants/999999999/offboard')
+        .set('Authorization', `Bearer ${platformToken()}`)
+        .send({});
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('VALIDATION_TENANT_NOT_FOUND');
     });
   });
 

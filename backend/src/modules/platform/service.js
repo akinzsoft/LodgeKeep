@@ -29,6 +29,8 @@ const { recordAuditEntry } = require('../../audit');
 const { SessionInvalidError } = require('../../auth/errors');
 const { ValidationError } = require('../../shared/errors');
 const { TenantNotFoundError, PropertyNotInTenantError, InvalidTenantLifecycleTransitionError } = require('./errors');
+const { OFFBOARDABLE_FROM_STATUSES, computeRetentionExpiresAt, createExportAttempt } = require('../offboarding/service');
+const { enqueueTenantDataExportJob } = require('../../jobs/tenant-data-export');
 
 const IMPERSONATION_SESSION_MINUTES = Number(process.env.IMPERSONATION_SESSION_MINUTES || 60);
 
@@ -221,7 +223,21 @@ async function reactivateTenant({ context, tenantId, reason, ip, userAgent, requ
   return scopedDb().for(context).transaction(async (db) => {
     const lifecycle = db.platformTenantLifecycle();
     const before = await db.platformDirectory().table('tenants').where({ id: tenantId }).first();
-    const updated = await lifecycle.changeStatus(tenantId, ['trial', 'suspended'], { status: 'active' });
+    // PLAN.md Phase 5 (tenant offboarding): `offboarding` was deliberately
+    // added to this function's own fromStatuses list, widening it beyond
+    // the original trial/suspended pair — a real, minimal extension of
+    // ALREADY-EXISTING behaviour, not new scope. Without it, offboarding
+    // would be a one-way door with no platform-side recovery path at all
+    // (this pass's own next piece, the actual purge, is a separate,
+    // later action — but an ACCIDENTAL or reconsidered offboarding request
+    // needs something to undo it in the meantime, and reusing this
+    // function is a two-line change against inventing a parallel
+    // "cancel offboarding" concept for the identical end state).
+    const wasOffboarding = before?.status === 'offboarding';
+    const updated = await lifecycle.changeStatus(tenantId, ['trial', 'suspended', 'offboarding'], {
+      status: 'active',
+      ...(wasOffboarding ? { offboarding_requested_at: null, retention_expires_at: null } : {}),
+    });
     if (!updated) {
       if (!before) throw new TenantNotFoundError();
       throw new InvalidTenantLifecycleTransitionError(before.status, 'active');
@@ -243,6 +259,62 @@ async function reactivateTenant({ context, tenantId, reason, ip, userAgent, requ
 
     return { tenantId: String(tenantId), status: 'active' };
   });
+}
+
+/**
+ * Platform-initiated offboarding — PLAN.md Phase 5, PRODUCT_REQUIREMENTS.md
+ * §3.22. The confirmed "Both" trigger-audiences decision's other half:
+ * `src/modules/offboarding/service.js`'s own `requestOwnOffboarding`
+ * covers a tenant's own admin/super_admin self-service request; this is a
+ * support-handled cancellation, gated `requirePlatformRole('admin')` at
+ * the route, same tier as suspend/reactivate. Shares the export-attempt
+ * bookkeeping (`createExportAttempt`) and the retention-window constant
+ * (`computeRetentionExpiresAt`) with that module rather than duplicating
+ * either — see that file's own header for why both live there.
+ */
+async function offboardTenant({ context, tenantId, reason, ip, userAgent, requestId }) {
+  const result = await scopedDb()
+    .for(context)
+    .transaction(async (db) => {
+      const lifecycle = db.platformTenantLifecycle();
+      const before = await db.platformDirectory().table('tenants').where({ id: tenantId }).first();
+      const now = new Date();
+      const retentionExpiresAt = computeRetentionExpiresAt(now);
+
+      const updated = await lifecycle.changeStatus(tenantId, OFFBOARDABLE_FROM_STATUSES, {
+        status: 'offboarding',
+        offboarding_requested_at: now,
+        retention_expires_at: retentionExpiresAt,
+      });
+      if (!updated) {
+        if (!before) throw new TenantNotFoundError();
+        throw new InvalidTenantLifecycleTransitionError(before.status, 'offboarding');
+      }
+
+      const exportId = await createExportAttempt(db, { tenantId, requestedByPlatformUserId: context.platformUserId, reason });
+
+      const tenantDb = lifecycle.withContext(workerContext({ tenantId }));
+      await recordAuditEntry(tenantDb, {
+        entityType: 'tenants',
+        entityId: tenantId,
+        action: 'offboard',
+        source: 'api',
+        beforeState: { status: before.status },
+        afterState: { status: 'offboarding' },
+        reason: reason ? String(reason).trim() : null,
+        requestId,
+        ipAddress: ip,
+        userAgent,
+      });
+
+      return { tenantId: String(tenantId), status: 'offboarding', retentionExpiresAt, exportId };
+    });
+
+  enqueueTenantDataExportJob({ tenantId: result.tenantId, exportId: result.exportId }).catch((error) => {
+    console.error('Failed to enqueue tenant data export job:', error);
+  });
+
+  return result;
 }
 
 /** Platform-console side — every impersonation session ever run against one tenant, across every platform admin. */
@@ -285,4 +357,5 @@ module.exports = {
   listImpersonationSessionsForTenant,
   suspendTenant,
   reactivateTenant,
+  offboardTenant,
 };
