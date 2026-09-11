@@ -95,6 +95,191 @@ describe('Platform console + impersonation (PLAN.md Phase 5)', () => {
   });
 
   // ====================================================================
+  // Tenant health — PLAN.md Phase 5's own "tenant list, health" bullet,
+  // PRODUCT_REQUIREMENTS.md §3.22's tenant-list/tenant-detail UI spec.
+  // ====================================================================
+
+  describe('tenant health', () => {
+    let legacyPlanId;
+
+    beforeAll(async () => {
+      [legacyPlanId] = await t.trx('plans').insert({
+        code: 'legacy-health-test',
+        name: 'Legacy (health test fixture)',
+        price: '10000.00',
+        currency: 'NGN',
+        billing_interval: 'monthly',
+        is_active: false,
+      });
+
+      // ctx.a already carries a real fixture `subscriptions` row
+      // (`tests/helpers/fixtures.js`'s own "ONLY tenant a gets a fixture
+      // subscriptions row" — that table's bare UNIQUE(tenant_id) means
+      // only one row can ever exist per tenant) — updated here to the
+      // 'past_due' status this describe's own tests need, rather than
+      // inserted fresh, which would collide with it. ctx.b deliberately
+      // has none — the fixture's own "nothing yet" baseline every
+      // assertion below is checked against for leakage.
+      ctx.a.subscriptionId = ctx.a.subscriptions[0].id;
+      await t.trx('subscriptions').where({ id: ctx.a.subscriptionId }).update({
+        status: 'past_due',
+        current_period_start: '2027-01-01',
+        current_period_end: '2027-02-01',
+      });
+
+      // An explicit, non-default plan on the TENANT itself — a separate
+      // column from the subscription's own plan_id above.
+      await t.trx('tenants').where({ id: ctx.a.id }).update({ plan_id: legacyPlanId });
+
+      await t.trx('auth_events').insert([
+        { audience: 'staff', event_type: 'login_success', tenant_id: ctx.a.id, user_id: ctx.a.users[0].id, occurred_at: '2027-01-05T09:00:00' },
+        { audience: 'staff', event_type: 'login_success', tenant_id: ctx.a.id, user_id: ctx.a.users[0].id, occurred_at: '2027-01-08T09:00:00' },
+        // The LATEST event overall for this tenant is a guest login — must
+        // never win over the staff-only max below.
+        { audience: 'guest', event_type: 'login_success', tenant_id: ctx.a.id, occurred_at: '2027-01-20T09:00:00' },
+      ]);
+
+      // 6 more invoices on top of the fixture's own single 2026-12-01 row
+      // (7 total for ctx.a) — enough to prove the detail endpoint's
+      // RECENT_INVOICE_COUNT (5) cap and its descending order, with the
+      // fixture row and the oldest of these correctly falling outside it.
+      const periods = ['2027-02-01', '2027-03-01', '2027-04-01', '2027-05-01', '2027-06-01', '2027-07-01'];
+      for (const periodStart of periods) {
+        await t.trx('subscription_invoices').insert({
+          tenant_id: ctx.a.id,
+          subscription_id: ctx.a.subscriptionId,
+          amount: '50000.00',
+          currency: 'NGN',
+          status: 'paid',
+          period_start: periodStart,
+          period_end: periodStart,
+          due_at: periodStart,
+        });
+      }
+    });
+
+    it('lists property_count from the real seeded properties', async () => {
+      const res = await t.request.get('/api/v1/platform/tenants').set('Authorization', `Bearer ${platformToken()}`);
+      const rowA = res.body.data.find((row) => String(row.id) === String(ctx.a.id));
+      const rowB = res.body.data.find((row) => String(row.id) === String(ctx.b.id));
+      expect(rowA.property_count).toBe(ctx.a.properties.length);
+      expect(rowB.property_count).toBe(ctx.b.properties.length);
+    });
+
+    it('resolves subscription_status from a real row, and null when none exists', async () => {
+      const res = await t.request.get('/api/v1/platform/tenants').set('Authorization', `Bearer ${platformToken()}`);
+      const rowA = res.body.data.find((row) => String(row.id) === String(ctx.a.id));
+      const rowB = res.body.data.find((row) => String(row.id) === String(ctx.b.id));
+      expect(rowA.subscription_status).toBe('past_due');
+      expect(rowB.subscription_status).toBeNull();
+    });
+
+    it('resolves an explicit plan_id to its own plan, and a null plan_id to the seeded default', async () => {
+      const res = await t.request.get('/api/v1/platform/tenants').set('Authorization', `Bearer ${platformToken()}`);
+      const rowA = res.body.data.find((row) => String(row.id) === String(ctx.a.id));
+      const rowB = res.body.data.find((row) => String(row.id) === String(ctx.b.id));
+      expect(rowA.plan).toEqual({ code: 'legacy-health-test', name: 'Legacy (health test fixture)' });
+      expect(rowB.plan).toEqual({ code: 'standard', name: 'Standard' });
+    });
+
+    it('resolves last_login_at to the most recent STAFF login, excluding guest logins', async () => {
+      const res = await t.request.get('/api/v1/platform/tenants').set('Authorization', `Bearer ${platformToken()}`);
+      const rowA = res.body.data.find((row) => String(row.id) === String(ctx.a.id));
+      const rowB = res.body.data.find((row) => String(row.id) === String(ctx.b.id));
+      // The later of the two staff events, never the even-later guest one.
+      expect(rowA.last_login_at).toBe('2027-01-08T09:00:00.000Z');
+      expect(rowB.last_login_at).toBeNull();
+    });
+
+    it('reports trial_days_remaining only for a trial-status tenant — exact boundary arithmetic is covered by health.test.js\'s own fixed-clock pure-function tests; this proves the real wiring resolves a genuine, roughly-correct positive count', async () => {
+      const now = new Date();
+      const trialEndsAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      const [trialTenantId] = await t.trx('tenants').insert({
+        name: 'Fixture trial tenant (health test)',
+        slug: 'health-test-trial-tenant',
+        status: 'trial',
+        trial_ends_at: trialEndsAt,
+      });
+      try {
+        const res = await t.request.get('/api/v1/platform/tenants').set('Authorization', `Bearer ${platformToken()}`);
+        const trialRow = res.body.data.find((row) => String(row.id) === String(trialTenantId));
+        const activeRow = res.body.data.find((row) => String(row.id) === String(ctx.a.id));
+        // A generous tolerance, not a razor-thin exact boundary — this
+        // integration test's job is proving the real DB round trip and
+        // response wiring, not the day-boundary arithmetic itself.
+        expect(trialRow.trial_days_remaining).toBeGreaterThanOrEqual(28);
+        expect(trialRow.trial_days_remaining).toBeLessThanOrEqual(31);
+        expect(activeRow.trial_days_remaining).toBeNull();
+      } finally {
+        await t.trx('tenants').where({ id: trialTenantId }).delete();
+      }
+    });
+
+    it('cross-tenant isolation: no health signal from one tenant ever appears on another\'s row', async () => {
+      const res = await t.request.get('/api/v1/platform/tenants').set('Authorization', `Bearer ${platformToken()}`);
+      const rowB = res.body.data.find((row) => String(row.id) === String(ctx.b.id));
+      expect(rowB.subscription_status).not.toBe('past_due');
+      expect(rowB.plan.code).not.toBe('legacy-health-test');
+      expect(rowB.last_login_at).toBeNull();
+    });
+
+    it('tenant detail includes the real subscription (without payment-method detail) and the 5 most recent invoices, most recent first', async () => {
+      const res = await t.request.get(`/api/v1/platform/tenants/${ctx.a.id}`).set('Authorization', `Bearer ${platformToken()}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.property_count).toBe(ctx.a.properties.length);
+      expect(res.body.data.plan).toEqual({ code: 'legacy-health-test', name: 'Legacy (health test fixture)' });
+      expect(res.body.data.last_login_at).toBe('2027-01-08T09:00:00.000Z');
+      expect(res.body.data.trial_days_remaining).toBeNull();
+
+      expect(res.body.data.subscription).toEqual({
+        id: String(ctx.a.subscriptionId),
+        status: 'past_due',
+        current_period_start: '2027-01-01',
+        current_period_end: '2027-02-01',
+        consecutive_failed_attempts: 0,
+      });
+      // The deliberate exclusion, proven directly: real payment-method
+      // fields exist on the underlying row (seeded above) but never
+      // surface on this broader-audience, cross-tenant console.
+      expect(res.body.data.subscription).not.toHaveProperty('payment_method_provider');
+      expect(res.body.data.subscription).not.toHaveProperty('payment_method_last4');
+      expect(res.body.data.subscription).not.toHaveProperty('payment_method_brand');
+      expect(res.body.data.subscription).not.toHaveProperty('payment_method_exp_month');
+      expect(res.body.data.subscription).not.toHaveProperty('payment_method_exp_year');
+
+      expect(res.body.data.recent_invoices).toHaveLength(5);
+      expect(res.body.data.recent_invoices.map((invoice) => invoice.period_start)).toEqual([
+        '2027-07-01',
+        '2027-06-01',
+        '2027-05-01',
+        '2027-04-01',
+        '2027-03-01',
+      ]);
+    });
+
+    it('tenant detail for a tenant with no subscription returns null subscription and an empty invoice list', async () => {
+      const res = await t.request.get(`/api/v1/platform/tenants/${ctx.b.id}`).set('Authorization', `Bearer ${platformToken()}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.subscription).toBeNull();
+      expect(res.body.data.recent_invoices).toEqual([]);
+    });
+
+    it('a support-tier platform token reads the same enriched roster and detail as an admin-tier one', async () => {
+      const support = await seedPlatformUser(t.trx, 'support-health-test@planmsys.test', 'support');
+      const supportToken = signAccessToken({ aud: 'platform', sub: String(support.id) });
+
+      const listRes = await t.request.get('/api/v1/platform/tenants').set('Authorization', `Bearer ${supportToken}`);
+      expect(listRes.status).toBe(200);
+      const rowA = listRes.body.data.find((row) => String(row.id) === String(ctx.a.id));
+      expect(rowA.subscription_status).toBe('past_due');
+
+      const detailRes = await t.request.get(`/api/v1/platform/tenants/${ctx.a.id}`).set('Authorization', `Bearer ${supportToken}`);
+      expect(detailRes.status).toBe(200);
+      expect(detailRes.body.data.subscription.status).toBe('past_due');
+    });
+  });
+
+  // ====================================================================
   // Starting an impersonation grant
   // ====================================================================
 

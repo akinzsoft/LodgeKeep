@@ -52,6 +52,39 @@ describe('<TenantDetailScreen>', () => {
     expect(screen.getByText('ops@lodgekeep.test')).toBeInTheDocument();
   });
 
+  it('shows real health facts — plan, property count, signup date, last login, subscription, and recent billing', async () => {
+    mocks.getTenant.mockResolvedValue({
+      ...TENANT,
+      created_at: '2027-01-01 00:00:00',
+      plan: { code: 'standard', name: 'Standard' },
+      property_count: 1,
+      trial_days_remaining: null,
+      last_login_at: '2027-01-10 09:00:00',
+      subscription: { id: '9', status: 'past_due', current_period_start: '2027-01-01', current_period_end: '2027-02-01', consecutive_failed_attempts: 1 },
+      recent_invoices: [
+        { id: '1', status: 'paid', amount: '50000.00', currency: 'NGN', period_start: '2027-01-01', period_end: '2027-01-31', due_at: '2027-01-01', attempt_count: 1 },
+      ],
+    });
+    renderScreen();
+    await screen.findByRole('heading', { name: 'Acme Hotels' });
+
+    expect(screen.getByText('Standard')).toBeInTheDocument();
+    expect(screen.getByText('2027-01-01 00:00:00')).toBeInTheDocument();
+    expect(screen.getByText('2027-01-10 09:00:00')).toBeInTheDocument();
+    expect(screen.getAllByText('past_due').length).toBeGreaterThan(0);
+    expect(screen.getByText('2027-01-01 – 2027-01-31')).toBeInTheDocument();
+  });
+
+  it('shows honest fallbacks when no subscription or plan exists yet', async () => {
+    mocks.getTenant.mockResolvedValue({ ...TENANT, plan: null, subscription: null, recent_invoices: [] });
+    renderScreen();
+    await screen.findByRole('heading', { name: 'Acme Hotels' });
+
+    expect(screen.getByText('No plan')).toBeInTheDocument();
+    expect(screen.getAllByText('No subscription').length).toBeGreaterThan(0);
+    expect(screen.getByText('No subscription invoices yet.')).toBeInTheDocument();
+  });
+
   it('starting impersonation requires a reason and a property, then calls the real endpoint', async () => {
     mocks.startImpersonation.mockResolvedValue({ accessToken: 'token', tenantId: '1', tenantName: 'Acme Hotels', propertyId: '20', impersonationSessionId: '9' });
     renderScreen();

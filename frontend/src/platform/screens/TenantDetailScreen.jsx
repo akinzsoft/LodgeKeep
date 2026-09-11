@@ -1,10 +1,22 @@
 import { useEffect, useState } from 'react';
 import { Card, DataTable, Button, StatusPill } from '../../shared/components/index.js';
+import { Money } from '../../shared/format/money.jsx';
 import { platformApi, ApiError } from '../../shared/api/index.js';
 import { usePlatformAuth } from '../auth/PlatformAuthContext.jsx';
 import styles from './PlatformScreens.module.css';
 
 const STATUS_TONE = { trial: 'warning', active: 'success', suspended: 'danger', offboarding: 'neutral' };
+
+/** Duplicated from TenantListScreen.jsx rather than imported — the same "owned by the one screen that reads it" convention `BillingScreen.jsx`'s own SUBSCRIPTION_STATUS already established for a different-audience version of the identical vocabulary. */
+const SUBSCRIPTION_STATUS_TONE = { active: 'success', past_due: 'warning', canceled: 'neutral' };
+const INVOICE_STATUS_TONE = { paid: 'success', uncollectible: 'danger', void: 'neutral', open: 'warning' };
+
+function describeTrial(tenant) {
+  if (tenant.status !== 'trial') return '—';
+  if (tenant.trial_days_remaining === null) return 'No expiry set';
+  if (tenant.trial_days_remaining < 0) return `Expired ${Math.abs(tenant.trial_days_remaining)}d ago`;
+  return `${tenant.trial_days_remaining}d left`;
+}
 
 /**
  * TenantDetailScreen — PLAN.md Phase 5 (Platform Foundation). Tenant
@@ -138,6 +150,43 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
             {role !== 'admin' &&
               'Suspend/reactivate/offboard require the platform admin tier — your account can still try, but the server will refuse it.'}
           </p>
+          <dl className={styles.factList}>
+            <div className={styles.factRow}>
+              <dt className={styles.factLabel}>Plan</dt>
+              <dd className={styles.factValue}>{tenant.plan?.name ?? 'No plan'}</dd>
+            </div>
+            <div className={styles.factRow}>
+              <dt className={styles.factLabel}>Properties</dt>
+              <dd className={styles.factValue}>{tenant.property_count}</dd>
+            </div>
+            <div className={styles.factRow}>
+              <dt className={styles.factLabel}>Signed up</dt>
+              <dd className={styles.factValue}>{tenant.created_at}</dd>
+            </div>
+            <div className={styles.factRow}>
+              <dt className={styles.factLabel}>Last login</dt>
+              <dd className={styles.factValue}>{tenant.last_login_at ?? 'Never'}</dd>
+            </div>
+            {tenant.status === 'trial' && (
+              <div className={styles.factRow}>
+                <dt className={styles.factLabel}>Trial</dt>
+                <dd className={styles.factValue}>{describeTrial(tenant)}</dd>
+              </div>
+            )}
+            <div className={styles.factRow}>
+              <dt className={styles.factLabel}>Subscription</dt>
+              <dd className={styles.factValue}>
+                {tenant.subscription ? (
+                  <StatusPill
+                    tone={SUBSCRIPTION_STATUS_TONE[tenant.subscription.status] ?? 'neutral'}
+                    label={tenant.subscription.status}
+                  />
+                ) : (
+                  <StatusPill tone="neutral" label="No subscription" />
+                )}
+              </dd>
+            </div>
+          </dl>
           {(tenant.status === 'trial' || tenant.status === 'active') && (
             <form className={styles.form} onSubmit={handleSuspend}>
               <label className={styles.field}>
@@ -212,6 +261,25 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
           { key: 'status', label: 'Status' },
         ]}
         rows={tenant?.properties ?? []}
+        rowKey={(row) => row.id}
+      />
+
+      <DataTable
+        title="Recent billing"
+        state={tenant === null ? 'loading' : (tenant.recent_invoices ?? []).length === 0 ? 'empty' : 'success'}
+        emptyMessage="No subscription invoices yet."
+        columns={[
+          { key: 'period_start', label: 'Period', render: (row) => `${row.period_start} – ${row.period_end}` },
+          {
+            key: 'status',
+            label: 'Status',
+            render: (row) => <StatusPill tone={INVOICE_STATUS_TONE[row.status] ?? 'neutral'} label={row.status} />,
+          },
+          { key: 'amount', label: 'Amount', align: 'right', render: (row) => <Money amount={row.amount} currencyCode={row.currency} /> },
+          { key: 'due_at', label: 'Due' },
+          { key: 'attempt_count', label: 'Attempts' },
+        ]}
+        rows={tenant?.recent_invoices ?? []}
         rowKey={(row) => row.id}
       />
 
