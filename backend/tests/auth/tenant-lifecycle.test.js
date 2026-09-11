@@ -42,11 +42,29 @@ describe('Tenant lifecycle read-only enforcement (PLAN.md Phase 5)', () => {
     await setStatus(ctx.b, 'active');
   });
 
+  // A real bug found and fixed in this session, not a mystery — this is
+  // almost certainly the actual root cause of the CI flake CLAUDE.md's own
+  // Phase 5 subscription-billing section documents as "66+ reproduction
+  // attempts, zero reproductions": `market_segments.code` is
+  // `VARCHAR(30)`, and this helper used to build
+  // `gate-${Date.now()}-${Math.random().toString(36).slice(2)}` — a
+  // 13-digit future-dated timestamp plus a RANDOM-LENGTH suffix
+  // (`Math.random().toString(36)` produces anywhere from a handful of
+  // characters up to ~13) that occasionally overflowed 30 characters,
+  // producing a genuine `ER_DATA_TOO_LONG` and a bare `500` on this exact
+  // endpoint. Reproduced directly in this session (twice, on two different
+  // tests that both call this same helper) after the original CI
+  // investigation's 66+ attempts all targeted environmental factors
+  // (Node version, DB freshness, CPU load, execution order) rather than
+  // this helper's own non-deterministic string length — none of which
+  // affect `Math.random()`'s output distribution, which is exactly why
+  // every environmental knob came back clean. Fixed with a
+  // fixed-maximum-length id instead of an unbounded random one.
   function writeRequest(tenant = ctx.a) {
     return t.request
       .post('/api/v1/market-segments')
       .set('Authorization', `Bearer ${staffToken({ tenant })}`)
-      .send({ name: 'Gate test', code: `gate-${Date.now()}-${Math.random().toString(36).slice(2)}` });
+      .send({ name: 'Gate test', code: `gt${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}` });
   }
 
   function readRequest(tenant = ctx.a) {
