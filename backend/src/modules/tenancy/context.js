@@ -184,6 +184,59 @@ function platformContext({ platformUserId }) {
 }
 
 /**
+ * An impersonation-derived staff context — PLAN.md Phase 5 (Platform
+ * Foundation), SECURITY.md §2.
+ *
+ * `audience: STAFF`, deliberately — not a fifth audience value. Every one
+ * of the ~15 existing business modules calls `db.for(context).table(...)`
+ * and reads `context.tenantId`/`propertyId`, never `context.audience`
+ * itself; keeping this STAFF is what lets every existing screen and
+ * service function work completely unmodified for a read. This is the
+ * exact reuse `src/audit/middleware.js`'s own pre-existing comment already
+ * anticipated ("platform's own mutation flow still carries `audience:
+ * STAFF`, and must pass `source` explicitly").
+ *
+ * `userId: null` is the deliberate, safe choice — never a `platform_users`
+ * id smuggled in as if it were a `users` id. `contextFromSession`'s own
+ * header already documents that the accessor itself never reads
+ * `context.userId` for scoping; the only code that would ever read it is a
+ * business predicate like `.where({ user_id: context.userId })` ("my own
+ * X"), which now safely matches nothing instead of risking a real
+ * `users.id`/`platform_users.id` numeric collision (the two id spaces are
+ * independently auto-incrementing, with no reason not to coincide).
+ *
+ * Never derived from a bearer token directly — the token
+ * (`aud: 'staff_impersonation'`) carries only `sub` (a `platform_users.id`)
+ * and `impersonation_session_id`; `src/auth/middleware.js`'s
+ * `liveImpersonationContext` builds this ONLY after loading and validating
+ * the live `impersonation_sessions` row itself, on every single request,
+ * never trusting a cached tenant/property claim.
+ *
+ * `isImpersonation`/`impersonationSessionId`/`platformUserId` are read by
+ * exactly two places: `src/auth/impersonation-guard.js` (blocks every
+ * non-GET/HEAD request outright — the actual read-only boundary) and
+ * `src/auth/rbac.js`'s `requirePermission` (grants read access without a
+ * `user_property_access` row to check, since a platform admin holds none).
+ */
+function impersonationContext({ tenantId, propertyId, impersonationSessionId, platformUserId }) {
+  const normalizedTenantId = normalizeId(tenantId, 'tenantId');
+  const normalizedPropertyId = normalizeId(propertyId, 'propertyId');
+  if (!normalizedTenantId || !normalizedPropertyId) {
+    throw new ScopeContextError('An impersonation context requires both a tenant_id and a property_id from the live grant.');
+  }
+
+  return freezeContext({
+    audience: AUDIENCES.STAFF,
+    tenantId: normalizedTenantId,
+    propertyId: normalizedPropertyId,
+    userId: null,
+    isImpersonation: true,
+    impersonationSessionId: normalizeId(impersonationSessionId, 'impersonationSessionId'),
+    platformUserId: normalizeId(platformUserId, 'platformUserId'),
+  });
+}
+
+/**
  * Narrows a context to a specific active property.
  *
  * Returns a new frozen context rather than mutating: a request handler that
@@ -192,6 +245,9 @@ function platformContext({ platformUserId }) {
  * carries the choice, it does not authorize it.
  */
 function withActiveProperty(context, propertyId) {
+  if (context.isImpersonation && String(propertyId) !== context.propertyId) {
+    throw new ScopeContextError('An impersonation grant cannot switch properties.');
+  }
   if (context.audience === AUDIENCES.PLATFORM) {
     throw new ScopeContextError(
       'A platform context has no tenant, so it cannot take an active property. ' +
@@ -251,6 +307,7 @@ module.exports = {
   contextFromSession,
   guestContextFromSession,
   platformContext,
+  impersonationContext,
   systemContext,
   workerContext,
   withActiveProperty,

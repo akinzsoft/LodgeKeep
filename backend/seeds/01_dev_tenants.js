@@ -590,4 +590,28 @@ exports.seed = async function seed(knex) {
     console.log(`  tenant=${spec.slug}  email=${spec.posOperatorUser.email}  password=${DEV_PASSWORD}`);
   }
   console.log('');
+
+  // PLAN.md Phase 5 (Platform Foundation) — one real platform_users row so
+  // the real TOTP enrollment flow can be exercised end to end against a
+  // running backend, the same "seed a real account to click through"
+  // precedent every other module's dev seed already follows. Belongs to no
+  // tenant (platform_users is PLATFORM_SCOPED) — seeded once, outside the
+  // per-tenant loop above. `mfa_secret` starts NULL: the first real login
+  // is what drives real enrollment, not a pre-seeded secret nobody has
+  // actually scanned into an authenticator app.
+  const PLATFORM_EMAIL = 'ops@lodgekeep.example.com';
+  const existingPlatformUser = await knex('platform_users').where({ email: PLATFORM_EMAIL }).first('id');
+  if (!existingPlatformUser) {
+    await knex('platform_users').insert({
+      email: PLATFORM_EMAIL,
+      password_hash: passwordHash,
+      first_name: 'LodgeKeep',
+      last_name: 'Support',
+    });
+    console.log('[seed] Platform console dev login — first login triggers real TOTP enrollment (scan the QR/enter the manual key):');
+    console.log(`  email=${PLATFORM_EMAIL}  password=${DEV_PASSWORD}`);
+    console.log('  URL: http://localhost:5173/platform\n');
+  } else {
+    console.log(`[seed] platform user "${PLATFORM_EMAIL}" already exists — skipping.\n`);
+  }
 };

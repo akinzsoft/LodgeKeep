@@ -125,18 +125,22 @@ describe('entity scoping (ARCHITECTURE.md §3)', () => {
     const declared = () => TABLE_SCOPES[table];
 
     it('carries exactly the columns its scope requires', () => {
-      const { scope, scopeRoot, attributionColumns = [] } = declared();
+      const { scope, scopeRoot, attributionColumns = [], unscopedColumns = [] } = declared();
       const needsTenant = scope === SCOPES.TENANT || scope === SCOPES.PROPERTY;
       const needsProperty = scope === SCOPES.PROPERTY;
 
       // A scope root defines the column rather than carrying it: tenants.id IS
       // the tenant_id, properties.id IS the property_id.
       //
-      // `attributionColumns` is the one declared way a table may carry a scope
+      // `attributionColumns` is one declared way a table may carry a scope
       // column its scope does not require — `auth_events` records who an event
-      // was about, including events with no tenant to resolve. The next test
-      // is what keeps that from being a loophole.
-      const permitted = (column, byScope) => byScope || attributionColumns.includes(column);
+      // was about, including events with no tenant to resolve; the next test
+      // is what keeps that from being a loophole (nullability). `unscopedColumns`
+      // is the other: a real, mandatory business column that happens to share a
+      // name with a scope column but is never null and never used by the
+      // accessor for row-level scoping (e.g. `impersonation_sessions.tenant_id` —
+      // a definite fact about a grant, not attribution for an unresolved one).
+      const permitted = (column, byScope) => byScope || attributionColumns.includes(column) || unscopedColumns.includes(column);
 
       expect(has(table, 'tenant_id')).toBe(
         permitted('tenant_id', needsTenant && scopeRoot !== 'tenant')

@@ -20,22 +20,28 @@ const {
   withActiveProperty,
   resolvePropertyBySlug,
 } = require('../modules/tenancy');
-const { signAccessToken, issueRefreshToken, hashRefreshToken, REFRESH_TTL_HOURS } = require('./tokens');
+const { signAccessToken, issueRefreshToken, hashRefreshToken, REFRESH_TTL_HOURS, PLATFORM_ACCESS_TTL } = require('./tokens');
 const { hashPassword, verifyPassword, validatePassword } = require('./password');
 const { writeAuthEvent } = require('./events');
 const { writeOutboxEvent } = require('../shared/outbox');
 const { enqueueOutboxDispatch } = require('../jobs/outbox-dispatcher');
-const { checkStaffLockout } = require('./lockout');
+const { checkStaffLockout, checkPlatformLockout } = require('./lockout');
 const { listPropertyAccess, roleAtProperty, roleRequiresMfa } = require('./roles');
 const { isEmailDeliveryReal } = require('../modules/notifications/service');
+const { encrypt, decrypt } = require('../shared/encryption');
 const {
   signMfaChallengeToken,
   verifyMfaChallengeToken,
+  signPlatformMfaChallengeToken,
+  verifyPlatformMfaChallengeToken,
+  signPlatformMfaEnrollmentToken,
+  verifyPlatformMfaEnrollmentToken,
   generateMfaCode,
   hashMfaCode,
   MFA_CODE_TTL_MINUTES,
   MFA_CODE_MAX_ATTEMPTS,
 } = require('./mfa');
+const { generateTotpSecret, buildOtpAuthUrl, generateQrCodeDataUrl, verifiedTotpStep } = require('./totp');
 const {
   InvalidCredentialsError,
   AccountLockedError,
@@ -1109,46 +1115,91 @@ async function completeGuestPasswordReset({ tenantId, token, newPassword, ip, us
   return { status: 'ok' };
 }
 
-/**
- * Platform console login — PRODUCT_REQUIREMENTS.md §3.16 ("MFA mandatory with
- * no opt-out"). Every successful password check ends in a challenge in this
- * pass, never full tokens — see `src/auth/mfa.js`'s header. TESTING.md AUTH-13
- * is exercised against a directly-built platform context in the isolation
- * suite; this endpoint is what a real request path uses to reach one, once
- * MFA verification exists.
- */
+/** Platform MFA uses one pending credential per account; a new login supersedes it. */
+function platformTokenHash(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
 async function platformLogin({ email, password, ip, userAgent, requestId }) {
-  const db = scopedDb();
-  const system = systemContext();
-  const platformUser = await db.for(system).platform().table('platform_users').where({ email }).first();
-
-  if (
-    !platformUser ||
-    platformUser.status !== 'active' ||
-    !(await verifyPassword(password, platformUser.password_hash))
-  ) {
-    await writeAuthEvent({
-      audience: 'platform',
-      eventType: 'login_failure',
-      failureReason: !platformUser ? 'unknown_email' : 'invalid_password',
-      emailAttempted: email,
-      ip,
-      userAgent,
-      requestId,
-    });
-    throw new InvalidCredentialsError();
-  }
-
-  await writeAuthEvent({
-    audience: 'platform',
-    eventType: 'mfa_challenge_issued',
-    platformUserId: platformUser.id,
-    ip,
-    userAgent,
-    requestId,
+  const result = await scopedDb().for(systemContext()).transaction(async (db) => {
+    const platformUser = await db.platform().table('platform_users').where({ email }).forUpdate().first();
+    const event = { audience: 'platform', platformUserId: platformUser?.id, emailAttempted: email, ip, userAgent, requestId };
+    const dimension = await checkPlatformLockout({ platformUserId: platformUser?.id, ip, db });
+    if (dimension) {
+      await writeAuthEvent({ ...event, eventType: 'lockout' }, db);
+      return { error: new AccountLockedError(dimension) };
+    }
+    if (!platformUser || platformUser.status !== 'active' || !(await verifyPassword(password, platformUser.password_hash))) {
+      await writeAuthEvent({ ...event, eventType: 'login_failure', failureReason: !platformUser ? 'unknown_email' : 'invalid_password' }, db);
+      return { error: new InvalidCredentialsError() };
+    }
+    const secretPlaintext = platformUser.mfa_secret ? null : generateTotpSecret();
+    const token = secretPlaintext
+      ? signPlatformMfaEnrollmentToken({ platformUserId: platformUser.id, secretPlaintext })
+      : signPlatformMfaChallengeToken({ platformUserId: platformUser.id });
+    await db.platform().table('platform_users').where({ id: platformUser.id }).update({ mfa_pending_token_hash: platformTokenHash(token) });
+    await writeAuthEvent({ ...event, eventType: 'mfa_challenge_issued' }, db);
+    if (secretPlaintext) {
+      return { status: 'mfa_enrollment_required', enrollmentToken: token, manualEntryKey: secretPlaintext,
+        otpAuthUrl: buildOtpAuthUrl({ secretPlaintext, accountLabel: platformUser.email }) };
+    }
+    return { status: 'mfa_challenge_required', challengeToken: token };
   });
+  // Expected failures must commit their lockout evidence before throwing.
+  if (result.error) throw result.error;
+  if (result.otpAuthUrl) result.qrCodeDataUrl = await generateQrCodeDataUrl(result.otpAuthUrl);
+  return result;
+}
 
-  return { status: 'mfa_challenge_required' };
+async function completePlatformMfa({ token, code, enrollment, ip, userAgent, requestId }) {
+  let payload;
+  const db = scopedDb().for(systemContext());
+  try {
+    payload = enrollment ? verifyPlatformMfaEnrollmentToken(token) : verifyPlatformMfaChallengeToken(token);
+  } catch {
+    const dimension = await checkPlatformLockout({ ip, db });
+    if (dimension) throw new AccountLockedError(dimension);
+    await writeAuthEvent({ audience: 'platform', eventType: 'mfa_failed', ip, userAgent, requestId });
+    throw new TokenInvalidError('This verification link is no longer valid. Log in again.');
+  }
+  const result = await db.transaction(async (trx) => {
+    const user = await trx.platform().table('platform_users').where({ id: String(payload.sub) }).forUpdate().first();
+    const event = { audience: 'platform', platformUserId: user?.id, ip, userAgent, requestId };
+    const dimension = await checkPlatformLockout({ platformUserId: user?.id, ip, db: trx });
+    if (dimension) {
+      await writeAuthEvent({ ...event, eventType: 'lockout' }, trx);
+      return { error: new AccountLockedError(dimension) };
+    }
+    if (!user || user.status !== 'active' || user.mfa_pending_token_hash !== platformTokenHash(token)
+      || payload.exp <= Math.floor(Date.now() / 1000) || (enrollment ? !!user.mfa_secret : !user.mfa_secret)) {
+      await writeAuthEvent({ ...event, eventType: 'mfa_failed' }, trx);
+      return { error: new TokenInvalidError('This verification link is no longer valid. Log in again.') };
+    }
+    const secretPlaintext = enrollment ? payload.secret : decrypt(user.mfa_secret);
+    const step = verifiedTotpStep({ secretPlaintext, code });
+    if (step === null || (user.mfa_last_used_step !== null && step <= Number(user.mfa_last_used_step))) {
+      await writeAuthEvent({ ...event, eventType: 'mfa_failed' }, trx);
+      return { error: new MfaCodeInvalidError() };
+    }
+    await trx.platform().table('platform_users').where({ id: user.id }).update({
+      ...(enrollment ? { mfa_secret: encrypt(secretPlaintext) } : {}),
+      mfa_pending_token_hash: null, mfa_last_used_step: step, last_login_at: new Date(),
+    });
+    await writeAuthEvent({ ...event, eventType: enrollment ? 'mfa_enrolled' : 'mfa_verified' }, trx);
+    await writeAuthEvent({ ...event, eventType: 'login_success' }, trx);
+    const accessToken = signAccessToken({ aud: 'platform', sub: String(user.id) }, { expiresIn: PLATFORM_ACCESS_TTL });
+    return { status: 'ok', accessToken, platformUserId: String(user.id) };
+  });
+  if (result.error) throw result.error;
+  return result;
+}
+
+async function confirmPlatformMfaEnrollment({ enrollmentToken, ...args }) {
+  return completePlatformMfa({ ...args, token: enrollmentToken, enrollment: true });
+}
+
+async function verifyPlatformMfa({ challengeToken, ...args }) {
+  return completePlatformMfa({ ...args, token: challengeToken, enrollment: false });
 }
 
 module.exports = {
@@ -1164,5 +1215,7 @@ module.exports = {
   requestGuestPasswordReset,
   completeGuestPasswordReset,
   platformLogin,
+  confirmPlatformMfaEnrollment,
+  verifyPlatformMfa,
   verifyStaffMfa,
 };

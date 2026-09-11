@@ -313,6 +313,30 @@ async function platformLogin(req, res, next) {
   }
 }
 
+/** POST /api/v1/platform/auth/mfa/enroll/confirm — the first-login TOTP enrollment round trip. */
+async function platformMfaEnrollConfirm(req, res, next) {
+  try {
+    const enrollmentToken = require_(req.body, 'enrollment_token');
+    const code = require_(req.body, 'code');
+    const result = await service.confirmPlatformMfaEnrollment({ enrollmentToken, code, ...requestMeta(req) });
+    res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** POST /api/v1/platform/auth/mfa/verify — real TOTP verification, distinct from staff's own `verifyMfa`. */
+async function verifyPlatformMfa(req, res, next) {
+  try {
+    const challengeToken = require_(req.body, 'challenge_token');
+    const code = require_(req.body, 'code');
+    const result = await service.verifyPlatformMfa({ challengeToken, code, ...requestMeta(req) });
+    res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   staffLogin,
   staffRefresh,
@@ -326,5 +350,7 @@ module.exports = {
   requestGuestPasswordReset,
   completeGuestPasswordReset,
   platformLogin,
+  platformMfaEnrollConfirm,
+  verifyPlatformMfa,
   verifyMfa,
 };

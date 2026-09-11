@@ -76,18 +76,20 @@ class SessionInvalidError extends AppError {
 }
 
 /**
- * `POST /auth/mfa/verify` exists so the shape is fixed. Real TOTP/
- * authenticator-app verification — and the `mfa_devices.secret` /
- * `platform_users.mfa_secret` encryption-at-rest story it depends on — is
- * still deferred, so a PLATFORM MFA-verify attempt (which never holds a
- * real challenge token to resume at all — `platformLogin` has no
- * token-issuance path to resume into yet) still returns this. The STAFF
- * path no longer does: a gap closure (user-reported) replaced the old
- * fixed dev-only bypass code with a real, emailed 6-digit code, so a
- * genuinely wrong/expired/already-used code for a valid staff challenge
- * now gets `MfaCodeInvalidError` below, not this. 501, not 500: this is a
- * known, temporary gap in what the API offers for the paths that still
- * hit it, not a server fault.
+ * `POST /auth/mfa/verify` exists so the shape is fixed. Originally returned
+ * unconditionally for both audiences before either had real verification.
+ * The STAFF path stopped hitting this once a gap closure (user-reported)
+ * replaced the old fixed dev-only bypass code with a real, emailed 6-digit
+ * code (a genuinely wrong/expired/already-used code for a valid staff
+ * challenge gets `MfaCodeInvalidError` below instead) — it now survives
+ * only as the fallback for a garbage/expired/wrong-audience STAFF
+ * challenge TOKEN (`verifyStaffMfa`'s own `catch`). PLAN.md Phase 5
+ * (Platform Foundation) closes the platform half too — real TOTP now
+ * exists (`src/auth/totp.js`), so a platform MFA-verify attempt no longer
+ * reaches this at all; a garbage/expired/wrong-audience platform challenge
+ * or enrollment token gets `TokenInvalidError` from its own real endpoint
+ * instead. 501, not 500: this remains a known, narrow gap (one staff edge
+ * case) in what the API offers, not a server fault.
  */
 class MfaNotImplementedError extends AppError {
   constructor() {
@@ -144,6 +146,35 @@ class PermissionDeniedError extends AppError {
   }
 }
 
+/**
+ * PLAN.md Phase 5 (Platform Foundation), API.md §4: "every route that
+ * touches tenant data via impersonation requires an active grant, checked
+ * per request, not just at token issuance." A `staff_impersonation` token
+ * whose `impersonation_sessions` row has been explicitly ended, or whose
+ * `expires_at` has lapsed, fails this re-check on the very next request —
+ * distinct from `TokenExpiredError` (the JWT itself, still cryptographically
+ * valid) exactly the way `SessionInvalidError` is distinct from it for an
+ * ordinary staff session.
+ */
+class ImpersonationEndedError extends AppError {
+  constructor() {
+    super('AUTH_IMPERSONATION_ENDED', 'This impersonation session has ended. Return to the platform console and start a new one.', 401);
+  }
+}
+
+/**
+ * SECURITY.md §2: impersonation is read-only. Enforced once, structurally,
+ * by a small middleware mounted ahead of every business router
+ * (`src/auth/impersonation-guard.js`) — this is the one error it throws,
+ * regardless of which module or permission the mutating request would
+ * otherwise have reached.
+ */
+class ImpersonationReadOnlyError extends AppError {
+  constructor() {
+    super('FORBIDDEN_IMPERSONATION_READ_ONLY', 'Impersonation is read-only — this action cannot be performed while viewing a tenant as platform staff.', 403);
+  }
+}
+
 module.exports = {
   InvalidCredentialsError,
   AccountLockedError,
@@ -156,6 +187,8 @@ module.exports = {
   MfaCodeInvalidError,
   NoActivePropertyError,
   PermissionDeniedError,
+  ImpersonationEndedError,
+  ImpersonationReadOnlyError,
   ValidationError,
   DuplicateEntryError,
 };

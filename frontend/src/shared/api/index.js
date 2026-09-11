@@ -14,3 +14,4 @@ export * as nightAuditApi from './night-audit.js';
 export * as posApi from './pos.js';
 export * as arApi from './ar.js';
 export * as groupBlocksApi from './group-blocks.js';
+export * as platformApi from './platform.js';

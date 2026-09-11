@@ -68,8 +68,20 @@ async function checkStaffLockout({ userId, ip }) {
   return null;
 }
 
+/** Platform password and MFA failures share durable account/IP lockout. */
+async function checkPlatformLockout({ platformUserId, ip, db = scopedDb().for(systemContext()) }) {
+  const count = (column, value) => db.platform().table('auth_events')
+    .where({ audience: 'platform', [column]: value })
+    .whereIn('event_type', ['login_failure', 'mfa_failed'])
+    .where('occurred_at', '>=', minutesAgo(ACCOUNT_WINDOW_MINUTES)).count();
+  if (platformUserId && await count('platform_user_id', platformUserId) >= ACCOUNT_THRESHOLD) return 'account';
+  if (ip && await count('ip', ip) >= IP_THRESHOLD) return 'ip';
+  return null;
+}
+
 module.exports = {
   checkStaffLockout,
+  checkPlatformLockout,
   ACCOUNT_THRESHOLD,
   ACCOUNT_WINDOW_MINUTES,
   IP_THRESHOLD,

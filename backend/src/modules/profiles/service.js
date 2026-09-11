@@ -60,8 +60,7 @@ async function searchGuests({ context, query }) {
  */
 async function getGuestStayHistory({ context, id }) {
   const db = scopedDb().for(context);
-  return db
-    .acrossProperties()
+  return (context.isImpersonation ? db : db.acrossProperties())
     .table('reservations')
     .where({ guest_id: id })
     .select(

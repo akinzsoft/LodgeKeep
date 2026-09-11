@@ -2201,6 +2201,32 @@ const ENTITIES = [
       },
     ],
   },
+
+  // -----------------------------------------------------------------
+  // Platform Foundation — PLAN.md Phase 5
+  // -----------------------------------------------------------------
+
+  {
+    table: 'impersonation_sessions',
+    // PLATFORM_SCOPED, mandatory tenant_id/property_id — unlike auth_events/
+    // payment_webhook_events, no nullable-attribution shape applies here
+    // (see the migration's own header). No crossTenant shape either, for
+    // the same reason payment_webhook_events declares none: the accessor
+    // never injects a tenant filter on this table at all — every read
+    // against it is a hand-written query in src/modules/platform/service.js.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      platform_user_id: ctx.platform.id,
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      reason: 'Isolation-suite fixture row',
+      expires_at: hoursFromNow(1),
+    }),
+    // No duplicateRow: nothing about this table is unique — a platform
+    // admin can legitimately start more than one grant against the same
+    // tenant/property over time. No restrictDelete either: this is a leaf
+    // table nothing else references.
+  },
 ];
 
 const byTable = (table) => ENTITIES.find((e) => e.table === table);

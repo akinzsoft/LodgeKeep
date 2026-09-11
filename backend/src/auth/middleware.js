@@ -20,17 +20,56 @@
 const jwt = require('jsonwebtoken');
 const { verifyAccessToken } = require('./tokens');
 const { scopedDb } = require('../db');
-const { contextFromSession, guestContextFromSession, platformContext } = require('../modules/tenancy');
+const { contextFromSession, guestContextFromSession, platformContext, impersonationContext, systemContext } = require('../modules/tenancy');
 const {
   UnauthenticatedError,
   TokenExpiredError,
   TokenInvalidError,
   WrongAudienceError,
   SessionInvalidError,
+  ImpersonationEndedError,
 } = require('./errors');
+
+/**
+ * PLAN.md Phase 5 (Platform Foundation) — API.md §4's "checked per request,
+ * not just at token issuance" for an impersonation grant, satisfied
+ * literally: the token carries only `sub` (a `platform_users.id`) and
+ * `impersonation_session_id`, never a tenant/property claim, so EVERY
+ * request re-reads the live `impersonation_sessions` row and re-derives
+ * both from it. See `context.js`'s `impersonationContext` for why this
+ * builds a STAFF-audience context rather than a new one.
+ */
+async function liveImpersonationContext(claims) {
+  const db = scopedDb();
+  const row = await db
+    .for(systemContext())
+    .platform()
+    .table('impersonation_sessions')
+    .where({ id: claims.impersonation_session_id })
+    .first();
+
+  if (!row || String(row.platform_user_id) !== String(claims.sub) || row.ended_at || new Date(row.expires_at) <= new Date()) {
+    throw new ImpersonationEndedError();
+  }
+
+  const platformUser = await db.for(systemContext()).platform().table('platform_users')
+    .where({ id: row.platform_user_id }).first();
+  if (!platformUser || platformUser.status !== 'active') throw new SessionInvalidError();
+
+  return impersonationContext({
+    tenantId: row.tenant_id,
+    propertyId: row.property_id,
+    impersonationSessionId: row.id,
+    platformUserId: row.platform_user_id,
+  });
+}
 
 async function liveContextFor(claims) {
   const db = scopedDb();
+
+  if (claims.aud === 'staff_impersonation') {
+    return liveImpersonationContext(claims);
+  }
 
   if (claims.aud === 'staff') {
     const context = contextFromSession({
@@ -109,7 +148,13 @@ function authenticate(audience) {
         throw new TokenInvalidError('This access token is not valid.');
       }
 
-      if (claims.aud !== audience) throw new WrongAudienceError();
+      // PLAN.md Phase 5: a `staff_impersonation` token satisfies exactly the
+      // staff tree's own audience check, and nothing else — it can never
+      // satisfy `authenticate('guest')`/`authenticate('platform')`. See
+      // `tokens.js`'s own header for why this is a distinct wire audience,
+      // never literally `aud: 'staff'`.
+      const audienceOk = claims.aud === audience || (audience === 'staff' && claims.aud === 'staff_impersonation');
+      if (!audienceOk) throw new WrongAudienceError();
 
       req.claims = claims;
       req.context = await liveContextFor(claims);

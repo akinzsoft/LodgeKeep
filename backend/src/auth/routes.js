@@ -65,7 +65,12 @@ function platformAuthRouter() {
   const router = Router();
   // No resolveTenant: platform_users belong to no tenant (SECURITY.md §2).
   router.post('/login', controller.platformLogin);
-  router.post('/mfa/verify', controller.verifyMfa);
+  // PLAN.md Phase 5 (Platform Foundation): platform now has its own real
+  // MFA implementation (TOTP, not staff's emailed code) — genuinely
+  // separate controller functions from here on, not the shared `verifyMfa`
+  // this route used before either audience had real verification.
+  router.post('/mfa/enroll/confirm', controller.platformMfaEnrollConfirm);
+  router.post('/mfa/verify', controller.verifyPlatformMfa);
   return router;
 }
 

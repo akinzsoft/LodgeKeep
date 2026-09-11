@@ -27,6 +27,7 @@ const {
   contextFromSession,
   guestContextFromSession,
   platformContext,
+  impersonationContext,
   systemContext,
   withActiveProperty,
 } = require('../../src/modules/tenancy');
@@ -66,6 +67,26 @@ describe('scoped data-access layer (SECURITY.md §2)', () => {
       userId: ctx.b.users[0].id,
       propertyId: ctx.b.properties[0].id,
     });
+  });
+
+  it.each(['insert', 'update', 'delete'])('directory chains retain the %s prohibition', async (verb) => {
+    const directory = scoped.for(platformContext({ platformUserId: ctx.platform.id })).platformDirectory();
+    const query = directory.table('tenants');
+    const chained = query.where({ id: ctx.a.id }).select('id').orderBy('id').limit(1);
+    await expect(Promise.resolve().then(() => chained[verb]({ name: 'Forbidden' }))).rejects.toThrow(/read-only/);
+    expect((await tx.trx('tenants').where({ id: ctx.a.id }).first()).name).toBeDefined();
+  });
+
+  it('impersonation cannot widen or switch its property, including root reads and joins', async () => {
+    const context = impersonationContext({ tenantId: ctx.a.id, propertyId: ctx.a.properties[0].id,
+      platformUserId: ctx.platform.id, impersonationSessionId: '1' });
+    const db = scoped.for(context);
+    expect(() => db.acrossProperties()).toThrow();
+    expect(() => withActiveProperty(context, ctx.a.properties[1].id)).toThrow();
+    expect((await db.table('properties')).map((p) => String(p.id))).toEqual([String(ctx.a.properties[0].id)]);
+    expect(await db.table('room_types').where({ property_id: ctx.a.properties[1].id })).toEqual([]);
+    const rows = await db.table('tenants').joinScoped('properties', (join) => join.on('tenants.id', 'properties.tenant_id')).select('properties.id');
+    expect(rows.map((r) => String(r.id))).toEqual([String(ctx.a.properties[0].id)]);
   });
 
   // ==================================================================
