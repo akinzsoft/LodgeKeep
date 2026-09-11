@@ -299,6 +299,14 @@ const TABLE_SCOPES = Object.freeze({
   // subscription_payments row it corresponds to is even resolved), not
   // `unscopedColumns` like its three siblings above.
   subscription_webhook_events: { scope: SCOPES.PLATFORM, attributionColumns: ['tenant_id'] },
+
+  // Tenant offboarding — PLAN.md Phase 5, PRODUCT_REQUIREMENTS.md §3.22.
+  // 20260925091000_create_tenant_data_exports. PLATFORM_SCOPED with
+  // `tenant_id` an `unscopedColumns` mandatory business column — the same
+  // shape `subscriptions`/`impersonation_sessions`/`tenant_signups`
+  // already established. Reached only through hand-written queries in
+  // src/modules/offboarding/service.js and the export job.
+  tenant_data_exports: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

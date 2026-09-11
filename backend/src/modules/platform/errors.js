@@ -24,13 +24,16 @@ class PropertyNotInTenantError extends AppError {
 }
 
 /**
- * PLAN.md Phase 5's trial/suspend/reactivate lifecycle — `suspendTenant`/
- * `reactivateTenant` each name the only starting statuses their transition
- * accepts; a tenant found in any other status (already in the target
- * state, or `offboarding`, which this pass builds no transition into or
- * out of) gets this real, specific rejection rather than a silent no-op —
- * `422`, matching this module's own existing "well-formed request, the
- * real-world state just doesn't support it" convention.
+ * PLAN.md Phase 5's trial/suspend/reactivate/offboard lifecycle —
+ * `suspendTenant`/`reactivateTenant`/`src/modules/offboarding/service.js`'s
+ * own transition each name the only starting statuses their transition
+ * accepts; a tenant found in any other status gets this real, specific
+ * rejection rather than a silent no-op — `422`, matching this module's own
+ * existing "well-formed request, the real-world state just doesn't
+ * support it" convention. `offboarding` is reachable both ways now
+ * (`reactivateTenant` was widened to accept it as a fromStatus, and the
+ * offboarding module is the one place that transitions INTO it) — this
+ * class stays generic rather than special-casing that status by name.
  */
 class InvalidTenantLifecycleTransitionError extends AppError {
   constructor(currentStatus, attemptedTransitionTo) {

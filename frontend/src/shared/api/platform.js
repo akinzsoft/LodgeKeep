@@ -91,3 +91,8 @@ export function suspendTenant(tenantId, reason) {
 export function reactivateTenant(tenantId, reason) {
   return request(`/platform/tenants/${tenantId}/reactivate`, { method: 'POST', body: { reason: reason || undefined } });
 }
+
+/** PLAN.md Phase 5 (tenant offboarding) — the platform-initiated half; `src/modules/offboarding/service.js`'s own `requestOwnOffboarding` is the tenant self-service half. */
+export function offboardTenant(tenantId, reason) {
+  return request(`/platform/tenants/${tenantId}/offboard`, { method: 'POST', body: { reason: reason || undefined } });
+}

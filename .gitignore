@@ -6,3 +6,7 @@ coverage/
 dist/
 *.log
 .DS_Store
+
+# PLAN.md Phase 5 tenant offboarding — generated data-export bundles,
+# never committed (real tenant data, local-disk storage per EXPORT_STORAGE_DIR).
+backend/storage/exports/

@@ -2375,6 +2375,26 @@ const ENTITIES = [
       verified: true,
     }),
   },
+
+  {
+    table: 'tenant_data_exports',
+    // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns) — reached only
+    // through hand-written queries in src/modules/offboarding/service.js
+    // and src/jobs/tenant-data-export.js, never the accessor's generic
+    // table() path. No crossTenant shape, for the same reason
+    // impersonation_sessions/tenant_signups/subscriptions declare none.
+    // No duplicateRow: nothing about this table is unique across two
+    // distinct attempts — a tenant can legitimately accumulate several
+    // export rows over time, one per attempt (a failed one retried as a
+    // fresh row, per the migration's own header).
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      status: 'pending',
+      requested_by_user_id: t.users[0].id,
+      reason: 'Isolation-suite fixture row',
+    }),
+  },
 ];
 
 const byTable = (table) => ENTITIES.find((e) => e.table === table);

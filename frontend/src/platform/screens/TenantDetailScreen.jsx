@@ -29,6 +29,9 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
   const [lifecycleSubmitting, setLifecycleSubmitting] = useState(false);
   const [lifecycleError, setLifecycleError] = useState(null);
 
+  const [offboardReason, setOffboardReason] = useState('');
+  const [offboardSubmitting, setOffboardSubmitting] = useState(false);
+
   async function reload() {
     setError(null);
     try {
@@ -88,6 +91,21 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
     }
   }
 
+  async function handleOffboard(event) {
+    event.preventDefault();
+    setLifecycleError(null);
+    setOffboardSubmitting(true);
+    try {
+      await platformApi.offboardTenant(tenantId, offboardReason);
+      setOffboardReason('');
+      await reload();
+    } catch (caught) {
+      setLifecycleError(caught instanceof ApiError ? caught.message : 'Could not offboard this tenant.');
+    } finally {
+      setOffboardSubmitting(false);
+    }
+  }
+
   return (
     <div className={styles.console}>
       <div className={styles.consoleHeader}>
@@ -114,9 +132,10 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
             </p>
           )}
           <p className={styles.hint}>
-            Trial and suspended tenants remain fully readable — every write is blocked until reactivated
-            (PRODUCT_REQUIREMENTS.md §3.22).{' '}
-            {role !== 'admin' && "Suspend/reactivate require the platform admin tier — your account can still try, but the server will refuse it."}
+            Trial, suspended, and offboarding tenants all remain fully readable — every write is blocked until
+            reactivated (PRODUCT_REQUIREMENTS.md §3.22).{' '}
+            {role !== 'admin' &&
+              'Suspend/reactivate/offboard require the platform admin tier — your account can still try, but the server will refuse it.'}
           </p>
           {(tenant.status === 'trial' || tenant.status === 'active') && (
             <form className={styles.form} onSubmit={handleSuspend}>
@@ -135,7 +154,7 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
               </Button>
             </form>
           )}
-          {tenant.status === 'suspended' && (
+          {(tenant.status === 'suspended' || tenant.status === 'offboarding') && (
             <form className={styles.form} onSubmit={handleReactivate}>
               <label className={styles.field}>
                 <span className={styles.label}>Reason (optional)</span>
@@ -151,7 +170,34 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
               </Button>
             </form>
           )}
-          {tenant.status === 'offboarding' && <p className={styles.hint}>This tenant is offboarding — no lifecycle transition is available yet.</p>}
+
+          {(tenant.status === 'trial' || tenant.status === 'active' || tenant.status === 'suspended') && (
+            <form className={styles.form} onSubmit={handleOffboard}>
+              <label className={styles.field}>
+                <span className={styles.label}>Reason (recorded on the audit trail)</span>
+                <input
+                  className={styles.input}
+                  value={offboardReason}
+                  onChange={(event) => setOffboardReason(event.target.value)}
+                  placeholder="e.g. Customer requested cancellation"
+                />
+              </label>
+              <Button type="submit" variant="danger" loading={offboardSubmitting}>
+                Offboard tenant
+              </Button>
+            </form>
+          )}
+
+          {tenant.status === 'offboarding' && (
+            <div className={styles.form}>
+              <p className={styles.hint}>
+                This tenant is offboarding — read-only, exactly like suspended. It can still log in to check its own
+                export status and download its data. Reactivating (above) reverses this and clears the dates below.
+              </p>
+              <p className={styles.hint}>Requested: {tenant.offboarding_requested_at ?? '—'}</p>
+              <p className={styles.hint}>Data retained until: {tenant.retention_expires_at ?? '—'}</p>
+            </div>
+          )}
         </Card>
       )}
 

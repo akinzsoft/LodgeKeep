@@ -19,6 +19,13 @@
  * reason again: a slow real-gateway call while charging one tenant's
  * subscription must never delay the trial-expiry sweep or the outbox's
  * own dispatch work, and vice versa.
+ *
+ * `tenant-data-export` (PLAN.md Phase 5, tenant offboarding) is a fifth,
+ * one-off only — no scheduler ever calls `upsertJobScheduler` against it
+ * (`src/jobs/tenant-data-export.js`'s own header), only the reactive
+ * `enqueueTenantDataExportJob`. A slow multi-table export bundling a
+ * large tenant's whole history must never delay any of the other four
+ * queues' own work, and vice versa.
  */
 
 const { Queue } = require('bullmq');
@@ -27,10 +34,12 @@ const { redisConnection } = require('./redis-connection');
 const OUTBOX_DISPATCH_QUEUE = 'outbox-dispatch';
 const TRIAL_EXPIRY_QUEUE = 'trial-expiry';
 const SUBSCRIPTION_BILLING_QUEUE = 'subscription-billing';
+const TENANT_DATA_EXPORT_QUEUE = 'tenant-data-export';
 
 let queue = null;
 let trialExpiryQueueInstance = null;
 let subscriptionBillingQueueInstance = null;
+let tenantDataExportQueueInstance = null;
 
 function outboxDispatchQueue() {
   if (!queue) {
@@ -53,6 +62,13 @@ function subscriptionBillingQueue() {
   return subscriptionBillingQueueInstance;
 }
 
+function tenantDataExportQueue() {
+  if (!tenantDataExportQueueInstance) {
+    tenantDataExportQueueInstance = new Queue(TENANT_DATA_EXPORT_QUEUE, { connection: redisConnection() });
+  }
+  return tenantDataExportQueueInstance;
+}
+
 /** Test-only teardown — BullMQ's `Queue` holds its own connection handles beyond the shared `redisConnection()` instance, and both must close for the process to exit without `--forceExit`. */
 async function __closeQueuesForTesting() {
   if (queue) {
@@ -67,6 +83,10 @@ async function __closeQueuesForTesting() {
     await subscriptionBillingQueueInstance.close();
     subscriptionBillingQueueInstance = null;
   }
+  if (tenantDataExportQueueInstance) {
+    await tenantDataExportQueueInstance.close();
+    tenantDataExportQueueInstance = null;
+  }
 }
 
 module.exports = {
@@ -76,5 +96,7 @@ module.exports = {
   trialExpiryQueue,
   SUBSCRIPTION_BILLING_QUEUE,
   subscriptionBillingQueue,
+  TENANT_DATA_EXPORT_QUEUE,
+  tenantDataExportQueue,
   __closeQueuesForTesting,
 };

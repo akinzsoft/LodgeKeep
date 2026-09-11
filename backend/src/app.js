@@ -54,6 +54,7 @@ const { groupBlocksRouter } = require('./modules/group-blocks');
 const { platformConsoleRouter, staffImpersonationRouter } = require('./modules/platform');
 const { signupRouter } = require('./modules/signup');
 const { billingRouter, billingWebhookRouter } = require('./modules/billing');
+const { offboardingRouter } = require('./modules/offboarding');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -74,6 +75,17 @@ function buildStaffRouter() {
   // under an active impersonation grant is rejected here, structurally,
   // before any business router below ever sees the request.
   router.use(rejectMutationDuringImpersonation());
+  // PLAN.md Phase 5 (tenant offboarding) — mounted here, AFTER the
+  // impersonation guard but BEFORE the tenant-lifecycle one just below,
+  // for two separate reasons: a platform admin impersonating a tenant
+  // must never trigger a real offboarding request "as" that tenant (that
+  // guard still applies), but a tenant already `offboarding` must still
+  // be able to check status, retry a failed export, or download a
+  // completed one — the entire reason this module exists. See
+  // `offboarding/routes.js`'s own header for the full reasoning, the
+  // identical placement logic `staffImpersonationRouter()` above already
+  // established for its own "must survive the state it's about" route.
+  router.use(offboardingRouter());
   // PLAN.md Phase 5 — the trial/suspended read-only boundary
   // (PRODUCT_REQUIREMENTS.md §3.22), the identical shape and placement as
   // the impersonation guard just above it, for a different read-only

@@ -125,10 +125,10 @@ describe('Tenant lifecycle read-only enforcement (PLAN.md Phase 5)', () => {
   });
 
   // ------------------------------------------------------------------
-  // tenant-resolution.js gap closure: reachability vs. write access are
-  // separate questions (see that file's own updated header). A trial or
-  // suspended tenant must still be able to log in at all — only
-  // `offboarding` stays a hard block.
+  // tenant-resolution.js: reachability vs. write access are separate
+  // questions (see that file's own header). Every one of `trial`/
+  // `suspended`/`offboarding` must still be able to log in — reads and
+  // writes are gated separately, below.
   // ------------------------------------------------------------------
 
   describe('login reachability by tenant status', () => {
@@ -153,10 +153,27 @@ describe('Tenant lifecycle read-only enforcement (PLAN.md Phase 5)', () => {
       expect(res.status).not.toBe(404);
     });
 
-    it('an offboarding tenant cannot be resolved at all — the one status that stays a hard block', async () => {
+    // PLAN.md Phase 5 (tenant offboarding): `offboarding` used to be the
+    // one status this describe block documented as a hard 404 block —
+    // confirmed with the user before changing it, since a tenant mid-
+    // offboarding must still be able to log in to see their request's
+    // status and download their data export. Read-only enforcement is
+    // proven separately, below (`isTenantWriteBlocked` has treated
+    // `offboarding` as write-blocked since it was added; this is the
+    // first path that actually exercises that branch with a real
+    // `offboarding` tenant).
+    it('an offboarding tenant can log in (read-only, but reachable — same as suspended)', async () => {
       await setStatus(ctx.a, 'offboarding');
       const res = await loginAs(ctx.a);
-      expect(res.status).toBe(404);
+      expect(res.status).not.toBe(404);
     });
+  });
+
+  it('an offboarding tenant is read-only, exactly like suspended', async () => {
+    await setStatus(ctx.a, 'offboarding');
+    expect((await readRequest()).status).toBe(200);
+    const writeRes = await writeRequest();
+    expect(writeRes.status).toBe(403);
+    expect(writeRes.body.error.code).toBe('FORBIDDEN_TENANT_READ_ONLY');
   });
 });
