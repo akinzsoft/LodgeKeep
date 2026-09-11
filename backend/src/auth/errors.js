@@ -211,6 +211,27 @@ class PlatformRoleDeniedError extends AppError {
   }
 }
 
+/**
+ * PLAN.md Phase 5's own final exit criterion, PRODUCT_REQUIREMENTS.md
+ * §3.22 ("a single entitlement check used everywhere"). The tenant's own
+ * PLAN does not include this capability — orthogonal to RBAC's
+ * `PermissionDeniedError` above: this fires regardless of which role or
+ * permission the caller holds, and no role at that tenant can bypass it
+ * short of a plan change. Filed here alongside `TenantReadOnlyError`/
+ * `PlatformRoleDeniedError` — a cross-cutting, whole-tenant access-policy
+ * error, not specific to any one business module.
+ */
+class PlanEntitlementDeniedError extends AppError {
+  constructor(featureKey, planCode) {
+    super(
+      'FORBIDDEN_PLAN_ENTITLEMENT',
+      'Your current plan does not include this feature. Upgrade your plan to unlock it.',
+      403,
+      { featureKey, planCode: planCode ?? null }
+    );
+  }
+}
+
 module.exports = {
   InvalidCredentialsError,
   AccountLockedError,
@@ -227,6 +248,7 @@ module.exports = {
   ImpersonationReadOnlyError,
   TenantReadOnlyError,
   PlatformRoleDeniedError,
+  PlanEntitlementDeniedError,
   ValidationError,
   DuplicateEntryError,
 };

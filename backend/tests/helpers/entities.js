@@ -2257,6 +2257,19 @@ const ENTITIES = [
   },
 
   {
+    table: 'plan_entitlements',
+    // GLOBAL_REFERENCE, following `plans` exactly — one catalogue, shared
+    // by both tenants, `UNIQUE(plan_id, feature_key)`. `duplicateRow`
+    // collides against 20260926090000_create_plan_entitlements' own seeded
+    // (`standard`, `multi_property`) row, the same "collide against an
+    // already-migration-seeded row" idiom `plans`' own entry above uses
+    // for `code: 'standard'`.
+    uniqueKeys: [['plan_id', 'feature_key']],
+    newRow: (ctx) => ({ plan_id: ctx.plans.standard, feature_key: 'isolation-suite-feature', enabled: true }),
+    duplicateRow: (ctx) => ({ plan_id: ctx.plans.standard, feature_key: 'multi_property', enabled: false }),
+  },
+
+  {
     table: 'subscriptions',
     // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns) — reached
     // only through hand-written queries in src/modules/billing/service.js,
