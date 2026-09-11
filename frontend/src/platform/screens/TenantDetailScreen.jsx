@@ -52,6 +52,7 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload is redefined every render and read here only for the tenantId-change fetch; listing it as a dep would re-run this effect on every render since it's a new function reference each time. Post-action staleness isn't a risk here: handleSuspend/handleReactivate/handleOffboard each call reload() explicitly after their own mutation resolves, so the tenant's real status (including offboarding_requested_at/retention_expires_at) always reflects the just-completed action, not this effect's own re-run.
   }, [tenantId]);
 
   async function handleImpersonate(event) {
