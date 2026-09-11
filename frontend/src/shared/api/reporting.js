@@ -42,3 +42,12 @@ export function getRevenueReportCsv({ dateFrom, dateTo }) {
   const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo, format: 'csv' });
   return requestBlob(`/reports/revenue?${params}`);
 }
+
+/** PLAN.md Phase 6's Multi-Property Roll-Up — `reports.view_chain`, super_admin only. */
+export function getChainOverview() {
+  return request('/reports/chain-overview');
+}
+
+export function getChainOverviewCsv() {
+  return requestBlob('/reports/chain-overview?format=csv');
+}

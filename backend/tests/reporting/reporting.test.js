@@ -11,7 +11,7 @@
  */
 
 const { useTestApp } = require('../helpers/app');
-const { seedTwoTenants } = require('../helpers/fixtures');
+const { seedTwoTenants, seedPlatformUser } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 
 describe('Reporting (PLAN.md Phase 3)', () => {
@@ -338,6 +338,269 @@ describe('Reporting (PLAN.md Phase 3)', () => {
         .set('Authorization', `Bearer ${tokenFor()}`);
       const day = res.body.data.find((d) => d.date === '2027-08-20');
       expect(day.audited).toBe(false);
+    });
+  });
+
+  // ==========================================================================
+  // Chain overview — PLAN.md Phase 6's Multi-Property Roll-Up
+  // (PRODUCT_REQUIREMENTS.md §3.13), reusing computeOccupancy/computeRevenue
+  // per active property. Property[0] is NGN, Property[1] is GBP — the exact
+  // fixture shape already established by seedTwoTenants — so the same
+  // seeding proves both correct aggregation math and mixed-currency
+  // grouping at once.
+  // ==========================================================================
+
+  describe('chain overview (PLAN.md Phase 6)', () => {
+    let superAdminUserId;
+    let adminUserId;
+
+    async function createUserWithRole(role) {
+      const suffix = `${role}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const [userId] = await t.trx('users').insert({
+        tenant_id: ctx.a.id,
+        email: `chain-${suffix}@example.com`,
+        first_name: 'Chain',
+        last_name: role,
+        password_hash: 'x',
+        status: 'active',
+      });
+      await t.trx('user_property_access').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, user_id: userId, role });
+      return userId;
+    }
+
+    function tokenForUser(userId) {
+      return signAccessToken({
+        aud: 'staff',
+        sub: String(userId),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+    }
+
+    beforeAll(async () => {
+      // Each property's own "today" — ARCHITECTURE.md §6, never wall-clock,
+      // and every property in a chain can legitimately be at a different
+      // point in time.
+      await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: '2027-09-01' });
+      await t.trx('properties').where({ id: ctx.a.properties[1].id }).update({ current_business_date: '2027-09-05' });
+
+      // Property[0] (NGN, from the fixture): 1 of 2 physical rooms sold -> 50% occupancy, NGN 250.00 revenue.
+      const [roomTypeAId] = await t.trx('room_types').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        code: `CHAINA${Date.now().toString(36)}`,
+        name: 'Chain Type A',
+        default_occupancy: 2,
+        base_rate: '250.00',
+      });
+      await t.trx('rooms').insert([
+        { tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, room_type_id: roomTypeAId, room_number: `CA1${Date.now().toString(36)}`, status: 'active' },
+        { tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, room_type_id: roomTypeAId, room_number: `CA2${Date.now().toString(36)}`, status: 'active' },
+      ]);
+      await t.trx('room_type_inventory').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        room_type_id: roomTypeAId,
+        stay_date: '2027-09-01',
+        rooms_sold: 1,
+        overbooking_threshold_pct: '100.00',
+      });
+      const [guestAId] = await t.trx('guests').insert({ tenant_id: ctx.a.id, first_name: 'Chain', last_name: 'GuestA' });
+      const [rateCodeAId] = await t.trx('rate_codes').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        code: `CHAINRATEA${Date.now().toString(36)}`,
+        base_rate: '250.00',
+        currency: 'NGN',
+        valid_from: '2026-01-01',
+      });
+      const [reservationAId] = await t.trx('reservations').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        guest_id: guestAId,
+        room_type_id: roomTypeAId,
+        rate_code_id: rateCodeAId,
+        arrival_date: '2027-09-01',
+        departure_date: '2027-09-02',
+        status: 'confirmed',
+        confirmation_number: `CHAINCONFA${Date.now().toString(36)}`,
+      });
+      await t.trx('reservation_daily_rates').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        reservation_id: reservationAId,
+        stay_date: '2027-09-01',
+        rate: '250.00',
+        currency: 'NGN',
+      });
+
+      // Property[1] (GBP, from the fixture): 1 of 1 physical rooms sold -> 100% occupancy, GBP 80.00 revenue.
+      const [roomTypeBId] = await t.trx('room_types').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[1].id,
+        code: `CHAINB${Date.now().toString(36)}`,
+        name: 'Chain Type B',
+        default_occupancy: 2,
+        base_rate: '80.00',
+      });
+      await t.trx('rooms').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[1].id,
+        room_type_id: roomTypeBId,
+        room_number: `CB1${Date.now().toString(36)}`,
+        status: 'active',
+      });
+      await t.trx('room_type_inventory').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[1].id,
+        room_type_id: roomTypeBId,
+        stay_date: '2027-09-05',
+        rooms_sold: 1,
+        overbooking_threshold_pct: '100.00',
+      });
+      const [guestBId] = await t.trx('guests').insert({ tenant_id: ctx.a.id, first_name: 'Chain', last_name: 'GuestB' });
+      const [rateCodeBId] = await t.trx('rate_codes').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[1].id,
+        code: `CHAINRATEB${Date.now().toString(36)}`,
+        base_rate: '80.00',
+        currency: 'GBP',
+        valid_from: '2026-01-01',
+      });
+      const [reservationBId] = await t.trx('reservations').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[1].id,
+        guest_id: guestBId,
+        room_type_id: roomTypeBId,
+        rate_code_id: rateCodeBId,
+        arrival_date: '2027-09-05',
+        departure_date: '2027-09-06',
+        status: 'confirmed',
+        confirmation_number: `CHAINCONFB${Date.now().toString(36)}`,
+      });
+      await t.trx('reservation_daily_rates').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[1].id,
+        reservation_id: reservationBId,
+        stay_date: '2027-09-05',
+        rate: '80.00',
+        currency: 'GBP',
+      });
+
+      superAdminUserId = await createUserWithRole('super_admin');
+      adminUserId = await createUserWithRole('admin');
+    });
+
+    it('super_admin gets a 200 with correct aggregation math across two real, distinctly-currencied properties', async () => {
+      const res = await t.request.get('/api/v1/reports/chain-overview').set('Authorization', `Bearer ${tokenForUser(superAdminUserId)}`);
+      expect(res.status).toBe(200);
+      const { properties, totals } = res.body.data;
+
+      const propertyA = properties.find((p) => String(p.propertyId) === String(ctx.a.properties[0].id));
+      const propertyB = properties.find((p) => String(p.propertyId) === String(ctx.a.properties[1].id));
+      // roomsSold/roomRevenue are exact and fully controlled by this test's own
+      // seeded reservation_daily_rates/room_type_inventory rows. occupancyPct
+      // for property[0] is NOT hardcoded here — livePhysicalCount is a real,
+      // property-wide count of every active room regardless of room type, and
+      // property[0] already carries other active rooms from the base Setup
+      // fixture plus the earlier describe blocks above in this same file, so
+      // any fixed expected percentage would be a fragile guess at that total.
+      // property[1] is untouched by anything else in this file (the base
+      // fixture only seeds properties[0]), so its 1-sold-of-1-active room is
+      // genuinely exact.
+      expect(propertyA).toMatchObject({ businessDate: '2027-09-01', roomsSold: 1, roomRevenue: '250.00', currencyCode: 'NGN' });
+      expect(propertyA.occupancyPct).toBeGreaterThan(0);
+      expect(propertyA.occupancyPct).toBeLessThanOrEqual(100);
+      expect(propertyB).toMatchObject({ businessDate: '2027-09-05', occupancyPct: 100, roomsSold: 1, roomRevenue: '80.00', currencyCode: 'GBP' });
+
+      // Never blended across currencies (ARCHITECTURE.md §1) — two separate entries, not one summed total.
+      expect(totals.totalRoomsSoldToday).toBe(2);
+      // The chain-wide average is a plain, unweighted mean of the two real
+      // per-property figures just asserted above — proven self-consistently
+      // rather than against a second hardcoded guess.
+      expect(totals.averageOccupancyPctToday).toBe(Number(((propertyA.occupancyPct + propertyB.occupancyPct) / 2).toFixed(2)));
+      expect(totals.revenueByCurrency).toEqual(
+        expect.arrayContaining([
+          { currencyCode: 'NGN', totalRoomRevenue: '250.00' },
+          { currencyCode: 'GBP', totalRoomRevenue: '80.00' },
+        ])
+      );
+      expect(totals.revenueByCurrency).toHaveLength(2);
+    });
+
+    it('admin gets 403 — the second admin/super_admin divergence in this matrix, after room_types.update', async () => {
+      const res = await t.request.get('/api/v1/reports/chain-overview').set('Authorization', `Bearer ${tokenForUser(adminUserId)}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+
+    it('manager (full reports.view_financial access, but not the chain key) gets 403', async () => {
+      // tokenFor()'s own default is ctx.a.users[0] @ properties[0], granted 'manager' by the shared fixture.
+      const res = await t.request.get('/api/v1/reports/chain-overview').set('Authorization', `Bearer ${tokenFor()}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+
+    it('front_desk gets 403', async () => {
+      // ctx.a.users[1] @ properties[0] was reassigned to front_desk by the earlier "occupancy" describe block above.
+      const res = await t.request.get('/api/v1/reports/chain-overview').set('Authorization', `Bearer ${tokenFor({ userId: ctx.a.users[1].id })}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+
+    it('excludes a property with no business date configured from every total, but still lists it', async () => {
+      const [unconfiguredPropertyId] = await t.trx('properties').insert({
+        tenant_id: ctx.a.id,
+        slug: `chain-unconfigured-${Date.now().toString(36)}`,
+        name: 'Chain Unconfigured Property',
+        timezone: 'UTC',
+        base_currency: 'NGN',
+        status: 'active',
+      });
+
+      const res = await t.request.get('/api/v1/reports/chain-overview').set('Authorization', `Bearer ${tokenForUser(superAdminUserId)}`);
+      expect(res.status).toBe(200);
+      const { properties, totals } = res.body.data;
+      const row = properties.find((p) => String(p.propertyId) === String(unconfiguredPropertyId));
+      expect(row).toMatchObject({ businessDate: null, occupancyPct: null, roomsSold: null, roomRevenue: null });
+      // The unconfigured property never joins the denominator — still exactly the 2 properly-configured properties.
+      expect(totals.configuredPropertyCount).toBe(2);
+    });
+
+    it('never includes tenant B’s properties in tenant A’s roll-up', async () => {
+      const res = await t.request.get('/api/v1/reports/chain-overview').set('Authorization', `Bearer ${tokenForUser(superAdminUserId)}`);
+      expect(res.status).toBe(200);
+      const propertyIds = res.body.data.properties.map((p) => String(p.propertyId));
+      expect(propertyIds).not.toContain(String(ctx.b.properties[0].id));
+      expect(propertyIds).not.toContain(String(ctx.b.properties[1].id));
+    });
+
+    it('exports the per-property breakdown as CSV, never the blended totals', async () => {
+      const res = await t.request
+        .get('/api/v1/reports/chain-overview')
+        .query({ format: 'csv' })
+        .set('Authorization', `Bearer ${tokenForUser(superAdminUserId)}`);
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/text\/csv/);
+      expect(res.text).toContain('propertyId,propertyName,currencyCode,businessDate,occupancyPct,roomsSold,roomRevenue,audited');
+      expect(res.text).toContain('2027-09-01');
+      expect(res.text).not.toMatch(/averageOccupancyPctToday|revenueByCurrency/);
+    });
+
+    it('under impersonation, sees only the one impersonated property, never the rest of the chain', async () => {
+      const platform = await seedPlatformUser(t.trx);
+      const platformToken = signAccessToken({ aud: 'platform', sub: String(platform.id) });
+      const startRes = await t.request
+        .post(`/api/v1/platform/tenants/${ctx.a.id}/impersonate`)
+        .set('Authorization', `Bearer ${platformToken}`)
+        .send({ property_id: ctx.a.properties[0].id, reason: 'Chain overview isolation proof' });
+      expect(startRes.status).toBe(201);
+
+      const res = await t.request
+        .get('/api/v1/reports/chain-overview')
+        .set('Authorization', `Bearer ${startRes.body.data.accessToken}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.properties.map((p) => String(p.propertyId))).toEqual([String(ctx.a.properties[0].id)]);
     });
   });
 });

@@ -72,4 +72,37 @@ async function oversoldRoomTypes(req, res, next) {
   }
 }
 
-module.exports = { occupancy, revenue, housekeepingSummary, oversoldRoomTypes };
+/**
+ * PLAN.md Phase 6's Multi-Property Roll-Up. CSV export covers only the
+ * per-property `properties` breakdown, not `totals` — a blended-currency
+ * total has no honest single CSV row shape.
+ */
+async function chainOverview(req, res, next) {
+  try {
+    const result = await service.computeChainOverview({ context: req.context });
+    if (req.query?.format === 'csv') {
+      res
+        .status(200)
+        .set('Content-Type', 'text/csv')
+        .set('Content-Disposition', 'attachment; filename="chain-overview.csv"')
+        .send(
+          service.toCsv(result.properties, [
+            'propertyId',
+            'propertyName',
+            'currencyCode',
+            'businessDate',
+            'occupancyPct',
+            'roomsSold',
+            'roomRevenue',
+            'audited',
+          ])
+        );
+      return;
+    }
+    res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
+module.exports = { occupancy, revenue, housekeepingSummary, oversoldRoomTypes, chainOverview };

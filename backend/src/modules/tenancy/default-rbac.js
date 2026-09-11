@@ -57,10 +57,12 @@ const ALL_PERMISSION_KEYS = Object.freeze([
   'billing.manage',
   'offboarding.manage',
   'migration.manage',
+  'reports.view_chain',
 ]);
 
-/** Every catalogue key except `room_types.update` — `admin`'s own exact exclusion (SECURITY.md §5). */
-const ADMIN_PERMISSION_KEYS = ALL_PERMISSION_KEYS.filter((key) => key !== 'room_types.update');
+/** Every catalogue key except `room_types.update`/`reports.view_chain` — `admin`'s own exact exclusions (SECURITY.md §5): the two places this matrix's Admin `✓` genuinely diverges from Super-admin's `✓` on a single action. */
+const ADMIN_ONLY_EXCLUSIONS = ['room_types.update', 'reports.view_chain'];
+const ADMIN_PERMISSION_KEYS = ALL_PERMISSION_KEYS.filter((key) => !ADMIN_ONLY_EXCLUSIONS.includes(key));
 
 const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
   front_desk: [

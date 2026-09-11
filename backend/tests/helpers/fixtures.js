@@ -1364,6 +1364,7 @@ async function seedTwoTenants(trx) {
     ['billing.manage', 'billing'],
     ['offboarding.manage', 'offboarding'],
     ['migration.manage', 'migration'],
+    ['reports.view_chain', 'reports'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -1492,6 +1493,11 @@ async function seedTwoTenants(trx) {
   // `reports.view` only — occupancy/housekeeping, no financial figures);
   // housekeeping/pos_operator get none; manager/admin/super_admin get full
   // access (`reports.view` + `reports.view_financial`).
+  //
+  // Gap closure (PLAN.md Phase 6): `reports.view_chain` (the chain-wide
+  // roll-up) is narrower still — super_admin only, NOT admin, the second
+  // place this matrix's own admin/super_admin split diverges on a single
+  // action, the same shape `room_types.update` established first.
   for (const t of both) {
     await trx('role_permissions').insert([
       { tenant_id: t.id, role_id: t.roles.front_desk, permission_id: permissions['reports.view'] },
@@ -1502,6 +1508,7 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['reports.view_financial'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['reports.view'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['reports.view_financial'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['reports.view_chain'] },
     ]);
   }
 
