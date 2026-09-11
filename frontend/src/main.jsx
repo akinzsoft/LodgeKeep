@@ -27,6 +27,7 @@ import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { notificationsApi, setupApi } from './shared/api/index.js';
 import { PortalApp } from './portal/PortalApp.jsx';
 import { PlatformApp } from './platform/PlatformApp.jsx';
+import { QrOrderApp } from './qr-order/QrOrderApp.jsx';
 
 /**
  * Gap closure: shown only while `AuthContext.jsx` is probing the HttpOnly
@@ -300,15 +301,18 @@ function Demo() {
 }
 
 /**
- * The guest portal, the platform console, and the staff app are three
- * separate trees, never mounted together in one page load (`PortalApp.jsx`'s
- * own header explains why this matters beyond routing: it's what makes
- * reusing `shared/api/client.js`'s single token/refresh-handler registration
- * safe for all three). A pathname check here, ahead of `<AuthProvider>`, is
- * this app's only "router" at the top level — `PortalApp` owns real
- * `react-router-dom` routing underneath its own `/portal/*` subtree,
- * `PlatformApp` (PLAN.md Phase 5) is router-free like the staff app itself,
- * but nothing above either needs to know that.
+ * The guest portal, the QR self-ordering app, the platform console, and the
+ * staff app are four separate trees, never mounted together in one page
+ * load (`PortalApp.jsx`'s own header explains why this matters beyond
+ * routing: it's what makes reusing `shared/api/client.js`'s single
+ * token/refresh-handler registration safe for all of them). A pathname
+ * check here, ahead of `<AuthProvider>`, is this app's only "router" at the
+ * top level — `PortalApp`/`QrOrderApp` each own real `react-router-dom`
+ * routing underneath their own subtree, `PlatformApp` (PLAN.md Phase 5) is
+ * router-free like the staff app itself, but nothing above either needs to
+ * know that. `QrOrderApp` needs no auth context of any kind registered at
+ * all — every route under `/qr-order` is fully anonymous
+ * (`shared/api/qr-ordering.js`'s own header).
  */
 createRoot(document.getElementById('root')).render(
   <StrictMode>
@@ -316,6 +320,8 @@ createRoot(document.getElementById('root')).render(
       <PortalApp />
     ) : window.location.pathname.startsWith('/platform') ? (
       <PlatformApp />
+    ) : window.location.pathname.startsWith('/qr-order') ? (
+      <QrOrderApp />
     ) : (
       <AuthProvider>
         <Demo />

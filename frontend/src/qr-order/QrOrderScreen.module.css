@@ -1,0 +1,130 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line);
+  font-weight: var(--text-h1-weight);
+  color: var(--text-primary);
+}
+
+.subtitle {
+  margin: calc(-1 * var(--space-3)) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-body-size);
+}
+
+.category {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-h2-size);
+  font-weight: var(--text-h1-weight);
+  color: var(--text-primary);
+}
+
+.itemRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.itemRow:last-child {
+  border-bottom: none;
+}
+
+.itemInfo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.itemName {
+  font-weight: var(--text-label-weight);
+  color: var(--text-primary);
+}
+
+.quantityControls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.quantityValue {
+  min-width: 1.5rem;
+  text-align: center;
+  font-weight: var(--text-label-weight);
+}
+
+.cartBar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--border);
+}
+
+.cartSummaryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: var(--text-label-weight);
+}
+
+.statTile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.statLabel {
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
+.statValue {
+  font-size: var(--text-h2-size);
+  font-weight: var(--text-h1-weight);
+  color: var(--text-primary);
+}
+
+.summaryList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.summaryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.devNote {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--state-warning-bg);
+  color: var(--state-warning);
+  font-size: var(--text-label-size);
+}
+
+.maskedNameCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}

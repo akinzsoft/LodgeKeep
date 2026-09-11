@@ -12,6 +12,7 @@ export * as reportingApi from './reporting.js';
 export * as cashieringApi from './cashiering.js';
 export * as nightAuditApi from './night-audit.js';
 export * as posApi from './pos.js';
+export * as qrOrderingApi from './qr-ordering.js';
 export * as arApi from './ar.js';
 export * as groupBlocksApi from './group-blocks.js';
 export * as platformApi from './platform.js';

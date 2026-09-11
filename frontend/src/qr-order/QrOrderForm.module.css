@@ -40,17 +40,26 @@
   width: 100%;
 }
 
-.checkboxField {
+.radioGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.radioOption {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
 }
 
-.checkbox {
-  width: var(--space-4);
-  height: var(--space-4);
-  accent-color: var(--domain-money);
+.radioOptionSelected {
+  border-color: var(--domain-booking, var(--text-primary));
+  background: var(--domain-booking-tint, var(--surface-sunken));
 }
 
 .actionsRow {
@@ -70,30 +79,18 @@
   font-weight: var(--text-label-weight);
 }
 
-.disabledNotice {
-  margin: 0;
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--state-neutral-bg);
-  color: var(--text-primary);
-  font-size: var(--text-label-size);
-}
-
-/* Added for PLAN.md Phase 6 (QR self-ordering): `GuestOrdersTab`/`QrTokensTab`'s own explanatory copy, matching every other form CSS module's identical `.hint` rule (e.g. `MigrationForm.module.css`). */
 .hint {
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--text-label-size);
 }
 
-.tokenLink {
-  display: block;
-  overflow-wrap: anywhere;
-  color: var(--domain-money);
-  font-size: var(--text-label-size);
+.link {
+  color: var(--domain-booking, var(--text-primary));
+  font-weight: var(--text-label-weight);
+  text-decoration: none;
 }
 
-.qrImage {
-  width: 200px;
-  height: 200px;
+.link:hover {
+  text-decoration: underline;
 }

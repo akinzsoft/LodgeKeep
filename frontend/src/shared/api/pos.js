@@ -1,4 +1,4 @@
-import { request } from './client.js';
+import { request, requestWithMeta } from './client.js';
 
 /**
  * PLAN.md Phase 4's POS core module. Same shape as `cashiering.js`/
@@ -157,4 +157,83 @@ export function closeShift(shiftId, countedCash) {
     headers: { 'Idempotency-Key': idempotencyKey() },
     body: { counted_cash: countedCash },
   });
+}
+
+// ---------------------------------------------------------------------
+// QR self-ordering — staff-facing (PLAN.md Phase 6). Wrappers over the
+// real routes in `backend/src/modules/qr-ordering/routes.js`'s
+// `qrOrderStaffRouter()` — `pos.manage` for token/policy configuration,
+// `pos.operate` for the guest-order queue, the exact same split every
+// other POS staff action in this file already uses. Neither carries an
+// Idempotency-Key: none of these controller handlers call
+// `requireIdempotencyKey` (unlike `settleOrder`/`closeShift` above).
+// ---------------------------------------------------------------------
+
+/** Every token, decrypted back to its real raw value for re-display/re-print — `pos.manage` only; never reachable by a guest. */
+export function listQrTokens(outletId) {
+  const params = outletId ? `?${new URLSearchParams({ outlet_id: outletId })}` : '';
+  return request(`/pos/qr-tokens${params}`);
+}
+
+/** Returns `{token, qrImageDataUrl}` — `rawToken` (the value that goes into the printed/displayed code) travels in `meta`, so this flattens it in, the same `{...data, ...meta}` shape every other split-envelope response in this codebase uses. */
+export async function createQrToken({ outletId, type, tableLabel, roomId, baseUrl }) {
+  const { data, meta } = await requestWithMeta('/pos/qr-tokens', {
+    method: 'POST',
+    body: { outlet_id: outletId, type, table_label: tableLabel, room_id: roomId, base_url: baseUrl },
+  });
+  return { ...data, rawToken: meta.rawToken };
+}
+
+/** The old code stops working the instant this succeeds (`rotated_at` set) — a genuinely new code, not a re-display of the old one. */
+export async function regenerateQrToken(id, baseUrl) {
+  const { data, meta } = await requestWithMeta(`/pos/qr-tokens/${id}/regenerate`, {
+    method: 'POST',
+    body: { base_url: baseUrl },
+  });
+  return { ...data, rawToken: meta.rawToken };
+}
+
+export function deactivateQrToken(id) {
+  return request(`/pos/qr-tokens/${id}/deactivate`, { method: 'POST', body: {} });
+}
+
+/** Reversible — the exact same code the guest already has keeps working once reactivated. */
+export function reactivateQrToken(id) {
+  return request(`/pos/qr-tokens/${id}/reactivate`, { method: 'POST', body: {} });
+}
+
+export function toggleGuestOrdering(outletId, enabled) {
+  return request(`/pos/outlets/${outletId}/toggle-guest-ordering`, { method: 'POST', body: { enabled } });
+}
+
+export function updateGuestOrderPolicy(outletId, { acceptTimeoutMinutes, rateLimitMax, maxUnpaidValue }) {
+  return request(`/pos/outlets/${outletId}/guest-order-policy`, {
+    method: 'PATCH',
+    body: { accept_timeout_minutes: acceptTimeoutMinutes, rate_limit_max: rateLimitMax, max_unpaid_value: maxUnpaidValue },
+  });
+}
+
+export function listGuestOrders({ outletId, status } = {}) {
+  const params = new URLSearchParams();
+  if (outletId) params.set('outlet_id', outletId);
+  if (status) params.set('status', status);
+  const query = params.toString();
+  return request(`/pos/guest-orders${query ? `?${query}` : ''}`);
+}
+
+export function getGuestOrder(id) {
+  return request(`/pos/guest-orders/${id}`);
+}
+
+export function acceptGuestOrder(id) {
+  return request(`/pos/guest-orders/${id}/accept`, { method: 'POST', body: {} });
+}
+
+export function markGuestOrderOnTheWay(id) {
+  return request(`/pos/guest-orders/${id}/mark-on-the-way`, { method: 'POST', body: {} });
+}
+
+/** Reverses whatever payment already settled (a full refund or a voided room-charge settlement) — see `qr-ordering/service.js`'s own `reverseGuestOrderPayment`. A reason is always required (DESIGN_SYSTEM.md §2's money/irreversible-action rule). */
+export function rejectGuestOrder(id, reason) {
+  return request(`/pos/guest-orders/${id}/reject`, { method: 'POST', body: { reason } });
 }
