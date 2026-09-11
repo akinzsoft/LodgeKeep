@@ -52,7 +52,13 @@
 
 const { scopedDb } = require('../../db');
 const { ValidationError, withDuplicateMapping } = require('../../shared/errors');
-const { sumMoney, negateMoney, compareMoney, toCents, fromCents } = require('../../shared/money');
+const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
+// PLAN.md Phase 6 (QR self-ordering) promoted this out of this module once
+// a second caller (`qr-ordering/service.js`) needed the identical
+// per-item pricing computation to price a guest's cart before an order
+// even exists — re-exported below so no existing import of this module
+// breaks.
+const { computeItemLineTotal } = require('../../shared/pos-pricing');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('../cashiering/tax-engine');
 const cashieringService = require('../cashiering/service');
 const reservationsService = require('../reservations/service');
@@ -218,31 +224,39 @@ async function listOrderSettlements({ context, orderId }) {
   return db.table('pos_order_settlements').where({ pos_order_id: orderId }).orderBy('id');
 }
 
-async function openOrder({ context, outletId, terminalId, openedByUserId, tableLabel }) {
+/**
+ * `terminalId`/`openedByUserId` are only required for `source: 'staff'`
+ * (the default, unchanged behaviour for every existing caller) — PLAN.md
+ * Phase 6's QR self-ordering module opens a tab with neither, since a
+ * guest scanning a table's QR code has no physical terminal and no staff
+ * identity behind them at all (`pos_orders.opened_by_user_id`/
+ * `terminal_id` are nullable as of that pass's own migration). The
+ * terminal lookup/validation below only runs when a terminalId is
+ * actually supplied, so a guest order never needs a fake terminal row to
+ * satisfy it.
+ */
+async function openOrder({ context, outletId, terminalId = null, openedByUserId = null, tableLabel, source = 'staff' }) {
   const db = scopedDb().for(context);
   const outlet = await getOutlet({ context, id: outletId });
   if (!outlet) throw new OutletNotFoundError();
-  // Matched in the WHERE clause, not fetched-then-compared in JS — a
-  // BIGINT id can come back from MySQL as a string while the caller's own
-  // value is a JS number (or vice versa); letting the database compare
-  // its own column values avoids that type mismatch entirely.
-  const terminal = await db.table('pos_terminals').where({ id: terminalId, outlet_id: outletId }).first();
-  if (!terminal) throw new TerminalNotFoundError();
+
+  if (terminalId) {
+    // Matched in the WHERE clause, not fetched-then-compared in JS — a
+    // BIGINT id can come back from MySQL as a string while the caller's own
+    // value is a JS number (or vice versa); letting the database compare
+    // its own column values avoids that type mismatch entirely.
+    const terminal = await db.table('pos_terminals').where({ id: terminalId, outlet_id: outletId }).first();
+    if (!terminal) throw new TerminalNotFoundError();
+  }
 
   const [id] = await db.table('pos_orders').insert({
     outlet_id: outletId,
     terminal_id: terminalId,
     opened_by_user_id: openedByUserId,
     table_label: tableLabel ?? null,
+    source,
   });
   return getOrder({ context, id });
-}
-
-/** Every menu-item price/modifier lookup and item-add goes through this exact cents math — no floats, ever (ARCHITECTURE.md §1). */
-function computeItemLineTotal({ unit_price: unitPrice, quantity, modifiers }) {
-  const modifierDeltaCents = (modifiers ?? []).reduce((sum, m) => sum + toCents(m.priceDelta ?? '0.00'), 0n);
-  const perUnitCents = toCents(unitPrice) + modifierDeltaCents;
-  return fromCents(perUnitCents * BigInt(quantity));
 }
 
 async function addItem({ context, orderId, menuItemId, quantity, modifiers }) {

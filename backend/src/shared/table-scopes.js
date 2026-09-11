@@ -226,6 +226,15 @@ const TABLE_SCOPES = Object.freeze({
   pos_order_settlements: { scope: SCOPES.PROPERTY },
   pos_shifts: { scope: SCOPES.PROPERTY },
 
+  // QR self-ordering — PLAN.md Phase 6 gap closure,
+  // 20260930090000_create_pos_order_tokens.js through
+  // 20260930092000_create_pos_room_charge_otps.js. All PROPERTY_SCOPED,
+  // following `pos_outlets`/`pos_orders` for the same reason every other
+  // POS-adjacent table does.
+  pos_order_tokens: { scope: SCOPES.PROPERTY },
+  pos_guest_orders: { scope: SCOPES.PROPERTY },
+  pos_room_charge_otps: { scope: SCOPES.PROPERTY },
+
   // Accounts Receivable — PLAN.md Phase 4, 20260918090000_create_company_profiles
   // through 20260918097000_alter_folios_for_ar.
   //

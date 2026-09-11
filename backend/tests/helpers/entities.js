@@ -24,6 +24,7 @@
  */
 
 const { PASSWORD_HASH, tokenHash, hoursFromNow, byLabel } = require('./fixtures');
+const { encrypt } = require('../../src/shared/encryption');
 
 /** MySQL error codes the suite asserts on, named so a failure message reads. */
 const ER = {
@@ -1822,6 +1823,148 @@ const ENTITIES = [
           user_id: own.users[0].id,
           opening_float: '100.00',
           currency: 'NGN',
+        }),
+      },
+    ],
+  },
+
+  // -----------------------------------------------------------------
+  // QR self-ordering — PLAN.md Phase 6 gap closure
+  // -----------------------------------------------------------------
+
+  {
+    table: 'pos_order_tokens',
+    // `token_hash` carries a real UNIQUE constraint globally (never per-
+    // tenant) — the one deliberate exception among this table's
+    // constraints to the usual `(tenant_id, ...)` composite shape, since
+    // the whole point is a single, indexed, exact-match lookup with no
+    // tenant context available yet at request time (see the migration's
+    // own header).
+    uniqueKeys: [['token_hash']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      type: 'table',
+      table_label: 'NEW-TABLE',
+      token_hash: tokenHash(`iso-new-token-${t.slug}`),
+      token_encrypted: encrypt(`iso-new-token-${t.slug}`),
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      type: 'table',
+      table_label: 'DUP-TABLE',
+      // Matches seedTwoTenants' own fixture token hash exactly.
+      token_hash: tokenHash(`fixture-qr-token-${t.slug}`),
+      token_encrypted: 'x',
+    }),
+    crossTenant: [
+      {
+        name: "creates a token against another tenant's outlet",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          type: 'table',
+          table_label: 'CROSS',
+          token_hash: tokenHash(`iso-cross-token-${own.slug}-${other.slug}`),
+          token_encrypted: 'x',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'pos_guest_orders',
+    // `UNIQUE(tenant_id, property_id, pos_order_id)` — one guest-order
+    // row per underlying tab.
+    uniqueKeys: [['tenant_id', 'property_id', 'pos_order_id']],
+    // `posOrders[0]` is already claimed by this tenant's own seeded
+    // `pos_guest_orders` fixture row — `posOrders[1]` (a second,
+    // deliberately unattached tab, seeded for exactly this reason; see
+    // `fixtures.js`'s own comment there) is the one genuinely free row.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      pos_order_id: t.posOrders[1].id,
+      token_id: t.posOrderTokens[0].id,
+      payment_method: 'room_charge',
+    }),
+    // Collides with seedTwoTenants' own fixture row, which targets
+    // posOrders[0] (see fixtures.js).
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      pos_order_id: t.posOrders[0].id,
+      token_id: t.posOrderTokens[0].id,
+      payment_method: 'room_charge',
+    }),
+    crossTenant: [
+      {
+        name: "creates a guest order against another tenant's pos_order",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          pos_order_id: other.posOrders[0].id,
+          token_id: own.posOrderTokens[0].id,
+          payment_method: 'card',
+        }),
+      },
+      {
+        name: "creates a guest order against another tenant's token",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          // own.posOrders[0] is already claimed by own's own seeded
+          // pos_guest_orders row — use the free, unattached second one so
+          // this case hits only the intended cross-tenant FK violation,
+          // never an incidental UNIQUE collision first.
+          pos_order_id: own.posOrders[1].id,
+          token_id: other.posOrderTokens[0].id,
+          payment_method: 'card',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'pos_room_charge_otps',
+    // No natural unique key — matching `mfa_login_codes`' own precedent
+    // exactly: `code_hash` is deliberately NOT unique (a 6-digit code's
+    // small keyspace makes coincidence ordinary, see the migration's own
+    // header).
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      reservation_id: t.reservations[0].id,
+      pos_order_id: t.posOrders[0].id,
+      code_hash: tokenHash(`iso-new-otp-${t.slug}`),
+      expires_at: hoursFromNow(1),
+    }),
+    crossTenant: [
+      {
+        name: "creates an OTP against another tenant's reservation",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          reservation_id: other.reservations[0].id,
+          pos_order_id: own.posOrders[0].id,
+          code_hash: tokenHash(`iso-cross-otp-${own.slug}-${other.slug}`),
+          expires_at: hoursFromNow(1),
+        }),
+      },
+      {
+        name: "creates an OTP against another tenant's pos_order",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          reservation_id: own.reservations[0].id,
+          pos_order_id: other.posOrders[0].id,
+          code_hash: tokenHash(`iso-cross-otp2-${own.slug}-${other.slug}`),
+          expires_at: hoursFromNow(1),
         }),
       },
     ],

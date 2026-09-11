@@ -1258,6 +1258,53 @@ async function findInHouseForCharge({ context, query }) {
     .limit(20);
 }
 
+/**
+ * PLAN.md Phase 6 (QR self-ordering gap closure) — the exact-match
+ * counterpart to `findInHouseForCharge`'s own fuzzy search: given a
+ * PHYSICAL room (resolved from a guest's own room-type QR token, never a
+ * guest-typed room number), returns the one reservation currently,
+ * genuinely checked into it, or `undefined` if the room is unoccupied.
+ * The QR-ordering module's own charge-to-room flow calls this to confirm
+ * a real, live occupancy before ever emailing an OTP — a guest scanning a
+ * room's own physical sticker cannot assert a different room.
+ */
+async function findInHouseReservationForRoom({ context, roomId }) {
+  const db = scopedDb().for(context);
+  return db
+    .table('reservations')
+    .joinScoped('reservation_rooms', (join) =>
+      join.on('reservation_rooms.reservation_id', '=', 'reservations.id').onNull('reservation_rooms.effective_to')
+    )
+    .joinScoped('guests', (join) => join.on('guests.id', '=', 'reservations.guest_id'))
+    .where({ 'reservations.status': 'checked_in', 'reservation_rooms.room_id': roomId })
+    // Column names passed directly to `.first()`, not a separate `.select()`
+    // call before it — the accessor's own `first()` defaults to `'*'` when
+    // given none, and knex's `.select()`/`.first()` calls are additive on
+    // the same builder, not replacing: chaining `.select(a, b).first()`
+    // compiles to `SELECT a, b, * FROM ...`, a real MySQL syntax error
+    // (named columns cannot precede a bare `*`). Caught live while building
+    // this function's own first caller.
+    .first(
+      'reservations.id as reservationId',
+      'reservations.property_id as propertyId',
+      'guests.first_name as guestFirstName',
+      'guests.last_name as guestLastName',
+      'guests.email as guestEmail'
+    );
+}
+
+/**
+ * "Jane Adeyemi" -> "J*** A." — PLAN.md Phase 6's room-charge confirm-name
+ * step: enough for a guest to recognize their own stay before requesting a
+ * code, without exposing a full name to anyone who merely scanned the
+ * room's own physical QR sticker.
+ */
+function maskGuestName(firstName, lastName) {
+  const maskedFirst = firstName ? `${firstName[0]}${'*'.repeat(Math.max(firstName.length - 1, 0))}` : '';
+  const lastInitial = lastName ? `${lastName[0]}.` : '';
+  return [maskedFirst, lastInitial].filter(Boolean).join(' ').trim();
+}
+
 module.exports = {
   generateUlid,
   expandStayDates,
@@ -1295,4 +1342,6 @@ module.exports = {
   listFreeRoomsNow,
   listEligiblePreferredRooms,
   findInHouseForCharge,
+  findInHouseReservationForRoom,
+  maskGuestName,
 };
