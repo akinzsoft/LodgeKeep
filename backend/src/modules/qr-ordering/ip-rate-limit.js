@@ -25,15 +25,21 @@ const { RedisStore } = require('rate-limit-redis');
 const { rateLimitRedisConnection } = require('../../shared/rate-limit-redis-connection');
 const { fail } = require('../../shared/response');
 
-function qrOrderIpRateLimiter() {
+/**
+ * `limit`/`prefix` are overridable (code-review fix, IMPORTANT) so a
+ * SEPARATE instance — its own Redis-backed counter, never sharing order
+ * creation's own budget — can guard the OTP request/verify routes too
+ * (`routes.js`), each with its own appropriately-scoped ceiling.
+ */
+function qrOrderIpRateLimiter({ limit = 30, prefix = 'qr-order-ip-rl:' } = {}) {
   return rateLimit({
     windowMs: 60_000,
-    limit: 30,
+    limit,
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKeyGenerator,
     store: new RedisStore({
-      prefix: 'qr-order-ip-rl:',
+      prefix,
       sendCommand: (...args) => rateLimitRedisConnection().call(...args),
     }),
     handler: (req, res) => {

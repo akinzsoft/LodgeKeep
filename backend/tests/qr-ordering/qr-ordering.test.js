@@ -45,12 +45,16 @@ const { rateLimitRedisConnection, destroyRateLimitRedisConnection } = require('.
  * Flushed once up front so this suite's own volume is never mistaken for
  * the abuse that limiter exists to catch; the per-token/dedicated rate
  * limiter tests live in their own file (`rate-limit.test.js`) and are
- * unaffected either way.
+ * unaffected either way. Also covers the two dedicated OTP request/verify
+ * per-IP counters (code-review fix, IMPORTANT) this file's own
+ * charge-to-room block now drives several real calls through.
  */
 async function flushIpRateLimitKeys() {
   const redis = rateLimitRedisConnection();
   const keys = await redis.keys('qr-order-ip-rl:*');
-  if (keys.length) await redis.del(...keys);
+  const otpKeys = [...(await redis.keys('qr-otp-request-ip-rl:*')), ...(await redis.keys('qr-otp-verify-ip-rl:*'))];
+  const all = [...keys, ...otpKeys];
+  if (all.length) await redis.del(...all);
 }
 
 describe('QR self-ordering (PLAN.md Phase 6)', () => {
@@ -679,6 +683,76 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       const fresh = await guestPost(`/${roomRaw}/orders/${order.id}/room-charge/verify`).send({ code: second.body.data.devOnlyCode });
       expect(fresh.status).toBe(200);
     });
+
+    it('rejecting a room-charge order still awaiting payment voids the tab and blocks a subsequent request-otp (CRITICAL code-review fix)', async () => {
+      const order = await createRoomChargeOrder();
+
+      const rejected = await t.request
+        .post(`/api/v1/pos/guest-orders/${order.id}/reject`)
+        .set('Authorization', `Bearer ${staffToken()}`)
+        .send({ reason: 'Kitchen closed' });
+      expect(rejected.status).toBe(200);
+      expect(rejected.body.data.status).toBe('rejected');
+      expect(rejected.body.data.payment_status).toBe('unpaid'); // never actually charged
+
+      const underlyingOrder = await t.trx('pos_orders').where({ id: order.pos_order_id }).first();
+      expect(underlyingOrder.status).toBe('void');
+
+      const otpAttempt = await guestPost(`/${roomRaw}/orders/${order.id}/room-charge/request-otp`).send({});
+      expect(otpAttempt.status).toBe(409);
+      expect(otpAttempt.body.error.code).toBe('CONFLICT_GUEST_ORDER_ALREADY_REJECTED');
+    });
+
+    it('rejecting after an OTP was requested (but not yet verified) blocks a subsequent verify with the real, correct code (CRITICAL code-review fix)', async () => {
+      const order = await createRoomChargeOrder();
+      const otpRes = await guestPost(`/${roomRaw}/orders/${order.id}/room-charge/request-otp`).send({});
+      const code = otpRes.body.data.devOnlyCode;
+
+      const rejected = await t.request
+        .post(`/api/v1/pos/guest-orders/${order.id}/reject`)
+        .set('Authorization', `Bearer ${staffToken()}`)
+        .send({ reason: 'Guest cancelled the order' });
+      expect(rejected.status).toBe(200);
+      expect(rejected.body.data.status).toBe('rejected');
+
+      const verifyAttempt = await guestPost(`/${roomRaw}/orders/${order.id}/room-charge/verify`).send({ code });
+      expect(verifyAttempt.status).toBe(409);
+      expect(verifyAttempt.body.error.code).toBe('CONFLICT_GUEST_ORDER_ALREADY_REJECTED');
+
+      // Never settled — no folio charge, no settlement row, ever posted.
+      expect(await t.trx('pos_order_settlements').where({ pos_order_id: order.pos_order_id, method: 'room_charge' }).first()).toBeUndefined();
+      const guestOrderAfter = await t.trx('pos_guest_orders').where({ id: order.id }).first();
+      expect(guestOrderAfter.payment_status).toBe('unpaid');
+    });
+
+    it('auto-reject exhibits the identical protection — a forced "received but still unpaid" order cannot be resurrected either (defense in depth)', async () => {
+      const order = await createRoomChargeOrder();
+      // `tryAutoReject`'s own WHERE clause only ever claims a REAL
+      // `received` row in production, and a room-charge order only ever
+      // reaches `received` once real OTP settlement already completed
+      // (`payment_status` is never actually `unpaid` there) — this state
+      // is forced directly here to prove the SHARED
+      // `reverseGuestOrderPayment` mechanism protects this hypothetical
+      // shape too, not just the real `awaiting_payment` one the two tests
+      // above cover.
+      await t.trx('pos_guest_orders').where({ id: order.id }).update({
+        status: 'received',
+        accepted_at: null,
+        updated_at: new Date(Date.now() - 11 * 60 * 1000),
+      });
+
+      const polled = await guestGet(`/${roomRaw}/orders/${order.id}`);
+      expect(polled.status).toBe(200);
+      expect(polled.body.data.status).toBe('auto_rejected');
+      expect(polled.body.data.payment_status).toBe('unpaid');
+
+      const underlyingOrder = await t.trx('pos_orders').where({ id: order.pos_order_id }).first();
+      expect(underlyingOrder.status).toBe('void');
+
+      const otpAttempt = await guestPost(`/${roomRaw}/orders/${order.id}/room-charge/request-otp`).send({});
+      expect(otpAttempt.status).toBe(409);
+      expect(otpAttempt.body.error.code).toBe('CONFLICT_GUEST_ORDER_ALREADY_REJECTED');
+    });
   });
 
   // -----------------------------------------------------------------
@@ -689,6 +763,15 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
     let tableRaw;
 
     beforeAll(async () => {
+      // This file's own cumulative order-creation volume by this point
+      // (several describe blocks earlier, now including this pass's own
+      // new reject-while-unpaid regression tests) can otherwise approach
+      // the real, shared per-IP order-creation limiter's own 30/minute
+      // ceiling — a real production guard (ARCHITECTURE.md §15), but not
+      // something this describe block's OWN tests exist to exercise.
+      // Flushed for the same reason the file's own top-level `beforeAll`
+      // already flushes once at the very start.
+      await flushIpRateLimitKeys();
       const created = await createStaffToken({ type: 'table', tableLabel: 'QUEUE-T1' });
       tableRaw = created.body.meta.rawToken;
     });
@@ -746,6 +829,46 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       expect(settlement.voided_at).not.toBeNull();
     });
 
+    it('rejecting a card order still awaiting payment voids the tab and cancels its in-flight payment — a later gateway success can no longer capture it (CRITICAL code-review fix)', async () => {
+      paystack.initializeTransaction.mockResolvedValue({ authorizationUrl: 'https://paystack.test/pay/unpaid-reject', accessCode: 'ur', reference: 'r' });
+      const created = await guestPost(`/${tableRaw}/orders`)
+        .set('Idempotency-Key', idemKey())
+        .send({ payment_method: 'card', guest_contact: 'unpaid-reject@example.com', items: [{ menu_item_id: menuItemId, quantity: 1 }] });
+      expect(created.status).toBe(201);
+      const id = created.body.data.id;
+      const posOrderId = created.body.data.pos_order_id;
+
+      const paymentBefore = await t.trx('payments').where({ pos_order_id: posOrderId, settlement_target: 'pos_order' }).first();
+      expect(paymentBefore.status).toBe('PENDING'); // startGuestOrderCheckout already advanced it past INITIATED
+
+      const rejected = await t.request
+        .post(`/api/v1/pos/guest-orders/${id}/reject`)
+        .set('Authorization', `Bearer ${staffToken()}`)
+        .send({ reason: 'Never accepted' });
+      expect(rejected.status).toBe(200);
+      expect(rejected.body.data.status).toBe('rejected');
+      expect(rejected.body.data.payment_status).toBe('unpaid'); // never actually paid — nothing to "refund"
+
+      const orderAfterReject = await t.trx('pos_orders').where({ id: posOrderId }).first();
+      expect(orderAfterReject.status).toBe('void');
+      const paymentAfterReject = await t.trx('payments').where({ id: paymentBefore.id }).first();
+      expect(paymentAfterReject.status).toBe('CANCELLED');
+
+      // A late gateway success — a delayed webhook, or the guest's own
+      // confirm-payment callback landing after the fact — must never
+      // resurrect this order or capture the cancelled payment.
+      paystack.verifyTransaction.mockResolvedValue({ status: 'success', reference: 'r', providerPaymentId: 'ps_late', amountSubunit: 2150, currency: 'NGN' });
+      const confirmAttempt = await guestPost(`/${tableRaw}/orders/${id}/confirm-payment`).send({});
+      expect(confirmAttempt.status).toBe(409);
+      expect(confirmAttempt.body.error.code).toBe('CONFLICT_GUEST_ORDER_ALREADY_REJECTED');
+
+      const paymentAfterLateConfirm = await t.trx('payments').where({ id: paymentBefore.id }).first();
+      expect(paymentAfterLateConfirm.status).toBe('CANCELLED'); // still cancelled — never captured
+      const orderAfterLateConfirm = await t.trx('pos_orders').where({ id: posOrderId }).first();
+      expect(orderAfterLateConfirm.status).toBe('void'); // still void — never settled
+      expect(await t.trx('pos_order_settlements').where({ pos_order_id: posOrderId }).first()).toBeUndefined();
+    });
+
     it('rejecting requires a reason', async () => {
       const id = await createPaidCardOrder();
       const res = await t.request.post(`/api/v1/pos/guest-orders/${id}/reject`).set('Authorization', `Bearer ${staffToken()}`).send({});
@@ -774,6 +897,10 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
     let tableRaw;
 
     beforeAll(async () => {
+      // Same reasoning as "staff guest-order queue"'s own flush above —
+      // this file's cumulative order-creation volume by this point can
+      // otherwise approach the real, shared per-IP limiter's ceiling.
+      await flushIpRateLimitKeys();
       await t.trx('pos_outlets').where({ id: outletId }).update({ guest_order_accept_timeout_minutes: 10 });
       const created = await createStaffToken({ type: 'table', tableLabel: 'AUTOREJECT-T1' });
       tableRaw = created.body.meta.rawToken;
@@ -820,6 +947,74 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
 
       const polled = await guestGet(`/${tableRaw}/orders/${created.body.data.id}`);
       expect(polled.body.data.status).toBe('preparing');
+    });
+  });
+
+  // -----------------------------------------------------------------
+  // OTP request rate limiting — code-review fix (IMPORTANT)
+  // -----------------------------------------------------------------
+
+  describe('OTP request rate limiting (code-review fix, IMPORTANT)', () => {
+    let rlRoomRaw;
+
+    beforeAll(async () => {
+      // A genuinely in-house reservation already exists on `roomId` (set
+      // up by the "guest charge-to-room via emailed OTP" block above, and
+      // never checked out by any test in this file) — a SECOND, distinct
+      // token against the SAME room is all this block needs, since
+      // `findInHouseReservationForRoom` keys off the room, not the token.
+      const created = await createStaffToken({ type: 'room', roomIdParam: roomId });
+      rlRoomRaw = created.body.meta.rawToken;
+
+      // A clean per-IP OTP-request budget for this block specifically —
+      // this file's earlier charge-to-room block already spent some of
+      // its own shared-IP allowance, and this test's own volume (enough
+      // real calls to genuinely trip the per-TOKEN limit) is deliberate
+      // abuse simulation, not incidental suite traffic that should count
+      // against it. Also flush the general order-creation IP counter this
+      // block's own two `POST .../orders` calls contribute to, for the
+      // same reason "staff guest-order queue"/"lazy auto-reject" above do.
+      await flushIpRateLimitKeys();
+      const redis = rateLimitRedisConnection();
+      const ipKeys = await redis.keys('qr-otp-request-ip-rl:*');
+      if (ipKeys.length) await redis.del(...ipKeys);
+    });
+
+    afterAll(async () => {
+      const redis = rateLimitRedisConnection();
+      const tokenKeys = await redis.keys('qr-otp-request-rate:*');
+      const ipKeys = await redis.keys('qr-otp-request-ip-rl:*');
+      const all = [...tokenKeys, ...ipKeys];
+      if (all.length) await redis.del(...all);
+    });
+
+    it('genuinely 429s once a single token exceeds its real per-minute OTP-request budget — a real Redis round trip, not just a middleware existing', async () => {
+      const created = await guestPost(`/${rlRoomRaw}/orders`)
+        .set('Idempotency-Key', idemKey())
+        .send({ payment_method: 'room_charge', items: [{ menu_item_id: menuItemId, quantity: 1 }] });
+      expect(created.status).toBe(201);
+      const orderId = created.body.data.id;
+
+      // The configured per-token ceiling is 15/minute (`rate-limit.js`) —
+      // exhaust it for real against a live Redis instance, then confirm
+      // the very next call is genuinely rejected with a real Retry-After
+      // header.
+      let lastRes;
+      for (let i = 0; i < 16; i += 1) {
+        lastRes = await guestPost(`/${rlRoomRaw}/orders/${orderId}/room-charge/request-otp`).send({});
+      }
+      expect(lastRes.status).toBe(429);
+      expect(lastRes.body.error.code).toBe('RATE_LIMITED');
+      expect(lastRes.headers['retry-after']).toBeDefined();
+      expect(Number(lastRes.headers['retry-after'])).toBeGreaterThan(0);
+
+      // A DIFFERENT token is never affected by this one being exhausted.
+      const otherToken = await createStaffToken({ type: 'room', roomIdParam: roomId });
+      const otherOrder = await guestPost(`/${otherToken.body.meta.rawToken}/orders`)
+        .set('Idempotency-Key', idemKey())
+        .send({ payment_method: 'room_charge', items: [{ menu_item_id: menuItemId, quantity: 1 }] });
+      const stillWorks = await guestPost(`/${otherToken.body.meta.rawToken}/orders/${otherOrder.body.data.id}/room-charge/request-otp`).send({});
+      expect(stillWorks.status).toBe(200);
     });
   });
 

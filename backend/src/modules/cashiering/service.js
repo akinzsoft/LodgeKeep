@@ -52,7 +52,7 @@ const paystack = require('./paystack-adapter');
 // object either module captured before the other finished assigning its
 // own `module.exports` would be stale, permanently).
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
-const { OrderNotOpenError } = require('../pos/errors');
+const { OrderNotOpenError, SettlementAlreadyVoidedError } = require('../pos/errors');
 const { writeOutboxEvent } = require('../../shared/outbox');
 // PLAN.md Phase 4 (Accounts Receivable) — a one-way dependency: this module
 // calls into `ar/service.js`, never the other way, so there is no import
@@ -633,6 +633,26 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
   const order = await trx.table('pos_orders').where({ id: payment.pos_order_id }).forUpdate().first();
   if (!order || order.status !== 'open') return;
 
+  // Code-review fix (CRITICAL) — defense-in-depth beyond the order's own
+  // `status` above: a Paystack webhook reaches this function WITHOUT ever
+  // going through `qr-ordering/service.js`'s own `assertGuestOrderNotRejected`
+  // guard (it arrives addressed only by payment reference, no guest-order
+  // lookup involved), so it could theoretically land in the narrow window
+  // where this order is still genuinely `open` but its guest-facing
+  // `pos_guest_orders.status` has already flipped to `rejected`/
+  // `auto_rejected` (`qr-ordering/service.js`'s `rejectGuestOrder`/
+  // `tryAutoReject` flip that column before they cancel the payment/void
+  // the order that follows). Never honor a capture in that window — the
+  // caller (`applyGatewayResult`) already claimed `payment.status =
+  // 'CAPTURED'` earlier in this SAME transaction, so undo that claim here
+  // rather than commit a captured payment with no settlement and nothing
+  // left to reverse it.
+  const guestOrder = await trx.table('pos_guest_orders').where({ pos_order_id: order.id }).first();
+  if (guestOrder && (guestOrder.status === 'rejected' || guestOrder.status === 'auto_rejected')) {
+    await trx.table('payments').where({ id: payment.id }).update({ status: 'CANCELLED' });
+    return;
+  }
+
   const items = await trx.table('pos_order_items').where({ pos_order_id: order.id }).whereNull('voided_at');
   const baseAmount = sumMoney(items.map(computeItemLineTotal));
 
@@ -653,7 +673,6 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
   });
   await trx.table('pos_orders').where({ id: order.id }).update({ status: 'settled', closed_at: new Date() });
 
-  const guestOrder = await trx.table('pos_guest_orders').where({ pos_order_id: order.id }).first();
   if (guestOrder) {
     await trx.table('pos_guest_orders').where({ id: guestOrder.id }).update({ payment_status: 'paid', status: 'received' });
     // A receipt is genuinely optional — a large share of guest orders
@@ -937,17 +956,33 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
         // order, re-check `voided_at` under a locking read, then write)
         // rather than imported — see this file's own header comment on
         // why `pos/service.js` is never required from here.
+        //
+        // Code-review fix (LOW) — this MUST stay in lockstep with
+        // `voidSettlement`'s own two invariants, since a future change to
+        // either copy can otherwise silently diverge from the other:
+        // (1) an already-voided settlement is a real `409` conflict, never
+        // a silent no-op (ARCHITECTURE.md §8's "void, never delete" —
+        // voiding twice must be as loud as deleting twice); (2) a
+        // `tip_service_charge_line_item_id` (currently never set on a
+        // `card`-method settlement — tips/service charges only ever post
+        // for `room_charge` settlements, `pos/service.js`'s own
+        // `settleOrder` — but voided here too regardless, so this stays
+        // correct the moment that stops being true) is voided alongside
+        // the settlement itself, never left orphaned on a folio.
         const settlement = await trx.table('pos_order_settlements').where({ payment_id: original.id }).first();
         if (settlement) {
           await trx.table('pos_orders').where({ id: settlement.pos_order_id }).forUpdate().first();
           const lockedSettlement = await trx.table('pos_order_settlements').where({ id: settlement.id }).forUpdate().first();
-          if (lockedSettlement && !lockedSettlement.voided_at) {
-            await trx.table('pos_order_settlements').where({ id: settlement.id }).update({
-              voided_at: new Date(),
-              void_reason: reason,
-              voided_by_user_id: userId,
-            });
+          if (lockedSettlement.voided_at) throw new SettlementAlreadyVoidedError(settlement.id);
+
+          if (lockedSettlement.tip_service_charge_line_item_id) {
+            await voidLineItem({ trx, lineItemId: lockedSettlement.tip_service_charge_line_item_id, reason, userId });
           }
+          await trx.table('pos_order_settlements').where({ id: settlement.id }).update({
+            voided_at: new Date(),
+            void_reason: reason,
+            voided_by_user_id: userId,
+          });
         }
       } else {
         const businessDate = await propertyBusinessDate({ trx, propertyId: (await trx.table('folios').where({ id: original.folio_id }).first()).property_id });

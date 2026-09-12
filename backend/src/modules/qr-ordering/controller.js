@@ -12,9 +12,28 @@ const { scopedDb } = require('../../db');
 const { ok, notFound } = require('../../shared/response');
 const { ValidationError } = require('../../shared/errors');
 const { requireIdempotencyKey } = require('../../shared/mutation');
-const { checkTokenOrderRateLimit } = require('./rate-limit');
+const { checkTokenOrderRateLimit, checkTokenOtpRequestRateLimit, checkTokenOtpVerifyRateLimit } = require('./rate-limit');
 const { RateLimitedError } = require('./errors');
 const service = require('./service');
+
+/**
+ * Code-review fix (IMPORTANT) — the shared "run a per-token rate check,
+ * set a real Retry-After on a 429, otherwise propagate any other error
+ * unchanged" shape `createOrder`'s own inline try/catch already
+ * established for order creation, promoted here once `requestOtp`/
+ * `verifyOtp` needed the identical pattern for their own dedicated
+ * counters.
+ */
+async function enforceTokenRateLimit(res, check) {
+  try {
+    await check();
+  } catch (error) {
+    if (error instanceof RateLimitedError) {
+      res.set('Retry-After', String(error.details.retryAfterSeconds));
+    }
+    throw error;
+  }
+}
 
 function require_(body, field) {
   const value = body?.[field];
@@ -155,8 +174,15 @@ async function confirmName(req, res, next) {
   }
 }
 
+/**
+ * Code-review fix (IMPORTANT) — the per-token counter runs FIRST, before
+ * even a 404 lookup, since it's keyed on the physical QR token, not this
+ * specific order id: any call against this token counts toward its
+ * budget regardless of which (or whether a real) order id was named.
+ */
 async function requestOtp(req, res, next) {
   try {
+    await enforceTokenRateLimit(res, () => checkTokenOtpRequestRateLimit({ tokenHash: req.qrToken.token_hash }));
     const guestOrder = await loadOwnGuestOrder(req);
     if (!guestOrder) return notFound(res);
     const result = await service.requestRoomChargeOtp({ context: req.context, token: req.qrToken, guestOrder });
@@ -168,6 +194,7 @@ async function requestOtp(req, res, next) {
 
 async function verifyOtp(req, res, next) {
   try {
+    await enforceTokenRateLimit(res, () => checkTokenOtpVerifyRateLimit({ tokenHash: req.qrToken.token_hash }));
     const guestOrder = await loadOwnGuestOrder(req);
     if (!guestOrder) return notFound(res);
     const code = require_(req.body, 'code');

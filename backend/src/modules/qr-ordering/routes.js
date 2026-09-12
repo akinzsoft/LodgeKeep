@@ -26,6 +26,18 @@ const { resolveQrOrderToken } = require('./middleware');
 const { qrOrderIpRateLimiter } = require('./ip-rate-limit');
 const { requirePermission } = require('../../auth');
 
+// Code-review fix (IMPORTANT) — dedicated per-IP counters for the
+// room-charge OTP flow, separate from order-creation's own
+// (`qr-order-ip-rl:`) so spamming OTP requests/verifies can never ride on
+// a token's still-unspent order-creation budget, and vice versa. See
+// `rate-limit.js`'s own per-token counterparts for why request-otp's
+// ceiling is the tighter of the two (it emails the current in-house guest
+// on every call) and verify's is looser (no email; must tolerate a
+// genuine two-connection concurrent-verify race,
+// `tests/qr-ordering/concurrency.test.js`).
+const qrOrderOtpRequestIpRateLimiter = qrOrderIpRateLimiter({ limit: 20, prefix: 'qr-otp-request-ip-rl:' });
+const qrOrderOtpVerifyIpRateLimiter = qrOrderIpRateLimiter({ limit: 30, prefix: 'qr-otp-verify-ip-rl:' });
+
 function qrOrderPublicRouter({ resolveTenant }) {
   const router = Router();
   const withToken = [resolveTenant, resolveQrOrderToken()];
@@ -36,8 +48,8 @@ function qrOrderPublicRouter({ resolveTenant }) {
   router.post('/:token/orders/:id/retry-checkout', ...withToken, controller.retryCheckout);
   router.post('/:token/orders/:id/confirm-payment', ...withToken, controller.confirmCardPayment);
   router.get('/:token/orders/:id/room-charge/confirm-name', ...withToken, controller.confirmName);
-  router.post('/:token/orders/:id/room-charge/request-otp', ...withToken, controller.requestOtp);
-  router.post('/:token/orders/:id/room-charge/verify', ...withToken, controller.verifyOtp);
+  router.post('/:token/orders/:id/room-charge/request-otp', ...withToken, qrOrderOtpRequestIpRateLimiter, controller.requestOtp);
+  router.post('/:token/orders/:id/room-charge/verify', ...withToken, qrOrderOtpVerifyIpRateLimiter, controller.verifyOtp);
 
   return router;
 }

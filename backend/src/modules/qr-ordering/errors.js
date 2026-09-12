@@ -78,6 +78,26 @@ class GuestOrderStateConflictError extends AppError {
   }
 }
 
+/**
+ * Code-review fix (CRITICAL): a guest order staff already rejected (or that
+ * auto-rejected) must never be resurrected by a delayed OTP verify, a late
+ * Paystack webhook/confirm-payment callback, or a request-otp made after
+ * the fact — `requestRoomChargeOtp`/`verifyRoomChargeOtpAndSettle`/
+ * `confirmCardPayment` all check this explicitly, not just the underlying
+ * `pos_orders.status`/`payment_status`, since those alone don't distinguish
+ * "never paid" from "rejected and therefore must never be paid".
+ */
+class GuestOrderAlreadyRejectedError extends AppError {
+  constructor(status) {
+    super(
+      'CONFLICT_GUEST_ORDER_ALREADY_REJECTED',
+      `This order was already ${status === 'auto_rejected' ? 'auto-rejected' : 'rejected'} and can no longer be paid or charged.`,
+      409,
+      { status }
+    );
+  }
+}
+
 module.exports = {
   GuestOrderingDisabledError,
   UnpaidValueCapExceededError,
@@ -89,4 +109,5 @@ module.exports = {
   NoInHouseReservationError,
   EmptyCartError,
   GuestOrderStateConflictError,
+  GuestOrderAlreadyRejectedError,
 };

@@ -62,7 +62,7 @@ const { writeOutboxEvent } = require('../../shared/outbox');
 const { enqueueOutboxDispatch } = require('../../jobs/outbox-dispatcher');
 
 const posService = require('../pos/service');
-const { OutletNotFoundError, MenuItemNotFoundError } = require('../pos/errors');
+const { OutletNotFoundError, MenuItemNotFoundError, OrderNotOpenError } = require('../pos/errors');
 const cashieringService = require('../cashiering/service');
 const reservationsService = require('../reservations/service');
 
@@ -78,7 +78,26 @@ const {
   NoInHouseReservationError,
   EmptyCartError,
   GuestOrderStateConflictError,
+  GuestOrderAlreadyRejectedError,
 } = require('./errors');
+
+/**
+ * Code-review fix (CRITICAL) — every guest-facing action that can move
+ * money (request a room-charge OTP, verify one, confirm a card payment)
+ * must refuse outright once staff have already turned this order away,
+ * checked against `pos_guest_orders.status` explicitly rather than
+ * inferring it from `payment_status`/`pos_orders.status` alone (neither
+ * of those tells "never paid" apart from "rejected and must stay that
+ * way"). This is a fast, sequential-read check — the real, load-bearing
+ * guarantee against a genuinely CONCURRENT reject is the row-level
+ * locking `reverseGuestOrderPayment`/`posService.voidOrder`/
+ * `posService.settleOrder` already do, below.
+ */
+function assertGuestOrderNotRejected(guestOrder) {
+  if (guestOrder.status === 'rejected' || guestOrder.status === 'auto_rejected') {
+    throw new GuestOrderAlreadyRejectedError(guestOrder.status);
+  }
+}
 
 function minutesFromNow(minutes) {
   return new Date(Date.now() + minutes * 60 * 1000);
@@ -282,6 +301,7 @@ async function startGuestOrderCheckout({ context, guestOrder, callbackUrl }) {
 }
 
 async function confirmCardPayment({ context, guestOrder }) {
+  assertGuestOrderNotRejected(guestOrder);
   const payment = await getLatestPaymentForOrder({ context, posOrderId: guestOrder.pos_order_id });
   if (!payment) throw new ValidationError('PAYMENT_NOT_FOUND', 'No payment has been started for this order yet.');
 
@@ -301,6 +321,7 @@ async function maskedReservationNameForToken({ context, token }) {
 }
 
 async function requestRoomChargeOtp({ context, token, guestOrder }) {
+  assertGuestOrderNotRejected(guestOrder);
   if (guestOrder.payment_method !== 'room_charge') throw new WrongPaymentMethodError('This order is not set up for charge-to-room.');
   if (guestOrder.payment_status !== 'unpaid') throw new OrderAlreadyPaidError();
 
@@ -354,6 +375,7 @@ async function requestRoomChargeOtp({ context, token, guestOrder }) {
 }
 
 async function verifyRoomChargeOtpAndSettle({ context, guestOrder, code }) {
+  assertGuestOrderNotRejected(guestOrder);
   if (guestOrder.payment_method !== 'room_charge') throw new WrongPaymentMethodError('This order is not set up for charge-to-room.');
   if (guestOrder.payment_status !== 'unpaid') throw new OrderAlreadyPaidError();
 
@@ -425,16 +447,83 @@ async function verifyRoomChargeOtpAndSettle({ context, guestOrder, code }) {
 // ---------------------------------------------------------------------
 
 /**
+ * Code-review fix (CRITICAL) — an `unpaid` guest order (still
+ * `awaiting_payment`, or `received` in a hypothetical future shape that
+ * reaches that status before payment completes) never actually settled
+ * anything, so there is no payment/settlement to refund — but leaving the
+ * underlying `pos_orders` tab `open` and any still-`INITIATED`/`PENDING`
+ * `payments` row alive is exactly the gap this fix closes: a delayed
+ * webhook, the guest's own confirm-payment retry, or an OTP verify could
+ * otherwise still complete a real capture/settlement against an order
+ * staff have already turned away.
+ *
+ * Cancelling the payment uses the SAME conditional-UPDATE idiom
+ * `applyGatewayResult`'s own claim already uses (`whereIn`/`whereNotIn`
+ * status, ARCHITECTURE.md §5) — whichever of "cancel" or "capture" reaches
+ * the `payments` row first wins outright. If capture already won the race
+ * by the time this runs (0 rows affected, or the underlying order is no
+ * longer `open` once we go to void it), the order genuinely settled
+ * despite the reject attempt — reload the guest order fresh and fall
+ * through to the ordinary already-settled reversal below instead of
+ * failing to void an order that no longer exists to void.
+ */
+async function cancelUnsettledGuestOrderPayment({ context, guestOrder, reason, userId }) {
+  const db = scopedDb().for(context);
+
+  if (guestOrder.payment_method === 'card') {
+    const payment = await db
+      .table('payments')
+      .where({ pos_order_id: guestOrder.pos_order_id, settlement_target: 'pos_order' })
+      .whereIn('status', ['INITIATED', 'PENDING'])
+      .orderBy('id', 'desc')
+      .first();
+    if (payment) {
+      await db.table('payments').where({ id: payment.id }).whereIn('status', ['INITIATED', 'PENDING']).update({ status: 'CANCELLED' });
+    }
+  }
+
+  const order = await db.table('pos_orders').where({ id: guestOrder.pos_order_id }).first();
+  if (order && order.status === 'open') {
+    try {
+      await posService.voidOrder({ context, orderId: order.id, reason, userId });
+      return null; // nothing was ever captured — `payment_status` correctly stays 'unpaid'.
+    } catch (error) {
+      // Lost the race between our plain read above and `voidOrder`'s own
+      // locked re-check — a concurrent capture/settlement won in that
+      // narrow window. Fall through to the reload below rather than
+      // surface this as an unhandled error.
+      if (!(error instanceof OrderNotOpenError)) throw error;
+    }
+  }
+
+  // Lost the race — a concurrent capture/settlement completed anyway.
+  // Reload the guest order's own now-current fields and let the caller's
+  // ordinary already-settled reversal handle it.
+  return db.table('pos_guest_orders').where({ id: guestOrder.id }).first();
+}
+
+/**
  * The reversal both a staff-triggered reject AND a lazy auto-reject use:
  * card-paid -> a real, full `refundPayment` (which itself now knows how
  * to unwind a `pos_order`-target payment, see `cashiering/service.js`);
  * room-charge-paid -> void the settlement directly (no `payments` row
- * exists for that method at all). Either way `pos_guest_orders`'s own
- * `payment_status` becomes `refunded` — a guest order is always reversed
- * in full, never partially.
+ * exists for that method at all); still-unpaid -> cancel the in-flight
+ * payment (if any) and void the still-open underlying tab
+ * (`cancelUnsettledGuestOrderPayment`, above) — the CRITICAL code-review
+ * fix, since an unpaid order left `open` could otherwise still be
+ * captured/charged after being rejected. Either way `pos_guest_orders`'s
+ * own `payment_status` becomes `refunded` once something real was
+ * actually reversed — a guest order is always reversed in full, never
+ * partially, and never resurrected.
  */
 async function reverseGuestOrderPayment({ context, guestOrder, reason, userId }) {
   const db = scopedDb().for(context);
+
+  if (guestOrder.payment_status === 'unpaid') {
+    const reloaded = await cancelUnsettledGuestOrderPayment({ context, guestOrder, reason, userId });
+    if (!reloaded) return; // genuinely never paid — nothing further to reverse.
+    guestOrder = reloaded;
+  }
 
   if (guestOrder.payment_method === 'card' && guestOrder.payment_status === 'paid') {
     const payment = await db
