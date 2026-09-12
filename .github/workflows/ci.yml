@@ -88,8 +88,22 @@ jobs:
       - name: Run migrations against the test database
         run: npx knex migrate:latest --env test
 
+      # CI-only unblock, not a fix: `npm test` (jest --runInBand) never
+      # explicitly closes its Redis connections (the BullMQ singleton,
+      # and — new on this branch — the QR-ordering rate-limiter's own),
+      # so once anything opens one, the process has a live, un-.unref()'d
+      # socket and never exits on its own once tests finish. Locally this
+      # only ever showed up as Jest's own "did not exit" warning, because
+      # this environment's own memory pressure reliably kills the lingering
+      # process within a minute or two; a normal CI runner has no such
+      # watchdog, so the step just hangs until the job's own default
+      # timeout. `--forceExit` here only makes CI actually terminate a
+      # suite that has already passed — it does not close either
+      # connection cleanly. See CLAUDE.md's own "test suite never
+      # explicitly closes its Redis connections" note for the real fix,
+      # deliberately kept as its own separate, later pass.
       - name: Test
-        run: npm test
+        run: npx jest --runInBand --forceExit
 
       - name: Lint
         run: npm run lint
