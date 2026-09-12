@@ -339,6 +339,19 @@ const TABLE_SCOPES = Object.freeze({
   import_runs: { scope: SCOPES.TENANT, attributionColumns: ['property_id'] },
   import_row_errors: { scope: SCOPES.TENANT },
   imported_record_map: { scope: SCOPES.TENANT },
+
+  // POS inventory & stock control — PLAN.md Phase 6,
+  // 20261001090000_create_stock_items.js through
+  // 20261001094000_create_stock_take_lines.js. All PROPERTY_SCOPED,
+  // following `pos_outlets`/`stock_items` (their own root) for the same
+  // reason every other outlet-adjacent table already is: two properties
+  // in the same tenant run entirely separate bars/kitchens with entirely
+  // separate stock rooms.
+  stock_items: { scope: SCOPES.PROPERTY },
+  pos_menu_item_components: { scope: SCOPES.PROPERTY },
+  stock_movements: { scope: SCOPES.PROPERTY },
+  stock_takes: { scope: SCOPES.PROPERTY },
+  stock_take_lines: { scope: SCOPES.PROPERTY },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

@@ -1,0 +1,138 @@
+import { useEffect, useState } from 'react';
+import { DataTable, Button } from '../../shared/components/index.js';
+import { Money } from '../../shared/format/money.jsx';
+import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
+import formStyles from './POSForm.module.css';
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * StockReportsTab — PLAN.md Phase 6: cost-of-sales and stock-variance
+ * reporting. `pos.stock_manage` only (a cost/margin figure is a
+ * manager-tier concern, matching `stock/reporting.js`'s own header — the
+ * same RBAC gate this pass's own CRUD/goods-received/stock-take endpoints
+ * already use), backend-enforced; no client-side check hides this tab.
+ *
+ * No CSV export here — unlike `RevenueTab.jsx`, the real backend
+ * (`stock/routes.js`) exposes no `?format=csv` variant of either report
+ * endpoint, so adding a download button here would call an endpoint that
+ * doesn't exist. Both reports render as plain tables instead, the same
+ * "run report" shape `RevenueTab.jsx`/`OccupancyTab.jsx` already establish.
+ */
+export function StockReportsTab() {
+  const [outlets, setOutlets] = useState(null);
+  const [outletId, setOutletId] = useState('');
+  const [dateFrom, setDateFrom] = useState(todayIso());
+  const [dateTo, setDateTo] = useState(todayIso());
+
+  const [costOfSales, setCostOfSales] = useState(null);
+  const [variance, setVariance] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    posApi
+      .listOutlets()
+      .then(setOutlets)
+      .catch(() => setOutlets([]));
+  }, []);
+
+  async function runReports(event) {
+    event?.preventDefault();
+    setError(null);
+    try {
+      const [cos, varianceResult] = await Promise.all([
+        stockApi.getCostOfSales({ dateFrom, dateTo, outletId: outletId || undefined }),
+        stockApi.getStockVariance({ dateFrom, dateTo, outletId: outletId || undefined }),
+      ]);
+      setCostOfSales(cos);
+      setVariance(varianceResult);
+    } catch (caught) {
+      setCostOfSales(null);
+      setVariance(null);
+      setError(caught instanceof ApiError ? caught.message : 'Could not load these reports.');
+    }
+  }
+
+  return (
+    <div className={formStyles.form}>
+      {error && (
+        <p role="alert" className={formStyles.errorBanner}>
+          {error}
+        </p>
+      )}
+
+      {/* Outside DataTable's own toolbar slot, deliberately — see
+          `RevenueTab.jsx`'s own identical comment: Card only renders
+          `children` while `state === 'success'`, so a persistent
+          date-range/outlet control must never live inside it. */}
+      <form className={formStyles.row} onSubmit={runReports}>
+        <label className={formStyles.field}>
+          <span className={formStyles.label}>Outlet</span>
+          <select className={formStyles.select} value={outletId} onChange={(event) => setOutletId(event.target.value)}>
+            <option value="">All outlets</option>
+            {(outlets ?? []).map((outlet) => (
+              <option key={outlet.id} value={outlet.id}>
+                {outlet.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={formStyles.field}>
+          <span className={formStyles.label}>From</span>
+          <input type="date" className={formStyles.input} value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} required />
+        </label>
+        <label className={formStyles.field}>
+          <span className={formStyles.label}>To</span>
+          <input type="date" className={formStyles.input} value={dateTo} onChange={(event) => setDateTo(event.target.value)} required />
+        </label>
+        <div className={formStyles.actionsRow}>
+          <Button type="submit">Run reports</Button>
+        </div>
+      </form>
+
+      {costOfSales && (
+        <p className={formStyles.hint}>
+          Total cost of sales: <Money amount={costOfSales.totalCost} currencyCode="NGN" />
+        </p>
+      )}
+
+      <DataTable
+        title="Cost of sales — by day"
+        state={costOfSales === null || costOfSales.byDay.length === 0 ? 'empty' : 'success'}
+        emptyMessage="Choose a date range and run the reports."
+        columns={[
+          { key: 'date', label: 'Date' },
+          { key: 'cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.cost} currencyCode="NGN" /> },
+        ]}
+        rows={costOfSales?.byDay ?? []}
+        rowKey={(row) => row.date}
+      />
+
+      <DataTable
+        title="Cost of sales — by stock item"
+        state={costOfSales === null || costOfSales.byItem.length === 0 ? 'empty' : 'success'}
+        emptyMessage="Choose a date range and run the reports."
+        columns={[
+          { key: 'stockItemId', label: 'Stock item' },
+          { key: 'cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.cost} currencyCode="NGN" /> },
+        ]}
+        rows={costOfSales?.byItem ?? []}
+        rowKey={(row) => row.stockItemId}
+      />
+
+      <DataTable
+        title="Stock variance — every completed stock take in range"
+        state={variance === null || variance.summaryByItem.length === 0 ? 'empty' : 'success'}
+        emptyMessage="Choose a date range and run the reports."
+        columns={[
+          { key: 'stockItemId', label: 'Stock item' },
+          { key: 'totalVariance', label: 'Total variance', align: 'right' },
+        ]}
+        rows={variance?.summaryByItem ?? []}
+        rowKey={(row) => row.stockItemId}
+      />
+    </div>
+  );
+}

@@ -13,14 +13,20 @@ const mocks = vi.hoisted(() => ({
   listQrTokens: vi.fn(),
 }));
 
+const stockMocks = vi.hoisted(() => ({
+  listStockItems: vi.fn(),
+  listStockTakes: vi.fn(),
+}));
+
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
-  return { ...actual, posApi: mocks, setupApi: { listRooms: vi.fn().mockResolvedValue([]) } };
+  return { ...actual, posApi: mocks, stockApi: stockMocks, setupApi: { listRooms: vi.fn().mockResolvedValue([]) } };
 });
 
 describe('<POSScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
+    Object.values(stockMocks).forEach((fn) => fn.mockReset());
     mocks.listOutlets.mockResolvedValue([]);
     mocks.listTerminals.mockResolvedValue([]);
     mocks.listMenuItems.mockResolvedValue([]);
@@ -28,9 +34,11 @@ describe('<POSScreen>', () => {
     mocks.listShifts.mockResolvedValue([]);
     mocks.listGuestOrders.mockResolvedValue([]);
     mocks.listQrTokens.mockResolvedValue([]);
+    stockMocks.listStockItems.mockResolvedValue([]);
+    stockMocks.listStockTakes.mockResolvedValue([]);
   });
 
-  it('defaults to the Register tab and switches between all six tabs, including the PLAN.md Phase 6 QR-ordering ones', async () => {
+  it('defaults to the Register tab and switches between all seven tabs, including the PLAN.md Phase 6 QR-ordering and stock-control ones', async () => {
     render(<POSScreen />);
     expect(screen.getByRole('tab', { name: 'Register', selected: true })).toBeInTheDocument();
 
@@ -45,6 +53,10 @@ describe('<POSScreen>', () => {
 
     await userEvent.click(screen.getByRole('tab', { name: 'QR codes' }));
     expect(await screen.findByText('Outlets')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Stock' }));
+    expect(await screen.findByRole('tab', { name: 'Stock items', selected: true })).toBeInTheDocument();
+    expect(await screen.findByText('New stock item')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Setup' }));
     expect(await screen.findByText('New outlet')).toBeInTheDocument();

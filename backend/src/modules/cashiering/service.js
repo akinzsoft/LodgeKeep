@@ -53,6 +53,15 @@ const paystack = require('./paystack-adapter');
 // own `module.exports` would be stale, permanently).
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
 const { OrderNotOpenError, SettlementAlreadyVoidedError } = require('../pos/errors');
+// PLAN.md Phase 6 (POS inventory & stock control) — a one-way dependency,
+// the identical shape this file's own `arService`/`pos-pricing` imports
+// already establish: this module calls INTO `stock/service.js`, which
+// never requires this file back (see that module's own header).
+// `finalizePosOrderCardCapture` is the SECOND real settlement writer this
+// codebase has (`pos/service.js`'s own `settleOrder` is the first) — both
+// need the identical deduction hook, or a card-paid QR guest order would
+// silently never deduct stock at all.
+const stockService = require('../stock/service');
 const { writeOutboxEvent } = require('../../shared/outbox');
 // PLAN.md Phase 4 (Accounts Receivable) — a one-way dependency: this module
 // calls into `ar/service.js`, never the other way, so there is no import
@@ -662,7 +671,7 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
   const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
   const taxAmount = sumMoney(taxLines.map((t) => t.amount));
 
-  await trx.table('pos_order_settlements').insert({
+  const [settlementId] = await trx.table('pos_order_settlements').insert({
     pos_order_id: order.id,
     method: 'card',
     subtotal: netAmount,
@@ -672,6 +681,20 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
     settled_by_user_id: userId ?? null,
   });
   await trx.table('pos_orders').where({ id: order.id }).update({ status: 'settled', closed_at: new Date() });
+
+  // PLAN.md Phase 6 (POS inventory & stock control) — this settlement
+  // writer has no split-group concept (it always settles the WHOLE
+  // order's unvoided `items`, already fetched above), so it deducts stock
+  // for every one of them in a single call, mirroring `pos/service.js`'s
+  // own `settleOrder` hook exactly.
+  await stockService.deductStockForSettlement({
+    trx,
+    orderId: order.id,
+    settlementId,
+    items,
+    businessDate: property?.current_business_date,
+    userId: userId ?? null,
+  });
 
   if (guestOrder) {
     await trx.table('pos_guest_orders').where({ id: guestOrder.id }).update({ payment_status: 'paid', status: 'received' });

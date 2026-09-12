@@ -62,6 +62,11 @@ const { computeItemLineTotal } = require('../../shared/pos-pricing');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('../cashiering/tax-engine');
 const cashieringService = require('../cashiering/service');
 const reservationsService = require('../reservations/service');
+// PLAN.md Phase 6 (POS inventory & stock control) — a one-way dependency,
+// the identical shape this file's own `cashieringService` import already
+// establishes: this module calls INTO `stock/service.js`, which never
+// requires this file back (see that module's own header).
+const stockService = require('../stock/service');
 const {
   OrderNotOpenError,
   OrderItemAlreadyVoidedError,
@@ -179,9 +184,22 @@ async function updateMenuItem({ context, id, changes }) {
   return getMenuItem({ context, id });
 }
 
-/** The stock-out toggle (PRODUCT_REQUIREMENTS.md §3.4) — staff mark an item unavailable without an admin edit. Same `pos.operate` grant as running the register, not `pos.manage` — see routes.js. */
+/**
+ * The stock-out toggle (PRODUCT_REQUIREMENTS.md §3.4) — staff mark an item
+ * unavailable without an admin edit. Same `pos.operate` grant as running
+ * the register, not `pos.manage` — see routes.js.
+ *
+ * PLAN.md Phase 6 (POS inventory & stock control) — ALWAYS clears
+ * `stock_auto_unavailable` back to `false`, in either direction: an
+ * explicit human action always wins over `applyStockAvailabilityEffects`'
+ * own automatic bookkeeping (`stock/service.js`'s own header). Without
+ * this, a human re-enabling an item the stock mechanism had disabled
+ * would leave `stock_auto_unavailable: true` behind, and a later,
+ * completely unrelated stock event on one of its components could
+ * silently re-disable an item the human just turned back on.
+ */
 async function setMenuItemAvailability({ context, id, isAvailable }) {
-  return updateMenuItem({ context, id, changes: { is_available: isAvailable } });
+  return updateMenuItem({ context, id, changes: { is_available: isAvailable, stock_auto_unavailable: false } });
 }
 
 async function archiveMenuItem({ context, id }) {
@@ -500,6 +518,21 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
 
     const [settlementId] = await trx.table('pos_order_settlements').insert(fields);
     results.push(await trx.table('pos_order_settlements').where({ id: settlementId }).first());
+
+    // PLAN.md Phase 6 (POS inventory & stock control) — deduct THIS
+    // settlement's own group of items only, immediately after its own
+    // settlement row exists (the deduction's `pos_order_settlement_id`
+    // needs a real id to attribute to, and `voidSettlement`'s own reversal
+    // lookup key depends on it). A menu item with no recipe at all costs
+    // one cheap, empty lookup — see `stockService`'s own header.
+    await stockService.deductStockForSettlement({
+      trx,
+      orderId,
+      settlementId,
+      items: groupItems,
+      businessDate,
+      userId: settledByUserId,
+    });
   }
 
   await trx.table('pos_orders').where({ id: orderId }).update({ status: 'settled', closed_at: new Date() });
@@ -533,6 +566,13 @@ async function voidSettlement({ trx, settlementId, reason, userId }) {
   if (settlement.tip_service_charge_line_item_id) {
     await cashieringService.voidLineItem({ trx, lineItemId: settlement.tip_service_charge_line_item_id, reason, userId });
   }
+
+  // PLAN.md Phase 6 (POS inventory & stock control) — the direct
+  // counterpart of `settleOrder`'s own deduction call above: every
+  // `sold` stock movement this settlement posted is reversed, restoring
+  // the quantity it consumed under its OWN original cost/business_date
+  // (see `stockService.reverseStockForSettlement`'s own header).
+  await stockService.reverseStockForSettlement({ trx, settlementId, userId });
 
   await trx.table('pos_order_settlements').where({ id: settlementId }).update({
     voided_at: new Date(),
