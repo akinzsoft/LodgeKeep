@@ -38,6 +38,22 @@ const { generateUlid } = require('../../shared/ulid');
 const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('./tax-engine');
 const paystack = require('./paystack-adapter');
+// PLAN.md Phase 6 (QR self-ordering gap closure) — a one-way dependency,
+// the same shape this file's own `ar/service.js` import already
+// establishes: cashiering calls into `pos-pricing`/`pos/errors` (both
+// dependency-free leaf files, no `require` of `pos/service.js` or of this
+// module), never the other way. `pos/service.js` is deliberately NOT
+// required here even for the one place a guest-order refund needs to void
+// a `pos_order_settlements` row — see `refundPayment`'s own comment for
+// why that logic is replicated inline instead of imported: `pos/service.js`
+// already requires THIS file (for room-charge settlement), and requiring
+// it back here would create the exact circular-require this codebase's
+// module-boundary rule exists to avoid (a real, silent breakage — the
+// object either module captured before the other finished assigning its
+// own `module.exports` would be stale, permanently).
+const { computeItemLineTotal } = require('../../shared/pos-pricing');
+const { OrderNotOpenError, SettlementAlreadyVoidedError } = require('../pos/errors');
+const { writeOutboxEvent } = require('../../shared/outbox');
 // PLAN.md Phase 4 (Accounts Receivable) — a one-way dependency: this module
 // calls into `ar/service.js`, never the other way, so there is no import
 // cycle. See that module's own header for the credit-limit lock this
@@ -528,6 +544,34 @@ async function initiatePaystackPaymentIntent({ trx, folioId, amount, currency, i
 }
 
 /**
+ * PLAN.md Phase 6 (QR self-ordering gap closure) — the sibling of
+ * `initiatePaystackPaymentIntent` for a guest QR order's card checkout:
+ * the identical local-intent-only phase, but funding a `pos_orders` tab
+ * (`settlement_target: 'pos_order'`) instead of a `folios` row. No
+ * `assertFolioOpenForPayment`-equivalent AR/company check applies here —
+ * a POS guest order has no company-billing concept at all — only that the
+ * order itself is still genuinely open.
+ */
+async function initiatePosOrderPaystackPaymentIntent({ trx, posOrderId, amount, currency, idempotencyKey }) {
+  const order = await trx.table('pos_orders').where({ id: posOrderId }).first();
+  if (!order) throw new ValidationError('ORDER_NOT_FOUND', 'The specified order does not exist.');
+  if (order.status !== 'open') throw new OrderNotOpenError(posOrderId, order.status);
+
+  const reference = generateUlid();
+  const [paymentId] = await trx.table('payments').insert({
+    pos_order_id: posOrderId,
+    settlement_target: 'pos_order',
+    idempotency_key: idempotencyKey,
+    provider: 'paystack',
+    provider_reference: reference,
+    amount,
+    currency,
+    status: 'INITIATED',
+  });
+  return trx.table('payments').where({ id: paymentId }).first();
+}
+
+/**
  * Phase 2 of 2 — the real external call, deliberately OUTSIDE any
  * transaction (ARCHITECTURE.md §6.4). Idempotent by construction: a payment
  * not still `INITIATED` (already progressed by a prior successful call, a
@@ -570,13 +614,107 @@ async function startPaystackCheckout({ context, paymentId, guestEmail, callbackU
 const TERMINAL_PAYMENT_STATUSES = new Set(['CAPTURED', 'FAILED', 'EXPIRED', 'VOIDED', 'REFUNDED', 'PARTIALLY_REFUNDED', 'CANCELLED']);
 
 /**
+ * PLAN.md Phase 6 (QR self-ordering gap closure) — the pos_order-target
+ * counterpart of `applyGatewayResult`'s success branch. A guest's card
+ * order has no folio at all; capture means recording a real `card`
+ * settlement against the `pos_orders` tab (the exact `subtotal`/
+ * `tax_amount` split `settleOrder`'s own cash/card branch already
+ * computes, replicated here since a guest order never goes through that
+ * function directly) and flipping the tab to `settled`.
+ *
+ * Idempotent by construction, on top of `applyGatewayResult`'s own
+ * conditional-UPDATE guard: locks the order first and no-ops if it is no
+ * longer `open` (already settled by a concurrent path, or a stale/late
+ * webhook for an order a manual reject already voided) — the same
+ * "lock, then check, then write" discipline `pos/service.js`'s own
+ * `settleOrder`/`lockOrderAndItem` already establish.
+ */
+async function finalizePosOrderCardCapture({ trx, payment, userId }) {
+  const order = await trx.table('pos_orders').where({ id: payment.pos_order_id }).forUpdate().first();
+  if (!order || order.status !== 'open') return;
+
+  // Code-review fix (CRITICAL) — defense-in-depth beyond the order's own
+  // `status` above: a Paystack webhook reaches this function WITHOUT ever
+  // going through `qr-ordering/service.js`'s own `assertGuestOrderNotRejected`
+  // guard (it arrives addressed only by payment reference, no guest-order
+  // lookup involved), so it could theoretically land in the narrow window
+  // where this order is still genuinely `open` but its guest-facing
+  // `pos_guest_orders.status` has already flipped to `rejected`/
+  // `auto_rejected` (`qr-ordering/service.js`'s `rejectGuestOrder`/
+  // `tryAutoReject` flip that column before they cancel the payment/void
+  // the order that follows). Never honor a capture in that window — the
+  // caller (`applyGatewayResult`) already claimed `payment.status =
+  // 'CAPTURED'` earlier in this SAME transaction, so undo that claim here
+  // rather than commit a captured payment with no settlement and nothing
+  // left to reverse it.
+  const guestOrder = await trx.table('pos_guest_orders').where({ pos_order_id: order.id }).first();
+  if (guestOrder && (guestOrder.status === 'rejected' || guestOrder.status === 'auto_rejected')) {
+    await trx.table('payments').where({ id: payment.id }).update({ status: 'CANCELLED' });
+    return;
+  }
+
+  const items = await trx.table('pos_order_items').where({ pos_order_id: order.id }).whereNull('voided_at');
+  const baseAmount = sumMoney(items.map(computeItemLineTotal));
+
+  const property = await trx.table('properties').where({ id: order.property_id }).first('current_business_date');
+  const allTaxRows = await trx.table('taxes');
+  const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate: property?.current_business_date, chargeType: 'pos_charge' });
+  const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
+  const taxAmount = sumMoney(taxLines.map((t) => t.amount));
+
+  await trx.table('pos_order_settlements').insert({
+    pos_order_id: order.id,
+    method: 'card',
+    subtotal: netAmount,
+    tax_amount: taxAmount,
+    currency: payment.currency,
+    payment_id: payment.id,
+    settled_by_user_id: userId ?? null,
+  });
+  await trx.table('pos_orders').where({ id: order.id }).update({ status: 'settled', closed_at: new Date() });
+
+  if (guestOrder) {
+    await trx.table('pos_guest_orders').where({ id: guestOrder.id }).update({ payment_status: 'paid', status: 'received' });
+    // A receipt is genuinely optional — a large share of guest orders
+    // supply no contact at all (`pos_guest_orders.guest_contact` is
+    // nullable by design). Sent only when the contact actually looks like
+    // an email — a phone number handed to the email adapter would just
+    // fail delivery after retries for no benefit, and `guest_contact` is a
+    // single free-text field that could hold either.
+    if (guestOrder.guest_contact && guestOrder.guest_contact.includes('@')) {
+      const property = await trx.table('properties').where({ id: order.property_id }).first('name');
+      await writeOutboxEvent({
+        trx,
+        eventType: 'pos.guest_order_receipt',
+        aggregateType: 'pos_guest_orders',
+        aggregateId: guestOrder.id,
+        propertyId: order.property_id,
+        payload: { recipientEmail: guestOrder.guest_contact, amount: sumMoney([netAmount, taxAmount]), currency: payment.currency, propertyName: property?.name ?? '' },
+      });
+    }
+  }
+}
+
+/**
  * Applies a gateway's verification result (Paystack's `status: 'success'`/
  * `'failed'`/`'abandoned'`) to the local payment — shared by both
  * `verifyPayment` (manual sync) and `handlePaystackWebhook` (real-time),
- * since both converge on the exact same state transition + folio effect,
- * applied idempotently (a payment already in a terminal state is left
- * untouched — applying the same result twice must never double-post the
- * folio effect).
+ * since both converge on the exact same state transition + folio/order
+ * effect, applied idempotently.
+ *
+ * PLAN.md Phase 6 (QR self-ordering gap closure) — a real, previously
+ * latent race in this function's own guard, surfaced and fixed while
+ * building the mandated "racing webhook + guest confirm-payment callback"
+ * concurrency test: the ORIGINAL guard checked `payment.status` as PASSED
+ * IN by the caller, not a fresh read — two racing callers (a webhook and a
+ * guest's own confirm callback) can each read the same still-`PENDING`
+ * snapshot before either writes, so both would pass this check and both
+ * would apply the success effect below, double-posting it (a genuine bug
+ * for the pre-existing folio path too, not only the new pos_order one).
+ * Fixed with a conditional UPDATE + affected-row check (ARCHITECTURE.md
+ * §5's own idiom) instead of trusting the in-memory value — the database,
+ * not a stale object, now decides which of two racing callers actually
+ * gets to apply the effect.
  */
 async function applyGatewayResult({ trx, payment, gatewayStatus, providerPaymentId, userId }) {
   if (TERMINAL_PAYMENT_STATUSES.has(payment.status)) {
@@ -585,33 +723,52 @@ async function applyGatewayResult({ trx, payment, gatewayStatus, providerPayment
 
   if (gatewayStatus === 'success') {
     const now = new Date();
-    await trx.table('payments').where({ id: payment.id }).update({
-      status: 'CAPTURED',
-      captured_at: now,
-      provider_payment_id: providerPaymentId ?? payment.provider_payment_id,
-    });
+    const claimed = await trx
+      .table('payments')
+      .where({ id: payment.id })
+      .whereNotIn('status', [...TERMINAL_PAYMENT_STATUSES])
+      .update({
+        status: 'CAPTURED',
+        captured_at: now,
+        provider_payment_id: providerPaymentId ?? payment.provider_payment_id,
+      });
+    if (claimed === 0) {
+      // A concurrent caller already claimed and applied this outcome —
+      // the same idempotent no-op the TERMINAL_PAYMENT_STATUSES check
+      // above covers, just decided by the database instead of a
+      // possibly-stale in-memory value.
+      return trx.table('payments').where({ id: payment.id }).first();
+    }
 
-    const folio = await trx.table('folios').where({ id: payment.folio_id }).first();
-    const businessDate = await propertyBusinessDate({ trx, propertyId: folio.property_id });
-    await trx.table('folio_line_items').insert({
-      folio_id: payment.folio_id,
-      type: 'payment',
-      description: 'Paystack payment',
-      amount: negateMoney(payment.amount),
-      currency: payment.currency,
-      payment_method: 'paystack',
-      payment_id: payment.id,
-      business_date: businessDate,
-      posted_by_user_id: userId ?? null,
-    });
-    await recomputeFolioBalance({ trx, folioId: payment.folio_id });
+    if (payment.settlement_target === 'pos_order') {
+      await finalizePosOrderCardCapture({ trx, payment: { ...payment, provider_payment_id: providerPaymentId ?? payment.provider_payment_id }, userId });
+    } else {
+      const folio = await trx.table('folios').where({ id: payment.folio_id }).first();
+      const businessDate = await propertyBusinessDate({ trx, propertyId: folio.property_id });
+      await trx.table('folio_line_items').insert({
+        folio_id: payment.folio_id,
+        type: 'payment',
+        description: 'Paystack payment',
+        amount: negateMoney(payment.amount),
+        currency: payment.currency,
+        payment_method: 'paystack',
+        payment_id: payment.id,
+        business_date: businessDate,
+        posted_by_user_id: userId ?? null,
+      });
+      await recomputeFolioBalance({ trx, folioId: payment.folio_id });
+    }
   } else {
-    await trx.table('payments').where({ id: payment.id }).update({
-      status: 'FAILED',
-      failed_at: new Date(),
-      failure_reason: `Gateway reported status "${gatewayStatus}".`,
-      provider_payment_id: providerPaymentId ?? payment.provider_payment_id,
-    });
+    await trx
+      .table('payments')
+      .where({ id: payment.id })
+      .whereNotIn('status', [...TERMINAL_PAYMENT_STATUSES])
+      .update({
+        status: 'FAILED',
+        failed_at: new Date(),
+        failure_reason: `Gateway reported status "${gatewayStatus}".`,
+        provider_payment_id: providerPaymentId ?? payment.provider_payment_id,
+      });
   }
 
   return trx.table('payments').where({ id: payment.id }).first();
@@ -773,10 +930,13 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
   // Paystack — the real external call, outside a transaction (§6.4).
   const gatewayResult = await paystack.refundTransaction({ reference: original.provider_reference, amount: amount ?? undefined });
   const processed = gatewayResult.status === 'processed' || gatewayResult.status === 'success';
+  const isPosOrderTarget = original.settlement_target === 'pos_order';
 
   return db.transaction(async (trx) => {
     const [refundPaymentId] = await trx.table('payments').insert({
-      folio_id: original.folio_id,
+      folio_id: isPosOrderTarget ? null : original.folio_id,
+      pos_order_id: isPosOrderTarget ? original.pos_order_id : null,
+      settlement_target: isPosOrderTarget ? 'pos_order' : 'folio',
       idempotency_key: idempotencyKey,
       provider: 'paystack',
       provider_reference: reference,
@@ -788,19 +948,57 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
     });
 
     if (processed) {
-      const businessDate = await propertyBusinessDate({ trx, propertyId: (await trx.table('folios').where({ id: original.folio_id }).first()).property_id });
-      await trx.table('folio_line_items').insert({
-        folio_id: original.folio_id,
-        type: 'refund',
-        description: `Paystack refund of payment ${original.id}`,
-        amount: refundAmount,
-        currency: original.currency,
-        payment_method: 'paystack',
-        payment_id: refundPaymentId,
-        business_date: businessDate,
-        posted_by_user_id: userId ?? null,
-      });
-      await recomputeFolioBalance({ trx, folioId: original.folio_id });
+      if (isPosOrderTarget) {
+        // PLAN.md Phase 6 (QR self-ordering gap closure) — no folio exists
+        // for a guest order's card payment at all; the real reversal is
+        // voiding the `card` settlement itself. Replicated inline
+        // (`pos/service.js`'s own `voidSettlement` shape: lock the parent
+        // order, re-check `voided_at` under a locking read, then write)
+        // rather than imported — see this file's own header comment on
+        // why `pos/service.js` is never required from here.
+        //
+        // Code-review fix (LOW) — this MUST stay in lockstep with
+        // `voidSettlement`'s own two invariants, since a future change to
+        // either copy can otherwise silently diverge from the other:
+        // (1) an already-voided settlement is a real `409` conflict, never
+        // a silent no-op (ARCHITECTURE.md §8's "void, never delete" —
+        // voiding twice must be as loud as deleting twice); (2) a
+        // `tip_service_charge_line_item_id` (currently never set on a
+        // `card`-method settlement — tips/service charges only ever post
+        // for `room_charge` settlements, `pos/service.js`'s own
+        // `settleOrder` — but voided here too regardless, so this stays
+        // correct the moment that stops being true) is voided alongside
+        // the settlement itself, never left orphaned on a folio.
+        const settlement = await trx.table('pos_order_settlements').where({ payment_id: original.id }).first();
+        if (settlement) {
+          await trx.table('pos_orders').where({ id: settlement.pos_order_id }).forUpdate().first();
+          const lockedSettlement = await trx.table('pos_order_settlements').where({ id: settlement.id }).forUpdate().first();
+          if (lockedSettlement.voided_at) throw new SettlementAlreadyVoidedError(settlement.id);
+
+          if (lockedSettlement.tip_service_charge_line_item_id) {
+            await voidLineItem({ trx, lineItemId: lockedSettlement.tip_service_charge_line_item_id, reason, userId });
+          }
+          await trx.table('pos_order_settlements').where({ id: settlement.id }).update({
+            voided_at: new Date(),
+            void_reason: reason,
+            voided_by_user_id: userId,
+          });
+        }
+      } else {
+        const businessDate = await propertyBusinessDate({ trx, propertyId: (await trx.table('folios').where({ id: original.folio_id }).first()).property_id });
+        await trx.table('folio_line_items').insert({
+          folio_id: original.folio_id,
+          type: 'refund',
+          description: `Paystack refund of payment ${original.id}`,
+          amount: refundAmount,
+          currency: original.currency,
+          payment_method: 'paystack',
+          payment_id: refundPaymentId,
+          business_date: businessDate,
+          posted_by_user_id: userId ?? null,
+        });
+        await recomputeFolioBalance({ trx, folioId: original.folio_id });
+      }
       const fullyRefunded = compareMoney(sumMoney([alreadyRefunded, refundAmount]), original.amount) === 0;
       await trx.table('payments').where({ id: original.id }).update({ status: fullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED' });
     }
@@ -826,8 +1024,10 @@ module.exports = {
   voidLineItem,
   captureCashPayment,
   initiatePaystackPaymentIntent,
+  initiatePosOrderPaystackPaymentIntent,
   startPaystackCheckout,
   applyGatewayResult,
+  finalizePosOrderCardCapture,
   verifyPayment,
   handlePaystackWebhook,
   refundPayment,

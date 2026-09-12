@@ -9,11 +9,13 @@ const mocks = vi.hoisted(() => ({
   listMenuItems: vi.fn(),
   listOrders: vi.fn(),
   listShifts: vi.fn(),
+  listGuestOrders: vi.fn(),
+  listQrTokens: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
-  return { ...actual, posApi: mocks };
+  return { ...actual, posApi: mocks, setupApi: { listRooms: vi.fn().mockResolvedValue([]) } };
 });
 
 describe('<POSScreen>', () => {
@@ -24,17 +26,25 @@ describe('<POSScreen>', () => {
     mocks.listMenuItems.mockResolvedValue([]);
     mocks.listOrders.mockResolvedValue([]);
     mocks.listShifts.mockResolvedValue([]);
+    mocks.listGuestOrders.mockResolvedValue([]);
+    mocks.listQrTokens.mockResolvedValue([]);
   });
 
-  it('defaults to the Register tab and switches between all four tabs', async () => {
+  it('defaults to the Register tab and switches between all six tabs, including the PLAN.md Phase 6 QR-ordering ones', async () => {
     render(<POSScreen />);
     expect(screen.getByRole('tab', { name: 'Register', selected: true })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Tickets' }));
     expect(await screen.findByText('No open tabs right now.')).toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole('tab', { name: 'Guest orders' }));
+    expect(await screen.findByText('About this queue')).toBeInTheDocument();
+
     await userEvent.click(screen.getByRole('tab', { name: 'Shifts' }));
     expect(await screen.findByText('Open a shift')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'QR codes' }));
+    expect(await screen.findByText('Outlets')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Setup' }));
     expect(await screen.findByText('New outlet')).toBeInTheDocument();

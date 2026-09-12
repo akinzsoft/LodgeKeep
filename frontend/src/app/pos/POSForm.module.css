@@ -78,3 +78,22 @@
   color: var(--text-primary);
   font-size: var(--text-label-size);
 }
+
+/* Added for PLAN.md Phase 6 (QR self-ordering): `GuestOrdersTab`/`QrTokensTab`'s own explanatory copy, matching every other form CSS module's identical `.hint` rule (e.g. `MigrationForm.module.css`). */
+.hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+}
+
+.tokenLink {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--domain-money);
+  font-size: var(--text-label-size);
+}
+
+.qrImage {
+  width: 200px;
+  height: 200px;
+}

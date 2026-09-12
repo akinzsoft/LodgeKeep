@@ -56,6 +56,20 @@ const EVENT_TEMPLATE_KEYS = {
   // final, distinct notice once the retry schedule is exhausted.
   'billing.payment_failed': 'billing_payment_failed',
   'billing.subscription_suspended': 'billing_subscription_suspended',
+  // PLAN.md Phase 6 (QR self-ordering gap closure) — neither recipient is a
+  // guest ACCOUNT (no login exists on this fully anonymous surface), so
+  // both use the same `recipientEmail` payload key `ar.*`/`billing.*`
+  // already established rather than a further instance of `guestEmail`'s
+  // borrowed-field pattern. `pos.room_charge_otp_requested`'s recipient is
+  // the IN-HOUSE RESERVATION's own registered email, never a guest-typed
+  // contact (this session's confirmed decision). `pos.guest_order_receipt`'s
+  // recipient is whatever contact the guest optionally supplied at order
+  // time — genuinely absent for a large share of orders, in which case
+  // `dispatchOne`'s existing "not an email-worthy event" fallthrough marks
+  // it sent with nothing to deliver, exactly like any other event with no
+  // resolvable recipient.
+  'pos.room_charge_otp_requested': 'pos_room_charge_otp',
+  'pos.guest_order_receipt': 'pos_guest_order_receipt',
 };
 
 /**
@@ -120,6 +134,17 @@ const DEFAULT_TEMPLATES = {
       '<p>After {{attemptCount}} failed payment attempts over the last two weeks, your account has been suspended for non-payment.</p>' +
       '<p>Your data is safe and untouched — this only pauses new bookings and other changes; nothing already in your account is lost or hidden.</p>' +
       '<p>Add a valid payment method to restore full access immediately.</p>',
+  },
+  pos_room_charge_otp: {
+    subject: 'Your room-charge confirmation code',
+    body_html:
+      '<p>A guest order at {{propertyName}} is requesting to be charged to your room.</p>' +
+      '<p style="font-size: 24px; font-weight: bold; letter-spacing: 4px;">{{code}}</p>' +
+      '<p>This code expires in {{expiresInMinutes}} minute(s). If you did not request this, you can safely ignore this email.</p>',
+  },
+  pos_guest_order_receipt: {
+    subject: 'Your order receipt — {{propertyName}}',
+    body_html: '<p>Thank you for your order. Total charged: {{amount}} {{currency}}.</p>',
   },
 };
 

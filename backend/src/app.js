@@ -56,6 +56,7 @@ const { signupRouter } = require('./modules/signup');
 const { billingRouter, billingWebhookRouter } = require('./modules/billing');
 const { offboardingRouter } = require('./modules/offboarding');
 const { migrationRouter } = require('./modules/migration');
+const { qrOrderPublicRouter, qrOrderStaffRouter } = require('./modules/qr-ordering');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -116,6 +117,10 @@ function buildStaffRouter() {
   // offboarding/impersonation above — a migration run never has to survive
   // a read-only tenant-lifecycle state or an impersonation grant.
   router.use(migrationRouter());
+  // PLAN.md Phase 6 — QR self-ordering's staff-facing half (token
+  // management, the guest-order queue), gated the same as `posRouter()`
+  // (`pos.operate`/`pos.manage` — see that module's own routes.js header).
+  router.use(qrOrderStaffRouter());
   router.use((req, res) => notFound(res));
   return router;
 }
@@ -141,6 +146,24 @@ function buildPortalRouter() {
   router.use(portalPublicRouter({ resolveTenant: tenantMiddleware }));
   router.use(authenticate('guest'));
   router.use(portalAccountRouter());
+  router.use((req, res) => notFound(res));
+  return router;
+}
+
+/**
+ * PLAN.md Phase 6 — QR self-ordering's guest-facing half. Own top-level
+ * tree, mirroring `buildPortalRouter()`'s public half exactly (its own
+ * `tenantMiddleware`, `attachAudit()` mounted ahead of the property/token
+ * resolution so `req.audit(...)` is defined for every route this tree
+ * actually handles) — but with NO authenticated tier at all: every route
+ * here is reachable with no bearer token, ever, by design (a guest
+ * scanning a physical QR sticker has no account and no session).
+ */
+function buildQrOrderRouter() {
+  const router = express.Router();
+  const tenantMiddleware = resolveTenant({ db: scopedDb(), systemContext });
+  router.use(attachAudit());
+  router.use(qrOrderPublicRouter({ resolveTenant: tenantMiddleware }));
   router.use((req, res) => notFound(res));
   return router;
 }
@@ -180,6 +203,11 @@ function createApp() {
   // tenant already exists. See `modules/signup/routes.js`'s own header.
   app.use('/api/v1', signupRouter());
   app.use('/api/v1/portal', buildPortalRouter());
+  // PLAN.md Phase 6 — QR self-ordering's guest-facing half. Mounted before
+  // `buildStaffRouter()`'s own catch-all could ever see it, at its own
+  // path prefix so a guest's raw token never collides with any staff
+  // route shape.
+  app.use('/api/v1/qr-order', buildQrOrderRouter());
   app.use('/api/v1/platform', buildPlatformRouter());
   app.use('/api/v1', buildStaffRouter());
 

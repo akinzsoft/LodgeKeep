@@ -29,6 +29,7 @@
  */
 
 const crypto = require('crypto');
+const { encrypt } = require('../../src/shared/encryption');
 
 /**
  * The seven roles of SECURITY.md §5's authorization matrix, seeded per tenant.
@@ -150,6 +151,9 @@ async function seedTwoTenants(trx) {
     posOrderItems: [],
     posOrderSettlements: [],
     posShifts: [],
+    posOrderTokens: [],
+    posGuestOrders: [],
+    posRoomChargeOtps: [],
     companyProfiles: [],
     arAccounts: [],
     arInvoices: [],
@@ -1017,6 +1021,84 @@ async function seedTwoTenants(trx) {
       }),
       property_id: property.id,
       terminal_id: terminal.id,
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // QR self-ordering (PLAN.md Phase 6 gap closure) — needs a real
+  // reservation to reference for the room-charge OTP, so it seeds here,
+  // after Reservations/POS core, same reasoning as Notifications below.
+  // ------------------------------------------------------------------
+  for (const t of both) {
+    const property = t.properties[0];
+    const outlet = t.posOutlets[0];
+    const terminal = t.posTerminals[0];
+    const order = t.posOrders[0];
+    const reservation = t.reservations[0];
+
+    // A second, otherwise-unattached tab — `pos_guest_orders` carries
+    // `UNIQUE(tenant_id, property_id, pos_order_id)`, and `order` above is
+    // already claimed by this same tenant's own seeded guest-order row
+    // below, so the isolation suite's generic "accepts a valid new row"
+    // case needs its OWN distinct `pos_order_id` to insert against — the
+    // same "target the one row fixtures leaves genuinely unconsumed"
+    // precedent `email_settings`' own entities.js entry already
+    // established (there, `properties[1]`; here, a second `pos_orders`
+    // row instead, since this table has no natural second dimension).
+    t.posOrders.push({
+      id: await insertReturningId(trx, 'pos_orders', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: outlet.id,
+        terminal_id: terminal.id,
+        opened_by_user_id: t.users[0].id,
+        table_label: 'T2-UNATTACHED',
+      }),
+      property_id: property.id,
+      outlet_id: outlet.id,
+      terminal_id: terminal.id,
+    });
+
+    const rawToken = `fixture-qr-token-${t.slug}`;
+    t.posOrderTokens.push({
+      id: await insertReturningId(trx, 'pos_order_tokens', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: outlet.id,
+        type: 'table',
+        table_label: 'T1',
+        token_hash: tokenHash(rawToken),
+        token_encrypted: encrypt(rawToken),
+      }),
+      property_id: property.id,
+      outlet_id: outlet.id,
+    });
+
+    t.posGuestOrders.push({
+      id: await insertReturningId(trx, 'pos_guest_orders', {
+        tenant_id: t.id,
+        property_id: property.id,
+        pos_order_id: order.id,
+        token_id: t.posOrderTokens[0].id,
+        payment_method: 'card',
+      }),
+      property_id: property.id,
+      pos_order_id: order.id,
+      token_id: t.posOrderTokens[0].id,
+    });
+
+    t.posRoomChargeOtps.push({
+      id: await insertReturningId(trx, 'pos_room_charge_otps', {
+        tenant_id: t.id,
+        property_id: property.id,
+        reservation_id: reservation.id,
+        pos_order_id: order.id,
+        code_hash: tokenHash(`fixture-qr-otp-${t.slug}`),
+        expires_at: hoursFromNow(1),
+      }),
+      property_id: property.id,
+      reservation_id: reservation.id,
+      pos_order_id: order.id,
     });
   }
 
