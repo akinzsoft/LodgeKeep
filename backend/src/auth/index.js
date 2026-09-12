@@ -16,6 +16,20 @@
  * exactly this identity-lifecycle action, and a business module deactivating
  * a user needs a sanctioned way to record it there rather than reaching
  * around this file into `src/auth/events.js` directly.
+ *
+ * `setRefreshTokenCookie`/`REFRESH_TOKEN_MAX_AGE_MS` joined this surface for
+ * a PLAN.md Phase 5 gap closure: `src/modules/signup`'s `issueStaffSession`
+ * call mints a refresh token exactly like `staffLogin` does, but signup's
+ * own controller (outside `buildStaffRouter()` entirely — see that module's
+ * `routes.js` header) had never been updated to deliver it as the same
+ * HttpOnly cookie `/auth/login`/`/auth/refresh` use, so it was leaking into
+ * the JSON response body instead. `stripRefreshToken` itself is NOT
+ * re-exported here — it is a one-line, response-shaping destructure with no
+ * real logic to share, so `signup/controller.js` keeps its own tiny copy
+ * rather than growing this surface for something that trivial (the same
+ * "duplicate a one-off, don't force a shared home for it" reasoning
+ * `billing/health.js`'s own `resolvePlanForRoster` already established for
+ * an equally small function).
  */
 
 const { staffAuthRouter, portalAuthRouter, platformAuthRouter } = require('./routes');
@@ -27,6 +41,8 @@ const { rejectMutationDuringImpersonation } = require('./impersonation-guard');
 const { rejectMutationForTenantLifecycle } = require('./tenant-lifecycle-guard');
 const { issueStaffSession } = require('./service');
 const { hashPassword, validatePassword } = require('./password');
+const { setRefreshTokenCookie, refreshTokenMaxAgeMs } = require('./refresh-cookie');
+const { REFRESH_TTL_HOURS } = require('./tokens');
 
 module.exports = {
   staffAuthRouter,
@@ -41,4 +57,6 @@ module.exports = {
   issueStaffSession,
   hashPassword,
   validatePassword,
+  setRefreshTokenCookie,
+  REFRESH_TOKEN_MAX_AGE_MS: refreshTokenMaxAgeMs(REFRESH_TTL_HOURS),
 };

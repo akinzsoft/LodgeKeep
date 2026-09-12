@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from './app/auth/index.js';
 import { StaffLoginScreen } from './app/auth/screens/StaffLoginScreen.jsx';
 import { MfaChallengeScreen } from './app/auth/screens/MfaChallengeScreen.jsx';
 import { AcceptInvitationScreen } from './app/auth/screens/AcceptInvitationScreen.jsx';
+import { SignupScreen } from './app/auth/screens/SignupScreen.jsx';
 import { AppShell } from './app/shell/index.js';
 import { HomeDashboard } from './app/dashboard/HomeDashboard.jsx';
 import { SetupScreen } from './app/setup/SetupScreen.jsx';
@@ -322,6 +323,12 @@ createRoot(document.getElementById('root')).render(
       <PlatformApp />
     ) : window.location.pathname.startsWith('/qr-order') ? (
       <QrOrderApp />
+    ) : window.location.pathname.startsWith('/signup') ? (
+      // PLAN.md Phase 5 gap closure — public, no session of any kind
+      // (POST /api/v1/signup is mounted outside buildStaffRouter()
+      // entirely, since no tenant exists yet), so this needs no
+      // <AuthProvider> any more than /qr-order's fully anonymous tree does.
+      <SignupScreen />
     ) : (
       <AuthProvider>
         <Demo />

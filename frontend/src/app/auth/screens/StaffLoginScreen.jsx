@@ -177,6 +177,9 @@ export function StaffLoginScreen({ isOffline = false }) {
                   <button type="button" className={styles.linkButton} onClick={() => setView('find-company')}>
                     Can&rsquo;t find your company?
                   </button>
+                  <a className={styles.linkButton} href="/signup">
+                    Create an account
+                  </a>
                 </div>
               </>
             )}
