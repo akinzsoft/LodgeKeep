@@ -1971,6 +1971,179 @@ const ENTITIES = [
   },
 
   // -----------------------------------------------------------------
+  // POS inventory & stock control — PLAN.md Phase 6
+  // -----------------------------------------------------------------
+
+  {
+    table: 'stock_items',
+    // No natural unique key — two stock items can legitimately share a
+    // name, the same reasoning `pos_menu_items` declares none.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      name: 'New Fixture Stock Item',
+      unit: 'ml',
+    }),
+    crossTenant: [
+      {
+        name: "creates a stock item against another tenant's outlet",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          name: 'Cross-Tenant Stock Item',
+          unit: 'ml',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'pos_menu_item_components',
+    uniqueKeys: [['tenant_id', 'property_id', 'menu_item_id', 'stock_item_id']],
+    // `t.stockItems[1]` is the deliberately unlinked "Fixture Garnish" row
+    // (`tests/helpers/fixtures.js`'s own comment) — the fixture already
+    // links this tenant's only other stock item (`stockItems[0]`) to its
+    // only menu item, so a genuinely NEW component needs the spare one.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      menu_item_id: t.posMenuItems[0].id,
+      stock_item_id: t.stockItems[1].id,
+      quantity: '10.000',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      menu_item_id: t.posMenuItems[0].id,
+      stock_item_id: t.stockItems[0].id, // Matches seedTwoTenants' own fixture component.
+      quantity: '99.000',
+    }),
+    crossTenant: [
+      {
+        name: "links a recipe component to another tenant's menu item",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          menu_item_id: other.posMenuItems[0].id,
+          stock_item_id: own.stockItems[1].id,
+          quantity: '10.000',
+        }),
+      },
+      {
+        name: "links a recipe component to another tenant's stock item",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          menu_item_id: own.posMenuItems[0].id,
+          stock_item_id: other.stockItems[1].id,
+          quantity: '10.000',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'stock_movements',
+    // Append-only ledger — no natural unique key, the same reasoning
+    // `folio_line_items` declares none.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      stock_item_id: t.stockItems[0].id,
+      type: 'wastage',
+      quantity: '-1.000',
+      business_date: '2026-12-24',
+      reason: 'Isolation fixture spill.',
+    }),
+    crossTenant: [
+      {
+        name: "posts a movement against another tenant's stock item",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: own.posOutlets[0].id,
+          stock_item_id: other.stockItems[0].id,
+          type: 'wastage',
+          quantity: '-1.000',
+          business_date: '2026-12-24',
+          reason: 'Cross-tenant fixture spill.',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'stock_takes',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      opened_by_user_id: t.users[0].id,
+    }),
+    crossTenant: [
+      {
+        name: "opens a stock take against another tenant's outlet",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          opened_by_user_id: own.users[0].id,
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'stock_take_lines',
+    uniqueKeys: [['tenant_id', 'property_id', 'stock_take_id', 'stock_item_id']],
+    // `t.stockItems[1]` (the spare, unlinked item) gives a genuinely new
+    // (stock_take_id, stock_item_id) pair — the fixture already counts
+    // `stockItems[0]` on this tenant's only stock take.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      stock_take_id: t.stockTakes[0].id,
+      stock_item_id: t.stockItems[1].id,
+      counted_quantity: '10.000',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      stock_take_id: t.stockTakes[0].id,
+      stock_item_id: t.stockItems[0].id, // Matches seedTwoTenants' own fixture line.
+      counted_quantity: '5.000',
+    }),
+    crossTenant: [
+      {
+        name: "counts a line against another tenant's stock take",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          stock_take_id: other.stockTakes[0].id,
+          stock_item_id: own.stockItems[1].id,
+          counted_quantity: '10.000',
+        }),
+      },
+      {
+        name: "counts another tenant's stock item on this tenant's take",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          stock_take_id: own.stockTakes[0].id,
+          stock_item_id: other.stockItems[1].id,
+          counted_quantity: '10.000',
+        }),
+      },
+    ],
+  },
+
+  // -----------------------------------------------------------------
   // Accounts Receivable — PLAN.md Phase 4
   // -----------------------------------------------------------------
 

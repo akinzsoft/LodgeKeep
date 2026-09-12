@@ -164,6 +164,11 @@ async function seedTwoTenants(trx) {
     subscriptionInvoices: [],
     subscriptionPayments: [],
     importRuns: [],
+    stockItems: [],
+    posMenuItemComponents: [],
+    stockMovements: [],
+    stockTakes: [],
+    stockTakeLines: [],
   });
 
   // Two symmetric example hotels, not one reference customer
@@ -801,6 +806,69 @@ async function seedTwoTenants(trx) {
     });
   }
 
+  // POS inventory & stock control (PLAN.md Phase 6) — a stock item and its
+  // recipe link, seeded here alongside the other outlet-scoped POS rows
+  // (no user-reference columns on either, so no ordering dependency on
+  // the staff users created below). stock_movements/stock_takes/
+  // stock_take_lines all reference a real staff user, so they seed
+  // further down, matching reservation_notes/housekeeping/POS-orders' own
+  // documented positioning.
+  for (const t of both) {
+    const property = t.properties[0];
+    const outlet = t.posOutlets[0];
+    const menuItem = t.posMenuItems[0];
+
+    t.stockItems.push({
+      id: await insertReturningId(trx, 'stock_items', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: outlet.id,
+        name: 'Fixture Vodka',
+        unit: 'ml',
+        purchase_cost: '5.00',
+        reorder_level: '500.000',
+        current_quantity: '1000.000',
+      }),
+      property_id: property.id,
+      outlet_id: outlet.id,
+    });
+
+    t.posMenuItemComponents.push({
+      id: await insertReturningId(trx, 'pos_menu_item_components', {
+        tenant_id: t.id,
+        property_id: property.id,
+        menu_item_id: menuItem.id,
+        stock_item_id: t.stockItems[0].id,
+        quantity: '50.000',
+      }),
+      property_id: property.id,
+      menu_item_id: menuItem.id,
+      stock_item_id: t.stockItems[0].id,
+    });
+
+    // A second, deliberately UNLINKED stock item — `tests/helpers/entities.js`'s
+    // own generic "accepts a valid new row" test for `pos_menu_item_components`
+    // needs a (menu_item_id, stock_item_id) pair that doesn't already exist
+    // (the fixture above already occupies the only real menu item this
+    // tenant has), the same "a spare, otherwise-unused row for the generic
+    // isolation suite to target" reasoning `subscriptions`' own comment
+    // documents for an identical shape.
+    t.stockItems.push({
+      id: await insertReturningId(trx, 'stock_items', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: outlet.id,
+        name: 'Fixture Garnish',
+        unit: 'each',
+        purchase_cost: '0.50',
+        reorder_level: '10.000',
+        current_quantity: '100.000',
+      }),
+      property_id: property.id,
+      outlet_id: outlet.id,
+    });
+  }
+
   // PLATFORM_SCOPED (nullable tenant/property attribution, `auth_events`'
   // own precedent) — a single, tenant-independent fixture row, not one per
   // tenant, since this table has no tenant loop to interleave (matching
@@ -1021,6 +1089,59 @@ async function seedTwoTenants(trx) {
       }),
       property_id: property.id,
       terminal_id: terminal.id,
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // POS inventory & stock control (PLAN.md Phase 6) — stock_movements/
+  // stock_takes/stock_take_lines all reference a real staff user, so
+  // (like POS core's own orders/settlements/shifts immediately above)
+  // they seed here rather than alongside stock_items/
+  // pos_menu_item_components further up (which have no such dependency).
+  // ------------------------------------------------------------------
+  for (const t of both) {
+    const property = t.properties[0];
+    const outlet = t.posOutlets[0];
+    const stockItem = t.stockItems[0];
+    const user = t.users[0];
+
+    t.stockMovements.push({
+      id: await insertReturningId(trx, 'stock_movements', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: outlet.id,
+        stock_item_id: stockItem.id,
+        type: 'received',
+        quantity: '1000.000',
+        unit_cost: '5.00',
+        total_cost: '5000.00',
+        business_date: '2026-12-24',
+        reference: 'Fixture delivery',
+        user_id: user.id,
+      }),
+      property_id: property.id,
+      stock_item_id: stockItem.id,
+    });
+
+    const stockTakeId = await insertReturningId(trx, 'stock_takes', {
+      tenant_id: t.id,
+      property_id: property.id,
+      outlet_id: outlet.id,
+      opened_by_user_id: user.id,
+    });
+    t.stockTakes.push({ id: stockTakeId, property_id: property.id, outlet_id: outlet.id });
+
+    t.stockTakeLines.push({
+      id: await insertReturningId(trx, 'stock_take_lines', {
+        tenant_id: t.id,
+        property_id: property.id,
+        stock_take_id: stockTakeId,
+        stock_item_id: stockItem.id,
+        counted_quantity: '995.000',
+      }),
+      property_id: property.id,
+      stock_take_id: stockTakeId,
+      stock_item_id: stockItem.id,
     });
   }
 
@@ -1447,6 +1568,8 @@ async function seedTwoTenants(trx) {
     ['offboarding.manage', 'offboarding'],
     ['migration.manage', 'migration'],
     ['reports.view_chain', 'reports'],
+    ['pos.stock_view', 'pos'],
+    ['pos.stock_manage', 'pos'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -1610,6 +1733,25 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.manage'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.operate'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.manage'] },
+    ]);
+  }
+
+  // POS inventory & stock control (PLAN.md Phase 6) — this session's
+  // confirmed decision: `pos.stock_view` (pos_operator/manager/admin/
+  // super_admin — read stock levels/alerts, record wastage with a
+  // mandatory reason) and `pos.stock_manage` (manager/admin/super_admin
+  // only — item CRUD, recipe/BOM, goods-received, the stock-take
+  // lifecycle, cost/variance reporting). Front desk/cashier/housekeeping
+  // get neither key, mirroring the POS grant block immediately above.
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.pos_operator, permission_id: permissions['pos.stock_view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['pos.stock_view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['pos.stock_manage'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.stock_view'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.stock_manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.stock_view'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.stock_manage'] },
     ]);
   }
 

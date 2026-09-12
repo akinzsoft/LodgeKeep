@@ -58,6 +58,8 @@ const ALL_PERMISSION_KEYS = Object.freeze([
   'offboarding.manage',
   'migration.manage',
   'reports.view_chain',
+  'pos.stock_view',
+  'pos.stock_manage',
 ]);
 
 /** Every catalogue key except `room_types.update`/`reports.view_chain` — `admin`'s own exact exclusions (SECURITY.md §5): the two places this matrix's Admin `✓` genuinely diverges from Super-admin's `✓` on a single action. */
@@ -86,6 +88,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
   ],
   pos_operator: [
     'pos.operate',
+    'pos.stock_view',
   ],
   manager: [
     'reservations.view', 'reservations.manage',
@@ -93,6 +96,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'cashiering.post_charge', 'cashiering.void_line',
     'housekeeping.view', 'housekeeping.manage',
     'pos.operate', 'pos.manage',
+    'pos.stock_view', 'pos.stock_manage',
     'reports.view', 'reports.view_financial',
     'setup.view',
     'notifications.view',

@@ -49,6 +49,7 @@ const { nightAuditRouter } = require('./modules/night-audit');
 const { profilesRouter } = require('./modules/profiles');
 const { portalPublicRouter, portalAccountRouter } = require('./modules/portal');
 const { posRouter } = require('./modules/pos');
+const { stockRouter } = require('./modules/stock');
 const { arRouter } = require('./modules/ar');
 const { groupBlocksRouter } = require('./modules/group-blocks');
 const { platformConsoleRouter, staffImpersonationRouter } = require('./modules/platform');
@@ -121,6 +122,12 @@ function buildStaffRouter() {
   // management, the guest-order queue), gated the same as `posRouter()`
   // (`pos.operate`/`pos.manage` — see that module's own routes.js header).
   router.use(qrOrderStaffRouter());
+  // PLAN.md Phase 6 — POS inventory & stock control. Mounted immediately
+  // after posRouter() (this module's own settlement-deduction hooks call
+  // INTO pos/service.js's callers, never the reverse — see
+  // stock/service.js's own header), gated on the new `pos.stock_view`/
+  // `pos.stock_manage` keys.
+  router.use(stockRouter());
   router.use((req, res) => notFound(res));
   return router;
 }
