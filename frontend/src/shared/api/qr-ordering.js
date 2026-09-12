@@ -33,6 +33,18 @@ export function getMenu(token) {
 }
 
 /**
+ * Mirrors `portalApi.getPropertyBranding` exactly in shape (`{name,
+ * logoUrl, theme, baseCurrency}`) — both hit the identical backend query
+ * (`portalService.getPropertyBranding`), just reached by a scanned token
+ * instead of a property slug. This is what lets the shared
+ * `BrandingProvider` (frontend/src/shared/branding/) serve this app and
+ * the guest booking portal with the same component, not two.
+ */
+export function getBranding(token) {
+  return request(`/qr-order/${token}/branding`, { auth: false });
+}
+
+/**
  * Returns `{...guestOrder, authorizationUrl, accessCode}` on a clean 201 (a
  * card order's Paystack intent was created and reached the gateway
  * successfully) or `{...guestOrder, checkoutError, retry}` on the honest

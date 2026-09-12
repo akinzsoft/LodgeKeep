@@ -43,6 +43,12 @@ function qrOrderPublicRouter({ resolveTenant }) {
   const withToken = [resolveTenant, resolveQrOrderToken()];
 
   router.get('/:token/menu', ...withToken, controller.getMenu);
+  // Mirrors `portalPublicRouter`'s own `/properties/branding` exactly —
+  // same underlying query (`portalService.getPropertyBranding`), just
+  // reached by a scanned token instead of a property slug, so the guest
+  // frontend's shared branding component has one real endpoint per app,
+  // never a fabricated/empty one.
+  router.get('/:token/branding', ...withToken, controller.getBranding);
   router.post('/:token/orders', ...withToken, qrOrderIpRateLimiter(), controller.createOrder);
   router.get('/:token/orders/:id', ...withToken, controller.getOrderStatus);
   router.post('/:token/orders/:id/retry-checkout', ...withToken, controller.retryCheckout);

@@ -1,5 +1,7 @@
+import { useCallback } from 'react';
 import { BrowserRouter, Routes, Route, Outlet, Navigate, useParams } from 'react-router-dom';
-import { QrOrderBrandingProvider } from './branding/QrOrderBrandingProvider.jsx';
+import { BrandingProvider } from '../shared/branding/BrandingProvider.jsx';
+import { qrOrderingApi } from '../shared/api/index.js';
 import { MenuScreen } from './screens/MenuScreen.jsx';
 import { CheckoutScreen } from './screens/CheckoutScreen.jsx';
 import { RoomChargeConfirmScreen } from './screens/RoomChargeConfirmScreen.jsx';
@@ -43,9 +45,17 @@ export function QrOrderApp() {
 
 function TokenScope() {
   const { token } = useParams();
+  // Same theming mechanism the guest booking portal uses
+  // (`shared/branding/BrandingProvider.jsx`) — this is the same class of
+  // surface (guest-facing, tenant-branded, no login), not a reason to
+  // build a second one. `getBranding` hits `GET /qr-order/:token/branding`,
+  // which calls the identical `portalService.getPropertyBranding` the
+  // portal's own endpoint does, just resolved via the scanned token
+  // instead of a property slug.
+  const fetchBranding = useCallback(() => qrOrderingApi.getBranding(token), [token]);
   return (
-    <QrOrderBrandingProvider>
+    <BrandingProvider fetchBranding={fetchBranding} rootId="qr-order-root">
       <Outlet context={{ token }} />
-    </QrOrderBrandingProvider>
+    </BrandingProvider>
   );
 }

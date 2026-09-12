@@ -15,6 +15,10 @@ const { requireIdempotencyKey } = require('../../shared/mutation');
 const { checkTokenOrderRateLimit, checkTokenOtpRequestRateLimit, checkTokenOtpVerifyRateLimit } = require('./rate-limit');
 const { RateLimitedError } = require('./errors');
 const service = require('./service');
+// One-way dependency on `portal`, mirroring `service.js`'s own header on
+// depending on `pos`/`cashiering`/`reservations` — portal never requires
+// this module back, so there is no cycle.
+const portalService = require('../portal/service');
 
 /**
  * Code-review fix (IMPORTANT) — the shared "run a per-token rate check,
@@ -46,6 +50,28 @@ function require_(body, field) {
 async function getMenu(req, res, next) {
   try {
     res.status(200).json(ok(await service.getMenuForToken({ context: req.context, token: req.qrToken })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * User-directed fix: the QR-ordering guest pages are the same class of
+ * surface as the guest booking portal (guest-facing, tenant-branded, no
+ * login) and must reuse its theming mechanism, not grow a second one.
+ * `resolveQrOrderToken()` (middleware.js) already resolves `req.context`
+ * to the token's own `propertyId` — the ONLY input
+ * `portalService.getPropertyBranding` ever needs — so this calls that
+ * exact same function verbatim rather than re-querying `properties`
+ * itself. `getPropertyBranding` returns `null` for a property with no row
+ * (can't happen here — the token middleware already 404'd on no match —
+ * but `notFound` is the correct, established response shape regardless).
+ */
+async function getBranding(req, res, next) {
+  try {
+    const branding = await portalService.getPropertyBranding({ context: req.context });
+    if (!branding) return notFound(res);
+    res.status(200).json(ok(branding));
   } catch (error) {
     next(error);
   }
@@ -208,6 +234,7 @@ async function verifyOtp(req, res, next) {
 
 module.exports = {
   getMenu,
+  getBranding,
   createOrder,
   getOrderStatus,
   retryCheckout,

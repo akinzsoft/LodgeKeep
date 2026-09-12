@@ -324,6 +324,37 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
   });
 
   // -----------------------------------------------------------------
+  // Guest — branding (user-directed fix: reuse the guest booking portal's
+  // OWN theming mechanism, not a second one — GET .../branding calls the
+  // identical portalService.getPropertyBranding backend.test.js's own
+  // "returns real property branding" case already proves for the
+  // property-slug-keyed route).
+  // -----------------------------------------------------------------
+
+  describe('guest branding — reuses the portal\'s own mechanism', () => {
+    let tableRaw;
+
+    beforeAll(async () => {
+      const created = await createStaffToken({ type: 'table', tableLabel: 'BRAND-T1' });
+      tableRaw = created.body.meta.rawToken;
+    });
+
+    it('returns the real property branding, the same shape the portal\'s own endpoint returns', async () => {
+      const res = await guestGet(`/${tableRaw}/branding`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.name).toBeTruthy();
+      expect(res.body.data.baseCurrency).toBeTruthy();
+      expect(res.body.data).toHaveProperty('logoUrl');
+      expect(res.body.data).toHaveProperty('theme');
+    });
+
+    it('a nonexistent/forged token 404s, same as every other guest-facing route', async () => {
+      const res = await guestGet('/totally-made-up-token-value/branding');
+      expect(res.status).toBe(404);
+    });
+  });
+
+  // -----------------------------------------------------------------
   // Guest — card checkout, full happy path + failure paths
   // -----------------------------------------------------------------
 

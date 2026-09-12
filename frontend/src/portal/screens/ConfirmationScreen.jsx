@@ -4,7 +4,7 @@ import { Card, Button, StatusPill } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { portalApi, ApiError } from '../../shared/api/index.js';
 import { statusTone, statusLabel } from '../../app/booking/status.js';
-import { useBranding } from '../branding/BrandingContext.jsx';
+import { useBranding } from '../../shared/branding/BrandingProvider.jsx';
 import styles from '../PortalScreen.module.css';
 import formStyles from '../PortalForm.module.css';
 

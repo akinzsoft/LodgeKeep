@@ -1,13 +1,14 @@
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom';
 import { render } from '@testing-library/react';
 import { GuestAuthProvider } from '../../auth/GuestAuthContext.jsx';
-import { BrandingProvider } from '../../branding/BrandingContext.jsx';
+import { BrandingProvider } from '../../../shared/branding/BrandingProvider.jsx';
+import { portalApi } from '../../../shared/api/index.js';
 
 export const PROPERTY_SLUG = 'alpha-hotels';
 
 function PropertyScope() {
   return (
-    <BrandingProvider propertySlug={PROPERTY_SLUG}>
+    <BrandingProvider fetchBranding={() => portalApi.getPropertyBranding(PROPERTY_SLUG)} rootId="portal-root">
       <GuestAuthProvider propertySlug={PROPERTY_SLUG}>
         <Outlet context={{ propertySlug: PROPERTY_SLUG }} />
       </GuestAuthProvider>

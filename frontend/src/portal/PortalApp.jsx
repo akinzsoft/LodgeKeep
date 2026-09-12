@@ -1,6 +1,8 @@
+import { useCallback } from 'react';
 import { BrowserRouter, Routes, Route, Outlet, useParams } from 'react-router-dom';
 import { GuestAuthProvider } from './auth/GuestAuthContext.jsx';
-import { BrandingProvider } from './branding/BrandingContext.jsx';
+import { BrandingProvider } from '../shared/branding/BrandingProvider.jsx';
+import { portalApi } from '../shared/api/index.js';
 import { PropertyLandingScreen } from './screens/PropertyLandingScreen.jsx';
 import { AvailabilitySearchScreen } from './screens/AvailabilitySearchScreen.jsx';
 import { BookingCheckoutScreen } from './screens/BookingCheckoutScreen.jsx';
@@ -51,8 +53,9 @@ export function PortalApp() {
 
 function PropertyScope() {
   const { propertySlug } = useParams();
+  const fetchBranding = useCallback(() => portalApi.getPropertyBranding(propertySlug), [propertySlug]);
   return (
-    <BrandingProvider propertySlug={propertySlug}>
+    <BrandingProvider fetchBranding={fetchBranding} rootId="portal-root">
       <GuestAuthProvider propertySlug={propertySlug}>
         <Outlet context={{ propertySlug }} />
       </GuestAuthProvider>
