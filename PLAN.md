@@ -173,6 +173,8 @@ Until now the product runs for tenants you create by hand. This phase makes it a
 
 **Note on migration's placement:** it sits here because it is needed when onboarding real customers at volume, but pull it into Phase 1 for any single customer arriving with existing records.
 
+**Exit:** a stranger can sign up, get billed, and eventually leave — all without an engineer touching any of it. **Met** — every bullet in this phase is now shipped: self-service signup and provisioning (PR #23), plan entitlements enforced at the API (PR #26), subscription billing with dunning (PR #24), trial handling with read-only degradation rather than a hard lockout (PR #23), tenant offboarding with full data export (PR #25), the platform console — tenant list and audited impersonation (PR #22), suspend/reactivate and platform-staff tiering (PR #23), tenant health (PR #29) — and data migration tooling (PR #28).
+
 ---
 
 ## Phase 6 — Depth and scale
@@ -184,8 +186,8 @@ Genuinely optional until customers ask. Building these early is the most likely 
 - Channel manager / OTA distribution (3.15)
 - Loyalty programme (3.1)
 - Mobile refinement (3.18), multi-language (3.17)
-- **QR guest self-ordering (3.4)** — signed table/room tokens, guest-facing ordering pages, payment-status-on-ticket, live order status. Real feature scope on its own (see §3.4's full spec), not a small add-on to core POS.
-- **POS inventory & stock control (3.4)** — stock items, recipes/BOM, goods received, stock takes with blind variance counting, wastage tracking, low-stock alerts. Needed for F&B cost control and fraud detection, but not for a hotel to simply run a functioning bar.
+- **QR guest self-ordering (3.4)** — signed table/room tokens, guest-facing ordering pages, payment-status-on-ticket, live order status — ✅ **shipped** (PR #31: signed-but-anonymous table/room tokens, a guest-facing anonymous ordering app reusing the guest booking portal's own theming mechanism, card and charge-to-room payment, and staff-side POS tabs for the guest-order queue). Real feature scope on its own (see §3.4's full spec), not a small add-on to core POS.
+- **POS inventory & stock control (3.4)** — stock items, recipes/BOM, goods received, stock takes with blind variance counting, wastage tracking, low-stock alerts — ✅ **shipped** (PR #32: stock items, a per-menu-item recipe/BOM, real deduction on settlement hooked into both settlement writers, goods-received, mandatory-reason wastage, a proactive stock-out guard, a full blind stock-take lifecycle, and cost-of-sales/variance reporting — see CLAUDE.md's own status section for the confirmed scope reductions). Needed for F&B cost control and fraud detection, but not for a hotel to simply run a functioning bar.
 
 ---
 
