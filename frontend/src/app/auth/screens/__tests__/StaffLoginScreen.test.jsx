@@ -52,6 +52,11 @@ describe('<StaffLoginScreen>', () => {
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
   });
 
+  it('links to the real /signup screen, PLAN.md Phase 5 gap closure', () => {
+    renderScreen();
+    expect(screen.getByRole('link', { name: 'Create an account' })).toHaveAttribute('href', '/signup');
+  });
+
   it('shows the "Powered by LodgeKeep" footer — a signed-out visitor never reaches AppShell to see it there', () => {
     renderScreen();
     expect(screen.getByText('Powered by LodgeKeep')).toBeInTheDocument();

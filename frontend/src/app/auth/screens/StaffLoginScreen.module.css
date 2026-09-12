@@ -216,6 +216,27 @@
   gap: var(--space-2);
 }
 
+/* SignupScreen's paired fields (first/last name, timezone/currency) —
+   mirrors SetupForm.module.css's own identical `.row`/`.field` shape rather
+   than importing that module here, so this screen stays on one CSS module
+   (and one shared `.field`/`.input` visual language) throughout. */
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.row .field {
+  flex: 1;
+  min-width: 10rem;
+}
+
+.hint {
+  margin: 0;
+  font-size: var(--text-caption-size);
+  color: var(--text-muted);
+}
+
 .label {
   font-size: var(--text-label-size);
   font-weight: var(--text-label-weight);

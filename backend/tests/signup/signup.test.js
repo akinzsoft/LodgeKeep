@@ -10,6 +10,7 @@
  */
 
 const { useTestApp } = require('../helpers/app');
+const { COOKIE_NAME: REFRESH_COOKIE_NAME } = require('../../src/auth/refresh-cookie');
 
 describe('POST /api/v1/signup', () => {
   const t = useTestApp();
@@ -35,7 +36,16 @@ describe('POST /api/v1/signup', () => {
     expect(res.status).toBe(201);
     expect(res.body.data.status).toBe('ok');
     expect(res.body.data.accessToken).toEqual(expect.any(String));
-    expect(res.body.data.refreshToken).toEqual(expect.any(String));
+    // Gap closure: the refresh token travels ONLY as an HttpOnly cookie now,
+    // matching /auth/login and /auth/refresh — never in the JSON body, not
+    // even once, so it's never JS-readable, not even transiently.
+    expect(res.body.data.refreshToken).toBeUndefined();
+    const setCookie = res.headers['set-cookie'] || [];
+    const refreshCookie = setCookie.find((c) => c.startsWith(`${REFRESH_COOKIE_NAME}=`));
+    expect(refreshCookie).toBeDefined();
+    expect(refreshCookie).toMatch(/HttpOnly/i);
+    expect(refreshCookie).toMatch(/SameSite=Lax/i);
+    expect(refreshCookie).toMatch(/Path=\/api\/v1\/auth/i);
     expect(res.body.data.role).toBe('super_admin');
     expect(res.body.data.tenantId).toEqual(expect.any(String));
     expect(res.body.data.propertyId).toEqual(expect.any(String));

@@ -105,3 +105,39 @@ export function acceptInvitation({ token, firstName, lastName, password }) {
     auth: false,
   });
 }
+
+/**
+ * PLAN.md Phase 5 gap closure — self-service tenant signup finally gets a
+ * real browser form (`SignupScreen.jsx`); `POST /api/v1/signup` itself has
+ * been real since the Phase 5 signup/lifecycle pass. Mounted at bare
+ * `/signup`, not `/auth/signup` — `src/modules/signup/routes.js` is its own
+ * tree in `app.js`, outside `buildStaffRouter()` entirely, since no tenant
+ * exists yet for Host-header resolution to find.
+ *
+ * The refresh token this mints travels ONLY as the same HttpOnly cookie
+ * `/auth/login`/`/auth/refresh` use (a later gap closure — this endpoint
+ * used to leak it into the JSON body, the one credential-issuing route that
+ * still did), so it never appears in this response at all. `SignupScreen.jsx`
+ * never reads it anyway: that cookie is scoped to the new tenant's own
+ * subdomain, not the bare/apex origin this form is served from, so there is
+ * nothing safe to do with it here regardless — the screen redirects to the
+ * new tenant's own login page instead of attempting to use it.
+ *
+ * @returns {Promise<{status: 'ok', accessToken: string, tenantId: string, userId: string, propertyId: string, activePropertyId: string, role: string, trialEndsAt: string, properties: Array<{propertyId: string, role: string}>}>}
+ */
+export function signup({ companyName, slug, timezone, baseCurrency, adminEmail, adminPassword, adminFirstName, adminLastName }) {
+  return request('/signup', {
+    method: 'POST',
+    body: {
+      company_name: companyName,
+      slug,
+      timezone,
+      base_currency: baseCurrency,
+      admin_email: adminEmail,
+      admin_password: adminPassword,
+      admin_first_name: adminFirstName,
+      admin_last_name: adminLastName,
+    },
+    auth: false,
+  });
+}
