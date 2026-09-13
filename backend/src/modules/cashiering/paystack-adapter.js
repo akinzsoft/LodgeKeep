@@ -83,9 +83,11 @@ async function paystackFetch(path, { method = 'GET', body } = {}) {
 /**
  * Starts a transaction — the guest/staff-facing `authorization_url` is what
  * the front desk shows (as a link or QR code, PRODUCT_REQUIREMENTS.md §3.5)
- * for the guest to complete on their own device.
+ * for the guest to complete on their own device. `channels` (optional, e.g.
+ * `['qr']`) narrows the checkout to those payment methods; omitted, Paystack
+ * offers every channel the account supports.
  */
-async function initializeTransaction({ email, amount, currency, reference, callbackUrl }) {
+async function initializeTransaction({ email, amount, currency, reference, callbackUrl, channels }) {
   const data = await paystackFetch('/transaction/initialize', {
     method: 'POST',
     body: {
@@ -94,6 +96,7 @@ async function initializeTransaction({ email, amount, currency, reference, callb
       currency,
       reference,
       callback_url: callbackUrl,
+      ...(channels ? { channels } : {}),
     },
   });
   return { authorizationUrl: data.authorization_url, accessCode: data.access_code, reference: data.reference };

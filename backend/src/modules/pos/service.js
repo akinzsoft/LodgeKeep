@@ -52,13 +52,13 @@
 
 const { scopedDb } = require('../../db');
 const { ValidationError, withDuplicateMapping } = require('../../shared/errors');
-const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
+const { sumMoney, negateMoney, compareMoney, percentOfMoney } = require('../../shared/money');
 // PLAN.md Phase 6 (QR self-ordering) promoted this out of this module once
 // a second caller (`qr-ordering/service.js`) needed the identical
 // per-item pricing computation to price a guest's cart before an order
 // even exists — re-exported below so no existing import of this module
 // breaks.
-const { computeItemLineTotal } = require('../../shared/pos-pricing');
+const { computeItemLineTotal, POS_SERVICE_CHARGE_PERCENT } = require('../../shared/pos-pricing');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('../cashiering/tax-engine');
 const cashieringService = require('../cashiering/service');
 const reservationsService = require('../reservations/service');
@@ -79,6 +79,9 @@ const {
   OrderNotFoundError,
   ShiftAlreadyClosedError,
   SettlementAlreadyVoidedError,
+  RegisterPaymentInvalidError,
+  OrderHasCapturedPaymentError,
+  SettlementPaidByGatewayError,
 } = require('./errors');
 
 // ---------------------------------------------------------------------
@@ -361,10 +364,34 @@ async function assignItemSplitGroup({ context, orderItemId, splitGroup }) {
 async function voidOrder({ context, orderId, reason, userId }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to void an order.', [{ field: 'reason', issue: 'missing' }]);
   const db = scopedDb().for(context);
+
+  // A card/NQR checkout still open on Paystack may already have been paid.
+  // Ask Paystack first — outside any transaction (ARCHITECTURE.md §7) — so
+  // a tab whose guest just paid is refused below instead of voided with
+  // the money left unrecorded.
+  for (const payment of await listUnsettledRegisterPayments({ db, orderId })) {
+    if (payment.status === 'PENDING') {
+      await cashieringService.verifyPayment({ context, paymentId: payment.id, userId });
+    }
+  }
+
   return db.transaction(async (trx) => {
     const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
     if (!order) throw new OrderNotFoundError();
     if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
+
+    const unsettled = await listUnsettledRegisterPayments({ db: trx, orderId });
+    const captured = unsettled.find((p) => p.status === 'CAPTURED');
+    if (captured) throw new OrderHasCapturedPaymentError(orderId, captured.id);
+    // Unpaid checkouts die with the tab. If the guest somehow completes one
+    // later anyway, `applyGatewayResult` still records the capture.
+    if (unsettled.length > 0) {
+      await trx
+        .table('payments')
+        .whereIn('id', unsettled.map((p) => p.id))
+        .whereIn('status', ['INITIATED', 'PENDING'])
+        .update({ status: 'CANCELLED', failure_reason: 'The Register tab was voided before payment.' });
+    }
 
     await trx.table('pos_orders').where({ id: orderId }).update({
       status: 'void',
@@ -429,7 +456,9 @@ async function previewSettlement({ context, orderId }) {
     const groupItems = items.filter((item) => groupKey(item.split_group) === key);
     const baseAmount = sumMoney(groupItems.map(computeItemLineTotal));
     const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
-    return { splitGroup, subtotal: netAmount, taxAmount: sumMoney(taxLines.map((t) => t.amount)) };
+    const taxAmount = sumMoney(taxLines.map((t) => t.amount));
+    const serviceCharge = percentOfMoney(netAmount, POS_SERVICE_CHARGE_PERCENT);
+    return { splitGroup, subtotal: netAmount, taxAmount, serviceCharge, total: sumMoney([netAmount, taxAmount, serviceCharge]) };
   });
 
   return { orderId: order.id, currency: property?.base_currency, groups };
@@ -568,15 +597,32 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
         tip_service_charge_line_item_id: tipLineId,
         room_charge_auth_method: roomCharge.authMethod,
         room_charge_auth_reference: roomCharge.authReference,
+        tender: 'room_charge',
       });
     } else {
       const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType: 'pos_charge' });
       const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
+      const taxAmount = sumMoney(taxLines.map((t) => t.amount));
       Object.assign(fields, {
         subtotal: netAmount,
-        tax_amount: sumMoney(taxLines.map((t) => t.amount)),
+        tax_amount: taxAmount,
         currency: property?.base_currency,
+        tender: 'cash',
       });
+
+      // Card and NQR only settle against money Paystack actually captured
+      // for this exact check — never on the cashier's word alone.
+      if (settlement.method === 'card') {
+        const payment = await claimRegisterPaymentForCheck({
+          trx,
+          orderId,
+          splitGroup: settlement.splitGroup ?? null,
+          paymentId: settlement.paymentId,
+          total: sumMoney([netAmount, taxAmount, tipAmount, serviceCharge]),
+          currency: property?.base_currency,
+        });
+        Object.assign(fields, { tender: payment.tender ?? 'card', payment_id: payment.id });
+      }
     }
 
     const [settlementId] = await trx.table('pos_order_settlements').insert(fields);
@@ -602,6 +648,132 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
   return { order: await trx.table('pos_orders').where({ id: orderId }).first(), settlements: results };
 }
 
+// ---------------------------------------------------------------------
+// Register card/NQR checkout through Paystack — ARCHITECTURE.md §7
+// ---------------------------------------------------------------------
+
+const REGISTER_TENDERS = { card: ['card'], nqr: ['qr'] };
+const OPEN_REGISTER_PAYMENT_STATUSES = ['INITIATED', 'PENDING', 'CAPTURED'];
+
+/** A Register payment still in play for this tab: not failed/cancelled, and not yet linked to a settlement. */
+async function listUnsettledRegisterPayments({ db, orderId }) {
+  const payments = await db
+    .table('payments')
+    .where({ pos_order_id: orderId, settlement_target: 'pos_register' })
+    .whereIn('status', OPEN_REGISTER_PAYMENT_STATUSES)
+    .orderBy('id');
+  if (payments.length === 0) return [];
+  // A voided settlement no longer accounts for its payment.
+  const linked = await db.table('pos_order_settlements').whereIn('payment_id', payments.map((p) => p.id)).whereNull('voided_at');
+  const linkedIds = new Set(linked.map((row) => String(row.payment_id)));
+  return payments.filter((p) => !linkedIds.has(String(p.id)));
+}
+
+/**
+ * Local half of a Register card/NQR checkout, inside the caller's
+ * idempotency transaction: prices the check server-side (net + tax + the
+ * fixed service charge — the same figures `previewSettlement` shows) and
+ * returns the payment to take it with.
+ *
+ * Never starts a second charge for a check that already has one in play:
+ * a CAPTURED payment is returned as-is (the caller settles with it), and an
+ * unpaid one for the same amount and tender is reused so Paystack reopens
+ * the same transaction. An unpaid one whose amount or tender no longer
+ * matches (items changed, or the cashier switched Card to NQR) is
+ * cancelled and replaced.
+ */
+async function prepareRegisterPayment({ trx, orderId, splitGroup, tender, idempotencyKey }) {
+  if (!REGISTER_TENDERS[tender]) {
+    throw new ValidationError('INVALID_TENDER', '"tender" must be "card" or "nqr".', [{ field: 'tender', issue: 'invalid' }]);
+  }
+  const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
+  if (!order) throw new OrderNotFoundError();
+  if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
+
+  const items = await trx.table('pos_order_items').where({ pos_order_id: orderId }).whereNull('voided_at');
+  const groupItems = items.filter((item) => groupKey(item.split_group) === groupKey(splitGroup));
+  if (groupItems.length === 0) {
+    throw new ValidationError('EMPTY_CHECK', 'This check has no items to pay for.', [{ field: 'split_group', issue: 'empty' }]);
+  }
+
+  const property = await trx.table('properties').where({ id: order.property_id }).first('current_business_date', 'base_currency');
+  const taxVersions = resolveApplicableTaxVersions({ allTaxRows: await trx.table('taxes'), businessDate: property?.current_business_date, chargeType: 'pos_charge' });
+  const { netAmount, taxLines } = computeChargeWithTax({ baseAmount: sumMoney(groupItems.map(computeItemLineTotal)), taxVersions });
+  const amount = sumMoney([netAmount, ...taxLines.map((t) => t.amount), percentOfMoney(netAmount, POS_SERVICE_CHARGE_PERCENT)]);
+
+  const existing = (await listUnsettledRegisterPayments({ db: trx, orderId })).filter((p) => groupKey(p.split_group) === groupKey(splitGroup));
+  const captured = existing.find((p) => p.status === 'CAPTURED');
+  if (captured) return captured;
+  const reusable = existing.find((p) => p.tender === tender && compareMoney(p.amount, amount) === 0);
+  if (reusable) return reusable;
+  if (existing.length > 0) {
+    await trx
+      .table('payments')
+      .whereIn('id', existing.map((p) => p.id))
+      .whereIn('status', ['INITIATED', 'PENDING'])
+      .update({ status: 'CANCELLED', failure_reason: 'Superseded — the check total or tender changed before payment.' });
+  }
+
+  return cashieringService.initiatePosRegisterPaymentIntent({
+    trx,
+    posOrderId: orderId,
+    splitGroup,
+    tender,
+    amount,
+    currency: property?.base_currency,
+    idempotencyKey,
+  });
+}
+
+/**
+ * External half — opens (or reopens) the Paystack transaction, outside any
+ * transaction. Paystack needs an email for its receipt; a walk-in customer
+ * rarely gives one, so the cashier's own staff email stands in.
+ */
+async function startRegisterPaystackCheckout({ context, payment, customerEmail }) {
+  if (payment.status === 'CAPTURED') return { payment, accessCode: null, authorizationUrl: null };
+  const db = scopedDb().for(context);
+  const staff = customerEmail ? null : await db.table('users').where({ id: context.userId }).first('email');
+  return cashieringService.startPaystackCheckout({
+    context,
+    paymentId: payment.id,
+    guestEmail: customerEmail || staff?.email,
+    channels: REGISTER_TENDERS[payment.tender],
+  });
+}
+
+/** Re-checks a Register payment with Paystack after the popup closes. Returns null when the payment is not one of this tab's own. */
+async function verifyRegisterPayment({ context, orderId, paymentId, userId }) {
+  const db = scopedDb().for(context);
+  const payment = await db.table('payments').where({ id: paymentId, pos_order_id: orderId, settlement_target: 'pos_register' }).first();
+  if (!payment) return null;
+  return cashieringService.verifyPayment({ context, paymentId: payment.id, userId });
+}
+
+/**
+ * `settleOrder`'s card branch: locks the payment and checks it is a
+ * captured Register payment for THIS order and check, not already used,
+ * for exactly the check's total. The UNIQUE(payment_id) index on
+ * `pos_order_settlements` backs the "not already used" rule.
+ */
+async function claimRegisterPaymentForCheck({ trx, orderId, splitGroup, paymentId, total, currency }) {
+  if (!paymentId) throw new RegisterPaymentInvalidError('missing');
+  const payment = await trx.table('payments').where({ id: paymentId }).forUpdate().first();
+  if (!payment || payment.settlement_target !== 'pos_register') throw new RegisterPaymentInvalidError('not_found', { paymentId });
+  if (String(payment.pos_order_id) !== String(orderId) || groupKey(payment.split_group) !== groupKey(splitGroup)) {
+    throw new RegisterPaymentInvalidError('wrong_check', { paymentId });
+  }
+  if (payment.status !== 'CAPTURED') throw new RegisterPaymentInvalidError('not_captured', { paymentId, status: payment.status });
+  if (await trx.table('pos_order_settlements').where({ payment_id: payment.id }).first()) {
+    throw new RegisterPaymentInvalidError('already_used', { paymentId });
+  }
+  if (payment.currency !== currency) throw new RegisterPaymentInvalidError('currency_mismatch', { paymentId });
+  if (compareMoney(payment.amount, total) !== 0) {
+    throw new RegisterPaymentInvalidError('amount_mismatch', { paymentId, paid: payment.amount, total });
+  }
+  return payment;
+}
+
 /** Post-settlement void — PRODUCT_REQUIREMENTS.md §3.4's "Manager overrides ... require a manager PIN," gated on `pos.manage` at the route layer rather than a separate PIN-re-entry mechanism this codebase has no other example of. Voids the settlement record and, for a room charge, the underlying folio line via the existing `voidLineItem`. */
 async function voidSettlement({ trx, settlementId, reason, userId }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to void a settlement.', [{ field: 'reason', issue: 'missing' }]);
@@ -619,6 +791,7 @@ async function voidSettlement({ trx, settlementId, reason, userId }) {
   // REPEATABLE-READ snapshot even after a concurrent voider committed.
   const lockedSettlement = await trx.table('pos_order_settlements').where({ id: settlementId }).forUpdate().first();
   if (lockedSettlement.voided_at) throw new SettlementAlreadyVoidedError(settlementId);
+  if (lockedSettlement.payment_id) throw new SettlementPaidByGatewayError(settlementId, lockedSettlement.payment_id);
 
   if (settlement.folio_line_item_id) {
     await cashieringService.voidLineItem({ trx, lineItemId: settlement.folio_line_item_id, reason, userId });
@@ -745,6 +918,10 @@ module.exports = {
   previewSettlement,
   settleOrder,
   voidSettlement,
+  listUnsettledRegisterPayments,
+  prepareRegisterPayment,
+  startRegisterPaystackCheckout,
+  verifyRegisterPayment,
   listShifts,
   getShift,
   openShift,

@@ -21,4 +21,12 @@ function computeItemLineTotal({ unit_price: unitPrice, quantity, modifiers }) {
   return fromCents(perUnitCents * BigInt(quantity));
 }
 
-module.exports = { computeItemLineTotal };
+/**
+ * The Register's fixed service charge, as a percentage of a check's net
+ * subtotal. The Register screen shows and sends this amount; the server
+ * needs the same figure to price a card/NQR Paystack checkout itself
+ * rather than trusting an amount from the request body.
+ */
+const POS_SERVICE_CHARGE_PERCENT = '7.5';
+
+module.exports = { computeItemLineTotal, POS_SERVICE_CHARGE_PERCENT };

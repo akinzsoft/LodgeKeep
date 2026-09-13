@@ -129,7 +129,28 @@ export function getSettlementPreview(orderId) {
   return request(`/pos/orders/${orderId}/settlement-preview`);
 }
 
-/** @param {Array<{splitGroup?: number|null, method: 'cash'|'card'|'room_charge', tipAmount?: string, serviceCharge?: string, roomCharge?: {reservationId: string, authMethod: string, authReference: string}}>} settlements */
+/**
+ * Starts (or reopens) Paystack checkout for one Register check. The server
+ * prices the check itself. Returns `{payment, accessCode, checkoutError}` —
+ * `accessCode` opens the on-screen popup; a payment that comes back
+ * already `CAPTURED` has none and can be settled straight away.
+ * @param {{splitGroup?: number|null, tender: 'card'|'nqr', customerEmail?: string}} params
+ */
+export async function startPaystackCheckout(orderId, { splitGroup, tender, customerEmail }) {
+  const { data, meta } = await requestWithMeta(`/pos/orders/${orderId}/paystack-checkout`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey() },
+    body: { split_group: splitGroup ?? null, tender, customer_email: customerEmail || undefined },
+  });
+  return { payment: data, accessCode: meta?.accessCode ?? null, checkoutError: meta?.checkoutError ?? null };
+}
+
+/** Asks Paystack whether a Register payment went through, after its popup closes. Returns the payment row. */
+export function verifyPaystackPayment(orderId, paymentId) {
+  return request(`/pos/orders/${orderId}/paystack-checkout/${paymentId}/verify`, { method: 'POST' });
+}
+
+/** @param {Array<{splitGroup?: number|null, method: 'cash'|'card'|'room_charge', paymentId?: string, tipAmount?: string, serviceCharge?: string, roomCharge?: {reservationId: string, authMethod: string, authReference: string}}>} settlements */
 export function settleOrder(orderId, settlements) {
   return request(`/pos/orders/${orderId}/settle`, {
     method: 'POST',
@@ -138,6 +159,7 @@ export function settleOrder(orderId, settlements) {
       settlements: settlements.map((s) => ({
         split_group: s.splitGroup ?? null,
         method: s.method,
+        payment_id: s.paymentId,
         tip_amount: s.tipAmount,
         service_charge: s.serviceCharge,
         room_charge: s.roomCharge

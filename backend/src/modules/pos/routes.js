@@ -51,6 +51,8 @@ function posRouter() {
   router.post('/pos/orders/:id/items/:itemId/split-group', requirePermission('pos.operate'), controller.assignItemSplitGroup);
   router.post('/pos/orders/:id/void', requirePermission('pos.operate'), controller.voidOrder);
   router.get('/pos/orders/:id/settlement-preview', requirePermission('pos.operate'), controller.previewSettlement);
+  router.post('/pos/orders/:id/paystack-checkout', requirePermission('pos.operate'), controller.startPaystackCheckout);
+  router.post('/pos/orders/:id/paystack-checkout/:paymentId/verify', requirePermission('pos.operate'), controller.verifyPaystackPayment);
   router.post('/pos/orders/:id/settle', requirePermission('pos.operate'), controller.settleOrder);
   router.post('/pos/orders/:id/settlements/:settlementId/void', requirePermission('pos.manage'), controller.voidSettlement);
 
