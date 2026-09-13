@@ -83,6 +83,7 @@ const {
   RegisterPaymentInvalidError,
   OrderHasCapturedPaymentError,
   SettlementPaidByGatewayError,
+  MenuCategoryInUseError,
 } = require('./errors');
 
 // ---------------------------------------------------------------------
@@ -153,6 +154,104 @@ async function archiveTerminal({ context, id }) {
 }
 
 // ---------------------------------------------------------------------
+// Menu categories — a registered list shared by every outlet at the
+// property; menu items pick one instead of typing it (see the
+// pos_menu_categories migration header). `pos_menu_items.category` keeps
+// holding the category name, so every reader is unchanged.
+// ---------------------------------------------------------------------
+
+function cleanCategoryName(name) {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  // 60 = pos_menu_items.category's width, which the name is copied into.
+  if (!trimmed || trimmed.length > 60) {
+    throw new ValidationError('INVALID_CATEGORY_NAME', 'A category name is required, up to 60 characters.', [{ field: 'name', issue: trimmed ? 'too_long' : 'missing' }]);
+  }
+  return trimmed;
+}
+
+/** Active categories in display order; `includeArchived` for the setup list. */
+async function listMenuCategories({ context, includeArchived = false }) {
+  const db = scopedDb().for(context);
+  const query = db.table('pos_menu_categories');
+  const rows = await (includeArchived ? query : query.where({ status: 'active' })).orderBy('sort_order').orderBy('name');
+  if (rows.length === 0) return rows;
+  const items = await db.table('pos_menu_items').where({ status: 'active' }).select('category');
+  const countByName = new Map();
+  for (const { category } of items) {
+    const key = String(category).trim().toLowerCase();
+    countByName.set(key, (countByName.get(key) ?? 0) + 1);
+  }
+  return rows.map((row) => ({ ...row, item_count: countByName.get(row.name.toLowerCase()) ?? 0 }));
+}
+
+async function getMenuCategory({ context, id }) {
+  const db = scopedDb().for(context);
+  return db.table('pos_menu_categories').where({ id }).first();
+}
+
+async function createMenuCategory({ context, name, sortOrder }) {
+  const db = scopedDb().for(context);
+  const clean = cleanCategoryName(name);
+  return withDuplicateMapping('pos_menu_categories', `A category named "${clean}" already exists.`, async () => {
+    if (sortOrder !== undefined && !Number.isInteger(sortOrder)) {
+      throw new ValidationError('INVALID_SORT_ORDER', '"sort_order" must be a whole number.', [{ field: 'sort_order', issue: 'invalid' }]);
+    }
+    const [id] = await db.table('pos_menu_categories').insert({ name: clean, sort_order: sortOrder ?? 0 });
+    return getMenuCategory({ context, id });
+  });
+}
+
+/**
+ * Renames and/or reorders a category. A rename is applied to every menu
+ * item using the old name in the same transaction, so items never end up
+ * pointing at a name that no longer exists.
+ */
+async function updateMenuCategory({ context, id, name, sortOrder }) {
+  const db = scopedDb().for(context);
+  return withDuplicateMapping('pos_menu_categories', `A category named "${typeof name === 'string' ? name.trim() : ''}" already exists.`, () =>
+    db.transaction(async (trx) => {
+      const category = await trx.table('pos_menu_categories').where({ id }).forUpdate().first();
+      if (!category) return null;
+      const changes = {};
+      if (name !== undefined) changes.name = cleanCategoryName(name);
+      if (sortOrder !== undefined) {
+        if (!Number.isInteger(sortOrder)) throw new ValidationError('INVALID_SORT_ORDER', '"sort_order" must be a whole number.', [{ field: 'sort_order', issue: 'invalid' }]);
+        changes.sort_order = sortOrder;
+      }
+      if (Object.keys(changes).length === 0) return category;
+      await trx.table('pos_menu_categories').where({ id }).update(changes);
+      if (changes.name && changes.name !== category.name) {
+        await trx.table('pos_menu_items').where({ category: category.name }).update({ category: changes.name });
+      }
+      return trx.table('pos_menu_categories').where({ id }).first();
+    })
+  );
+}
+
+/** Archives a category no active menu item still uses; refuses (409) otherwise, naming how many items to move first. */
+async function archiveMenuCategory({ context, id }) {
+  const db = scopedDb().for(context);
+  return db.transaction(async (trx) => {
+    const category = await trx.table('pos_menu_categories').where({ id }).forUpdate().first();
+    if (!category) return null;
+    const inUse = await trx.table('pos_menu_items').where({ category: category.name, status: 'active' }).count();
+    if (inUse > 0) throw new MenuCategoryInUseError(category.name, inUse);
+    await trx.table('pos_menu_categories').where({ id }).update({ status: 'archived' });
+    return trx.table('pos_menu_categories').where({ id }).first();
+  });
+}
+
+/** The registered, active category matching `name` (case-insensitively) — its canonical spelling is what the menu item stores. */
+async function resolveMenuCategoryName({ db, name }) {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  const category = trimmed ? await db.table('pos_menu_categories').where({ name: trimmed, status: 'active' }).first() : null;
+  if (!category) {
+    throw new ValidationError('CATEGORY_NOT_FOUND', 'Choose a category from the list — register new categories in Menu categories first.', [{ field: 'category', issue: 'not_registered' }]);
+  }
+  return category.name;
+}
+
+// ---------------------------------------------------------------------
 // Menu items
 // ---------------------------------------------------------------------
 
@@ -172,10 +271,11 @@ async function createMenuItem({ context, outletId, name, category, price, modifi
   const db = scopedDb().for(context);
   const outlet = await getOutlet({ context, id: outletId });
   if (!outlet) throw new OutletNotFoundError();
+  const categoryName = await resolveMenuCategoryName({ db, name: category });
   const [id] = await db.table('pos_menu_items').insert({
     outlet_id: outletId,
     name,
-    category,
+    category: categoryName,
     price,
     modifiers: modifiers ?? null,
     is_available: isAvailable ?? true,
@@ -185,7 +285,17 @@ async function createMenuItem({ context, outletId, name, category, price, modifi
 
 async function updateMenuItem({ context, id, changes }) {
   const db = scopedDb().for(context);
-  await db.table('pos_menu_items').where({ id }).update(changes);
+  const next = { ...changes };
+  if (next.category !== undefined) {
+    const current = await db.table('pos_menu_items').where({ id }).first('category');
+    const unchanged = current && typeof next.category === 'string' && next.category.trim() === current.category;
+    // An item keeps its current category even if that category has since
+    // been archived — editing only its price must not be refused. Only a
+    // change of category has to name an active registered one.
+    if (unchanged) delete next.category;
+    else next.category = await resolveMenuCategoryName({ db, name: next.category });
+  }
+  await db.table('pos_menu_items').where({ id }).update(next);
   return getMenuItem({ context, id });
 }
 
@@ -965,6 +1075,11 @@ module.exports = {
   createTerminal,
   updateTerminal,
   archiveTerminal,
+  listMenuCategories,
+  getMenuCategory,
+  createMenuCategory,
+  updateMenuCategory,
+  archiveMenuCategory,
   listMenuItems,
   getMenuItem,
   createMenuItem,

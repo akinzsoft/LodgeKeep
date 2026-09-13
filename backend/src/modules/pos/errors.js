@@ -104,6 +104,13 @@ class SettlementPaidByGatewayError extends AppError {
   }
 }
 
+/** A category still used by active menu items cannot be archived — the items would be left in a category nobody can pick. */
+class MenuCategoryInUseError extends AppError {
+  constructor(name, itemCount) {
+    super('CONFLICT_POS_MENU_CATEGORY_IN_USE', `"${name}" is still used by ${itemCount} menu item${itemCount === 1 ? '' : 's'} — move them to another category first.`, 409, { name, itemCount });
+  }
+}
+
 class OutletNotFoundError extends ValidationError {
   constructor() {
     super('OUTLET_NOT_FOUND', 'The specified outlet does not exist.');
@@ -139,6 +146,7 @@ module.exports = {
   RegisterPaymentInvalidError,
   OrderHasCapturedPaymentError,
   SettlementPaidByGatewayError,
+  MenuCategoryInUseError,
   OutletNotFoundError,
   TerminalNotFoundError,
   MenuItemNotFoundError,

@@ -147,6 +147,7 @@ async function seedTwoTenants(trx) {
     posOutlets: [],
     posTerminals: [],
     posMenuItems: [],
+    posMenuCategories: [],
     posOrders: [],
     posOrderItems: [],
     posOrderSettlements: [],
@@ -785,6 +786,20 @@ async function seedTwoTenants(trx) {
       }),
       property_id: property.id,
       outlet_id: outlet.id,
+    });
+  }
+
+  // Registered menu category the fixture menu item below uses (menu items
+  // may only use a registered category — 20261005090000).
+  for (const t of both) {
+    const property = t.properties[0];
+    t.posMenuCategories.push({
+      id: await insertReturningId(trx, 'pos_menu_categories', {
+        tenant_id: t.id,
+        property_id: property.id,
+        name: 'Cocktails',
+      }),
+      property_id: property.id,
     });
   }
 

@@ -40,6 +40,8 @@ describe('POS (PLAN.md Phase 4)', () => {
   beforeAll(async () => {
     ctx = await seedTwoTenants(t.trx);
     await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: '2027-03-01' });
+    // Menu items may only use registered categories.
+    await t.trx('pos_menu_categories').insert(['Mains', 'Snacks'].map((name) => ({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, name })));
   });
 
   function tokenFor({ tenant = ctx.a, userId, propertyId } = {}) {

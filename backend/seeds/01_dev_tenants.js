@@ -346,6 +346,13 @@ exports.seed = async function seed(knex) {
       { name: 'House Cocktail', category: 'Cocktails', price: '20.00' },
       { name: 'Bottled Water', category: 'Soft Drinks', price: '3.00' },
     ];
+    // Menu items may only use registered categories (20261005090000).
+    for (const name of [...new Set(menuItems.map((item) => item.category))]) {
+      const existingCategory = await knex('pos_menu_categories').where({ tenant_id: tenantId, property_id: propertyId, name }).first('id');
+      if (!existingCategory) {
+        await knex('pos_menu_categories').insert({ tenant_id: tenantId, property_id: propertyId, name });
+      }
+    }
     for (const item of menuItems) {
       const existingItem = await knex('pos_menu_items')
         .where({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, name: item.name })
