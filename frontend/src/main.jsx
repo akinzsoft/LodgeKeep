@@ -273,7 +273,7 @@ function Demo() {
       ) : activeItemKey === 'profiles' ? (
         <ProfilesScreen isOffline={!isOnline} />
       ) : activeItemKey === 'pos' ? (
-        <POSScreen isOffline={!isOnline} />
+        <POSScreen activeProperty={activePropertyRecord} isOffline={!isOnline} />
       ) : activeItemKey === 'ar' ? (
         <ARScreen isOffline={!isOnline} />
       ) : activeItemKey === 'group_blocks' ? (

@@ -25,7 +25,7 @@ describe('<StockReportsTab>', () => {
   });
 
   it('the date-range/outlet toolbar stays reachable before any report has ever run — never hidden inside a state-gated table', async () => {
-    render(<StockReportsTab />);
+    render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
     expect(await screen.findByLabelText('Outlet')).toBeInTheDocument();
     expect(screen.getByLabelText('From')).toBeInTheDocument();
     expect(screen.getByLabelText('To')).toBeInTheDocument();
@@ -49,7 +49,7 @@ describe('<StockReportsTab>', () => {
       lines: [],
       summaryByItem: [{ stockItemId: '20', totalVariance: '-2.000' }],
     });
-    render(<StockReportsTab />);
+    render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
 
@@ -62,10 +62,26 @@ describe('<StockReportsTab>', () => {
     expect(within(varianceTable).getByText('-2.000')).toBeInTheDocument();
   });
 
+  it("bug fix: renders the active property's real currency, not a hardcoded NGN", async () => {
+    mocks.getCostOfSales.mockResolvedValue({ totalCost: '100.00', byDay: [{ date: '2027-06-01', cost: '100.00' }], byItem: [] });
+    mocks.getStockVariance.mockResolvedValue({ lines: [], summaryByItem: [] });
+    render(<StockReportsTab activeProperty={{ base_currency: 'KES' }} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+
+    // KES formats as "Ksh" via Intl (confirmed directly against the real
+    // Intl.NumberFormat output) — proves the currency actually threaded
+    // through, not just that the component happened to still say "NGN".
+    // Two real matches here (the "Total cost of sales" line and the
+    // by-day table row), so findAllByText — not findByText — is correct.
+    expect((await screen.findAllByText(/Ksh/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/₦/)).not.toBeInTheDocument();
+  });
+
   it('running the reports for a specific outlet passes the real outlet id through', async () => {
     mocks.getCostOfSales.mockResolvedValue({ totalCost: '0.00', byDay: [], byItem: [] });
     mocks.getStockVariance.mockResolvedValue({ lines: [], summaryByItem: [] });
-    render(<StockReportsTab />);
+    render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '1');
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
@@ -77,7 +93,7 @@ describe('<StockReportsTab>', () => {
   it('shows a real backend error when the reports fail to load', async () => {
     mocks.getCostOfSales.mockRejectedValue(new Error('boom'));
     mocks.getStockVariance.mockResolvedValue({ lines: [], summaryByItem: [] });
-    render(<StockReportsTab />);
+    render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
     expect(await screen.findByText('Could not load these reports.')).toBeInTheDocument();

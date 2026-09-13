@@ -51,7 +51,7 @@ describe('<StockItemsTab>', () => {
 
   it('lists real stock items with quantity+unit and cost, never running quantity through the money formatter', async () => {
     mocks.listStockItems.mockResolvedValue([item()]);
-    render(<StockItemsTab />);
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
 
     expect(await screen.findByText('Vodka')).toBeInTheDocument();
     expect(screen.getByText('100.000 ml')).toBeInTheDocument();
@@ -60,15 +60,26 @@ describe('<StockItemsTab>', () => {
     expect(screen.getByText('Acme Beverages')).toBeInTheDocument();
   });
 
+  it("bug fix: renders the active property's real currency, not a hardcoded NGN", async () => {
+    mocks.listStockItems.mockResolvedValue([item()]);
+    render(<StockItemsTab activeProperty={{ base_currency: 'KES' }} />);
+
+    // KES formats as "Ksh" via Intl (confirmed directly against the real
+    // Intl.NumberFormat output) — proves the currency actually threaded
+    // through, not just that the component happened to still say "NGN".
+    expect(await screen.findByText(/Ksh/)).toBeInTheDocument();
+    expect(screen.queryByText(/₦/)).not.toBeInTheDocument();
+  });
+
   it('shows a real backend error when the list fails to load', async () => {
     mocks.listStockItems.mockRejectedValue(new Error('boom'));
-    render(<StockItemsTab />);
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
     expect(await screen.findByText('Could not load stock items.')).toBeInTheDocument();
   });
 
   it('the outlet filter and low-stock toggle stay reachable even when the list is genuinely empty — never hidden inside the state-gated table', async () => {
     mocks.listStockItems.mockResolvedValue([]);
-    render(<StockItemsTab />);
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await screen.findByText('No stock items match this filter.');
     expect(screen.getByLabelText('Filter by outlet')).toBeInTheDocument();
@@ -77,7 +88,7 @@ describe('<StockItemsTab>', () => {
 
   it('low-stock filtering calls the real endpoint with low_stock requested', async () => {
     mocks.listStockItems.mockResolvedValue([]);
-    render(<StockItemsTab />);
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
     await waitFor(() => expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: undefined, lowStockOnly: false }));
 
     await userEvent.click(screen.getByLabelText('Low stock only'));
@@ -87,7 +98,7 @@ describe('<StockItemsTab>', () => {
   it('creates a stock item with the real form payload', async () => {
     mocks.listStockItems.mockResolvedValue([]);
     mocks.createStockItem.mockResolvedValue(item());
-    render(<StockItemsTab />);
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
     await screen.findByText('New stock item');
 
     await userEvent.selectOptions(screen.getByLabelText('Outlet'), '1');
@@ -104,7 +115,7 @@ describe('<StockItemsTab>', () => {
   it('editing prefills the real values and never shows an editable cost field — cost is read-only', async () => {
     mocks.listStockItems.mockResolvedValue([item()]);
     mocks.updateStockItem.mockResolvedValue(item({ name: 'Premium Vodka' }));
-    render(<StockItemsTab />);
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
     await screen.findByText('Vodka');
 
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
@@ -130,7 +141,7 @@ describe('<StockItemsTab>', () => {
   it('archiving requires going through the ConfirmDialog before calling the real endpoint', async () => {
     mocks.listStockItems.mockResolvedValue([item()]);
     mocks.archiveStockItem.mockResolvedValue(item({ status: 'archived' }));
-    render(<StockItemsTab />);
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
     await screen.findByText('Vodka');
 
     await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
@@ -144,7 +155,7 @@ describe('<StockItemsTab>', () => {
 
   it('disables every mutating control while offline', async () => {
     mocks.listStockItems.mockResolvedValue([item()]);
-    render(<StockItemsTab isOffline />);
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} isOffline />);
     await screen.findByText('Vodka');
 
     expect(screen.getByText(/You are offline/)).toBeInTheDocument();
@@ -158,7 +169,7 @@ describe('<StockItemsTab>', () => {
     mocks.createStockItem.mockRejectedValue(
       new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'You do not have permission to perform this action.' })
     );
-    render(<StockItemsTab />);
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
     await screen.findByText('New stock item');
 
     // The control is fully visible and clickable regardless of the real role.

@@ -16,8 +16,13 @@ import formStyles from './POSForm.module.css';
  * CLAUDE.md states; a pos_operator submitting a create/edit here gets a
  * real 403 from the backend, same as every other under-permissioned
  * action in this app.
+ *
+ * Bug fix (see `POSScreen`'s own header): the menu-item price column used
+ * to hardcode `currencyCode="NGN"` — `pos_menu_items` carries no currency
+ * column of its own, so the real source of truth is the active property's
+ * `base_currency`, now threaded in as a prop.
  */
-export function SetupTab() {
+export function SetupTab({ activeProperty }) {
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState(null);
   const [menuItems, setMenuItems] = useState(null);
@@ -285,7 +290,7 @@ export function SetupTab() {
               columns={[
                 { key: 'name', label: 'Name' },
                 { key: 'category', label: 'Category' },
-                { key: 'price', label: 'Price', align: 'right', render: (row) => <Money amount={row.price} currencyCode="NGN" /> },
+                { key: 'price', label: 'Price', align: 'right', render: (row) => <Money amount={row.price} currencyCode={activeProperty.base_currency} /> },
                 { key: 'is_available', label: 'Available', render: (row) => (row.is_available ? 'Yes' : 'Stocked out') },
               ]}
               rows={menuItems ?? []}

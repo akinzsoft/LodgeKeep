@@ -25,8 +25,13 @@ const AUTH_METHODS = [
  * "Settle" then shows one settlement form per DISTINCT group actually
  * present, submitted together in one call, matching `settleOrder`'s own
  * "cover every group in one request" requirement.
+ *
+ * Bug fix (see `POSScreen`'s own header): every `Money` here used to
+ * hardcode `currencyCode="NGN"` — `pos_menu_items`/`pos_orders` carry no
+ * currency column of their own, so the real source of truth is the active
+ * property's `base_currency`, now threaded in as a prop.
  */
-export function RegisterTab({ isOffline = false }) {
+export function RegisterTab({ activeProperty, isOffline = false }) {
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
@@ -271,7 +276,7 @@ export function RegisterTab({ isOffline = false }) {
                     .map((item) => (
                       <button key={item.id} type="button" className={styles.menuTile} onClick={() => handleAddItem(item)} disabled={isOffline}>
                         <span>{item.name}</span>
-                        <Money amount={item.price} currencyCode="NGN" />
+                        <Money amount={item.price} currencyCode={activeProperty.base_currency} />
                       </button>
                     ))}
                 </div>
@@ -284,7 +289,7 @@ export function RegisterTab({ isOffline = false }) {
                       {item.quantity}× {menuItems.find((m) => m.id === item.menu_item_id)?.name ?? `#${item.menu_item_id}`}
                     </span>
                     <span>
-                      <Money amount={multiplyMoney(item.unit_price, item.quantity)} currencyCode="NGN" />
+                      <Money amount={multiplyMoney(item.unit_price, item.quantity)} currencyCode={activeProperty.base_currency} />
                       <Button size="compact" variant="ghost" onClick={() => handleVoidItem(item)} disabled={isOffline}>
                         Void
                       </Button>
@@ -306,7 +311,7 @@ export function RegisterTab({ isOffline = false }) {
 
                 <div className={styles.runningTotal}>
                   <span>Total</span>
-                  <Money amount={runningTotal} currencyCode="NGN" />
+                  <Money amount={runningTotal} currencyCode={activeProperty.base_currency} />
                 </div>
 
                 {!settlementForms && unvoidedItems.length > 0 && (

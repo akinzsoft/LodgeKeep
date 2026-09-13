@@ -32,8 +32,13 @@ const STATUS_FILTERS = [
  * DESIGN_SYSTEM.md §2 money/irreversible-action rule `NewImportTab.jsx`'s
  * commit confirmation already follows. Accept/mark-on-the-way are plain
  * buttons — neither is financial or irreversible in that sense.
+ *
+ * Bug fix (see `POSScreen`'s own header): the subtotal column used to
+ * hardcode a literal NGN currency code — `pos_orders` carries no currency
+ * column of its own, so the real source of truth is the active property's
+ * `base_currency`, now threaded in as a prop.
  */
-export function GuestOrdersTab() {
+export function GuestOrdersTab({ activeProperty }) {
   const [statusFilter, setStatusFilter] = useState('');
   const [orders, setOrders] = useState(null);
   const [itemsByOrderId, setItemsByOrderId] = useState({});
@@ -150,7 +155,7 @@ export function GuestOrdersTab() {
           { key: 'table_label', label: 'Table / room', render: (row) => row.table_label ?? '—' },
           { key: 'guest_name', label: 'Guest', render: (row) => row.guest_name || row.guest_contact || '—' },
           { key: 'items', label: 'Items', render: (row) => orderItemsSummary(row) },
-          { key: 'subtotal', label: 'Subtotal', align: 'right', render: (row) => <Money amount={orderSubtotal(row)} currencyCode="NGN" /> },
+          { key: 'subtotal', label: 'Subtotal', align: 'right', render: (row) => <Money amount={orderSubtotal(row)} currencyCode={activeProperty.base_currency} /> },
           { key: 'status', label: 'Status', render: (row) => <StatusPill tone={guestOrderStatusTone(row.status)} label={guestOrderStatusLabel(row.status)} /> },
           {
             key: 'payment_status',

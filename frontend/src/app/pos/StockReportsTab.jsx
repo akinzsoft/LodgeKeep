@@ -20,8 +20,13 @@ function todayIso() {
  * endpoint, so adding a download button here would call an endpoint that
  * doesn't exist. Both reports render as plain tables instead, the same
  * "run report" shape `RevenueTab.jsx`/`OccupancyTab.jsx` already establish.
+ *
+ * Bug fix (see `POSScreen`'s own header): every cost figure here used to
+ * hardcode a literal NGN currency code — `stock_items`/cost-of-sales rows
+ * carry no currency column of their own, so the real source of truth is
+ * the active property's `base_currency`, now threaded in as a prop.
  */
-export function StockReportsTab() {
+export function StockReportsTab({ activeProperty }) {
   const [outlets, setOutlets] = useState(null);
   const [outletId, setOutletId] = useState('');
   const [dateFrom, setDateFrom] = useState(todayIso());
@@ -94,7 +99,7 @@ export function StockReportsTab() {
 
       {costOfSales && (
         <p className={formStyles.hint}>
-          Total cost of sales: <Money amount={costOfSales.totalCost} currencyCode="NGN" />
+          Total cost of sales: <Money amount={costOfSales.totalCost} currencyCode={activeProperty.base_currency} />
         </p>
       )}
 
@@ -104,7 +109,7 @@ export function StockReportsTab() {
         emptyMessage="Choose a date range and run the reports."
         columns={[
           { key: 'date', label: 'Date' },
-          { key: 'cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.cost} currencyCode="NGN" /> },
+          { key: 'cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.cost} currencyCode={activeProperty.base_currency} /> },
         ]}
         rows={costOfSales?.byDay ?? []}
         rowKey={(row) => row.date}
@@ -116,7 +121,7 @@ export function StockReportsTab() {
         emptyMessage="Choose a date range and run the reports."
         columns={[
           { key: 'stockItemId', label: 'Stock item' },
-          { key: 'cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.cost} currencyCode="NGN" /> },
+          { key: 'cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.cost} currencyCode={activeProperty.base_currency} /> },
         ]}
         rows={costOfSales?.byItem ?? []}
         rowKey={(row) => row.stockItemId}

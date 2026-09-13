@@ -51,7 +51,7 @@ describe('<GuestOrdersTab>', () => {
 
   it('shows a real guest order row with its real items, subtotal, and status/payment pills', async () => {
     mocks.listGuestOrders.mockResolvedValue([orderRow()]);
-    render(<GuestOrdersTab />);
+    render(<GuestOrdersTab activeProperty={{ base_currency: 'NGN' }} />);
 
     expect(await screen.findByText('Table 3')).toBeInTheDocument();
     expect(screen.getByText('Jordan')).toBeInTheDocument();
@@ -64,16 +64,27 @@ describe('<GuestOrdersTab>', () => {
     expect(screen.getByText('Paid')).toBeInTheDocument();
   });
 
+  it("bug fix: renders the active property's real currency, not a hardcoded NGN", async () => {
+    mocks.listGuestOrders.mockResolvedValue([orderRow()]);
+    render(<GuestOrdersTab activeProperty={{ base_currency: 'KES' }} />);
+
+    // KES formats as "Ksh" via Intl (confirmed directly against the real
+    // Intl.NumberFormat output) — proves the currency actually threaded
+    // through, not just that the component happened to still say "NGN".
+    expect(await screen.findByText(/Ksh/)).toBeInTheDocument();
+    expect(screen.queryByText(/₦/)).not.toBeInTheDocument();
+  });
+
   it('shows a real backend error when the queue fails to load', async () => {
     mocks.listGuestOrders.mockRejectedValue(new Error('boom'));
-    render(<GuestOrdersTab />);
+    render(<GuestOrdersTab activeProperty={{ base_currency: 'NGN' }} />);
     expect(await screen.findByText('Could not load guest orders.')).toBeInTheDocument();
   });
 
   it('accepts a received order for real', async () => {
     mocks.listGuestOrders.mockResolvedValue([orderRow()]);
     mocks.acceptGuestOrder.mockResolvedValue({});
-    render(<GuestOrdersTab />);
+    render(<GuestOrdersTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await screen.findByText('Table 3');
     mocks.listGuestOrders.mockResolvedValue([orderRow({ status: 'preparing' })]);
@@ -86,7 +97,7 @@ describe('<GuestOrdersTab>', () => {
   it('marks a preparing order on the way for real', async () => {
     mocks.listGuestOrders.mockResolvedValue([orderRow({ status: 'preparing' })]);
     mocks.markGuestOrderOnTheWay.mockResolvedValue({});
-    render(<GuestOrdersTab />);
+    render(<GuestOrdersTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await screen.findByText('Table 3');
     mocks.listGuestOrders.mockResolvedValue([orderRow({ status: 'on_the_way' })]);
@@ -98,7 +109,7 @@ describe('<GuestOrdersTab>', () => {
 
   it('rejecting requires going through the ConfirmDialog with a real reason — no reason, no reject call', async () => {
     mocks.listGuestOrders.mockResolvedValue([orderRow()]);
-    render(<GuestOrdersTab />);
+    render(<GuestOrdersTab activeProperty={{ base_currency: 'NGN' }} />);
     await screen.findByText('Table 3');
 
     await userEvent.click(screen.getByRole('button', { name: 'Reject' }));
@@ -113,7 +124,7 @@ describe('<GuestOrdersTab>', () => {
   it('reject with a real reason calls the real endpoint and reverses payment', async () => {
     mocks.listGuestOrders.mockResolvedValue([orderRow()]);
     mocks.rejectGuestOrder.mockResolvedValue({});
-    render(<GuestOrdersTab />);
+    render(<GuestOrdersTab activeProperty={{ base_currency: 'NGN' }} />);
     await screen.findByText('Table 3');
 
     await userEvent.click(screen.getByRole('button', { name: 'Reject' }));
@@ -129,7 +140,7 @@ describe('<GuestOrdersTab>', () => {
 
   it('shows no accept/mark/reject actions for a terminal order', async () => {
     mocks.listGuestOrders.mockResolvedValue([orderRow({ status: 'auto_rejected', payment_status: 'refunded' })]);
-    render(<GuestOrdersTab />);
+    render(<GuestOrdersTab activeProperty={{ base_currency: 'NGN' }} />);
     await screen.findByText('Table 3');
     expect(screen.queryByRole('button', { name: 'Accept' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
@@ -137,7 +148,7 @@ describe('<GuestOrdersTab>', () => {
 
   it('filtering by status calls the real endpoint with the chosen filter', async () => {
     mocks.listGuestOrders.mockResolvedValue([]);
-    render(<GuestOrdersTab />);
+    render(<GuestOrdersTab activeProperty={{ base_currency: 'NGN' }} />);
     await waitFor(() => expect(mocks.listGuestOrders).toHaveBeenCalledWith({ status: undefined }));
 
     await userEvent.selectOptions(screen.getByLabelText('Status'), 'preparing');

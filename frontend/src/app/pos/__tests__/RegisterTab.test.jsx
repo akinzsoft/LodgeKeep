@@ -43,7 +43,7 @@ describe('<RegisterTab>', () => {
       .mockResolvedValueOnce({ order, items: [{ id: '1', menu_item_id: '3', quantity: 1, unit_price: '20.00', modifiers: null, split_group: null, voided_at: null }], settlements: [] });
     mocks.settleOrder.mockResolvedValue({ order: { ...order, status: 'settled' }, settlements: [] });
 
-    render(<RegisterTab />);
+    render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await userEvent.selectOptions(await screen.findByLabelText('Outlet'), 'Main Bar');
     await userEvent.selectOptions(screen.getByLabelText('Terminal'), 'BAR-TERM-1');
@@ -73,7 +73,7 @@ describe('<RegisterTab>', () => {
     });
     mocks.findInHouseForCharge.mockResolvedValue([{ reservationId: '55', roomNumber: '204', guestFirstName: 'Ada', guestLastName: 'Bello' }]);
 
-    render(<RegisterTab />);
+    render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
     await userEvent.selectOptions(await screen.findByLabelText('Outlet'), 'Main Bar');
     await userEvent.selectOptions(screen.getByLabelText('Terminal'), 'BAR-TERM-1');
     await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
@@ -87,5 +87,25 @@ describe('<RegisterTab>', () => {
     await userEvent.type(screen.getByPlaceholderText('Room number or guest name'), '204');
     expect(mocks.findInHouseForCharge).toHaveBeenCalledWith('204');
     expect(await screen.findByText(/Room 204 — Ada Bello/)).toBeInTheDocument();
+  });
+
+  it("bug fix: renders the active property's real currency, not a hardcoded NGN", async () => {
+    const order = { id: '9', table_label: '', status: 'open' };
+    mocks.openOrder.mockResolvedValue(order);
+    mocks.getOrder.mockResolvedValue({ order, items: [], settlements: [] });
+
+    render(<RegisterTab activeProperty={{ base_currency: 'KES' }} />);
+    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), 'Main Bar');
+    await userEvent.selectOptions(screen.getByLabelText('Terminal'), 'BAR-TERM-1');
+    await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
+
+    // The menu tile (where a price renders) only mounts once a tab is open —
+    // KES formats as "Ksh" via Intl (confirmed directly against the real
+    // Intl.NumberFormat output, not assumed) — proves the currency actually
+    // threaded through, not just that the component happened to still say
+    // "NGN". Two real matches (the menu tile's own price and the running
+    // total), so findAllByText — not findByText — is correct.
+    expect((await screen.findAllByText(/Ksh/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/₦/)).not.toBeInTheDocument();
   });
 });

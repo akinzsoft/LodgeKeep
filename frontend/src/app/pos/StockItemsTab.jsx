@@ -26,8 +26,13 @@ const EMPTY_FORM = { outlet_id: '', name: '', unit: '', purchase_cost: '', suppl
  * delivery (`stock/service.js`'s own "last-cost only" rule) — shown
  * read-only instead, so editing here can never silently disagree with the
  * real cost basis a delivery just set.
+ *
+ * Bug fix (see `POSScreen`'s own header): the cost column used to hardcode
+ * a literal NGN currency code — `stock_items` carries no currency column of
+ * its own, so the real source of truth is the active property's
+ * `base_currency`, now threaded in as a prop.
  */
-export function StockItemsTab({ isOffline = false }) {
+export function StockItemsTab({ activeProperty, isOffline = false }) {
   const [outlets, setOutlets] = useState(null);
   const [items, setItems] = useState(null);
   const [outletFilter, setOutletFilter] = useState('');
@@ -224,7 +229,7 @@ export function StockItemsTab({ isOffline = false }) {
           { key: 'unit', label: 'Unit' },
           { key: 'current_quantity', label: 'On hand', align: 'right', render: (row) => formatQuantity(row.current_quantity, row.unit) },
           { key: 'reorder_level', label: 'Reorder level', align: 'right', render: (row) => formatQuantity(row.reorder_level, row.unit) },
-          { key: 'purchase_cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.purchase_cost} currencyCode="NGN" /> },
+          { key: 'purchase_cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.purchase_cost} currencyCode={activeProperty.base_currency} /> },
           { key: 'supplier', label: 'Supplier', render: (row) => row.supplier ?? '—' },
         ]}
         rows={items ?? []}
@@ -249,7 +254,7 @@ export function StockItemsTab({ isOffline = false }) {
             </p>
           )}
           <p className={formStyles.hint}>
-            Cost is <Money amount={editingItem.purchase_cost} currencyCode="NGN" /> — set automatically by the most recent goods-received delivery, not editable here.
+            Cost is <Money amount={editingItem.purchase_cost} currencyCode={activeProperty.base_currency} /> — set automatically by the most recent goods-received delivery, not editable here.
           </p>
           <form className={formStyles.row} onSubmit={handleEditSubmit}>
             <label className={formStyles.field}>

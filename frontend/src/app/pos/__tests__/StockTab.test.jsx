@@ -29,7 +29,7 @@ describe('<StockTab>', () => {
   });
 
   it('defaults to Stock items and switches between all six inner tabs, none hidden by any client-side permission check', async () => {
-    render(<StockTab />);
+    render(<StockTab activeProperty={{ base_currency: 'NGN' }} />);
     expect(screen.getByRole('tab', { name: 'Stock items', selected: true })).toBeInTheDocument();
     expect(await screen.findByText('New stock item')).toBeInTheDocument();
 
@@ -51,7 +51,7 @@ describe('<StockTab>', () => {
 
   it('threads isOffline down to every mutating inner tab', async () => {
     stockMocks.listStockItems.mockResolvedValue([{ id: '1', name: 'Vodka', unit: 'ml', current_quantity: '0.000', reorder_level: '0.000', purchase_cost: '0.00', supplier: null }]);
-    render(<StockTab isOffline />);
+    render(<StockTab activeProperty={{ base_currency: 'NGN' }} isOffline />);
     expect(await screen.findByText(/You are offline/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Wastage' }));

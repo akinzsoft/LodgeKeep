@@ -33,7 +33,7 @@ describe('<SetupTab>', () => {
 
   it('lists outlets and creates a new one', async () => {
     mocks.createOutlet.mockResolvedValue({ id: '2', code: 'REST', name: 'Restaurant', type: 'restaurant' });
-    render(<SetupTab />);
+    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
 
     expect(await screen.findByText('Main Bar')).toBeInTheDocument();
 
@@ -46,7 +46,7 @@ describe('<SetupTab>', () => {
 
   it('selecting an outlet loads its terminals and menu, and creating a terminal calls the API', async () => {
     mocks.createTerminal.mockResolvedValue({ id: '9' });
-    render(<SetupTab />);
+    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
     expect(await screen.findByText('Terminals — Main Bar')).toBeInTheDocument();
@@ -60,7 +60,7 @@ describe('<SetupTab>', () => {
   it('toggles a menu item stock-out state', async () => {
     mocks.listMenuItems.mockResolvedValue([{ id: '5', name: 'Cocktail', category: 'Drinks', price: '20.00', is_available: true }]);
     mocks.setMenuItemAvailability.mockResolvedValue({});
-    render(<SetupTab />);
+    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Mark stocked out' }));
@@ -68,10 +68,23 @@ describe('<SetupTab>', () => {
     expect(mocks.setMenuItemAvailability).toHaveBeenCalledWith('5', false);
   });
 
+  it("bug fix: renders the active property's real currency, not a hardcoded NGN", async () => {
+    mocks.listMenuItems.mockResolvedValue([{ id: '5', name: 'Cocktail', category: 'Drinks', price: '20.00', is_available: true }]);
+    render(<SetupTab activeProperty={{ base_currency: 'KES' }} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+
+    // KES formats as "Ksh" via Intl (confirmed directly against the real
+    // Intl.NumberFormat output) — proves the currency actually threaded
+    // through, not just that the component happened to still say "NGN".
+    expect(await screen.findByText(/Ksh/)).toBeInTheDocument();
+    expect(screen.queryByText(/₦/)).not.toBeInTheDocument();
+  });
+
   it('shows a real error rather than an empty list on load failure', async () => {
     mocks.listOutlets.mockReset();
     mocks.listOutlets.mockRejectedValue(new Error('boom'));
-    render(<SetupTab />);
+    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
     expect(await screen.findByText('No outlets yet — add one above.')).toBeInTheDocument();
   });
 });

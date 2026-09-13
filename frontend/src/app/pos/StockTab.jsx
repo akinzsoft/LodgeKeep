@@ -35,7 +35,7 @@ const STOCK_TABS = [
   { key: 'reports', label: 'Reports' },
 ];
 
-export function StockTab({ isOffline = false }) {
+export function StockTab({ activeProperty, isOffline = false }) {
   const [tab, setTab] = useState('items');
 
   return (
@@ -56,12 +56,12 @@ export function StockTab({ isOffline = false }) {
       </div>
 
       <div className={styles.panel}>
-        {tab === 'items' && <StockItemsTab isOffline={isOffline} />}
+        {tab === 'items' && <StockItemsTab activeProperty={activeProperty} isOffline={isOffline} />}
         {tab === 'recipes' && <StockRecipesTab isOffline={isOffline} />}
-        {tab === 'goods_received' && <StockGoodsReceivedTab isOffline={isOffline} />}
+        {tab === 'goods_received' && <StockGoodsReceivedTab activeProperty={activeProperty} isOffline={isOffline} />}
         {tab === 'takes' && <StockTakesTab isOffline={isOffline} />}
         {tab === 'wastage' && <StockWastageTab isOffline={isOffline} />}
-        {tab === 'reports' && <StockReportsTab />}
+        {tab === 'reports' && <StockReportsTab activeProperty={activeProperty} />}
       </div>
     </div>
   );

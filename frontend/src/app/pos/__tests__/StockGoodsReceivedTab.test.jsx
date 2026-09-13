@@ -25,7 +25,7 @@ const STOCK_ITEMS = [
 ];
 
 async function selectOutlet() {
-  render(<StockGoodsReceivedTab />);
+  render(<StockGoodsReceivedTab activeProperty={{ base_currency: 'NGN' }} />);
   await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '1');
   await screen.findByText('New delivery');
 }
@@ -72,6 +72,27 @@ describe('<StockGoodsReceivedTab>', () => {
     expect(screen.getByText(/6\.50/)).toBeInTheDocument();
   });
 
+  it("bug fix: renders the active property's real currency, not a hardcoded NGN", async () => {
+    mocks.recordGoodsReceived.mockResolvedValue({
+      outletId: '1',
+      reference: 'DN-1',
+      count: 1,
+      items: [{ id: '20', name: 'Vodka', unit: 'ml', current_quantity: '110.000', purchase_cost: '6.50' }],
+    });
+    render(<StockGoodsReceivedTab activeProperty={{ base_currency: 'KES' }} />);
+    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '1');
+    await userEvent.selectOptions(screen.getByLabelText('Stock item'), '20');
+    await userEvent.type(screen.getByLabelText('Quantity'), '10');
+    await userEvent.type(screen.getByLabelText('Unit cost'), '6.50');
+    await userEvent.click(screen.getByRole('button', { name: 'Record delivery' }));
+
+    // KES formats as "Ksh" via Intl (confirmed directly against the real
+    // Intl.NumberFormat output) — proves the currency actually threaded
+    // through, not just that the component happened to still say "NGN".
+    expect(await screen.findByText(/Ksh/)).toBeInTheDocument();
+    expect(screen.queryByText(/₦/)).not.toBeInTheDocument();
+  });
+
   it('adding another line, then removing the only line, leaves exactly one fresh empty line — never zero', async () => {
     await selectOutlet();
     expect(screen.getAllByLabelText('Stock item')).toHaveLength(1);
@@ -110,7 +131,7 @@ describe('<StockGoodsReceivedTab>', () => {
   });
 
   it('disables the whole delivery flow while offline, matching ShiftsTab.jsx\'s own precedent of disabling the entire mutating form, not just its submit button', async () => {
-    render(<StockGoodsReceivedTab isOffline />);
+    render(<StockGoodsReceivedTab activeProperty={{ base_currency: 'NGN' }} isOffline />);
     expect(await screen.findByText(/You are offline/)).toBeInTheDocument();
     // The outlet picker itself is part of the mutating "new delivery" flow
     // here (unlike a pure read-side filter) — disabled outright, so there

@@ -39,7 +39,7 @@ describe('<POSScreen>', () => {
   });
 
   it('defaults to the Register tab and switches between all seven tabs, including the PLAN.md Phase 6 QR-ordering and stock-control ones', async () => {
-    render(<POSScreen />);
+    render(<POSScreen activeProperty={{ base_currency: 'NGN' }} />);
     expect(screen.getByRole('tab', { name: 'Register', selected: true })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Tickets' }));
@@ -60,5 +60,11 @@ describe('<POSScreen>', () => {
 
     await userEvent.click(screen.getByRole('tab', { name: 'Setup' }));
     expect(await screen.findByText('New outlet')).toBeInTheDocument();
+  });
+
+  it("bug fix: shows a real guard, not a crash, when no active property is resolved yet — every Money display below needs a real currency", () => {
+    render(<POSScreen />);
+    expect(screen.getByText('Select an active property to use the POS.')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Register' })).not.toBeInTheDocument();
   });
 });

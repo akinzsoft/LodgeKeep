@@ -29,6 +29,26 @@ import styles from './POSScreen.module.css';
  *
  * Deliberately NOT built here, per this module's own backend header:
  * happy-hour/time-based menu pricing.
+ *
+ * Bug fix (user-reported "test the POS menu," found by live-testing then
+ * reading every tab): every `Money` display across this whole module —
+ * `RegisterTab`, `SetupTab`, `GuestOrdersTab`, and three of `StockTab`'s own
+ * six inner tabs — hardcoded `currencyCode="NGN"`, unlike every other money-
+ * displaying screen in this app (`CashieringScreen`, `FrontDeskTab`, ...),
+ * which always reads the real currency off the actual data row. Invisible
+ * in this dev environment specifically because both seeded tenants happen
+ * to use NGN — the exact "silently correct by coincidence" shape this
+ * session has already found twice elsewhere (Tape Chart's business date,
+ * Housekeeping's business date). None of `pos_menu_items`/`pos_orders`/
+ * `stock_items` carry their own currency column (confirmed by reading the
+ * migrations directly) — money on those tables is always the property's
+ * own `base_currency`, the same single-source-of-truth `folios.currency`
+ * already represents for Cashiering. `main.jsx` already resolves
+ * `activePropertyRecord` for `RoomsScreen`'s/`HousekeepingScreen`'s own
+ * identical need; this screen was mounted with none of it at all. Guarded
+ * the same way `BookingScreen`/`RoomsScreen` guard an unresolved property,
+ * since `shared/format/money.jsx`'s own `Money` component throws rather
+ * than silently defaulting a currency it wasn't given.
  */
 const TABS = [
   { key: 'register', label: 'Register' },
@@ -40,37 +60,43 @@ const TABS = [
   { key: 'setup', label: 'Setup' },
 ];
 
-export function POSScreen({ isOffline = false }) {
+export function POSScreen({ activeProperty, isOffline = false }) {
   const [tab, setTab] = useState('register');
 
   return (
     <div className={styles.page}>
       <h1 className={styles.title}>POS</h1>
 
-      <div className={styles.tabs} role="tablist" aria-label="POS sections">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.key}
-            className={`${styles.tab} ${tab === t.key ? styles.tabActive : ''}`.trim()}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {!activeProperty ? (
+        <p className={styles.loading}>Select an active property to use the POS.</p>
+      ) : (
+        <>
+          <div className={styles.tabs} role="tablist" aria-label="POS sections">
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={tab === t.key}
+                className={`${styles.tab} ${tab === t.key ? styles.tabActive : ''}`.trim()}
+                onClick={() => setTab(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-      <div className={styles.panel}>
-        {tab === 'register' && <RegisterTab isOffline={isOffline} />}
-        {tab === 'tickets' && <TicketsTab />}
-        {tab === 'guest_orders' && <GuestOrdersTab />}
-        {tab === 'shifts' && <ShiftsTab isOffline={isOffline} />}
-        {tab === 'qr_codes' && <QrTokensTab />}
-        {tab === 'stock' && <StockTab isOffline={isOffline} />}
-        {tab === 'setup' && <SetupTab />}
-      </div>
+          <div className={styles.panel}>
+            {tab === 'register' && <RegisterTab activeProperty={activeProperty} isOffline={isOffline} />}
+            {tab === 'tickets' && <TicketsTab />}
+            {tab === 'guest_orders' && <GuestOrdersTab activeProperty={activeProperty} />}
+            {tab === 'shifts' && <ShiftsTab isOffline={isOffline} />}
+            {tab === 'qr_codes' && <QrTokensTab />}
+            {tab === 'stock' && <StockTab activeProperty={activeProperty} isOffline={isOffline} />}
+            {tab === 'setup' && <SetupTab activeProperty={activeProperty} />}
+          </div>
+        </>
+      )}
     </div>
   );
 }

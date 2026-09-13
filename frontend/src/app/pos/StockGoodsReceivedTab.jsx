@@ -16,8 +16,13 @@ function emptyLine() {
  * (`stock/service.js`'s "last-cost only, never a weighted average") — the
  * result card shows exactly what changed, not a generic "saved" message,
  * since that replacement is a real, consequential side effect.
+ *
+ * Bug fix (see `POSScreen`'s own header): the new-cost column used to
+ * hardcode a literal NGN currency code — `stock_items` carries no currency
+ * column of its own, so the real source of truth is the active property's
+ * `base_currency`, now threaded in as a prop.
  */
-export function StockGoodsReceivedTab({ isOffline = false }) {
+export function StockGoodsReceivedTab({ activeProperty, isOffline = false }) {
   const [outlets, setOutlets] = useState(null);
   const [selectedOutletId, setSelectedOutletId] = useState('');
   const [stockItems, setStockItems] = useState(null);
@@ -180,7 +185,7 @@ export function StockGoodsReceivedTab({ isOffline = false }) {
             columns={[
               { key: 'name', label: 'Stock item' },
               { key: 'current_quantity', label: 'New quantity on hand', align: 'right', render: (row) => formatQuantity(row.current_quantity, row.unit) },
-              { key: 'purchase_cost', label: 'New cost', align: 'right', render: (row) => <Money amount={row.purchase_cost} currencyCode="NGN" /> },
+              { key: 'purchase_cost', label: 'New cost', align: 'right', render: (row) => <Money amount={row.purchase_cost} currencyCode={activeProperty.base_currency} /> },
             ]}
             rows={result.items}
             rowKey={(row) => row.id}
