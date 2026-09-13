@@ -35,6 +35,11 @@ function orderItem(overrides) {
   return { id: '1', menu_item_id: '3', quantity: 1, unit_price: '20.00', modifiers: null, split_group: null, voided_at: null, ...overrides };
 }
 
+/** A real settle-response row: 20.00 subtotal + 1.50 tax + 1.50 service (7.5%) = 23.00. */
+function settlementRow(overrides) {
+  return { id: '1', split_group: null, method: 'cash', subtotal: '20.00', tax_amount: '1.50', tip_amount: '0.00', service_charge: '1.50', currency: 'NGN', ...overrides };
+}
+
 /** A single ×1 House Cocktail's real preview (subtotal 20.00, tax 1.50 at the ambient 7.5% VAT this session's backend tests already establish as the fixture convention). */
 const SINGLE_ITEM_PREVIEW = { orderId: '9', currency: 'NGN', groups: [{ splitGroup: null, subtotal: '20.00', taxAmount: '1.50' }] };
 
@@ -96,6 +101,155 @@ describe('<RegisterTab>', () => {
     // Service is a fixed 7.5% of the real 20.00 subtotal = 1.50, computed
     // automatically — no cashier input exists to type it.
     expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'cash', serviceCharge: '1.50' })]);
+  });
+
+  describe('after checkout (bug fix: checkout used to leave what looked like a blank page)', () => {
+    async function checkoutWith(tender, settlementOverrides = {}) {
+      const order = await openNewTab([orderItem()]);
+      mocks.settleOrder.mockResolvedValue({ order: { ...order, status: 'settled' }, settlements: [settlementRow(settlementOverrides)] });
+      await screen.findByText('Subtotal');
+      await userEvent.click(screen.getByRole('button', { name: tender }));
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+      return order;
+    }
+
+    it('shows a receipt with the items, the tender, and the exact total — and focuses it', async () => {
+      await checkoutWith('Cash');
+
+      const receipt = await screen.findByRole('region', { name: 'Sale receipt' });
+      expect(within(receipt).getByRole('heading', { name: 'Tab settled' })).toHaveFocus();
+      expect(within(receipt).getByText('House Cocktail × 1')).toBeInTheDocument();
+      expect(within(receipt).getByText('Paid by Cash')).toBeInTheDocument();
+      // 20.00 + 1.50 tax + 1.50 service, summed exactly.
+      expect(within(receipt).getByText('Total paid').parentElement).toHaveTextContent(/23\.00/);
+      expect(screen.getByRole('button', { name: 'New sale' })).toBeInTheDocument();
+    });
+
+    it('keeps the station and tab strip usable while the receipt shows — never a blank page', async () => {
+      await checkoutWith('Cash');
+      await screen.findByRole('region', { name: 'Sale receipt' });
+
+      expect(screen.getByLabelText('Outlet')).toHaveValue('1');
+      expect(screen.getByLabelText('Terminal')).toHaveValue('2');
+      expect(screen.getByRole('button', { name: '+ New tab' })).toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: 'Order ticket' })).not.toBeInTheDocument();
+    });
+
+    it('names NQR on the receipt, even though it settles as method "card"', async () => {
+      await checkoutWith('NQR', { method: 'card' });
+      const receipt = await screen.findByRole('region', { name: 'Sale receipt' });
+      expect(within(receipt).getByText('Paid by NQR')).toBeInTheDocument();
+    });
+
+    it('"New sale" clears the receipt and returns to the Register with the station still selected', async () => {
+      await checkoutWith('Cash');
+      await userEvent.click(await screen.findByRole('button', { name: 'New sale' }));
+
+      expect(screen.queryByRole('region', { name: 'Sale receipt' })).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Outlet')).toHaveValue('1');
+      expect(screen.getByRole('button', { name: '+ New tab' })).toBeEnabled();
+    });
+
+    it('switching to another open tab from the receipt goes straight to that tab', async () => {
+      const other = { id: '20', table_label: 'Table 7', status: 'open' };
+      mocks.listOrders.mockResolvedValue([other]);
+      await checkoutWith('Cash');
+      await screen.findByRole('region', { name: 'Sale receipt' });
+
+      mocks.getOrder.mockResolvedValueOnce({ order: other, items: [orderItem({ id: '5' })], settlements: [] });
+      await userEvent.click(screen.getByRole('button', { name: 'Table 7' }));
+
+      expect(await screen.findByRole('region', { name: 'Order ticket' })).toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: 'Sale receipt' })).not.toBeInTheDocument();
+    });
+
+    it('marks exactly one tender as selected (bug fix: the buttons gave no visible feedback)', async () => {
+      await openNewTab([orderItem()]);
+      await screen.findByText('Subtotal');
+      const pressed = () => ['Cash', 'Card', 'NQR'].filter((name) => screen.getByRole('button', { name }).getAttribute('aria-pressed') === 'true');
+
+      expect(pressed()).toEqual(['Cash']);
+      await userEvent.click(screen.getByRole('button', { name: 'Card' }));
+      expect(pressed()).toEqual(['Card']);
+      await userEvent.click(screen.getByRole('button', { name: 'NQR' }));
+      expect(pressed()).toEqual(['NQR']);
+    });
+
+    it('sends exactly one settle on a double-tap, showing "Settling…" meanwhile', async () => {
+      const order = await openNewTab([orderItem()]);
+      let resolveSettle;
+      mocks.settleOrder.mockReturnValue(new Promise((resolve) => { resolveSettle = resolve; }));
+      await screen.findByText('Subtotal');
+
+      const checkout = screen.getByRole('button', { name: 'Send to Bar & Checkout' });
+      fireEvent.click(checkout);
+      fireEvent.click(checkout);
+
+      expect(mocks.settleOrder).toHaveBeenCalledTimes(1);
+      const busy = await screen.findByRole('button', { name: 'Settling…' });
+      expect(busy).toBeDisabled();
+
+      await act(async () => {
+        resolveSettle({ order: { ...order, status: 'settled' }, settlements: [settlementRow()] });
+      });
+      expect(await screen.findByRole('region', { name: 'Sale receipt' })).toBeInTheDocument();
+      expect(mocks.settleOrder).toHaveBeenCalledTimes(1);
+    });
+
+    it('sends exactly one settle when the form is submitted twice in a row (e.g. Enter pressed twice), which bypasses the disabled button', async () => {
+      await openNewTab([orderItem()]);
+      mocks.settleOrder.mockReturnValue(new Promise(() => {}));
+      await screen.findByText('Subtotal');
+
+      const form = screen.getByRole('button', { name: 'Send to Bar & Checkout' }).closest('form');
+      fireEvent.submit(form);
+      fireEvent.submit(form);
+
+      expect(mocks.settleOrder).toHaveBeenCalledTimes(1);
+    });
+
+    it('locks the station and tab strip while a checkout is in flight, so a late result can never take over another tab (code-review fix)', async () => {
+      const other = { id: '20', table_label: 'Table 7', status: 'open' };
+      mocks.listOrders.mockResolvedValue([other]);
+      const order = await openNewTab([orderItem()]);
+      let resolveSettle;
+      mocks.settleOrder.mockReturnValue(new Promise((resolve) => { resolveSettle = resolve; }));
+      await screen.findByText('Subtotal');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+      await screen.findByRole('button', { name: 'Settling…' });
+
+      expect(screen.getByRole('button', { name: 'Table 7' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Remove Table 7' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: '+ New tab' })).toBeDisabled();
+      expect(screen.getByLabelText('Outlet')).toBeDisabled();
+      expect(screen.getByLabelText('Terminal')).toBeDisabled();
+
+      // A click attempt does nothing while locked.
+      await userEvent.click(screen.getByRole('button', { name: 'Table 7' }));
+      expect(mocks.getOrder).not.toHaveBeenCalledWith('20');
+
+      await act(async () => {
+        resolveSettle({ order: { ...order, status: 'settled' }, settlements: [settlementRow()] });
+      });
+      expect(await screen.findByRole('region', { name: 'Sale receipt' })).toBeInTheDocument();
+      // Unlocked again once the checkout finishes.
+      expect(screen.getByRole('button', { name: 'Table 7' })).toBeEnabled();
+      expect(screen.getByLabelText('Outlet')).toBeEnabled();
+    });
+
+    it('keeps the ticket and re-enables checkout when the settle is refused', async () => {
+      await openNewTab([orderItem()]);
+      mocks.settleOrder.mockRejectedValue(new ApiError({ code: 'CONFLICT_POS_ORDER_NOT_OPEN', message: 'This tab was already settled on another terminal.' }));
+      await screen.findByText('Subtotal');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+      expect(await screen.findByText('This tab was already settled on another terminal.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Send to Bar & Checkout' })).toBeEnabled();
+      expect(within(screen.getByRole('region', { name: 'Order ticket' })).getByText('House Cocktail')).toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: 'Sale receipt' })).not.toBeInTheDocument();
+    });
   });
 
   describe('removing a tab', () => {
@@ -520,12 +674,21 @@ describe('<RegisterTab>', () => {
     expect(await within(modal).findByText('Ungrouped')).toBeInTheDocument();
     expect(within(modal).getByRole('heading', { name: 'Group 1' })).toBeInTheDocument();
 
-    mocks.settleOrder.mockResolvedValue({ order: { ...order, status: 'settled' }, settlements: [] });
+    mocks.settleOrder.mockResolvedValue({
+      order: { ...order, status: 'settled' },
+      settlements: [settlementRow({ id: '1', split_group: null }), settlementRow({ id: '2', split_group: 1 })],
+    });
     await userEvent.click(within(modal).getByRole('button', { name: 'Confirm settlement' }));
     expect(mocks.settleOrder).toHaveBeenCalledWith(
       '9',
       expect.arrayContaining([expect.objectContaining({ splitGroup: null }), expect.objectContaining({ splitGroup: 1 })])
     );
+
+    // The receipt lists one line per check, and the combined total.
+    const receipt = await screen.findByRole('region', { name: 'Sale receipt' });
+    expect(within(receipt).getByText('Ungrouped · Paid by Cash')).toBeInTheDocument();
+    expect(within(receipt).getByText('Group 1 · Paid by Cash')).toBeInTheDocument();
+    expect(within(receipt).getByText('Total paid').parentElement).toHaveTextContent(/46\.00/);
   });
 
   it('bug fix: opening "Split bill" before any item has a real group hides the inline checkout underneath, never a second live copy', async () => {

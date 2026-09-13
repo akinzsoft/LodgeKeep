@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, ConfirmDialog } from '../../shared/components/index.js';
+import { ConfirmDialog } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
-import { sumMoney, percentOfMoney } from '../../shared/money.js';
+import { sumMoney, multiplyMoney, percentOfMoney } from '../../shared/money.js';
 import { posApi, ApiError } from '../../shared/api/index.js';
 import { CategoryIcon, AllCategoriesIcon, PaymentMethodIcon, TrashIcon } from './registerCategoryIcons.jsx';
 import formStyles from './POSForm.module.css';
@@ -167,7 +167,13 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const [searchQuery, setSearchQuery] = useState('');
 
   const [error, setError] = useState(null);
+  // The receipt snapshot shown after a successful checkout (see
+  // `handleSubmitSettlement`) — `null` while selling.
   const [settleResult, setSettleResult] = useState(null);
+  // `settlingRef` closes the same-tick double-click gap a state-only guard
+  // can't; `settling` drives the disabled/"Settling…" button.
+  const settlingRef = useRef(false);
+  const [settling, setSettling] = useState(false);
   const [settlementForms, setSettlementForms] = useState(null);
   const [settlementPreview, setSettlementPreview] = useState(null);
   const [previewError, setPreviewError] = useState(null);
@@ -242,6 +248,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   }
 
   function handleSelectOutlet(id) {
+    setSettleResult(null);
     setOutletId(id);
     setTerminalId('');
     setActiveOrderId(null);
@@ -265,6 +272,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
 
   async function handleNewTab() {
     if (openingTab) return;
+    setSettleResult(null);
     if (!terminalId) {
       setError('Select a terminal first.');
       return;
@@ -356,6 +364,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   }
 
   function switchToTab(order) {
+    setSettleResult(null);
     setSplitModalOpen(false);
     setActiveOrderId(order.id);
     loadActiveOrder(order.id);
@@ -444,8 +453,25 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     }
   }
 
+  /**
+   * Bug fix (user-reported: "click checkout, it opens a blank page"): a
+   * successful settle used to replace the ENTIRE Register — header, tab
+   * strip and panel — with a tiny "Tab settled." line and a faint ghost
+   * button, which read as a blank page. It now snapshots a receipt (items,
+   * tender per check, exact totals) from the order state about to be
+   * cleared, and `SettlementReceipt` shows it inside the panel while the
+   * header and remaining tabs stay usable.
+   *
+   * Also fixed: no in-flight guard. A double-tap sent two settles with two
+   * different Idempotency-Keys; the backend's row lock refused the second
+   * with ORDER_NOT_OPEN, surfacing an error right after a checkout that had
+   * actually succeeded.
+   */
   async function handleSubmitSettlement(event) {
     event.preventDefault();
+    if (settlingRef.current) return;
+    settlingRef.current = true;
+    setSettling(true);
     setError(null);
     try {
       const result = await posApi.settleOrder(
@@ -460,7 +486,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
               : undefined,
         }))
       );
-      setSettleResult(result);
+      // Built before anything below clears the order it reads from.
+      setSettleResult(buildReceipt(result));
       setSplitModalOpen(false);
       setSettlementForms(null);
       setSettlementPreview(null);
@@ -470,7 +497,37 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       setActiveOrder(null);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not settle this tab.');
+    } finally {
+      settlingRef.current = false;
+      setSettling(false);
     }
+  }
+
+  /** Receipt snapshot from the settle response plus the order/forms still in scope. Totals are exact decimal sums — never float arithmetic. The stored method for NQR is `card`, so the tender shown comes from the form's own label. */
+  function buildReceipt(result) {
+    const settlements = (result.settlements ?? []).map((settlement) => {
+      const form = settlementForms.find((candidate) => candidate.splitGroup === settlement.split_group);
+      const guest = settlement.method === 'room_charge' ? form?.roomChargeGuest : null;
+      return {
+        splitGroup: settlement.split_group,
+        tenderLabel: form?.tenderLabel ?? (settlement.method === 'room_charge' ? 'Charge to room' : settlement.method),
+        roomNumber: guest?.roomNumber ?? null,
+        guestName: guest ? `${guest.guestFirstName} ${guest.guestLastName}` : null,
+        total: sumMoney([settlement.subtotal, settlement.tax_amount, settlement.tip_amount, settlement.service_charge]),
+      };
+    });
+    return {
+      tableLabel: activeOrder.order.table_label || `Tab #${activeOrder.order.id}`,
+      currencyCode: activeProperty.base_currency,
+      items: groupOrderItems(unvoidedItems).map((group) => ({
+        key: `${group.menuItemId}:${group.splitGroup ?? 'none'}`,
+        name: menuItemName(group.menuItemId),
+        quantity: group.rows.reduce((sum, row) => sum + row.quantity, 0),
+        unitPrice: group.rows[0].unit_price,
+      })),
+      settlements,
+      grandTotal: sumMoney(settlements.map((settlement) => settlement.total)),
+    };
   }
 
   /** Patches one settlement-form entry by its split-group key — every field below uses this instead of each repeating its own clone-and-map. */
@@ -631,17 +688,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       )}
       {isOffline && <p className={formStyles.disabledNotice}>You are offline. Orders cannot be settled until connectivity returns.</p>}
 
-      {settleResult && (
-        <div className={styles.runningTotal}>
-          <span>Tab settled.</span>
-          <Button variant="ghost" onClick={() => setSettleResult(null)}>
-            New sale
-          </Button>
-        </div>
-      )}
-
-      {!settleResult && (
-        <>
+      <>
           {/*
             Layout pass (user-reported): the outlet/terminal picker and the
             tab strip used to be two separate full-width rows above the
@@ -655,7 +702,14 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
             row would cost.
           */}
           <div className={styles.compactHeader}>
-            <select className={styles.compactSelect} aria-label="Outlet" value={outletId} onChange={(e) => handleSelectOutlet(e.target.value)}>
+            {/*
+              Every header control is disabled while a checkout is in flight
+              (code-review fix): switching tabs, opening or removing one, or
+              changing station mid-settle let the settle's success handler —
+              which clears the active order and shows its receipt — land on
+              top of whatever the cashier had moved on to.
+            */}
+            <select className={styles.compactSelect} aria-label="Outlet" value={outletId} onChange={(e) => handleSelectOutlet(e.target.value)} disabled={settling}>
               <option value="">Select an outlet</option>
               {(outlets ?? []).map((outlet) => (
                 <option key={outlet.id} value={outlet.id}>
@@ -663,7 +717,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                 </option>
               ))}
             </select>
-            <select className={styles.compactSelect} aria-label="Terminal" value={terminalId} onChange={(e) => setTerminalId(e.target.value)} disabled={!outletId}>
+            <select className={styles.compactSelect} aria-label="Terminal" value={terminalId} onChange={(e) => setTerminalId(e.target.value)} disabled={!outletId || settling}>
               <option value="">Select a terminal</option>
               {terminals.map((terminal) => (
                 <option key={terminal.id} value={terminal.id}>
@@ -681,14 +735,14 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                     // in a button): the label switches to the tab, the ✕
                     // removes it.
                     <span key={order.id} className={`${styles.tabChip} ${styles.tabGroup} ${activeOrderId === order.id ? styles.tabChipActive : ''}`.trim()}>
-                      <button type="button" className={styles.tabLabelButton} onClick={() => switchToTab(order)}>
+                      <button type="button" className={styles.tabLabelButton} onClick={() => switchToTab(order)} disabled={settling}>
                         {label}
                       </button>
                       <button
                         type="button"
                         className={styles.tabCloseButton}
                         onClick={() => handleRemoveTab(order)}
-                        disabled={isOffline || removingTabId === order.id}
+                        disabled={isOffline || settling || removingTabId === order.id}
                         aria-label={`Remove ${label}`}
                         title="Remove tab"
                       >
@@ -697,14 +751,16 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                     </span>
                   );
                 })}
-                <button type="button" className={styles.tabChip} onClick={handleNewTab} disabled={isOffline || openingTab}>
+                <button type="button" className={styles.tabChip} onClick={handleNewTab} disabled={isOffline || openingTab || settling}>
                   + New tab
                 </button>
               </div>
             )}
           </div>
 
-          {activeOrder && (
+          {settleResult ? (
+            <SettlementReceipt receipt={settleResult} onNewSale={() => setSettleResult(null)} />
+          ) : activeOrder && (
             <div className={styles.panel}>
               <nav className={styles.rail} aria-label="Menu categories">
                 <button
@@ -867,8 +923,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                                 Split bill
                               </button>
                             )}
-                            <button type="submit" className={styles.checkoutButton} disabled={isOffline || !previewReadyFor(settlementForms)}>
-                              Send to Bar &amp; Checkout
+                            <button type="submit" className={styles.checkoutButton} disabled={isOffline || settling || !previewReadyFor(settlementForms)}>
+                              {settling ? 'Settling…' : 'Send to Bar & Checkout'}
                             </button>
                           </div>
                         </form>
@@ -924,8 +980,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                 ))}
 
                 <div className={styles.modalActionsRow}>
-                  <button type="submit" className={styles.confirmButton} disabled={isOffline || !previewReadyFor(settlementForms)}>
-                    Confirm settlement
+                  <button type="submit" className={styles.confirmButton} disabled={isOffline || settling || !previewReadyFor(settlementForms)}>
+                    {settling ? 'Settling…' : 'Confirm settlement'}
                   </button>
                   <button type="button" className={styles.cancelButton} onClick={() => setSplitModalOpen(false)}>
                     Cancel
@@ -960,8 +1016,61 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
               onCancel={() => setVoidingRow(null)}
             />
           )}
-        </>
-      )}
+      </>
+    </div>
+  );
+}
+
+/**
+ * The confirmation shown after a successful checkout, inside the Register
+ * area where the order panel was. Focus moves to its heading so a screen
+ * reader announces the sale, and "New sale" is the one prominent action.
+ */
+function SettlementReceipt({ receipt, onNewSale }) {
+  const headingRef = useRef(null);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
+  const splitBill = receipt.settlements.length > 1;
+  return (
+    <div className={styles.receiptPanel} role="region" aria-label="Sale receipt">
+      <h2 ref={headingRef} tabIndex={-1} className={styles.receiptHeading}>
+        Tab settled
+      </h2>
+      <p className={styles.receiptMeta}>{receipt.tableLabel}</p>
+
+      <div className={styles.receiptLines}>
+        {receipt.items.map((item) => (
+          <div key={item.key} className={styles.settlementLine}>
+            <span>
+              {item.name} × {item.quantity}
+            </span>
+            <Money amount={multiplyMoney(item.unitPrice, item.quantity)} currencyCode={receipt.currencyCode} />
+          </div>
+        ))}
+      </div>
+
+      <div className={styles.receiptLines}>
+        {receipt.settlements.map((settlement) => (
+          <div key={settlement.splitGroup ?? 'all'} className={styles.settlementLine}>
+            <span>
+              {splitBill ? `${settlement.splitGroup ? `Group ${settlement.splitGroup}` : 'Ungrouped'} · ` : ''}
+              Paid by {settlement.tenderLabel}
+              {settlement.roomNumber ? ` · Room ${settlement.roomNumber}${settlement.guestName ? ` (${settlement.guestName})` : ''}` : ''}
+            </span>
+            <Money amount={settlement.total} currencyCode={receipt.currencyCode} />
+          </div>
+        ))}
+      </div>
+
+      <div className={`${styles.settlementLine} ${styles.settlementGrandTotal}`}>
+        <span>Total paid</span>
+        <Money amount={receipt.grandTotal} currencyCode={receipt.currencyCode} />
+      </div>
+
+      <button type="button" className={styles.newSaleButton} onClick={onNewSale}>
+        New sale
+      </button>
     </div>
   );
 }
