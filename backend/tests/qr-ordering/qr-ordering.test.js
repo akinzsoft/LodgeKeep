@@ -494,6 +494,30 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       expect(settlement.method).toBe('card');
       expect(settlement.subtotal).toBe('20.00');
       expect(settlement.tax_amount).toBe('1.50');
+
+      const status = await guestGet(`/${tableRaw}/orders/${created.body.data.id}`);
+      expect(status.status).toBe(200);
+      expect(status.body.data.items).toEqual([
+        expect.objectContaining({ name: 'QR Test Item', quantity: 1, unit_price: '20.00', line_total: '20.00' }),
+      ]);
+      expect(status.body.data.subtotal).toBe('20.00');
+      expect(status.body.data.tax_amount).toBe('1.50');
+      expect(status.body.data.total).toBe('21.50');
+      expect(status.body.data.currency).toBe('NGN');
+    });
+
+    it('an unpaid card order status shows its items and the payment intent total, with no tax figure yet', async () => {
+      paystack.initializeTransaction.mockResolvedValue({ authorizationUrl: 'https://paystack.test/pay/details', accessCode: 'd', reference: 'r' });
+      const created = await guestPost(`/${tableRaw}/orders`)
+        .set('Idempotency-Key', idemKey())
+        .send({ payment_method: 'card', guest_contact: 'details@example.com', items: [{ menu_item_id: menuItemId, quantity: 2 }] });
+      expect(created.status).toBe(201);
+
+      const status = await guestGet(`/${tableRaw}/orders/${created.body.data.id}`);
+      expect(status.body.data.items).toEqual([expect.objectContaining({ name: 'QR Test Item', quantity: 2, line_total: '40.00' })]);
+      expect(status.body.data.subtotal).toBe('40.00');
+      expect(status.body.data.tax_amount).toBeNull();
+      expect(status.body.data.total).toBe('43.00');
     });
 
     it('a failed gateway verification leaves the order unpaid, never settled', async () => {

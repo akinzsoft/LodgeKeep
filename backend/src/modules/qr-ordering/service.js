@@ -279,6 +279,49 @@ async function getGuestOrderForToken({ context, token, id }) {
   return resolveEffectiveGuestOrderStatus({ context, guestOrder: row });
 }
 
+/**
+ * What the guest actually ordered, for their own status page: each unvoided
+ * line (name snapshotted from the menu item, price from the line's own
+ * add-time snapshot) and the order's totals. Totals come from the real
+ * settlement once one exists (the exact figures charged), otherwise from the
+ * card payment intent's server-computed amount; a still-unsettled
+ * room-charge order has no tax figure yet, so only its item subtotal shows.
+ */
+async function getGuestOrderDetails({ context, guestOrder }) {
+  const db = scopedDb().for(context);
+  const lines = await db.table('pos_order_items').where({ pos_order_id: guestOrder.pos_order_id }).whereNull('voided_at').orderBy('id');
+  const menuItemIds = [...new Set(lines.map((line) => line.menu_item_id))];
+  const menuItems = menuItemIds.length ? await db.table('pos_menu_items').whereIn('id', menuItemIds).select('id', 'name') : [];
+  const nameById = new Map(menuItems.map((item) => [String(item.id), item.name]));
+
+  const items = lines.map((line) => ({
+    id: line.id,
+    name: nameById.get(String(line.menu_item_id)) ?? 'Item',
+    quantity: line.quantity,
+    unit_price: line.unit_price,
+    modifiers: line.modifiers ?? null,
+    line_total: computeItemLineTotal(line),
+  }));
+  const itemsSubtotal = sumMoney(items.map((item) => item.line_total));
+
+  const settlements = await db.table('pos_order_settlements').where({ pos_order_id: guestOrder.pos_order_id }).whereNull('voided_at');
+  if (settlements.length > 0) {
+    const subtotal = sumMoney(settlements.map((s) => s.subtotal));
+    const taxAmount = sumMoney(settlements.map((s) => s.tax_amount));
+    return { items, subtotal, tax_amount: taxAmount, total: sumMoney([subtotal, taxAmount]), currency: settlements[0].currency };
+  }
+
+  const payment = guestOrder.payment_method === 'card' ? await getLatestPaymentForOrder({ context, posOrderId: guestOrder.pos_order_id }) : null;
+  const property = payment ? null : await db.table('properties').where({ id: context.propertyId }).first('base_currency');
+  return {
+    items,
+    subtotal: itemsSubtotal,
+    tax_amount: null,
+    total: payment ? payment.amount : itemsSubtotal,
+    currency: payment?.currency ?? property?.base_currency ?? null,
+  };
+}
+
 /** The one payment a card guest order ever creates (mirrors `portal/service.js`'s own "the most recent row is always the right one" comment for `getLatestPaymentForReservation`). */
 async function getLatestPaymentForOrder({ context, posOrderId }) {
   const db = scopedDb().for(context);
@@ -767,6 +810,7 @@ module.exports = {
   sumOpenUnpaidValueForToken,
   createGuestOrder,
   getGuestOrderForToken,
+  getGuestOrderDetails,
   getLatestPaymentForOrder,
   startGuestOrderCheckout,
   confirmCardPayment,
