@@ -84,6 +84,16 @@ export function switchProperty({ propertyId }) {
 }
 
 /** @returns {Promise<{status: 'ok', dev_only_token?: string}>} */
+/**
+ * The signed-in staff member's role and granted permission keys at their
+ * active property — drives the role-aware sidebar. Convenience only: every
+ * real route still enforces its own permission server-side.
+ * @returns {Promise<{propertyId: string|null, role: string|null, permissions: string[]}>}
+ */
+export function getMyPermissions() {
+  return request('/auth/me/permissions');
+}
+
 export function requestPasswordReset({ email }) {
   return request('/auth/password/forgot', { method: 'POST', body: { email }, auth: false });
 }

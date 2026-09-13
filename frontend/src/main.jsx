@@ -16,7 +16,7 @@ import { StaffLoginScreen } from './app/auth/screens/StaffLoginScreen.jsx';
 import { MfaChallengeScreen } from './app/auth/screens/MfaChallengeScreen.jsx';
 import { AcceptInvitationScreen } from './app/auth/screens/AcceptInvitationScreen.jsx';
 import { SignupScreen } from './app/auth/screens/SignupScreen.jsx';
-import { AppShell } from './app/shell/index.js';
+import { AppShell, isNavItemAllowed } from './app/shell/index.js';
 import { HomeDashboard } from './app/dashboard/HomeDashboard.jsx';
 import { SetupScreen } from './app/setup/SetupScreen.jsx';
 import { BookingScreen } from './app/booking/BookingScreen.jsx';
@@ -34,7 +34,7 @@ import { DataMigrationScreen } from './app/migration/DataMigrationScreen.jsx';
 import { ChainOverviewScreen } from './app/chain-overview/ChainOverviewScreen.jsx';
 import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
-import { notificationsApi, setupApi } from './shared/api/index.js';
+import { authApi, notificationsApi, setupApi } from './shared/api/index.js';
 import { PortalApp } from './portal/PortalApp.jsx';
 import { PlatformApp } from './platform/PlatformApp.jsx';
 import { QrOrderApp } from './qr-order/QrOrderApp.jsx';
@@ -77,24 +77,12 @@ function BootstrappingScreen() {
  * business date) for ids `user.properties` already authorized, never to
  * add or offer an id the user doesn't hold.
  *
- * `permissions` below is NOT the real grant set, and cannot be yet: no
- * endpoint returns "what can this user actually do" (a `GET
- * /api/v1/me/permissions`-shaped read, or the login response carrying it,
- * neither built). Passing `setup.view`/`setup.manage` unconditionally means
- * the Setup nav item is always visible rather than correctly hidden from a
- * front-desk/cashier/housekeeping account — but per CLAUDE.md's own line,
- * "UI-level RBAC ... is convenience only — the API check ... is the real
- * one," and that real check is verified working (`tests/setup/setup.test.js`):
- * a role with no `setup.manage` grant gets a genuine 403 from the backend
- * the moment it tries to write anything, same as always. This is a visible
- * nav item for an account that will hit a real permission error, not a
- * security hole — the fix is a real permissions-read endpoint, not invented
- * here ahead of one.
- *
- * PLAN.md Phase 2 adds the same unconditional-optimistic set for
- * `reservations.*`/`front_desk.*` — identical reasoning, identical gap,
- * still pending the same real permissions-read endpoint. PLAN.md Phase 3
- * adds the same for `housekeeping.*`/`notifications.*`/`reports.*`.
+ * The sidebar is role-aware: `GET /auth/me/permissions` returns the real
+ * permission keys the user's role holds at the ACTIVE property, re-fetched
+ * after every property switch (a user can be a manager at one property and
+ * front desk at another). This replaced a hardcoded "every key granted" set
+ * that showed every role every menu item. UI filtering is convenience only —
+ * each real route still enforces its own permission server-side.
  */
 function Demo() {
   const isOnline = useOnlineStatus();
@@ -107,6 +95,11 @@ function Demo() {
   // see this file's own header for why `GET /properties` is safe to call
   // here but must never widen WHICH ids are offered.
   const [properties, setProperties] = useState(null);
+  // `{ userId, permissions }` — tagged with whose grants these are, so a
+  // sign-out/sign-in as someone else never briefly shows the previous
+  // user's menu while the new fetch is in flight.
+  const [grants, setGrants] = useState(null);
+  const [grantsError, setGrantsError] = useState(null);
 
   async function reloadNotifications() {
     try {
@@ -136,6 +129,34 @@ function Demo() {
     reloadNotifications();
     reloadProperties();
   }, [status]);
+
+  // Re-fetched whenever the active property changes: the role — and so the
+  // menu — is per property. The previous property's grants stay on screen
+  // until the new ones land, rather than flashing the bootstrap screen.
+  const userId = user?.userId;
+  const activePropertyId = user?.activePropertyId;
+  useEffect(() => {
+    if (status !== 'authenticated') return undefined;
+    let cancelled = false;
+    authApi
+      .getMyPermissions()
+      .then((result) => {
+        if (cancelled) return;
+        setGrants({ userId, permissions: result.permissions });
+        setGrantsError(null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Fail closed: hide gated items rather than show ones the API will
+        // refuse — but say so, since a manager seeing only Home would
+        // otherwise look like a broken account.
+        setGrants({ userId, permissions: [] });
+        setGrantsError('Could not load your permissions, so some menu items are hidden. Reload the page to try again.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [status, userId, activePropertyId]);
 
   async function handleMarkNotificationRead(id) {
     try {
@@ -177,9 +198,15 @@ function Demo() {
   // wait for it rather than mounting `HomeDashboard` (whose own mount-time
   // report fetches read `businessDate` once and do not re-fetch if it
   // changes underneath them) with a transiently-null business date.
-  if (properties === null) {
+  const grantedPermissions = grants && grants.userId === user.userId ? new Set(grants.permissions) : null;
+  if (properties === null || grantedPermissions === null) {
     return <BootstrappingScreen />;
   }
+
+  // A property switch can take away the screen currently open (e.g. Setup
+  // after becoming front desk) — fall back to Home instead of rendering a
+  // screen whose menu item has disappeared.
+  const screenKey = isNavItemAllowed(activeItemKey, grantedPermissions) ? activeItemKey : 'home';
 
   // Gap closure: a session restored via the bootstrap refresh (AuthContext.jsx's
   // own header) never submitted a login form this page load, so it carries
@@ -211,38 +238,10 @@ function Demo() {
 
   return (
     <AppShell
-      user={{ name: displayName, role: user.role }}
-      permissions={
-        new Set([
-          'setup.view',
-          'setup.manage',
-          'reservations.view',
-          'reservations.manage',
-          'front_desk.view',
-          'front_desk.manage',
-          'housekeeping.view',
-          'housekeeping.manage',
-          'notifications.view',
-          'notifications.manage',
-          'reports.view',
-          'reports.view_financial',
-          'cashiering.post_charge',
-          'cashiering.void_line',
-          'night_audit.view',
-          'night_audit.run',
-          'pos.operate',
-          'pos.manage',
-          'ar.view',
-          'ar.manage',
-          'group_blocks.view',
-          'group_blocks.manage',
-          'billing.view',
-          'billing.manage',
-          'migration.manage',
-          'reports.view_chain',
-        ])
-      }
-      activeItemKey={activeItemKey}
+      // Role codes are snake_case (`pos_operator`); the shell capitalizes each word.
+      user={{ name: displayName, role: user.role?.replace(/_/g, ' ') }}
+      permissions={grantedPermissions}
+      activeItemKey={screenKey}
       onNavigate={setActiveItemKey}
       // Real name when `GET /properties` has resolved it; the same
       // "Property {id}" labelled stand-in as before while still loading or
@@ -268,33 +267,38 @@ function Demo() {
           {switchError}
         </p>
       )}
-      {activeItemKey === 'setup' ? (
+      {grantsError && (
+        <p role="alert" className={styles.switchError}>
+          {grantsError}
+        </p>
+      )}
+      {screenKey === 'setup' ? (
         <SetupScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} />
-      ) : activeItemKey === 'booking' ? (
+      ) : screenKey === 'booking' ? (
         <BookingScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} />
-      ) : activeItemKey === 'housekeeping' ? (
+      ) : screenKey === 'housekeeping' ? (
         <HousekeepingScreen activeProperty={activePropertyRecord} isOffline={!isOnline} />
-      ) : activeItemKey === 'rooms' ? (
+      ) : screenKey === 'rooms' ? (
         <RoomsScreen activeProperty={activePropertyRecord} />
-      ) : activeItemKey === 'reports' ? (
+      ) : screenKey === 'reports' ? (
         <ReportingScreen activePropertyId={user.activePropertyId} />
-      ) : activeItemKey === 'cashiering' ? (
+      ) : screenKey === 'cashiering' ? (
         <CashieringScreen isOffline={!isOnline} />
-      ) : activeItemKey === 'night_audit' ? (
+      ) : screenKey === 'night_audit' ? (
         <NightAuditScreen isOffline={!isOnline} />
-      ) : activeItemKey === 'profiles' ? (
+      ) : screenKey === 'profiles' ? (
         <ProfilesScreen isOffline={!isOnline} />
-      ) : activeItemKey === 'pos' ? (
+      ) : screenKey === 'pos' ? (
         <POSScreen activeProperty={activePropertyRecord} isOffline={!isOnline} currentUserLabel={displayName} />
-      ) : activeItemKey === 'ar' ? (
+      ) : screenKey === 'ar' ? (
         <ARScreen isOffline={!isOnline} />
-      ) : activeItemKey === 'group_blocks' ? (
+      ) : screenKey === 'group_blocks' ? (
         <GroupBlocksScreen isOffline={!isOnline} />
-      ) : activeItemKey === 'billing' ? (
+      ) : screenKey === 'billing' ? (
         <BillingScreen isOffline={!isOnline} />
-      ) : activeItemKey === 'migration' ? (
+      ) : screenKey === 'migration' ? (
         <DataMigrationScreen isOffline={!isOnline} />
-      ) : activeItemKey === 'chain_overview' ? (
+      ) : screenKey === 'chain_overview' ? (
         <ChainOverviewScreen isOffline={!isOnline} />
       ) : (
         <HomeDashboard

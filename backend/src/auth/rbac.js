@@ -85,6 +85,52 @@ async function hasPermission(db, roleCode, permissionKey) {
  *      never trusted from the token, exactly like a property switch)
  *   3. Does that role grant this permission? (SECURITY.md §5)
  */
+/**
+ * Every permission key a role holds — the same role_permissions → roles →
+ * permissions join `hasPermission` checks one key against, so the list the
+ * UI filters its navigation by can never disagree with what the API
+ * actually enforces. An archived role grants nothing, exactly as above.
+ */
+async function listGrantedPermissions(db, roleCode) {
+  const rows = await db
+    .table('role_permissions')
+    .joinScoped('roles', (join) => join.on('role_permissions.role_id', '=', 'roles.id'))
+    .joinScoped('permissions', (join) => join.on('role_permissions.permission_id', '=', 'permissions.id'))
+    .where('roles.code', roleCode)
+    .where('roles.status', 'active')
+    .select('permissions.permission_key');
+
+  return [...new Set(rows.map((row) => row.permission_key))].sort();
+}
+
+/**
+ * What the signed-in staff member may do at their active property — role
+ * plus granted permission keys. UI-level RBAC (a filtered sidebar) is
+ * convenience only; `requirePermission` above stays the real enforcement.
+ *
+ * - No active property yet (a multi-property user who hasn't picked one):
+ *   no role, no permissions — every gated item hides, matching the
+ *   `NoActivePropertyError` the API itself would return.
+ * - Platform impersonation: `requirePermission` lets every check through
+ *   (the impersonation guard separately blocks all writes), so the honest
+ *   answer is the whole catalogue.
+ */
+async function resolveMyPermissions(context) {
+  const db = scopedDb().for(context);
+
+  if (context.isImpersonation) {
+    const rows = await db.table('permissions').select('permission_key');
+    return { role: 'platform_impersonation', permissions: rows.map((row) => row.permission_key).sort() };
+  }
+
+  if (!context.propertyId) return { role: null, permissions: [] };
+
+  const role = await roleAtProperty(db, context, context.userId, context.propertyId);
+  if (!role) return { role: null, permissions: [] };
+
+  return { role, permissions: await listGrantedPermissions(db, role) };
+}
+
 function requirePermission(permissionKey) {
   return async function requirePermissionMiddleware(req, res, next) {
     try {
@@ -125,4 +171,4 @@ function requirePermission(permissionKey) {
   };
 }
 
-module.exports = { requirePermission, hasPermission };
+module.exports = { requirePermission, hasPermission, listGrantedPermissions, resolveMyPermissions };

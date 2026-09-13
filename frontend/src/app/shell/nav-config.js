@@ -150,3 +150,17 @@ export const DEFAULT_NAV_GROUPS = [
     ],
   },
 ];
+
+/**
+ * Whether the signed-in user may open the nav item `key`: an item with no
+ * `requiredPermission` is open to everyone; a gated item needs that key in
+ * `permissions`. An unknown key is never allowed. Shared by the sidebar's own
+ * filtering (via the same `requiredPermission` field) and `main.jsx`'s
+ * fallback that keeps a hidden item's screen from rendering after a property
+ * switch changes the user's role.
+ */
+export function isNavItemAllowed(key, permissions, groups = DEFAULT_NAV_GROUPS) {
+  const item = groups.flatMap((group) => group.items).find((candidate) => candidate.key === key);
+  if (!item) return false;
+  return !item.requiredPermission || permissions.has(item.requiredPermission);
+}
