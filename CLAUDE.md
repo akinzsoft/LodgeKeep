@@ -2,6 +2,69 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Bug fix: intermittent POS test failures — dynamically-loaded selects raced their own option fetches
+
+**Found while verifying PR #35**: `RegisterTab.test.jsx` failed once in a loaded full-suite run and passed on every rerun. Treated as a real bug rather than a flake to shrug off, and reproduced deliberately: 12 runs of that file with all 8 CPU cores saturated failed **5 times**. The real error wasn't in the one test first seen failing — it was `TestingLibraryElementError: Value "Main Bar" not found in options`, hitting whichever test lost the race that run.
+
+**Root cause, in the tests, not the app**: POS selects (Outlet, Terminal, Stock item, Menu item, Add stock item) render immediately with only their placeholder option, then fill in when their list fetch resolves a tick later. The shared pattern `userEvent.selectOptions(await screen.findByLabelText('Outlet'), 'Main Bar')` waited for the *select element*, not the *option* — so under load the selection ran before the options existed. The same race existed across the Stock tab tests (reproduced there too: 1 failure in 8 loaded runs).
+
+**Fix**: `frontend/src/app/pos/__tests__/selectWhenLoaded.js` — `selectWhenLoaded(label, option)` waits until the option (by value or visible text) is actually present, then selects it. Every dynamically-populated select in the POS tests now uses it (Register, ShiftsTab, and five Stock tab files); static selects (fixed `<option>` lists) don't need it. Verified: the same 12-run saturated-CPU stress of `RegisterTab.test.jsx` went from 5 failures to **0**.
+
+**Not a flake to "fix" with longer timeouts**: stressing the entire POS test folder at 2× CPU oversubscription can still exceed Vitest's 5s per-test timeout (the slowest POS test takes ~1.6s unloaded, ~3× headroom). That's an artificial-load artifact, not a race — deliberately not masked by raising timeouts. The lesson worth carrying forward: when a test fails intermittently, reproduce it under CPU load and read the *actual* error; a `findBy…` on a container that renders before its async content is a race regardless of how rarely it loses.
+
+## Redesign: the warm Lodgekeep design system, applied app-wide (PR #36, merged)
+
+**User-requested, in two rounds**: first "change the design CSS of the website... beautiful UI/UX" — confirmed via AskUserQuestion as **whole app via tokens** in a "modern clean" indigo direction — then, before that shipped, replaced by an explicit reference image: warm cream canvas, dark charcoal sidebar, brass and teal accents, serif greeting. Only the second, reference-matched version shipped; the indigo pass never left the working tree.
+
+**What's real now**: every screen restyles through `frontend/src/styles/tokens.css` — `--surface-page: #FAF8F4`, white cards with `--border: #EAE4D6`, `--accent: #8A6D3B` (brass), `--accent-secondary: #2E5850` (teal), brick `#B5482F` reserved for negative/down/destructive, a new `--sidebar-*` block for the dark sidebar, `--chart-1..4` for data series, `--font-display` (Fraunces). `DESIGN_SYSTEM.md` §1 documents the values. `--domain-booking` doubles as the app's de-facto primary accent (buttons, tabs, active states across ~15 module stylesheets), so it now equals `--accent`. Shared components (Button, Card, DataTable — hover rows, no zebra, small uppercase headers — StatusPill with a leading dot, ConfirmDialog) and global form focus rings follow the tokens. The POS Register's dark panel is untouched — it keeps its own deliberate `--pos-register-*` palette.
+
+**Text contrast was measured, not eyeballed**: the reference's muted gray `#8B9490` is 3.1:1 on white (fails WCAG AA); `--text-muted` is `#6E7873` (4.57:1 on white). It is 4.31:1 on the cream canvas — still marginally under 4.5 there, flagged rather than hidden.
+
+**Fonts were never actually loaded before this**: `--font-sans` always named Inter, but nothing loaded it — every screen rendered in the OS fallback. Inter (400–700) and Fraunces (600) are now self-hosted via `@fontsource/inter` / `@fontsource/fraunces`, imported once in `main.jsx` (no CDN — works on an offline terminal). Fraunces is used only for the Home greeting and the sidebar wordmark.
+
+**Shell**: dark charcoal sidebar with a nav icon per item (`app/shell/navIcons.jsx`, hand-authored SVG — no icon library), a brass active pill, two-letter teal initials avatars (`app/shell/initials.js`), and the user's real name (from #35's login/refresh name fields) instead of their email in the sidebar/top bar. The top bar stays (restyled onto the canvas) because it carries the business date and property switcher.
+
+**Pre-existing bugs found and fixed along the way, by looking at the real app in headless Chrome rather than trusting the test suite**: (1) the collapsed (icon-only) sidebar rendered blank buttons with no accessible name — items now carry an icon plus `aria-label`/`title` when collapsed (`AppShell.test.jsx` had asserted the unnamed behaviour and was corrected); (2) no global `box-sizing: border-box` reset existed, so every `width: 100%` input with padding overflowed its grid cell (visible as overlapping date fields on Booking); (3) the top bar overflowed a 390px phone width, forcing horizontal page scroll (page width now equals viewport).
+
+**Deliberately not copied from the reference**: a "Search" pill (no global search exists to drive it), and placeholder content ("Emily Smith", "Goldenland Hotel", a 4.7★ rating) — the real user, property, and an honest empty rating state are shown.
+
+**Verification**: frontend 715/715, both lints clean (the 3 pre-existing Group Blocks warnings), build clean; CI green on the PR. Live-verified by driving headless Chrome over the DevTools protocol against the running dev app (login as the seeded manager, real data): Home and Booking at desktop width, collapsed sidebar, and 390px phone width.
+
+**Environment gotcha worth knowing**: `frontend/package.json`'s `engines` requires Node `^22.22.2 || ^24.15.0 || >=26` — under the machine's default nvm Node 20, Vitest fails to even start (`webidl.util.markAsUncloneable is not a function`, from `undici` 8 via `jsdom` 30). Use `~/.nvm/versions/node/v24.16.0/bin` for frontend commands. Separately, a stale dev backend process (plain `node src/server.js`, not `--watch`) kept serving pre-change code — restart it after backend edits before live-verifying.
+
+## Redesign: Home dashboard with real metrics and hand-drawn charts (PR #35, merged)
+
+**User-requested**: a reference-designed Home dashboard (greeting, Guest Rating and Total Income widgets, four KPI cards with deltas and progress bars, a New vs. Returning area chart, a Bookings by Room Type donut), with "every number, chart, and delta wired to real data... no placeholder names, hotel names, or hardcoded stats," falling back to existing empty-state messaging where a source isn't populated.
+
+**Every figure is anchored on the property's business date (ARCHITECTURE.md §6), never the wall clock** — "this week" is the 7 business days ending on it, "last week" the 7 before. Definitions, chosen so each number and bar means something real:
+- **Total Bookings**: room-holding reservations (`tentative`/`confirmed`/`checked_in`/`checked_out` — the same set Group Blocks' pickup uses) arriving this week; delta vs. last week; bar = the week's average occupancy.
+- **Rooms Available**: tonight's live sellable rooms (occupancy report `physicalCount − roomsSold`); delta vs. the previous business day — an audited day carries no physical count, so today's live count stands in; bar = share still free.
+- **New Guests**: guests whose first-ever room-holding stay arrives this week (ties on the same first night count once); delta vs. last week; bar = their share of this week's bookings.
+- **Total Revenue**: today's posted room revenue; % delta vs. the previous business day (never an invented percent against a zero baseline); bar = today's share of the week's income.
+- **Total Income — this week**: the week's room revenue summed exactly, with a daily sparkline.
+- **New vs. Returning Guests**: arrivals per business date, split by whether the guest has an earlier stay. **Bookings by Room Type**: room-holding reservations arriving in the business date's calendar month, largest-first, beyond four types folded into "Other".
+- **Guest Rating**: an honest empty state — no guest reviews or ratings exist anywhere in this codebase (confirmed: no table, no endpoint).
+
+**Where the logic lives**: `frontend/src/app/dashboard/dashboardMetrics.js` — pure, directly unit-tested functions (exact BigInt-cents money sums via `shared/money.js`, largest-remainder percentages that always total 100, UTC-safe business-date arithmetic, property-timezone greeting and date). Money only becomes a plain Number for chart geometry and display-only percent ratios. `DashboardCharts.jsx` draws the area chart, donut, and sparkline as hand-built SVG (no chart library is bundled); the area chart measures its real container width (ResizeObserver) so axis text stays a true 12px instead of scaling with a viewBox. Each data source fetches independently, so a role lacking a grant (e.g. `reports.view_financial`) degrades only the affected cards to "Not available for your role." — never an error banner. The pre-existing setup-incomplete banner and "Today at a glance" alert strip are kept below the charts.
+
+**Backend — the real name was never returned**: `users.first_name`/`last_name` have always existed, but `POST /auth/login` and `POST /auth/refresh` returned only `userId`, so the app showed the email. Both now return `firstName`/`lastName` (additive; `AuthContext` stores them), and a new `tests/auth/auth.test.js` case covers both endpoints.
+
+**Tests**: new `dashboardMetrics.test.js` and a rewritten `HomeDashboard.test.jsx` (real values, deltas both directions, 403 degradation, empty states, charts, month and timezone rollover). Mutation-checked: letting cancelled bookings count broke 8 tests. Backend auth suite 46/46; frontend 715/715; CI green. Live-verified against the real dev database (Alpha Hotels: 13 bookings, 10 new guests, a real 7-day series).
+
+**Gaps, flagged rather than hidden**: (1) guest reviews/ratings — the widget can only fill in once that feature exists; (2) no global search; (3) the Home greeting's calendar date is the wall-clock date in the property's timezone, while every metric uses the business date — the top bar already shows the business date alongside it.
+
+## Redesign: POS Register — reference-matched dark panel (PR #34, merged)
+
+**User-requested, built through the literal `/feature-dev:feature-dev` skill**: redesign the POS "Register" tab's content (not the shell or other POS tabs) into a dark, touch-first panel matching a detailed spec and later a reference screenshot — category rail, 3-column menu grid, always-visible order ticket, amber "Send to Bar & Checkout" — wired to the real menu, order state, and settlement flow. Four forks confirmed via AskUserQuestion: NQR is a visually distinct tender that submits as `method: 'card'` (Flutterwave is deliberately unwired — no sandbox credentials), split billing kept behind a "Split bill" action, service charge as a percentage computed against the real server subtotal, and the Tax line kept (dropping it would re-open the settlement-preview tax bug fixed at the start of this work).
+
+**A follow-up layout/color pass, per user feedback**: outlet/terminal pickers and the tab strip fold into one compact header row; the ticket drops the Tip and editable Service % inputs (Subtotal, Service at a fixed 7.5%, Total — Tax still shows when nonzero); Cash/Card/NQR share one equal-weight style with no highlighted state (selection conveyed via `aria-pressed`); bright amber is reserved for the checkout button alone; all grays warm-toned.
+
+**Real bugs caught before merge** (three `feature-dev:code-reviewer` rounds plus the suite itself, each mutation-tested): dark-on-dark invisible form labels; no staleness guards on `loadActiveOrder` or the room-charge guest search (the guest-search guard needed a global never-reset counter — a per-group counter reset on tab switch left a collision window); a whole-line void partial failure leaving stale UI (`Promise.allSettled` + unconditional reload); a "Table N" numbering race on rapid "+ New tab" taps; `percentOfMoney` truncating to 2 decimals vs. the backend's 4-decimal tax-rate precision; and a live-total staleness key that ignored quantity changes. One regression test was itself found passing for the wrong reason: it typed "204" character by character, and the later keystrokes' searches superseded the deferred one before the tab switch it existed to prove — rewritten with a single `fireEvent.change` and re-verified by mutation.
+
+**Also in this PR's first commit**: the settlement preview omitted tax (a real ₦20.00 item with 7.5% VAT charged ₦21.50 while the cashier saw ₦20.00) — fixed with a `pos.operate`-gated `GET /pos/orders/:id/settlement-preview` reusing the exact tax computation `settleOrder` uses — and a room-charge 500.
+
+**Verification**: POS suites 99/99, frontend suite green, lints and build clean, CI green.
+
 ## Known gap, found while fixing code-review findings on PR #31 (QR guest self-ordering, Phase 6, still open): the test suite never explicitly closes its Redis connections
 
 **User-reported**: a full backend run on `phase-6-qr-self-ordering` (2146/2146 passing) printed Jest's own "did not exit one second after the test run has completed... asynchronous operations that weren't stopped" warning, and asked directly whether the QR-ordering module's new rate-limiting Redis client was the cause, or whether this predates the PR — checked rather than assumed.

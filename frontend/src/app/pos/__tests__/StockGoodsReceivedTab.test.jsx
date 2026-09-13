@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StockGoodsReceivedTab } from '../StockGoodsReceivedTab.jsx';
+import { selectWhenLoaded } from './selectWhenLoaded.js';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
@@ -26,7 +27,7 @@ const STOCK_ITEMS = [
 
 async function selectOutlet() {
   render(<StockGoodsReceivedTab activeProperty={{ base_currency: 'NGN' }} />);
-  await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '1');
+  await selectWhenLoaded('Outlet', '1');
   await screen.findByText('New delivery');
 }
 
@@ -54,7 +55,7 @@ describe('<StockGoodsReceivedTab>', () => {
     await selectOutlet();
 
     await userEvent.type(screen.getByLabelText('Reference (optional)'), 'DN-1');
-    await userEvent.selectOptions(screen.getByLabelText('Stock item'), '20');
+    await selectWhenLoaded('Stock item', '20');
     await userEvent.type(screen.getByLabelText('Quantity'), '10');
     await userEvent.type(screen.getByLabelText('Unit cost'), '6.50');
     await userEvent.click(screen.getByRole('button', { name: 'Record delivery' }));
@@ -80,8 +81,8 @@ describe('<StockGoodsReceivedTab>', () => {
       items: [{ id: '20', name: 'Vodka', unit: 'ml', current_quantity: '110.000', purchase_cost: '6.50' }],
     });
     render(<StockGoodsReceivedTab activeProperty={{ base_currency: 'KES' }} />);
-    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '1');
-    await userEvent.selectOptions(screen.getByLabelText('Stock item'), '20');
+    await selectWhenLoaded('Outlet', '1');
+    await selectWhenLoaded('Stock item', '20');
     await userEvent.type(screen.getByLabelText('Quantity'), '10');
     await userEvent.type(screen.getByLabelText('Unit cost'), '6.50');
     await userEvent.click(screen.getByRole('button', { name: 'Record delivery' }));
@@ -112,7 +113,7 @@ describe('<StockGoodsReceivedTab>', () => {
     await selectOutlet();
     expect(screen.getByRole('button', { name: 'Record delivery' })).toBeDisabled();
 
-    await userEvent.selectOptions(screen.getByLabelText('Stock item'), '20');
+    await selectWhenLoaded('Stock item', '20');
     await userEvent.type(screen.getByLabelText('Quantity'), '10');
     await userEvent.type(screen.getByLabelText('Unit cost'), '6.50');
     expect(screen.getByRole('button', { name: 'Record delivery' })).toBeEnabled();
@@ -122,7 +123,7 @@ describe('<StockGoodsReceivedTab>', () => {
     mocks.recordGoodsReceived.mockRejectedValue(new Error('boom'));
     await selectOutlet();
 
-    await userEvent.selectOptions(screen.getByLabelText('Stock item'), '20');
+    await selectWhenLoaded('Stock item', '20');
     await userEvent.type(screen.getByLabelText('Quantity'), '10');
     await userEvent.type(screen.getByLabelText('Unit cost'), '6.50');
     await userEvent.click(screen.getByRole('button', { name: 'Record delivery' }));

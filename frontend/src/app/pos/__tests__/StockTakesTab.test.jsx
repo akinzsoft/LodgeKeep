@@ -3,6 +3,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StockTakesTab } from '../StockTakesTab.jsx';
 import { ApiError } from '../../../shared/api/index.js';
+import { selectWhenLoaded } from './selectWhenLoaded.js';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
@@ -52,7 +53,7 @@ describe('<StockTakesTab>', () => {
     mocks.getStockTake.mockResolvedValue({ stockTake: openTakeRow(), lines: [] });
     render(<StockTakesTab />);
 
-    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '1');
+    await selectWhenLoaded('Outlet', '1');
     await userEvent.click(screen.getByRole('button', { name: 'Open stock take' }));
 
     expect(await screen.findByText('Vodka')).toBeInTheDocument();

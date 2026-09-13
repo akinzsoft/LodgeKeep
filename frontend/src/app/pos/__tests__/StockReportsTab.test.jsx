@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StockReportsTab } from '../StockReportsTab.jsx';
+import { selectWhenLoaded } from './selectWhenLoaded.js';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
@@ -96,7 +97,7 @@ describe('<StockReportsTab>', () => {
     mocks.getStockVariance.mockResolvedValue({ lines: [], summaryByItem: [] });
     render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
 
-    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '1');
+    await selectWhenLoaded('Outlet', '1');
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
 
     expect(mocks.getCostOfSales).toHaveBeenCalledWith(expect.objectContaining({ outletId: '1' }));

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StockRecipesTab } from '../StockRecipesTab.jsx';
+import { selectWhenLoaded } from './selectWhenLoaded.js';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
@@ -29,8 +30,8 @@ const STOCK_ITEMS = [
 
 async function selectOutletAndMenuItem() {
   render(<StockRecipesTab />);
-  await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '1');
-  await userEvent.selectOptions(await screen.findByLabelText('Menu item'), '10');
+  await selectWhenLoaded('Outlet', '1');
+  await selectWhenLoaded('Menu item', '10');
 }
 
 describe('<StockRecipesTab>', () => {
@@ -64,7 +65,7 @@ describe('<StockRecipesTab>', () => {
     await selectOutletAndMenuItem();
     await screen.findByText('No recipe components yet — add one below. This menu item\'s stock is never affected by a sale until it has at least one.');
 
-    await userEvent.selectOptions(screen.getByLabelText('Add stock item'), '21');
+    await selectWhenLoaded('Add stock item', '21');
     await userEvent.type(screen.getByLabelText('Quantity'), '10');
     await userEvent.click(screen.getByRole('button', { name: 'Add to recipe' }));
     expect(await screen.findByText('Tonic water')).toBeInTheDocument();
@@ -94,8 +95,8 @@ describe('<StockRecipesTab>', () => {
   it('disables recipe controls while offline', async () => {
     mocks.listMenuItemComponents.mockResolvedValue([{ stock_item_id: '20', quantity: '25.000' }]);
     render(<StockRecipesTab isOffline />);
-    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '1');
-    await userEvent.selectOptions(await screen.findByLabelText('Menu item'), '10');
+    await selectWhenLoaded('Outlet', '1');
+    await selectWhenLoaded('Menu item', '10');
     await screen.findByText('Vodka');
 
     expect(screen.getByText(/You are offline/)).toBeInTheDocument();

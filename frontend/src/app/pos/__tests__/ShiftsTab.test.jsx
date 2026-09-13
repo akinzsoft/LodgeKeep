@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ShiftsTab } from '../ShiftsTab.jsx';
+import { selectWhenLoaded } from './selectWhenLoaded.js';
 
 const mocks = vi.hoisted(() => ({
   listTerminals: vi.fn(),
@@ -26,7 +27,7 @@ describe('<ShiftsTab>', () => {
     mocks.openShift.mockResolvedValue({ id: '9' });
     render(<ShiftsTab />);
 
-    await userEvent.selectOptions(await screen.findByLabelText('Terminal'), 'BAR-TERM-1');
+    await selectWhenLoaded('Terminal', 'BAR-TERM-1');
     await userEvent.type(screen.getByLabelText('Opening float'), '100');
     await userEvent.click(screen.getByRole('button', { name: 'Open shift' }));
 

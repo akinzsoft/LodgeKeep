@@ -3,6 +3,7 @@ import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StockItemsTab } from '../StockItemsTab.jsx';
 import { ApiError } from '../../../shared/api/index.js';
+import { selectWhenLoaded } from './selectWhenLoaded.js';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
@@ -101,7 +102,7 @@ describe('<StockItemsTab>', () => {
     render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
     await screen.findByText('New stock item');
 
-    await userEvent.selectOptions(screen.getByLabelText('Outlet'), '1');
+    await selectWhenLoaded('Outlet', '1');
     await userEvent.type(screen.getByLabelText('Name'), 'Vodka');
     await userEvent.type(screen.getByLabelText('Unit'), 'ml');
     await userEvent.type(screen.getByLabelText('Reorder level (optional)'), '20');
@@ -176,7 +177,7 @@ describe('<StockItemsTab>', () => {
     const addButton = screen.getByRole('button', { name: 'Add stock item' });
     expect(addButton).toBeEnabled();
 
-    await userEvent.selectOptions(screen.getByLabelText('Outlet'), '1');
+    await selectWhenLoaded('Outlet', '1');
     await userEvent.type(screen.getByLabelText('Name'), 'Vodka');
     await userEvent.type(screen.getByLabelText('Unit'), 'ml');
     await userEvent.click(addButton);

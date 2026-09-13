@@ -3,6 +3,7 @@ import { render, screen, within, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RegisterTab } from '../RegisterTab.jsx';
 import { ApiError } from '../../../shared/api/index.js';
+import { selectWhenLoaded } from './selectWhenLoaded.js';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
@@ -36,12 +37,17 @@ function orderItem(overrides) {
 /** A single ×1 House Cocktail's real preview (subtotal 20.00, tax 1.50 at the ambient 7.5% VAT this session's backend tests already establish as the fixture convention). */
 const SINGLE_ITEM_PREVIEW = { orderId: '9', currency: 'NGN', groups: [{ splitGroup: null, subtotal: '20.00', taxAmount: '1.50' }] };
 
+/** Picks the outlet and terminal, waiting for each option to load first — see `selectWhenLoaded` for the race this avoids. */
+async function selectStation() {
+  await selectWhenLoaded('Outlet', 'Main Bar');
+  await selectWhenLoaded('Terminal', 'BAR-TERM-1');
+}
+
 /** `initialItems` seeds the FIRST `getOrder` resolution — the one `handleNewTab` itself triggers immediately after opening — so it must be queued before the "+ New tab" click, not after. */
 async function openNewTab(initialItems = []) {
   const order = { id: '9', table_label: '', status: 'open' };
   render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
-  await userEvent.selectOptions(await screen.findByLabelText('Outlet'), 'Main Bar');
-  await userEvent.selectOptions(screen.getByLabelText('Terminal'), 'BAR-TERM-1');
+  await selectStation();
   mocks.openOrder.mockResolvedValue(order);
   mocks.getOrder.mockResolvedValueOnce({ order, items: initialItems, settlements: [] });
   await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
@@ -73,8 +79,7 @@ describe('<RegisterTab>', () => {
 
     render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
 
-    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), 'Main Bar');
-    await userEvent.selectOptions(screen.getByLabelText('Terminal'), 'BAR-TERM-1');
+    await selectStation();
     await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
 
     expect(mocks.openOrder).toHaveBeenCalledWith(expect.objectContaining({ outletId: '1', terminalId: '2', tableLabel: 'Table 1' }));
@@ -98,8 +103,7 @@ describe('<RegisterTab>', () => {
     mocks.getOrder.mockResolvedValue({ order: { id: '10', table_label: 'Table 2', status: 'open' }, items: [], settlements: [] });
 
     render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
-    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), 'Main Bar');
-    await userEvent.selectOptions(screen.getByLabelText('Terminal'), 'BAR-TERM-1');
+    await selectStation();
     await screen.findByRole('button', { name: 'Table 1' }); // the pre-existing open tab
 
     await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
@@ -112,8 +116,7 @@ describe('<RegisterTab>', () => {
     mocks.getOrder.mockResolvedValue({ order, items: [], settlements: [] });
 
     render(<RegisterTab activeProperty={{ base_currency: 'KES' }} />);
-    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), 'Main Bar');
-    await userEvent.selectOptions(screen.getByLabelText('Terminal'), 'BAR-TERM-1');
+    await selectStation();
     await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
 
     // KES formats as "Ksh" via Intl (confirmed directly against the real
@@ -366,8 +369,7 @@ describe('<RegisterTab>', () => {
     mocks.getSettlementPreview.mockResolvedValue({ orderId: '9', currency: 'NGN', groups: [{ splitGroup: null, subtotal: '20.00', taxAmount: '1.50' }] });
 
     render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
-    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), 'Main Bar');
-    await userEvent.selectOptions(screen.getByLabelText('Terminal'), 'BAR-TERM-1');
+    await selectStation();
 
     // Tab A: start a slow, deliberately never-resolved-yet guest search.
     mocks.getOrder.mockResolvedValueOnce({ order: orderA, items: [orderItem({ id: '1' })], settlements: [] });
@@ -465,8 +467,7 @@ describe('<RegisterTab>', () => {
     mocks.getSettlementPreview.mockResolvedValue({ orderId: '9', currency: 'NGN', groups: [] });
 
     render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
-    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), 'Main Bar');
-    await userEvent.selectOptions(screen.getByLabelText('Terminal'), 'BAR-TERM-1');
+    await selectStation();
 
     // Open tab A first — a real, already-correct load.
     mocks.getOrder.mockResolvedValueOnce({ order: orderA, items: [orderItem({ id: '1' })], settlements: [] });
