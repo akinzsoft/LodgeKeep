@@ -252,7 +252,19 @@ exports.seed = async function seed(knex) {
    * the time this runs.
    */
   async function ensureManagerGroupBlocksAccess(tenantId) {
-    const keys = ['group_blocks.view', 'group_blocks.manage'];
+    await grantManagerKeys(tenantId, ['group_blocks.view', 'group_blocks.manage']);
+  }
+
+  /**
+   * PLAN.md Phase 7's door access monitoring — manager holds both keys
+   * (SECURITY.md §5: manager/admin/super_admin only; admin/super_admin get
+   * them via `ensureAdminSuperAdminFullAccess`).
+   */
+  async function ensureManagerDoorAccessAccess(tenantId) {
+    await grantManagerKeys(tenantId, ['door_access.view', 'door_access.manage']);
+  }
+
+  async function grantManagerKeys(tenantId, keys) {
     const permissions = await knex('permissions').whereIn('permission_key', keys).select('id', 'permission_key');
     if (permissions.length !== keys.length) return; // migrations not yet run — nothing to grant
     const managerRole = await knex('roles').where({ tenant_id: tenantId, code: 'manager' }).first('id');
@@ -481,6 +493,7 @@ exports.seed = async function seed(knex) {
       await ensureManagerPosAccess(existingTenant.id);
       await ensureManagerArAccess(existingTenant.id);
       await ensureManagerGroupBlocksAccess(existingTenant.id);
+      await ensureManagerDoorAccessAccess(existingTenant.id);
       await ensurePosOperatorRoleAccess(existingTenant.id);
       // src/auth/mfa.js's dev-only bypass: backfill the admin account and
       // its full-access grant onto a pre-existing dev tenant too, same
@@ -573,6 +586,9 @@ exports.seed = async function seed(knex) {
 
     // PLAN.md Phase 4's Group Blocks — see `ensureManagerGroupBlocksAccess`'s own header.
     await ensureManagerGroupBlocksAccess(tenantId);
+
+    // PLAN.md Phase 7's door access monitoring.
+    await ensureManagerDoorAccessAccess(tenantId);
 
     // PLAN.md Phase 1 gap closure — see `ensureReferenceData`'s own header.
     await ensureReferenceData(tenantId, propertyId);

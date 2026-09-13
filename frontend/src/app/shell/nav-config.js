@@ -147,6 +147,12 @@ export const DEFAULT_NAV_GROUPS = [
       // second place this matrix's admin/super_admin split diverges on a
       // single action, after `room_types.update` (SECURITY.md §5).
       { key: 'chain_overview', label: 'Multi-Property Roll-up', requiredPermission: 'reports.view_chain' },
+      // PLAN.md Phase 7 (door access monitoring) — PRODUCT_REQUIREMENTS.md
+      // §3.23: "Manager/admin only — these screens must not render for front
+      // desk or housekeeping roles". Filed under SETUP with the other
+      // back-office review screens; gated on `door_access.view`
+      // (manager/admin/super_admin only).
+      { key: 'door_access', label: 'Door Access', requiredPermission: 'door_access.view' },
     ],
   },
 ];

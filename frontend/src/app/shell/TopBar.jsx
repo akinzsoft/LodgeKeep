@@ -22,6 +22,10 @@ function describeNotification(notification) {
     const roomNumber = payload.roomNumber ?? payload.roomId ?? 'a room';
     return `Housekeeping discrepancy raised for room ${roomNumber}.`;
   }
+  if (notification.type === 'door_access.critical_alert_raised') {
+    const rule = payload.rule === 'post_checkout_access' ? 'post-checkout access' : 'unsold occupancy';
+    return `Door access alert (found in an uploaded lock log): ${rule}, room ${payload.roomNumber ?? '?'}.`;
+  }
   return notification.type;
 }
 

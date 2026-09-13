@@ -291,7 +291,7 @@ Runs against **every** module. Generated from a table of endpoints rather than h
 
 ### 12A. Door access — PHASE 2 (PRODUCT_REQUIREMENTS.md §3.23)
 
-Not part of the MVP build (PLAN.md gates this on lock hardware being confirmed for a given tenant) — but the spec and schema exist now, so the tests are written now too, ready for whenever a property is actually configured with a lock adapter other than `none`.
+Built in PLAN.md Phase 7 for `manual_import` only (HiRead ProUSB). Covered by `backend/tests/access-monitoring/` — LOCK-3, 4, 5, 8/10 (natural-key dedup), 9, 12 and 14 are real tests. **Not built, so not testable yet**: LOCK-1 and LOCK-6 (no card encoding), LOCK-7 (`staff_card_anomaly`), LOCK-11 (no real-time adapter), LOCK-13 (no retention window). LOCK-2's denied events are stored but not evaluated. Additional Phase 7 cases: post-checkout grace window, a room vacated by a room move is not a checkout, once-per-stay first-use confirmation, incident extend vs. fresh alert after resolution, overlapping concurrent imports and concurrent resolves under real connections.
 
 | # | Test | Expect |
 |---|---|---|
@@ -302,8 +302,8 @@ Not part of the MVP build (PLAN.md gates this on lock hardware being confirmed f
 | LOCK-5 | Card used after the guest has checked out | `post_checkout_access` rule fires; `critical` severity |
 | LOCK-6 | Card tied to a reservation that was subsequently cancelled | Alert fires — the card should have been deactivated at cancellation; this test also verifies cancellation actually revokes the card, not just that the alert fires |
 | LOCK-7 | Master/staff card used | Event recorded with `card_type: staff`, `staff_user_id` populated; no alert unless it falls outside that staff member's assigned shift/room (`staff_card_anomaly`) |
-| LOCK-8 | The same physical door-open event delivered twice by the lock vendor | Deduplicated on (lock_system, external_event_id) — exactly one `door_access_events` row, not two |
-| LOCK-9 | Manual CSV import of a pulled audit trail | Events created, each flagged `is_retrospective: true`, `ingestion_mode: manual_import` |
+| LOCK-8 | The same physical door-open event delivered twice by the lock vendor | Deduplicated — exactly one `door_access_events` row, not two. For `manual_import` the key is (room, card, opened_at), since the export carries no vendor event id |
+| LOCK-9 | Manual import (.xls/.xlsx/.csv) of a pulled audit trail | Events created, each flagged `is_retrospective: true`; the property's lock config is `ingestion_mode: manual_import` |
 | LOCK-10 | The same CSV file imported twice (a real operator habit) | No duplicate events — same dedupe key as LOCK-8 applies regardless of ingestion mode |
 | LOCK-11 | Real-time webhook event (networked/TTHotel-tier adapter) | Processed immediately; `is_retrospective: false`; detection rules evaluate on ingest, not deferred to the next night-audit sweep |
 | LOCK-12 | Door event for a room belonging to another tenant's property | Rejected at ingest — tenant isolation (SECURITY.md §2) applies to hardware-sourced data exactly as it does to anything else |

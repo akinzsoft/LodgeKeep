@@ -71,6 +71,10 @@ const EVENT_TEMPLATE_KEYS = {
   // resolvable recipient.
   'pos.room_charge_otp_requested': 'pos_room_charge_otp',
   'pos.guest_order_receipt': 'pos_guest_order_receipt',
+  // PLAN.md Phase 7 (door access monitoring) — one digest per manager/admin/
+  // super_admin per lock-log import that raised critical alerts; recipient
+  // is staff, so `recipientEmail` like `ar.*`/`billing.*`.
+  'door_access.critical_alerts_detected': 'door_access_critical_alerts',
 };
 
 /**
@@ -216,6 +220,19 @@ const DEFAULT_TEMPLATES = {
       paragraph('Your order at {{propertyName}} has been paid.') +
       details([['Total charged', '{{amount}} {{currency}}']]) +
       note('Please keep this email as your receipt.'),
+  },
+  door_access_critical_alerts: {
+    subject: 'Door access: {{criticalAlertCount}} critical alert(s) found in a lock log import — {{propertyName}}',
+    body_html:
+      heading('Critical door-access alerts') +
+      paragraph('Dear {{recipientName}},') +
+      paragraph('A lock audit trail uploaded at {{propertyName}} raised {{criticalAlertCount}} critical alert(s).') +
+      paragraph('These were found retrospectively. The door events happened between {{earliestEventDate}} and {{latestEventDate}} and were only detected when the lock log was uploaded — this is not real-time monitoring.') +
+      details([
+        ['Alerts', '{{alertSummary}}'],
+        ['Door events imported', '{{importedEventCount}}'],
+      ]) +
+      note('Review the evidence and acknowledge or resolve each alert under Door Access.'),
   },
 };
 

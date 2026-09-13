@@ -58,6 +58,7 @@ const { mediaRouter } = require('./shared/image-store');
 const { billingRouter, billingWebhookRouter } = require('./modules/billing');
 const { offboardingRouter } = require('./modules/offboarding');
 const { migrationRouter } = require('./modules/migration');
+const { accessMonitoringRouter } = require('./modules/access-monitoring');
 const { qrOrderPublicRouter, qrOrderStaffRouter } = require('./modules/qr-ordering');
 
 function buildStaffRouter() {
@@ -129,6 +130,8 @@ function buildStaffRouter() {
   // stock/service.js's own header), gated on the new `pos.stock_view`/
   // `pos.stock_manage` keys.
   router.use(stockRouter());
+  // PLAN.md Phase 7 — door access monitoring (manual lock-log import).
+  router.use(accessMonitoringRouter());
   router.use((req, res) => notFound(res));
   return router;
 }
