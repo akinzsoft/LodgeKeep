@@ -526,6 +526,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
       tip_amount: tipAmount,
       service_charge: serviceCharge,
       settled_by_user_id: settledByUserId,
+      business_date: businessDate ?? null,
     };
 
     if (settlement.method === 'room_charge') {

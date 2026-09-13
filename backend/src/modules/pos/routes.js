@@ -56,6 +56,9 @@ function posRouter() {
   router.post('/pos/orders/:id/settle', requirePermission('pos.operate'), controller.settleOrder);
   router.post('/pos/orders/:id/settlements/:settlementId/void', requirePermission('pos.manage'), controller.voidSettlement);
 
+  // A reconciliation report, not a till action — manager tier, like the other POS overrides.
+  router.get('/pos/reports/sales', requirePermission('pos.manage'), controller.salesReport);
+
   router.get('/pos/shifts', requirePermission('pos.operate'), controller.listShifts);
   router.get('/pos/shifts/:id', requirePermission('pos.operate'), controller.getShift);
   router.post('/pos/shifts', requirePermission('pos.operate'), controller.openShift);

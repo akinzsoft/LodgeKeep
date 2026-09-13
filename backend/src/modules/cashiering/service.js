@@ -712,6 +712,8 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
     tax_amount: taxAmount,
     currency: payment.currency,
     payment_id: payment.id,
+    tender: 'card',
+    business_date: property?.current_business_date ?? null,
     settled_by_user_id: userId ?? null,
   });
   await trx.table('pos_orders').where({ id: order.id }).update({ status: 'settled', closed_at: new Date() });

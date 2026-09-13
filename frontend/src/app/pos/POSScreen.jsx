@@ -6,6 +6,7 @@ import { ShiftsTab } from './ShiftsTab.jsx';
 import { GuestOrdersTab } from './GuestOrdersTab.jsx';
 import { QrTokensTab } from './QrTokensTab.jsx';
 import { StockTab } from './StockTab.jsx';
+import { SalesTab } from './SalesTab.jsx';
 import styles from './POSScreen.module.css';
 
 /**
@@ -20,7 +21,9 @@ import styles from './POSScreen.module.css';
  * per-table/per-room code management, `pos.manage`), and Stock (raw
  * ingredient/consumable tracking, recipes, goods received, blind stock
  * takes, wastage, and cost/variance reporting — split across
- * `pos.stock_view`/`pos.stock_manage`, see `StockTab.jsx`'s own header).
+ * `pos.stock_view`/`pos.stock_manage`, see `StockTab.jsx`'s own header),
+ * plus Sales (totals per payment method, top sellers, settled tabs, CSV,
+ * and captured card payments to refund — `pos.manage`, see `SalesTab.jsx`).
  * Same self-contained multi-tab pattern `HousekeepingScreen`/`BookingScreen`
  * already established — no router in this app yet. No client-side
  * permission check hides any tab, the same "the real 403 is what a
@@ -55,6 +58,7 @@ const TABS = [
   { key: 'tickets', label: 'Tickets' },
   { key: 'guest_orders', label: 'Guest orders' },
   { key: 'shifts', label: 'Shifts' },
+  { key: 'sales', label: 'Sales' },
   { key: 'qr_codes', label: 'QR codes' },
   { key: 'stock', label: 'Stock' },
   { key: 'setup', label: 'Setup' },
@@ -91,6 +95,7 @@ export function POSScreen({ activeProperty, isOffline = false, currentUserLabel 
             {tab === 'tickets' && <TicketsTab />}
             {tab === 'guest_orders' && <GuestOrdersTab activeProperty={activeProperty} />}
             {tab === 'shifts' && <ShiftsTab isOffline={isOffline} />}
+            {tab === 'sales' && <SalesTab activeProperty={activeProperty} isOffline={isOffline} />}
             {tab === 'qr_codes' && <QrTokensTab />}
             {tab === 'stock' && <StockTab activeProperty={activeProperty} isOffline={isOffline} />}
             {tab === 'setup' && <SetupTab activeProperty={activeProperty} />}

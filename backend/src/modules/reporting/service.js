@@ -301,10 +301,21 @@ async function computeChainOverview({ context }) {
 }
 
 /** CSV export (PRODUCT_REQUIREMENTS.md §3.11: "export must reflect the filters currently applied on screen") — no PDF/Excel library exists yet in this codebase; CSV needs none. */
+function csvCell(value) {
+  let text = String(value ?? '');
+  // Spreadsheet formula injection: a staff-entered name starting with = + - @
+  // (or a tab/CR) would run as a formula when the file is opened. Prefix a
+  // quote to keep it text — plain numbers such as "-10.00" are left alone.
+  if (/^[=+\-@\t\r]/.test(text) && !/^-?\d+(\.\d+)?$/.test(text)) text = `'${text}`;
+  // RFC 4180: a cell containing a comma, quote, or newline is quoted, with
+  // inner quotes doubled — a menu item or guest name can contain any of them.
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
 function toCsv(rows, columns) {
-  const header = columns.join(',');
+  const header = columns.map(csvCell).join(',');
   const body = rows
-    .map((row) => columns.map((column) => String(row[column] ?? '')).join(','))
+    .map((row) => columns.map((column) => csvCell(row[column])).join(','))
     .join('\n');
   return `${header}\n${body}`;
 }
