@@ -1,0 +1,182 @@
+/* BrandingTab — the logo uploader and its receipt/email previews. Tokens only. */
+
+.layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.current {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  margin-block: var(--space-3);
+  padding: var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-page);
+}
+
+.currentLogo {
+  display: block;
+  max-width: 100%;
+  max-height: 96px;
+  object-fit: contain;
+}
+
+/* The native file input stays in the label (so it is keyboard-reachable and
+   announced), visually replaced by a button-styled label. */
+.uploadButton {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--text-inverse);
+  font-size: var(--text-body-size);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.uploadButton[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.uploadButton:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.fileInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.tips {
+  margin: var(--space-4) 0 0;
+  padding-left: var(--space-5);
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+}
+
+.previews {
+  display: grid;
+  gap: var(--space-5);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+/* Receipt preview — an 80mm roll at screen scale, same logo rules as the printed receipt. */
+.receiptPreview {
+  width: 80mm;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-3);
+  border: 1px solid var(--border);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption-size);
+  line-height: 1.35;
+}
+
+.receiptPreview p {
+  margin: 0 0 var(--space-1);
+}
+
+.receiptLogo {
+  display: block;
+  height: 18mm;
+  max-width: 60mm;
+  margin: 0 auto var(--space-1);
+  object-fit: contain;
+  filter: grayscale(1);
+}
+
+.receiptTitle {
+  font-size: var(--text-h3-size);
+  font-weight: 700;
+  text-align: center;
+}
+
+.receiptCentered {
+  text-align: center;
+}
+
+.receiptRow {
+  display: flex;
+  justify-content: space-between;
+}
+
+.receiptRule {
+  margin: var(--space-1) 0;
+  border: none;
+  border-top: 1px dashed var(--text-primary);
+}
+
+/* Email preview — the same 240×72 logo box the real email header uses. */
+.emailPreview {
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-page);
+}
+
+.emailHeader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 72px;
+  margin-bottom: var(--space-3);
+}
+
+.emailLogo {
+  display: block;
+  max-width: 240px;
+  max-height: 72px;
+  object-fit: contain;
+}
+
+.emailWordmark {
+  font-family: var(--font-display);
+  font-size: var(--text-h2-size);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.emailCard {
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+
+.emailHeading {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-h3-size);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.emailLine {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+}
+
+.emailFooter {
+  margin: var(--space-3) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  font-weight: 600;
+  text-align: center;
+}

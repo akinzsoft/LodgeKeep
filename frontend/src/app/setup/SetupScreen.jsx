@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { setupApi, ApiError } from '../../shared/api/index.js';
 import { PropertyTab } from './PropertyTab.jsx';
+import { BrandingTab } from './BrandingTab.jsx';
 import { RoomTypesTab } from './RoomTypesTab.jsx';
 import { RoomsTab } from './RoomsTab.jsx';
 import { RateCodesTab } from './RateCodesTab.jsx';
@@ -45,6 +46,7 @@ import styles from './SetupScreen.module.css';
 const TABS = [
   { key: 'wizard', label: 'Guided Setup' },
   { key: 'property', label: 'Property' },
+  { key: 'branding', label: 'Branding' },
   { key: 'room-types', label: 'Room Types' },
   { key: 'rooms', label: 'Rooms' },
   { key: 'rate-codes', label: 'Rate Codes & Calendar' },
@@ -133,6 +135,16 @@ export function SetupScreen({ activePropertyId, isOffline = false, onPropertiesC
               // The app shell keeps its own copy of the property records (name,
               // business date, logo for receipts) — refresh it too, so a new
               // logo or name shows everywhere without a page reload.
+              onPropertiesChanged?.();
+            }}
+          />
+        )}
+        {tab === 'branding' && (
+          <BrandingTab
+            activeProperty={activeProperty}
+            isOffline={isOffline}
+            onPropertiesChanged={async () => {
+              await reloadProperties();
               onPropertiesChanged?.();
             }}
           />
