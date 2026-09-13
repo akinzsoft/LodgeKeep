@@ -13,6 +13,17 @@ import styles from './ReportingScreen.module.css';
  * types) — all computed live, no `daily_reports` snapshot (Night Audit was
  * not built this pass; see `src/modules/reporting/index.js`'s own backend
  * header). No custom-dashboard builder or scheduled delivery UI this pass.
+ *
+ * Bug fix (found while testing the Reporting menu): this screen rendered
+ * its tabs immediately on mount, before `listProperties()` had resolved —
+ * `activeProperty` was `null` for that whole window, and `RevenueTab` used
+ * to paper over it with `activeProperty?.base_currency ?? 'USD'`, a silent
+ * currency misstatement (a real, reachable version of the exact bug this
+ * session already found and fixed across the whole POS module — see
+ * `POSScreen`'s own header). Fixed the same way `BookingScreen`/
+ * `POSScreen`/`HousekeepingScreen` already guard an unresolved property:
+ * nothing renders until it's real, so `RevenueTab` never needs — or gets —
+ * a fallback currency again.
  */
 const TABS = [
   { key: 'occupancy', label: 'Occupancy' },
@@ -49,26 +60,34 @@ export function ReportingScreen({ activePropertyId }) {
         </p>
       )}
 
-      <div className={styles.tabs} role="tablist" aria-label="Reporting sections">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.key}
-            className={`${styles.tab} ${tab === t.key ? styles.tabActive : ''}`.trim()}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {properties === null ? (
+        <p className={styles.loading}>Loading reporting…</p>
+      ) : !activeProperty ? (
+        <p className={styles.loading}>Select an active property to view reports.</p>
+      ) : (
+        <>
+          <div className={styles.tabs} role="tablist" aria-label="Reporting sections">
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={tab === t.key}
+                className={`${styles.tab} ${tab === t.key ? styles.tabActive : ''}`.trim()}
+                onClick={() => setTab(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-      <div className={styles.panel}>
-        {tab === 'occupancy' && <OccupancyTab />}
-        {tab === 'revenue' && <RevenueTab activeProperty={activeProperty} />}
-        {tab === 'housekeeping' && <HousekeepingSummaryTab />}
-      </div>
+          <div className={styles.panel}>
+            {tab === 'occupancy' && <OccupancyTab />}
+            {tab === 'revenue' && <RevenueTab activeProperty={activeProperty} />}
+            {tab === 'housekeeping' && <HousekeepingSummaryTab />}
+          </div>
+        </>
+      )}
     </div>
   );
 }

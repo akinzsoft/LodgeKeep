@@ -75,6 +75,12 @@
   font-size: var(--text-body-size);
 }
 
+.loading {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-body-size);
+}
+
 .errorBanner {
   margin: 0;
   padding: var(--space-3);

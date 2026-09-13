@@ -45,8 +45,15 @@ describe('<ReportingScreen>', () => {
   it('runs the occupancy report and shows the resulting rows', async () => {
     mocks.getOccupancyReport.mockResolvedValue([{ date: '2027-01-01', physicalCount: 5, roomsSold: 2, occupancyPct: 40 }]);
     render(<ReportingScreen activePropertyId="1" />);
-    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Run report' }));
     expect(await screen.findByText('40%')).toBeInTheDocument();
+  });
+
+  it("gap closure: an audited day's real null physical count renders as \"—\", not a blank cell", async () => {
+    mocks.getOccupancyReport.mockResolvedValue([{ date: '2027-01-01', physicalCount: null, roomsSold: 2, occupancyPct: 40, audited: true }]);
+    render(<ReportingScreen activePropertyId="1" />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Run report' }));
+    expect(await screen.findByText('—')).toBeInTheDocument();
   });
 
   it('shows a real 403 error banner on the revenue tab, not a silent failure', async () => {
@@ -55,6 +62,39 @@ describe('<ReportingScreen>', () => {
     await userEvent.click(await screen.findByRole('tab', { name: 'Revenue' }));
     await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
     expect(await screen.findByText('You do not have this permission.')).toBeInTheDocument();
+  });
+
+  it('bug fix: shows a real guard, never renders a tab, until the active property actually resolves', async () => {
+    mocks.listProperties.mockResolvedValue([]); // no property matches activePropertyId="1"
+    render(<ReportingScreen activePropertyId="1" />);
+
+    expect(await screen.findByText('Select an active property to view reports.')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Revenue' })).not.toBeInTheDocument();
+  });
+
+  it("bug fix: the revenue tab renders the real property currency, never a fallback USD", async () => {
+    mocks.getRevenueReport.mockResolvedValue([{ date: '2027-01-01', roomRevenue: '500.00', roomsSold: 2, adr: '250.00', revpar: '100.00' }]);
+    render(<ReportingScreen activePropertyId="1" />);
+
+    await userEvent.click(await screen.findByRole('tab', { name: 'Revenue' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+
+    expect(await screen.findByText(/₦500\.00/)).toBeInTheDocument();
+    expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
+  });
+
+  it('gap closure: shows the real payments-collected figure for an audited day, and "—" for a live day the backend never computes it for', async () => {
+    mocks.getRevenueReport.mockResolvedValue([
+      { date: '2027-01-01', roomRevenue: '500.00', roomsSold: 2, adr: '250.00', revpar: '100.00', paymentsCollected: '300.00', audited: true },
+      { date: '2027-01-02', roomRevenue: '0.00', roomsSold: 0, adr: '0.00', revpar: '0.00', audited: false },
+    ]);
+    render(<ReportingScreen activePropertyId="1" />);
+
+    await userEvent.click(await screen.findByRole('tab', { name: 'Revenue' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+
+    expect(await screen.findByText(/₦300\.00/)).toBeInTheDocument();
+    expect(screen.getByText('—')).toBeInTheDocument();
   });
 
   it('runs the housekeeping summary report', async () => {

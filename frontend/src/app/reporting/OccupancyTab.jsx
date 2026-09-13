@@ -78,7 +78,19 @@ export function OccupancyTab() {
         emptyMessage="Choose a date range and run the report."
         columns={[
           { key: 'date', label: 'Date' },
-          { key: 'physicalCount', label: 'Physical rooms', align: 'right' },
+          {
+            key: 'physicalCount',
+            label: 'Physical rooms',
+            align: 'right',
+            // A real, deliberate `null` once a day is audited — Night
+            // Audit's own snapshot never re-derives a live physical count
+            // for an already-closed day (`computeOccupancy`'s own header).
+            // Rendered as the same "—" placeholder every other screen in
+            // this app already uses for a legitimately missing value,
+            // rather than a blank cell a person could mistake for a
+            // rendering glitch.
+            render: (row) => row.physicalCount ?? '—',
+          },
           { key: 'roomsSold', label: 'Rooms sold', align: 'right' },
           { key: 'occupancyPct', label: 'Occupancy %', align: 'right', render: (row) => `${row.occupancyPct}%` },
         ]}

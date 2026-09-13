@@ -15,6 +15,14 @@ function todayIso() {
  * data. No client-side permission check hides this tab (this codebase's UI
  * RBAC is convenience only, per CLAUDE.md); a caller without the grant sees
  * the real backend 403 in the error banner below, same as everywhere else.
+ *
+ * Bug fix (see `ReportingScreen`'s own header): every `Money` here used to
+ * fall back to `?? 'USD'` for the rare window `activeProperty` was still
+ * null — a real, silent currency misstatement, not a safe default
+ * (`shared/format/money.jsx`'s own header: "a defaulted currency is a
+ * silent misstatement of an amount, not a convenience"). `ReportingScreen`
+ * now guarantees a real `activeProperty` before this tab ever mounts, so
+ * the fallback is gone rather than papered over again.
  */
 export function RevenueTab({ activeProperty }) {
   const [dateFrom, setDateFrom] = useState(todayIso());
@@ -80,15 +88,30 @@ export function RevenueTab({ activeProperty }) {
             key: 'roomRevenue',
             label: 'Room revenue',
             align: 'right',
-            render: (row) => <Money amount={row.roomRevenue} currencyCode={activeProperty?.base_currency ?? 'USD'} />,
+            render: (row) => <Money amount={row.roomRevenue} currencyCode={activeProperty.base_currency} />,
           },
           { key: 'roomsSold', label: 'Rooms sold', align: 'right' },
-          { key: 'adr', label: 'ADR', align: 'right', render: (row) => <Money amount={row.adr} currencyCode={activeProperty?.base_currency ?? 'USD'} /> },
+          { key: 'adr', label: 'ADR', align: 'right', render: (row) => <Money amount={row.adr} currencyCode={activeProperty.base_currency} /> },
           {
             key: 'revpar',
             label: 'RevPAR',
             align: 'right',
-            render: (row) => <Money amount={row.revpar} currencyCode={activeProperty?.base_currency ?? 'USD'} />,
+            render: (row) => <Money amount={row.revpar} currencyCode={activeProperty.base_currency} />,
+          },
+          {
+            key: 'paymentsCollected',
+            label: 'Payments collected',
+            align: 'right',
+            // Gap closure (found while testing the Reporting menu): the
+            // backend has always computed and returned this figure for
+            // every AUDITED day (`daily_reports.payments_collected`,
+            // src/modules/reporting/service.js's own computeRevenue) —
+            // nothing on this screen ever displayed it. Genuinely absent,
+            // not just falsy, for the current live/unaudited day (the
+            // backend never computes it outside a real Night Audit
+            // snapshot), so it renders the same "—" placeholder the
+            // Physical rooms column uses for its own equally real gap.
+            render: (row) => (row.paymentsCollected != null ? <Money amount={row.paymentsCollected} currencyCode={activeProperty.base_currency} /> : '—'),
           },
         ]}
         rows={rows ?? []}
