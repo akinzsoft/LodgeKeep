@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, act, fireEvent } from '@testing-library/react';
+import { render, screen, within, act, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RegisterTab } from '../RegisterTab.jsx';
 import { ApiError } from '../../../shared/api/index.js';
@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   getSettlementPreview: vi.fn(),
   settleOrder: vi.fn(),
   findInHouseForCharge: vi.fn(),
+  voidOrder: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -95,6 +96,86 @@ describe('<RegisterTab>', () => {
     // Service is a fixed 7.5% of the real 20.00 subtotal = 1.50, computed
     // automatically — no cashier input exists to type it.
     expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'cash', serviceCharge: '1.50' })]);
+  });
+
+  describe('removing a tab', () => {
+    const TABLE_1 = { id: '9', table_label: 'Table 1', status: 'open' };
+    const TABLE_2 = { id: '10', table_label: 'Table 2', status: 'open' };
+
+    async function renderWithTabs() {
+      mocks.listOrders.mockResolvedValue([TABLE_1, TABLE_2]);
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
+      await selectStation();
+      await screen.findByRole('button', { name: 'Table 2' });
+    }
+
+    it('closes an empty tab immediately — voided with a recorded reason, no confirmation needed', async () => {
+      await renderWithTabs();
+      mocks.getOrder.mockResolvedValueOnce({ order: TABLE_2, items: [], settlements: [] });
+      mocks.voidOrder.mockResolvedValue({ ...TABLE_2, status: 'void' });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Table 2' }));
+
+      expect(mocks.voidOrder).toHaveBeenCalledExactlyOnceWith('10', 'Empty tab removed from the Register');
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Table 2' })).not.toBeInTheDocument());
+      expect(screen.getByRole('button', { name: 'Table 1' })).toBeInTheDocument();
+      expect(screen.queryByText('Remove tab')).not.toBeInTheDocument();
+    });
+
+    it('asks for confirmation and a reason before voiding a tab that still has items', async () => {
+      await renderWithTabs();
+      mocks.getOrder.mockResolvedValueOnce({ order: TABLE_1, items: [orderItem({ id: '1' }), orderItem({ id: '2', voided_at: '2026-09-13T08:00:00Z' })], settlements: [] });
+      mocks.voidOrder.mockResolvedValue({ ...TABLE_1, status: 'void' });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Table 1' }));
+
+      // Only the unvoided item counts.
+      expect(await screen.findByText(/"Table 1" still has 1 item on it/)).toBeInTheDocument();
+      const confirmButton = screen.getByRole('button', { name: 'Remove tab' });
+      expect(confirmButton).toBeDisabled();
+      expect(mocks.voidOrder).not.toHaveBeenCalled();
+
+      await userEvent.type(screen.getByLabelText('Reason'), 'Guest walked out before ordering more');
+      await userEvent.click(confirmButton);
+
+      expect(mocks.voidOrder).toHaveBeenCalledExactlyOnceWith('9', 'Guest walked out before ordering more');
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Table 1' })).not.toBeInTheDocument());
+    });
+
+    it('keeps the tab when the confirmation is cancelled', async () => {
+      await renderWithTabs();
+      mocks.getOrder.mockResolvedValueOnce({ order: TABLE_1, items: [orderItem()], settlements: [] });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Table 1' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+
+      expect(mocks.voidOrder).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Table 1' })).toBeInTheDocument();
+    });
+
+    it('clears the order panel when the tab being removed is the one currently open', async () => {
+      const order = await openNewTab([orderItem()]);
+      mocks.getOrder.mockResolvedValueOnce({ order, items: [orderItem()], settlements: [] });
+      mocks.voidOrder.mockResolvedValue({ ...order, status: 'void' });
+
+      await userEvent.click(screen.getByRole('button', { name: `Remove Tab #${order.id}` }));
+      await userEvent.type(await screen.findByLabelText('Reason'), 'Opened by mistake');
+      await userEvent.click(screen.getByRole('button', { name: 'Remove tab' }));
+
+      await waitFor(() => expect(screen.queryByText('Order Ticket')).not.toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: `Tab #${order.id}` })).not.toBeInTheDocument();
+    });
+
+    it('shows the real error and keeps the tab when the void is refused', async () => {
+      await renderWithTabs();
+      mocks.getOrder.mockResolvedValueOnce({ order: TABLE_2, items: [], settlements: [] });
+      mocks.voidOrder.mockRejectedValue(new ApiError({ code: 'CONFLICT_POS_ORDER_NOT_OPEN', message: 'This tab was already settled on another terminal.' }));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove Table 2' }));
+
+      expect(await screen.findByText('This tab was already settled on another terminal.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Table 2' })).toBeInTheDocument();
+    });
   });
 
   it('reference-design fix: a second new tab is auto-labelled "Table 2", not left blank', async () => {
