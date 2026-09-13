@@ -3,6 +3,7 @@ import { ConfirmDialog } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney, percentOfMoney } from '../../shared/money.js';
 import { posApi, ApiError } from '../../shared/api/index.js';
+import { openPaystackPopup } from '../../shared/paystack.js';
 import { CategoryIcon, AllCategoriesIcon, PaymentMethodIcon, TrashIcon } from './registerCategoryIcons.jsx';
 import formStyles from './POSForm.module.css';
 import styles from './RegisterTab.module.css';
@@ -13,25 +14,25 @@ const AUTH_METHODS = [
   { value: 'pin', label: 'PIN' },
 ];
 
-// "NQR" (Nigerian instant-transfer QR) submits identically to "card" — this
-// codebase's own migrations (`pos_order_settlements`, `payments`) already
-// establish contactless/NQR as a HARDWARE fact about the terminal
-// (`pos_terminals.supports_contactless`), never a separate settlement
-// method, and Flutterwave (the gateway PRODUCT_REQUIREMENTS.md §3.5 names
-// for real NQR processing) is deliberately unwired anywhere in this
-// codebase — no sandbox credentials exist. Confirmed with the user before
-// building: NQR is a visually distinct tender-type button, recorded the
-// same way Card already is, not a live gateway integration.
+// Card and NQR both collect the money on screen through Paystack before the
+// tab settles (`collectPaystackPayment`): Card opens a card-only checkout,
+// NQR a QR-only one the guest scans with their banking app. Both settle as
+// `method: 'card'`; `tender` is what tells them apart on the settlement.
 // The three primary tender buttons the reference design shows in one row.
 // "Charge to room" is real, tested, pre-existing functionality this
 // redesign preserves rather than drops — kept reachable as its own smaller
 // link below the row instead of a 4th equally-weighted button, matching
 // the reference's own literal 3-button row exactly.
 const PAYMENT_METHODS = [
-  { value: 'cash', label: 'Cash' },
-  { value: 'card', label: 'Card' },
-  { value: 'card', label: 'NQR' },
+  { value: 'cash', label: 'Cash', tender: 'cash' },
+  { value: 'card', label: 'Card', tender: 'card' },
+  { value: 'card', label: 'NQR', tender: 'nqr' },
 ];
+
+/** A Paystack checkout that ended without captured money — its message is meant for the cashier as-is. */
+class PaymentNotCompletedError extends Error {}
+
+const TENDER_LABELS = { cash: 'Cash', card: 'Card', nqr: 'NQR', room_charge: 'Charge to room' };
 
 const ZERO = '0.00';
 
@@ -73,6 +74,9 @@ function defaultSettlementForm(splitGroup) {
     // conveys the real selection to assistive tech, and it's still needed
     // to distinguish "Card" from "NQR" even though both submit identically.
     tenderLabel: 'Cash',
+    tender: 'cash',
+    // Optional — Paystack's receipt goes here; blank, the cashier's own email stands in.
+    customerEmail: '',
     roomChargeQuery: '',
     roomChargeGuest: null,
     roomChargeResults: [],
@@ -93,13 +97,10 @@ function defaultSettlementForm(splitGroup) {
  * Four real product forks were confirmed with the user before building
  * (AskUserQuestion), since the mockup's own literal text left them open:
  *
- * 1. **NQR/Flutterwave** — no real gateway integration exists anywhere in
- *    this codebase (confirmed by reading `payments`/`pos_order_settlements`
- *    migrations directly: Flutterwave has no sandbox credentials, and NQR
- *    has always been treated as a hardware fact about the terminal, not a
- *    payment method). NQR submits as `method: 'card'`, visually distinct —
- *    building a real Flutterwave adapter is a separate, much larger
- *    project than a Register redesign.
+ * 1. **NQR** — originally recorded like Card with no real payment behind
+ *    it. Card and NQR now collect the money on screen through Paystack
+ *    before the tab settles (`collectPaystackPayment`); see
+ *    `PAYMENT_METHODS`' own header.
  * 2. **Split billing** — the mockup's single always-visible ticket has no
  *    room for the existing multi-group settlement flow. Kept, not
  *    dropped: a "Split bill" action opens the pre-existing (now restyled)
@@ -174,6 +175,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   // can't; `settling` drives the disabled/"Settling…" button.
   const settlingRef = useRef(false);
   const [settling, setSettling] = useState(false);
+  // What the checkout button says while a card/NQR payment is in progress.
+  const [paymentStage, setPaymentStage] = useState(null);
   const [settlementForms, setSettlementForms] = useState(null);
   const [settlementPreview, setSettlementPreview] = useState(null);
   const [previewError, setPreviewError] = useState(null);
@@ -474,11 +477,21 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     setSettling(true);
     setError(null);
     try {
+      // Card/NQR checks are paid through Paystack first, one at a time; the
+      // tab only settles once every one of them has captured money.
+      const paymentIds = new Map();
+      for (const form of settlementForms) {
+        if (form.method !== 'card') continue;
+        const payment = await collectPaystackPayment(form);
+        paymentIds.set(form.splitGroup, payment.id);
+      }
+      setPaymentStage('Settling…');
       const result = await posApi.settleOrder(
         activeOrderId,
         settlementForms.map((form) => ({
           splitGroup: form.splitGroup,
           method: form.method,
+          paymentId: paymentIds.get(form.splitGroup),
           serviceCharge: serviceAmountForGroup(form.splitGroup) ?? ZERO,
           roomCharge:
             form.method === 'room_charge'
@@ -496,11 +509,66 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       setActiveOrderId(null);
       setActiveOrder(null);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not settle this tab.');
+      const readable = caught instanceof ApiError || caught instanceof PaymentNotCompletedError;
+      setError(readable ? caught.message : 'Could not settle this tab.');
+      // A card/NQR payment may have been captured even though settling
+      // failed — reload so the tab shows it rather than a stale view.
+      if (settlementForms.some((form) => form.method === 'card')) loadActiveOrder(activeOrderId);
     } finally {
       settlingRef.current = false;
       setSettling(false);
+      setPaymentStage(null);
     }
+  }
+
+  /**
+   * One check's Paystack payment: start (or reopen) checkout, show the
+   * on-screen popup, then ask the server what really happened — the popup's
+   * own callback is never trusted as proof of payment (ARCHITECTURE.md §7).
+   * A payment the server already holds as captured (the guest paid, then the
+   * browser closed before settling) is returned without a second popup.
+   */
+  async function collectPaystackPayment(form) {
+    const tenderName = form.tenderLabel;
+    setPaymentStage(`Opening ${tenderName} payment…`);
+    const { payment, accessCode, checkoutError } = await posApi.startPaystackCheckout(activeOrderId, {
+      splitGroup: form.splitGroup,
+      tender: form.tender,
+      customerEmail: form.customerEmail.trim(),
+    });
+    if (payment.status === 'CAPTURED') return payment;
+    if (!accessCode) {
+      // Paystack refuses a checkout whose only channel is switched off on
+      // the merchant account — for NQR, the QR channel must be enabled in
+      // the Paystack dashboard first.
+      if (checkoutError?.includes('No active channel')) {
+        throw new PaymentNotCompletedError(`${tenderName} payments are not enabled on this Paystack account yet. Enable the channel in the Paystack dashboard, or choose another way to pay.`);
+      }
+      throw new PaymentNotCompletedError(checkoutError ? `Could not open Paystack: ${checkoutError}` : 'Could not open the Paystack checkout. Try again.');
+    }
+
+    setPaymentStage(`Waiting for ${tenderName} payment…`);
+    await new Promise((resolve, reject) => {
+      // Paystack can fire more than one close callback; the first one wins.
+      let done = false;
+      openPaystackPopup({
+        accessCode,
+        onClose: () => {
+          if (done) return;
+          done = true;
+          resolve();
+        },
+      }).catch(() => reject(new PaymentNotCompletedError('Could not load the Paystack payment window. Check the connection and try again.')));
+    });
+
+    setPaymentStage('Confirming payment…');
+    const verified = await posApi.verifyPaystackPayment(activeOrderId, payment.id);
+    if (verified.status === 'CAPTURED') return verified;
+    throw new PaymentNotCompletedError(
+      verified.status === 'FAILED'
+        ? `The ${tenderName} payment failed. Try again or choose another way to pay.`
+        : `The ${tenderName} payment was not completed. Tap checkout again to reopen it.`
+    );
   }
 
   /** Receipt snapshot from the settle response plus the order/forms still in scope. Totals are exact decimal sums — never float arithmetic. The stored method for NQR is `card`, so the tender shown comes from the form's own label. */
@@ -510,7 +578,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       const guest = settlement.method === 'room_charge' ? form?.roomChargeGuest : null;
       return {
         splitGroup: settlement.split_group,
-        tenderLabel: form?.tenderLabel ?? (settlement.method === 'room_charge' ? 'Charge to room' : settlement.method),
+        tenderLabel: TENDER_LABELS[settlement.tender] ?? form?.tenderLabel ?? settlement.method,
         roomNumber: guest?.roomNumber ?? null,
         guestName: guest ? `${guest.guestFirstName} ${guest.guestLastName}` : null,
         total: sumMoney([settlement.subtotal, settlement.tax_amount, settlement.tip_amount, settlement.service_charge]),
@@ -676,6 +744,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   );
 
   const singleSettlementForm = settlementForms?.length === 1 ? settlementForms[0] : null;
+  const capturedPayments = orderLoaded ? (activeOrder.registerPayments ?? []).filter((payment) => payment.status === 'CAPTURED') : [];
   const selectedTerminal = terminals.find((t) => t.id === terminalId);
   const selectedOutlet = (outlets ?? []).find((o) => o.id === outletId);
 
@@ -759,7 +828,13 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
           </div>
 
           {settleResult ? (
-            <SettlementReceipt receipt={settleResult} onNewSale={() => setSettleResult(null)} />
+            <SettlementReceipt
+              receipt={settleResult}
+              onNewSale={() => {
+                setSettleResult(null);
+                if (terminalId) handleNewTab();
+              }}
+            />
           ) : activeOrder && (
             <div className={styles.panel}>
               <nav className={styles.rail} aria-label="Menu categories">
@@ -894,6 +969,12 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                     DOM underneath the modal overlay, hidden only by CSS
                     (position: fixed), reachable by keyboard/tab order. The
                     modal is now the sole rendered checkout UI while open. */}
+                {capturedPayments.length > 0 && (
+                  <p className={styles.capturedNotice} role="status">
+                    Payment already received for this tab — checkout will use it instead of charging again.
+                  </p>
+                )}
+
                 {unvoidedItems.length > 0 && !splitModalOpen && (
                   <>
                     {anySplit ? (
@@ -924,7 +1005,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                               </button>
                             )}
                             <button type="submit" className={styles.checkoutButton} disabled={isOffline || settling || !previewReadyFor(settlementForms)}>
-                              {settling ? 'Settling…' : 'Send to Bar & Checkout'}
+                              {settling ? (paymentStage ?? 'Settling…') : 'Send to Bar & Checkout'}
                             </button>
                           </div>
                         </form>
@@ -981,7 +1062,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
 
                 <div className={styles.modalActionsRow}>
                   <button type="submit" className={styles.confirmButton} disabled={isOffline || settling || !previewReadyFor(settlementForms)}>
-                    {settling ? 'Settling…' : 'Confirm settlement'}
+                    {settling ? (paymentStage ?? 'Settling…') : 'Confirm settlement'}
                   </button>
                   <button type="button" className={styles.cancelButton} onClick={() => setSplitModalOpen(false)}>
                     Cancel
@@ -1156,7 +1237,7 @@ function SettlementFields({ form, preview, serviceAmount, grandTotal, currencyCo
             type="button"
             className={styles.paymentButton}
             aria-pressed={form.tenderLabel === method.label}
-            onClick={() => onPatch({ method: method.value, tenderLabel: method.label })}
+            onClick={() => onPatch({ method: method.value, tenderLabel: method.label, tender: method.tender })}
             disabled={isOffline}
           >
             <PaymentMethodIcon method={method.label} />
@@ -1168,11 +1249,22 @@ function SettlementFields({ form, preview, serviceAmount, grandTotal, currencyCo
       <button
         type="button"
         className={`${styles.roomChargeLink} ${form.method === 'room_charge' ? styles.roomChargeLinkActive : ''}`.trim()}
-        onClick={() => onPatch({ method: 'room_charge', tenderLabel: 'Charge to room' })}
+        onClick={() => onPatch({ method: 'room_charge', tenderLabel: 'Charge to room', tender: 'room_charge' })}
         disabled={isOffline}
       >
         Charge to room instead
       </button>
+
+      {form.method === 'card' && (
+        <input
+          className={styles.darkInput}
+          type="email"
+          placeholder="Customer email for receipt (optional)"
+          aria-label="Customer email for receipt"
+          value={form.customerEmail}
+          onChange={(e) => onPatch({ customerEmail: e.target.value })}
+        />
+      )}
 
       {form.method === 'room_charge' && (
         <div className={formStyles.form}>

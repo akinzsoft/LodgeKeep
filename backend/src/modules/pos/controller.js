@@ -15,7 +15,9 @@
 
 const { ok, notFound } = require('../../shared/response');
 const { ValidationError } = require('../../shared/errors');
-const { runIdempotentMutation } = require('../../shared/mutation');
+const { runIdempotentMutation, requireIdempotencyKey } = require('../../shared/mutation');
+const { withIdempotency } = require('../../shared/idempotency');
+const { scopedDb } = require('../../db');
 const service = require('./service');
 
 function require_(body, field) {
@@ -253,11 +255,16 @@ async function getOrder(req, res, next) {
   try {
     const order = await service.getOrder({ context: req.context, id: req.params.id });
     if (!order) return notFound(res);
-    const [items, settlements] = await Promise.all([
+    const db = scopedDb().for(req.context);
+    const [items, settlements, registerPayments] = await Promise.all([
       service.listOrderItems({ context: req.context, orderId: order.id }),
       service.listOrderSettlements({ context: req.context, orderId: order.id }),
+      service.listUnsettledRegisterPayments({ db, orderId: order.id }),
     ]);
-    res.status(200).json(ok({ order, items, settlements }));
+    // `registerPayments` lets the Register recover a card/NQR payment
+    // Paystack captured but the tab never settled (a closed browser, a
+    // dropped connection) instead of charging the guest a second time.
+    res.status(200).json(ok({ order, items, settlements, registerPayments }));
   } catch (error) {
     next(error);
   }
@@ -358,6 +365,7 @@ async function settleOrder(req, res, next) {
           settlements: (req.body?.settlements ?? []).map((s) => ({
             splitGroup: s.split_group ?? null,
             method: s.method,
+            paymentId: s.payment_id,
             tipAmount: s.tip_amount,
             serviceCharge: s.service_charge,
             roomCharge: s.room_charge
@@ -368,6 +376,71 @@ async function settleOrder(req, res, next) {
         return { status: 200, body: ok(result) };
       },
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Card/NQR checkout for one Register check (ARCHITECTURE.md §7): the local
+ * payment intent commits under the Idempotency-Key, then Paystack is called
+ * outside that transaction. The response carries `accessCode` in `meta` for
+ * the on-screen Paystack popup. A payment already CAPTURED comes back with
+ * no access code — the Register settles with it straight away. A gateway
+ * failure is a `202` with `checkoutError`, the same honest partial success
+ * `cashiering/controller.js`'s `capturePaystackPayment` returns.
+ */
+async function startPaystackCheckout(req, res, next) {
+  try {
+    const tender = require_(req.body, 'tender');
+    const key = requireIdempotencyKey(req);
+    const outcome = await withIdempotency({
+      context: req.context,
+      operationType: 'pos.start_register_paystack_checkout',
+      key,
+      payload: { ...req.body, orderId: req.params.id },
+      handler: async (trx) => {
+        const payment = await service.prepareRegisterPayment({
+          trx,
+          orderId: req.params.id,
+          splitGroup: req.body?.split_group ?? null,
+          tender,
+          idempotencyKey: key,
+        });
+        return { status: 201, body: ok(payment) };
+      },
+    });
+    const prepared = outcome.body.data;
+    if (!outcome.replayed) {
+      await req.audit({ entityType: 'payments', entityId: prepared.id, action: 'initiate_register_paystack_payment', afterState: prepared });
+    }
+
+    try {
+      const { payment, accessCode } = await service.startRegisterPaystackCheckout({
+        context: req.context,
+        payment: prepared,
+        customerEmail: req.body?.customer_email,
+      });
+      res.status(201).json(ok(payment, { accessCode }));
+    } catch (checkoutError) {
+      res.status(202).json(ok(prepared, { checkoutError: checkoutError.message }));
+    }
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function verifyPaystackPayment(req, res, next) {
+  try {
+    const payment = await service.verifyRegisterPayment({
+      context: req.context,
+      orderId: req.params.id,
+      paymentId: req.params.paymentId,
+      userId: req.context.userId,
+    });
+    if (!payment) return notFound(res);
+    await req.audit({ entityType: 'payments', entityId: payment.id, action: 'verify', afterState: payment });
+    res.status(200).json(ok(payment));
   } catch (error) {
     next(error);
   }
@@ -467,6 +540,8 @@ module.exports = {
   voidOrder,
   previewSettlement,
   settleOrder,
+  startPaystackCheckout,
+  verifyPaystackPayment,
   voidSettlement,
   listShifts,
   getShift,

@@ -366,6 +366,15 @@
   text-align: center;
 }
 
+.capturedNotice {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--pos-register-brass-tint);
+  border-radius: var(--radius-sm);
+  color: var(--pos-register-brass-text);
+  font-size: var(--text-label-size);
+}
+
 .ticketLine {
   display: grid;
   grid-template-columns: 1fr auto;

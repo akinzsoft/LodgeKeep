@@ -68,6 +68,42 @@ class SettlementAlreadyVoidedError extends AppError {
   }
 }
 
+/**
+ * A Register card/NQR check can only settle against money Paystack has
+ * actually captured for that exact check. `reason` says which rule failed:
+ * `missing` (no payment id sent), `not_found`, `wrong_check` (another
+ * order or split group), `not_captured`, `already_used`, `amount_mismatch`
+ * (the check's total changed after the guest paid), `currency_mismatch`.
+ */
+class RegisterPaymentInvalidError extends AppError {
+  constructor(reason, details = {}) {
+    const messages = {
+      missing: 'A card or NQR check must be paid through Paystack before it can be settled.',
+      not_found: 'The Paystack payment for this check could not be found.',
+      wrong_check: 'That Paystack payment belongs to a different check.',
+      not_captured: 'Paystack has not confirmed this payment yet.',
+      already_used: 'That Paystack payment has already been used to settle a check.',
+      amount_mismatch: "The amount paid does not match this check's total — the check changed after payment. Refund the payment or restore the check.",
+      currency_mismatch: "The payment's currency does not match this property's currency.",
+    };
+    super('BUSINESS_RULE_POS_REGISTER_PAYMENT_INVALID', messages[reason] ?? messages.not_found, 422, { reason, ...details });
+  }
+}
+
+/** A tab holding money Paystack has already captured cannot be voided — the payment would be left with nothing to settle or refund against. */
+class OrderHasCapturedPaymentError extends AppError {
+  constructor(orderId, paymentId) {
+    super('CONFLICT_POS_ORDER_HAS_CAPTURED_PAYMENT', `Order ${orderId} has a captured card payment that has not been settled — settle the tab or refund the payment first.`, 409, { orderId, paymentId });
+  }
+}
+
+/** A card/NQR settlement is reversed by refunding its Paystack payment (which voids the settlement too), never by voiding the settlement alone — that would leave the captured money un-refunded. */
+class SettlementPaidByGatewayError extends AppError {
+  constructor(settlementId, paymentId) {
+    super('CONFLICT_POS_SETTLEMENT_PAID_BY_GATEWAY', `Settlement ${settlementId} was paid through Paystack — refund payment ${paymentId} instead; the refund voids this settlement.`, 409, { settlementId, paymentId });
+  }
+}
+
 class OutletNotFoundError extends ValidationError {
   constructor() {
     super('OUTLET_NOT_FOUND', 'The specified outlet does not exist.');
@@ -100,6 +136,9 @@ module.exports = {
   ShiftAlreadyOpenError,
   ShiftAlreadyClosedError,
   SettlementAlreadyVoidedError,
+  RegisterPaymentInvalidError,
+  OrderHasCapturedPaymentError,
+  SettlementPaidByGatewayError,
   OutletNotFoundError,
   TerminalNotFoundError,
   MenuItemNotFoundError,

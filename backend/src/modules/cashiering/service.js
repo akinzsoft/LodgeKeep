@@ -581,6 +581,33 @@ async function initiatePosOrderPaystackPaymentIntent({ trx, posOrderId, amount, 
 }
 
 /**
+ * POS Register card/NQR checkout — the sibling of
+ * `initiatePosOrderPaystackPaymentIntent` for a STAFF Register tab. The
+ * payment funds exactly one check (`split_group`) and is never settled by
+ * the gateway result itself (`applyGatewayResult`'s `pos_register` branch
+ * only captures it): `pos/service.js`'s own `settleOrder` links it to a
+ * settlement afterwards, once it has checked the captured amount covers
+ * that check's exact total. `amount` is computed by the caller, server-side,
+ * never taken from the request body.
+ */
+async function initiatePosRegisterPaymentIntent({ trx, posOrderId, splitGroup, tender, amount, currency, idempotencyKey }) {
+  const reference = generateUlid();
+  const [paymentId] = await trx.table('payments').insert({
+    pos_order_id: posOrderId,
+    settlement_target: 'pos_register',
+    split_group: splitGroup ?? null,
+    tender,
+    idempotency_key: idempotencyKey,
+    provider: 'paystack',
+    provider_reference: reference,
+    amount,
+    currency,
+    status: 'INITIATED',
+  });
+  return trx.table('payments').where({ id: paymentId }).first();
+}
+
+/**
  * Phase 2 of 2 — the real external call, deliberately OUTSIDE any
  * transaction (ARCHITECTURE.md §6.4). Idempotent by construction: a payment
  * not still `INITIATED` (already progressed by a prior successful call, a
@@ -601,11 +628,17 @@ async function initiatePosOrderPaystackPaymentIntent({ trx, posOrderId, amount, 
  * §7); the real state transition still only happens via the webhook or the
  * existing `POST /cashiering/payments/:id/verify`.
  */
-async function startPaystackCheckout({ context, paymentId, guestEmail, callbackUrl }) {
+async function startPaystackCheckout({ context, paymentId, guestEmail, callbackUrl, channels }) {
   const db = scopedDb().for(context);
   const payment = await db.table('payments').where({ id: paymentId }).first();
   if (!payment) throw new ValidationError('PAYMENT_NOT_FOUND', 'The specified payment does not exist.');
-  if (payment.status !== 'INITIATED') return { payment, authorizationUrl: null, accessCode: null };
+  if (payment.status !== 'INITIATED') {
+    // A Register payment whose popup was closed unpaid stays PENDING (see
+    // `verifyPayment`); hand back its stored access code so the cashier's
+    // retry reopens the SAME Paystack transaction rather than a second one.
+    const resumable = payment.settlement_target === 'pos_register' && payment.status === 'PENDING' ? payment.provider_access_code : null;
+    return { payment, authorizationUrl: null, accessCode: resumable ?? null };
+  }
 
   const init = await paystack.initializeTransaction({
     email: guestEmail,
@@ -613,9 +646,10 @@ async function startPaystackCheckout({ context, paymentId, guestEmail, callbackU
     currency: payment.currency,
     reference: payment.provider_reference,
     callbackUrl,
+    channels,
   });
 
-  await db.table('payments').where({ id: paymentId }).update({ status: 'PENDING' });
+  await db.table('payments').where({ id: paymentId }).update({ status: 'PENDING', provider_access_code: init.accessCode ?? null });
   const updated = await db.table('payments').where({ id: paymentId }).first();
   return { payment: updated, authorizationUrl: init.authorizationUrl, accessCode: init.accessCode };
 }
@@ -740,19 +774,25 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
  * gets to apply the effect.
  */
 async function applyGatewayResult({ trx, payment, gatewayStatus, providerPaymentId, userId }) {
-  if (TERMINAL_PAYMENT_STATUSES.has(payment.status)) {
+  // A Register checkout cancelled locally (tab voided, tender switched) is
+  // still payable on Paystack's side. If the guest pays it anyway, the money
+  // is real: record the capture rather than drop it, so a refund can find it.
+  const lateRegisterCapture = payment.settlement_target === 'pos_register' && payment.status === 'CANCELLED' && gatewayStatus === 'success';
+  if (TERMINAL_PAYMENT_STATUSES.has(payment.status) && !lateRegisterCapture) {
     return trx.table('payments').where({ id: payment.id }).first();
   }
 
   if (gatewayStatus === 'success') {
     const now = new Date();
+    const claimableStatuses = [...TERMINAL_PAYMENT_STATUSES].filter((status) => !(lateRegisterCapture && status === 'CANCELLED'));
     const claimed = await trx
       .table('payments')
       .where({ id: payment.id })
-      .whereNotIn('status', [...TERMINAL_PAYMENT_STATUSES])
+      .whereNotIn('status', claimableStatuses)
       .update({
         status: 'CAPTURED',
         captured_at: now,
+        ...(lateRegisterCapture ? { failure_reason: 'Captured after its Register checkout was cancelled; no settlement uses it, so it needs a refund.' } : {}),
         provider_payment_id: providerPaymentId ?? payment.provider_payment_id,
       });
     if (claimed === 0) {
@@ -765,6 +805,10 @@ async function applyGatewayResult({ trx, payment, gatewayStatus, providerPayment
 
     if (payment.settlement_target === 'pos_order') {
       await finalizePosOrderCardCapture({ trx, payment: { ...payment, provider_payment_id: providerPaymentId ?? payment.provider_payment_id }, userId });
+    } else if (payment.settlement_target === 'pos_register') {
+      // Capture only — the Register's own `settleOrder` links this payment
+      // to a settlement once it has checked the amount (see
+      // `initiatePosRegisterPaymentIntent`). No folio exists to post to.
     } else {
       const folio = await trx.table('folios').where({ id: payment.folio_id }).first();
       const businessDate = await propertyBusinessDate({ trx, propertyId: folio.property_id });
@@ -808,6 +852,14 @@ async function verifyPayment({ context, paymentId, userId }) {
   if (TERMINAL_PAYMENT_STATUSES.has(payment.status)) return payment;
 
   const result = await paystack.verifyTransaction({ reference: payment.provider_reference });
+  // A Register cashier verifies the moment the popup closes — often because
+  // the guest closed it before paying ('abandoned') or is still mid-payment
+  // ('ongoing'/'pending'). Only a definite gateway failure ends a Register
+  // payment; anything else leaves it PENDING so a retry reopens the same
+  // transaction (`startPaystackCheckout`) instead of charging twice.
+  if (payment.settlement_target === 'pos_register' && result.status !== 'success' && result.status !== 'failed') {
+    return payment;
+  }
   return db.transaction((trx) =>
     applyGatewayResult({
       trx,
@@ -953,13 +1005,15 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
   // Paystack — the real external call, outside a transaction (§6.4).
   const gatewayResult = await paystack.refundTransaction({ reference: original.provider_reference, amount: amount ?? undefined });
   const processed = gatewayResult.status === 'processed' || gatewayResult.status === 'success';
-  const isPosOrderTarget = original.settlement_target === 'pos_order';
+  // A Register payment reverses the same way a guest QR order's does: void
+  // the settlement it funded. Neither has a folio to post a refund line to.
+  const isPosOrderTarget = original.settlement_target === 'pos_order' || original.settlement_target === 'pos_register';
 
   return db.transaction(async (trx) => {
     const [refundPaymentId] = await trx.table('payments').insert({
       folio_id: isPosOrderTarget ? null : original.folio_id,
       pos_order_id: isPosOrderTarget ? original.pos_order_id : null,
-      settlement_target: isPosOrderTarget ? 'pos_order' : 'folio',
+      settlement_target: isPosOrderTarget ? original.settlement_target : 'folio',
       idempotency_key: idempotencyKey,
       provider: 'paystack',
       provider_reference: reference,
@@ -1048,6 +1102,7 @@ module.exports = {
   captureCashPayment,
   initiatePaystackPaymentIntent,
   initiatePosOrderPaystackPaymentIntent,
+  initiatePosRegisterPaymentIntent,
   startPaystackCheckout,
   applyGatewayResult,
   finalizePosOrderCardCapture,

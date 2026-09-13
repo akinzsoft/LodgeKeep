@@ -407,7 +407,7 @@ describe('POS (PLAN.md Phase 4)', () => {
 
       const res = await t.request.get(`/api/v1/pos/orders/${order.id}/settlement-preview`).set('Authorization', `Bearer ${token}`);
       expect(res.status).toBe(200);
-      expect(res.body.data.groups).toEqual([{ splitGroup: null, subtotal: '20.00', taxAmount: '1.50' }]);
+      expect(res.body.data.groups).toEqual([{ splitGroup: null, subtotal: '20.00', taxAmount: '1.50', serviceCharge: '1.50', total: '23.00' }]);
     });
 
     it('previews each split group independently — a tab split into two groups', async () => {
@@ -434,8 +434,8 @@ describe('POS (PLAN.md Phase 4)', () => {
       const res = await t.request.get(`/api/v1/pos/orders/${order.id}/settlement-preview`).set('Authorization', `Bearer ${token}`);
       expect(res.status).toBe(200);
       const byGroup = Object.fromEntries(res.body.data.groups.map((g) => [g.splitGroup, g]));
-      expect(byGroup[1]).toEqual({ splitGroup: 1, subtotal: '20.00', taxAmount: '1.50' });
-      expect(byGroup[2]).toEqual({ splitGroup: 2, subtotal: '40.00', taxAmount: '3.00' });
+      expect(byGroup[1]).toEqual({ splitGroup: 1, subtotal: '20.00', taxAmount: '1.50', serviceCharge: '1.50', total: '23.00' });
+      expect(byGroup[2]).toEqual({ splitGroup: 2, subtotal: '40.00', taxAmount: '3.00', serviceCharge: '3.00', total: '46.00' });
     });
 
     // Correctness nuance a naive "always add tax on top of the raw item

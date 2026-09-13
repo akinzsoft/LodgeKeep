@@ -19,12 +19,18 @@ const mocks = vi.hoisted(() => ({
   settleOrder: vi.fn(),
   findInHouseForCharge: vi.fn(),
   voidOrder: vi.fn(),
+  startPaystackCheckout: vi.fn(),
+  verifyPaystackPayment: vi.fn(),
 }));
+
+const paystackMocks = vi.hoisted(() => ({ openPaystackPopup: vi.fn() }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return { ...actual, posApi: mocks };
 });
+
+vi.mock('../../../shared/paystack.js', () => paystackMocks);
 
 const OUTLET = { id: '1', name: 'Main Bar' };
 const TERMINAL = { id: '2', device_ref: 'BAR-TERM-1' };
@@ -64,6 +70,7 @@ async function openNewTab(initialItems = []) {
 describe('<RegisterTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
+    paystackMocks.openPaystackPopup.mockReset();
     mocks.listOutlets.mockResolvedValue([OUTLET]);
     mocks.listTerminals.mockResolvedValue([TERMINAL]);
     mocks.listMenuItems.mockResolvedValue([MENU_ITEM]);
@@ -136,18 +143,23 @@ describe('<RegisterTab>', () => {
     });
 
     it('names NQR on the receipt, even though it settles as method "card"', async () => {
-      await checkoutWith('NQR', { method: 'card' });
+      mocks.startPaystackCheckout.mockResolvedValue({ payment: { id: '70', status: 'CAPTURED' }, accessCode: null, checkoutError: null });
+      await checkoutWith('NQR', { method: 'card', tender: 'nqr', payment_id: '70' });
       const receipt = await screen.findByRole('region', { name: 'Sale receipt' });
       expect(within(receipt).getByText('Paid by NQR')).toBeInTheDocument();
     });
 
-    it('"New sale" clears the receipt and returns to the Register with the station still selected', async () => {
+    it('"New sale" opens a fresh tab, ready for the next order (bug fix: it used to leave no tab open)', async () => {
       await checkoutWith('Cash');
+      const next = { id: '11', table_label: '', status: 'open' };
+      mocks.openOrder.mockResolvedValue(next);
+      mocks.getOrder.mockResolvedValueOnce({ order: next, items: [], settlements: [] });
       await userEvent.click(await screen.findByRole('button', { name: 'New sale' }));
 
+      expect(await screen.findByRole('region', { name: 'Order ticket' })).toBeInTheDocument();
       expect(screen.queryByRole('region', { name: 'Sale receipt' })).not.toBeInTheDocument();
-      expect(screen.getByLabelText('Outlet')).toHaveValue('1');
-      expect(screen.getByRole('button', { name: '+ New tab' })).toBeEnabled();
+      expect(mocks.openOrder).toHaveBeenCalledTimes(2);
+      expect(screen.getByLabelText('Terminal')).toHaveValue('2');
     });
 
     it('switching to another open tab from the receipt goes straight to that tab', async () => {
@@ -249,6 +261,121 @@ describe('<RegisterTab>', () => {
       expect(screen.getByRole('button', { name: 'Send to Bar & Checkout' })).toBeEnabled();
       expect(within(screen.getByRole('region', { name: 'Order ticket' })).getByText('House Cocktail')).toBeInTheDocument();
       expect(screen.queryByRole('region', { name: 'Sale receipt' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('card and NQR through Paystack', () => {
+    const PAYMENT = { id: '70', status: 'PENDING' };
+
+    it('opens the Paystack popup, confirms the payment with the server, then settles against it', async () => {
+      const order = await openNewTab([orderItem()]);
+      mocks.startPaystackCheckout.mockResolvedValue({ payment: PAYMENT, accessCode: 'acc-1', checkoutError: null });
+      paystackMocks.openPaystackPopup.mockImplementation(async ({ onClose }) => onClose());
+      mocks.verifyPaystackPayment.mockResolvedValue({ ...PAYMENT, status: 'CAPTURED' });
+      mocks.settleOrder.mockResolvedValue({ order: { ...order, status: 'settled' }, settlements: [settlementRow({ method: 'card', tender: 'card', payment_id: '70' })] });
+      await screen.findByText('Subtotal');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Card' }));
+      await userEvent.type(screen.getByLabelText('Customer email for receipt'), 'guest@example.com');
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+      const receipt = await screen.findByRole('region', { name: 'Sale receipt' });
+      expect(mocks.startPaystackCheckout).toHaveBeenCalledWith('9', { splitGroup: null, tender: 'card', customerEmail: 'guest@example.com' });
+      expect(paystackMocks.openPaystackPopup).toHaveBeenCalledWith(expect.objectContaining({ accessCode: 'acc-1' }));
+      expect(mocks.verifyPaystackPayment).toHaveBeenCalledWith('9', '70');
+      expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'card', paymentId: '70', serviceCharge: '1.50' })]);
+      expect(within(receipt).getByText('Paid by Card')).toBeInTheDocument();
+    });
+
+    it('never settles when the popup closes without payment, and says how to retry', async () => {
+      await openNewTab([orderItem()]);
+      mocks.startPaystackCheckout.mockResolvedValue({ payment: PAYMENT, accessCode: 'acc-1', checkoutError: null });
+      paystackMocks.openPaystackPopup.mockImplementation(async ({ onClose }) => onClose());
+      mocks.verifyPaystackPayment.mockResolvedValue(PAYMENT);
+      mocks.getOrder.mockResolvedValue({ order: { id: '9', table_label: '', status: 'open' }, items: [orderItem()], settlements: [], registerPayments: [PAYMENT] });
+      await screen.findByText('Subtotal');
+
+      await userEvent.click(screen.getByRole('button', { name: 'NQR' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+      expect(await screen.findByText('The NQR payment was not completed. Tap checkout again to reopen it.')).toBeInTheDocument();
+      expect(mocks.startPaystackCheckout).toHaveBeenCalledWith('9', expect.objectContaining({ tender: 'nqr' }));
+      expect(mocks.settleOrder).not.toHaveBeenCalled();
+      expect(await screen.findByRole('button', { name: 'Send to Bar & Checkout' })).toBeEnabled();
+    });
+
+    it('reports a failed payment distinctly', async () => {
+      await openNewTab([orderItem()]);
+      mocks.startPaystackCheckout.mockResolvedValue({ payment: PAYMENT, accessCode: 'acc-1', checkoutError: null });
+      paystackMocks.openPaystackPopup.mockImplementation(async ({ onClose }) => onClose());
+      mocks.verifyPaystackPayment.mockResolvedValue({ ...PAYMENT, status: 'FAILED' });
+      mocks.getOrder.mockResolvedValue({ order: { id: '9', table_label: '', status: 'open' }, items: [orderItem()], settlements: [] });
+      await screen.findByText('Subtotal');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Card' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+      expect(await screen.findByText('The Card payment failed. Try again or choose another way to pay.')).toBeInTheDocument();
+      expect(mocks.settleOrder).not.toHaveBeenCalled();
+    });
+
+    it('shows the gateway error when Paystack checkout cannot start', async () => {
+      await openNewTab([orderItem()]);
+      mocks.startPaystackCheckout.mockResolvedValue({ payment: { id: '70', status: 'INITIATED' }, accessCode: null, checkoutError: 'Paystack unreachable' });
+      mocks.getOrder.mockResolvedValue({ order: { id: '9', table_label: '', status: 'open' }, items: [orderItem()], settlements: [] });
+      await screen.findByText('Subtotal');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Card' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+      expect(await screen.findByText('Could not open Paystack: Paystack unreachable')).toBeInTheDocument();
+      expect(paystackMocks.openPaystackPopup).not.toHaveBeenCalled();
+      expect(mocks.settleOrder).not.toHaveBeenCalled();
+    });
+
+    it('explains when the Paystack account has the tender switched off', async () => {
+      await openNewTab([orderItem()]);
+      mocks.startPaystackCheckout.mockResolvedValue({
+        payment: { id: '70', status: 'INITIATED' },
+        accessCode: null,
+        checkoutError: 'The "paystack" gateway returned an error: No active channel to process transaction. Please contact merchant',
+      });
+      mocks.getOrder.mockResolvedValue({ order: { id: '9', table_label: '', status: 'open' }, items: [orderItem()], settlements: [] });
+      await screen.findByText('Subtotal');
+
+      await userEvent.click(screen.getByRole('button', { name: 'NQR' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+      expect(await screen.findByText(/NQR payments are not enabled on this Paystack account yet/)).toBeInTheDocument();
+      expect(mocks.settleOrder).not.toHaveBeenCalled();
+    });
+
+    it('settles straight away with a payment the server already captured, without a second popup', async () => {
+      const order = await openNewTab([orderItem()]);
+      mocks.startPaystackCheckout.mockResolvedValue({ payment: { id: '70', status: 'CAPTURED' }, accessCode: null, checkoutError: null });
+      mocks.settleOrder.mockResolvedValue({ order: { ...order, status: 'settled' }, settlements: [settlementRow({ method: 'card', tender: 'card', payment_id: '70' })] });
+      await screen.findByText('Subtotal');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Card' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+      await screen.findByRole('region', { name: 'Sale receipt' });
+      expect(paystackMocks.openPaystackPopup).not.toHaveBeenCalled();
+      expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ paymentId: '70' })]);
+    });
+
+    it('tells the cashier when a tab already holds a captured payment', async () => {
+      await openNewTab([orderItem()]);
+      mocks.getOrder.mockResolvedValueOnce({
+        order: { id: '9', table_label: '', status: 'open' },
+        items: [orderItem()],
+        settlements: [],
+        registerPayments: [{ id: '70', status: 'CAPTURED' }],
+      });
+      mocks.addItem.mockResolvedValue({});
+      await userEvent.click(screen.getByRole('button', { name: 'Add another House Cocktail' }));
+
+      expect(await screen.findByRole('status')).toHaveTextContent('Payment already received for this tab');
     });
   });
 
@@ -498,17 +625,6 @@ describe('<RegisterTab>', () => {
       '9',
       expect.arrayContaining([expect.objectContaining({ method: 'cash', serviceCharge: '1.50' })])
     );
-  });
-
-  it('Card and NQR are visually distinct tenders that both submit as method: card (no real Flutterwave/gateway integration exists)', async () => {
-    const order = await openNewTab([orderItem()]);
-    mocks.settleOrder.mockResolvedValue({ order: { ...order, status: 'settled' }, settlements: [] });
-    await screen.findByText('Subtotal');
-
-    await userEvent.click(screen.getByRole('button', { name: 'NQR' }));
-
-    await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
-    expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'card' })]);
   });
 
   it('bug fix: shows "Calculating…" and disables checkout until the real, tax-inclusive preview resolves', async () => {
