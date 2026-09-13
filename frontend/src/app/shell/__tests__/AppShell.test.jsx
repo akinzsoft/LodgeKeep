@@ -38,11 +38,14 @@ describe('<AppShell>', () => {
     expect(screen.getByRole('button', { name: 'Booking' })).toBeInTheDocument();
   });
 
-  it('toggling the hamburger collapses the sidebar (text labels disappear)', async () => {
+  it('toggling the hamburger collapses the sidebar to icons — visible labels disappear, but each item keeps its accessible name', async () => {
     render(<AppShell {...baseProps}>content</AppShell>);
-    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByText('Home')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Toggle sidebar' }));
-    expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Home')).not.toBeInTheDocument();
+    // Icon-only items used to render with no name at all — unusable with a
+    // screen reader and indistinguishable on hover.
+    expect(screen.getByRole('button', { name: 'Home' })).toHaveAttribute('title', 'Home');
   });
 
   it('shows no impersonation banner by default', () => {

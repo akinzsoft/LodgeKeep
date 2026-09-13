@@ -17,6 +17,8 @@
     "lint": "eslint . && stylelint \"src/**/*.css\""
   },
   "dependencies": {
+    "@fontsource/fraunces": "5.3.0",
+    "@fontsource/inter": "5.3.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-router-dom": "^7.18.3"

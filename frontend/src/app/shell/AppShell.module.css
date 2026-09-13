@@ -37,7 +37,7 @@
     display: block;
     position: fixed;
     inset: 0;
-    background: rgba(28, 36, 52, 0.4);
+    background: var(--overlay-scrim);
     z-index: 150;
   }
 }

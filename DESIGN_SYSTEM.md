@@ -6,40 +6,56 @@ Companion to `AGENT.md`. Follow this for all frontend visual implementation — 
 
 Define these as CSS custom properties once, in a single `tokens.css`, and reference them everywhere. No hardcoded hex values in component files — a colour that appears literally in a component is a defect, because the next tenant theme override won't reach it.
 
-**Colour tokens**
+**Colour tokens** — the "Lodgekeep warm" palette: a warm cream canvas, white cards with a warm hairline border, a dark charcoal sidebar, brass as the primary accent, deep teal as the secondary, and brick reserved for negative/down signals.
 
 ```css
 :root {
   /* surfaces */
-  --surface-page:    #F4F6FB;   /* app background — never pure white */
+  --surface-page:    #FAF8F4;   /* warm cream canvas — never pure white */
   --surface-card:    #FFFFFF;   /* cards, tables, modals */
-  --surface-sunken:  #EDF0F7;   /* inset areas, table zebra rows */
-  --border:          #E3E8F0;   /* hairline dividers */
-  --border-strong:   #CBD3E1;   /* input borders, emphasis */
+  --surface-sunken:  #F4F0E8;   /* inset areas, table headers, hover rows */
+  --border:          #EAE4D6;   /* warm hairline dividers */
+  --border-strong:   #D9D0BF;   /* input borders, emphasis */
 
-  /* text */
-  --text-primary:    #1C2434;   /* headings, KPI numerals */
-  --text-secondary:  #5A6478;   /* labels, supporting copy */
-  --text-muted:      #8A93A6;   /* hints, placeholders, timestamps */
+  /* text — AA on white */
+  --text-primary:    #1F2926;   /* headings, KPI numerals */
+  --text-secondary:  #5C6B66;   /* labels, supporting copy */
+  --text-muted:      #6E7873;   /* hints, placeholders, timestamps (4.57:1) */
   --text-inverse:    #FFFFFF;   /* text on filled buttons/badges */
 
+  /* accents */
+  --accent:           #8A6D3B;  /* brass — buttons, active states, focus, links */
+  --accent-hover:     #735A2F;
+  --accent-tint:      #F3EDE2;
+  --accent-secondary: #2E5850;  /* deep teal — avatars, up-deltas, secondary emphasis */
+
+  /* dark sidebar */
+  --sidebar-bg:          #14191C;
+  --sidebar-text:        #D9DDD9;
+  --sidebar-text-muted:  #8B9490;
+  --sidebar-active-bg:   #3A3222;   /* brass, deepened for the charcoal ground */
+  --sidebar-active-text: #F4EEE1;
+
   /* domain accents — assigned by meaning, reused on every screen */
-  --domain-booking:  #7F77DD;   /* reservations, bookings */
-  --domain-rooms:    #EF9F27;   /* rooms, inventory, housekeeping */
-  --domain-guest:    #639922;   /* profiles, guests, CRM */
-  --domain-money:    #1D9E75;   /* cashiering, revenue, AR */
+  --domain-booking:  #8A6D3B;   /* reservations, bookings — shares --accent */
+  --domain-rooms:    #9A6A26;   /* rooms, inventory, housekeeping — ochre */
+  --domain-guest:    #2E5850;   /* profiles, guests, CRM — teal */
+  --domain-money:    #4A7058;   /* cashiering, revenue, AR — sage */
 
   /* semantic state — meaning, never decoration */
-  --state-success:   #1D9E75;
-  --state-success-bg:#E1F5EE;
-  --state-warning:   #BA7517;
-  --state-warning-bg:#FAEEDA;
-  --state-danger:    #D14343;
-  --state-danger-bg: #FCEBEB;
-  --state-info:      #378ADD;
-  --state-info-bg:   #E6F1FB;
-  --state-neutral:   #8A93A6;
-  --state-neutral-bg:#F1EFE8;
+  --state-success:   #2E6B4F;
+  --state-success-bg:#E5EFE9;
+  --state-warning:   #93641C;
+  --state-warning-bg:#F6EDDA;
+  --state-danger:    #B5482F;   /* brick — negative, down, destructive only */
+  --state-danger-bg: #F6E4DE;
+  --state-info:      #2E5850;
+  --state-info-bg:   #E3ECE9;
+  --state-neutral:   #5C6B66;
+  --state-neutral-bg:#EFEBE3;
+
+  /* charts — ordered series colours */
+  --chart-1: #8A6D3B;  --chart-2: #2E5850;  --chart-3: #B5482F;  --chart-4: #CDB791;
 }
 ```
 
@@ -55,7 +71,7 @@ Each domain accent needs a matching tint for icon-badge backgrounds (roughly the
 | Occupied / in-house / in progress | `--state-info` | room status, active stays |
 | Out of service / inactive / archived | `--state-neutral` | rooms, deactivated users |
 
-Status is always rendered as a filled pill — background `--state-*-bg`, text `--state-*`, never plain coloured text on white, which fails contrast at small sizes.
+Status is always rendered as a filled, fully rounded pill with a small leading dot — background `--state-*-bg`, text `--state-*`, never plain coloured text on white, which fails contrast at small sizes.
 
 **Spacing & sizing**
 
@@ -64,12 +80,13 @@ Status is always rendered as a filled pill — background `--state-*-bg`, text `
   --space-1: 4px;   --space-2: 8px;   --space-3: 12px;
   --space-4: 16px;  --space-5: 24px;  --space-6: 32px;  --space-8: 48px;
 
-  --radius-sm:  6px;   /* pills, badges, inputs */
-  --radius-md:  10px;  /* buttons, small cards */
-  --radius-lg:  14px;  /* cards, modals */
+  --radius-sm:   6px;   /* inputs, small badges */
+  --radius-md:   8px;   /* buttons, small cards */
+  --radius-lg:   10px;  /* cards, modals */
+  --radius-full: 999px; /* status pills, avatars, progress bars */
 
-  --shadow-card:  0 1px 3px rgba(28,36,52,0.06), 0 1px 2px rgba(28,36,52,0.04);
-  --shadow-raised:0 4px 12px rgba(28,36,52,0.08);
+  --shadow-card:  0 1px 2px rgba(31,41,38,0.03);   /* cards read by their border, not a lift */
+  --shadow-raised:0 12px 32px rgba(20,25,28,0.14);
 
   --sidebar-w:        248px;
   --sidebar-w-collapsed: 72px;
@@ -89,8 +106,8 @@ All spacing is a multiple of 4px. Card padding is `--space-4` on mobile, `--spac
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;  /* folio amounts, confirmation codes, IDs */
 
-  --text-kpi:      30px/1.2  600;   /* dashboard KPI numerals */
-  --text-h1:       24px/1.3  600;
+  --text-kpi:      28px/1.2  700;   /* dashboard KPI numerals */
+  --text-h1:       24px/1.3  700;
   --text-h2:       19px/1.35 600;
   --text-h3:       16px/1.4  600;
   --text-body:     14px/1.6  400;
@@ -99,17 +116,17 @@ All spacing is a multiple of 4px. Card padding is `--space-4` on mobile, `--spac
 }
 ```
 
-Weights: 400 body, 500 labels, 600 headings and numerals. Never below 12px — front-desk terminals are often old, low-resolution, and viewed at arm's length. **Tabular figures (`font-variant-numeric: tabular-nums`) on every money column and folio total**, so digits align vertically down a column; proportional figures in a folio are genuinely hard to scan.
+Inter is self-hosted (`@fontsource/inter`, loaded once in `main.jsx`) so terminals that are offline still render it. `--font-display` (Fraunces, `@fontsource/fraunces`) is reserved for the Home greeting and the sidebar wordmark — never body text, labels, or numerals. Weights: 400 body, 500 labels, 600 headings, 700 page titles and KPI numerals. Never below 12px — front-desk terminals are often old, low-resolution, and viewed at arm's length. **Tabular figures (`font-variant-numeric: tabular-nums`) on every money column and folio total**, so digits align vertically down a column; proportional figures in a folio are genuinely hard to scan.
 
 **Touch targets**: minimum 44×44px on any screen a housekeeper or front-desk agent uses on a tablet or phone (3.18). Desktop-only admin screens may use 40px. **The POS order screen (3.4) is the one place this bends further**: PRODUCT_REQUIREMENTS.md §3.4 names it explicitly as "a different design problem from the rest of the product — used standing up, at speed, often one-handed, on a touch terminal... aim for 64px+ here." `--control-h-pos` (64px) is that token — scoped to `app/pos/`'s own order-screen components only, never used elsewhere in the admin app, and paired with fewer words and higher information sparsity than every other screen in this spec uses.
 
-**Focus & accessibility**: a visible focus ring (`2px solid --domain-booking`, 2px offset) on every interactive element — front-desk staff are keyboard-heavy and speed matters more than polish. Body text must hit WCAG AA (4.5:1); status pills must hit AA at their small size, which is why they use tinted backgrounds rather than coloured text. Never encode meaning in colour alone — every status pill carries a text label, since a colour-blind night auditor still needs to read the room grid.
+**Focus & accessibility**: a visible focus ring (`2px solid --accent`, 2px offset) on every interactive element — text inputs, selects and textareas instead get an `--accent` border plus a 3px `--accent-ring` halo — front-desk staff are keyboard-heavy and speed matters more than polish. Body text must hit WCAG AA (4.5:1); status pills must hit AA at their small size, which is why they use tinted backgrounds rather than coloured text. Never encode meaning in colour alone — every status pill carries a text label, since a colour-blind night auditor still needs to read the room grid.
 
-**Cards**: `--surface-card` background, `--radius-lg`, `--shadow-card`, `--space-5` padding. Cards are the default container for everything — KPIs, charts, tables, forms.
+**Cards**: `--surface-card` background, 1px `--border` hairline, `--radius-lg`, `--shadow-card`, `--space-5` padding. Cards are the default container for everything — KPIs, charts, tables, forms.
 
 **Icon badges**: filled rounded-square (`--radius-md`) in the domain tint, icon in the domain accent. Colour by domain, reused across every screen.
 
-**Tables**: card container, sticky header, `--surface-sunken` zebra rows or hairline separators, status as pill, row actions right-aligned. Filter and search live at the top of the card.
+**Tables**: card container, sticky `--surface-sunken` header with small uppercase column labels, hairline row separators with a hover highlight (no zebra striping), status as pill, row actions right-aligned. Filter and search live at the top of the card.
 
 **Responsive breakpoints**
 

@@ -1,4 +1,6 @@
 import lodgekeepIcon from '../../assets/brand/lodgekeep-icon.png';
+import { initialsFor } from './initials.js';
+import { NavIcon } from './navIcons.jsx';
 import styles from './Sidebar.module.css';
 
 /**
@@ -78,12 +80,14 @@ export function Sidebar({
           <img className={styles.avatar} src={user.avatarUrl} alt="" />
         ) : (
           <span className={styles.avatarFallback} aria-hidden="true">
-            {user.name.charAt(0)}
+            {initialsFor(user.name)}
           </span>
         )}
         {!collapsed && (
-          <div>
-            <p className={styles.userName}>{user.name}</p>
+          <div className={styles.userText}>
+            <p className={styles.userName} title={user.name}>
+              {user.name}
+            </p>
             <p className={styles.userRole}>{user.role}</p>
           </div>
         )}
@@ -110,7 +114,14 @@ export function Sidebar({
                   className={`${styles.item} ${item.key === activeItemKey ? styles.active : ''}`.trim()}
                   onClick={() => onNavigate?.(item.key)}
                   aria-current={item.key === activeItemKey ? 'page' : undefined}
+                  // Collapsed items show only an icon — without these they
+                  // had no accessible name and no hover hint at all.
+                  aria-label={collapsed ? item.label : undefined}
+                  title={collapsed ? item.label : undefined}
                 >
+                  <span className={styles.itemIcon}>
+                    <NavIcon itemKey={item.key} />
+                  </span>
                   {!collapsed && <span className={styles.itemLabel}>{item.label}</span>}
                   {!collapsed && item.badge && <span className={styles.itemBadge}>{item.badge}</span>}
                 </button>
