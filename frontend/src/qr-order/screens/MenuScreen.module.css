@@ -1,0 +1,537 @@
+/*
+ * Guest QR menu, laid out like a shop: card grid, category chips, a sticky
+ * cart bar and a bottom-sheet cart. The accent is --domain-booking so a
+ * property's own brand colour (BrandingProvider) reaches the buttons.
+ * Phone-first; the grid widens on larger screens.
+ */
+
+.shop {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-4) calc(var(--space-8) * 3);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line);
+  font-weight: var(--text-h1-weight);
+  color: var(--text-primary);
+}
+
+.subtitle {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-body-size);
+}
+
+.cartIconButton {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--control-h-touch);
+  height: var(--control-h-touch);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.cartBadge {
+  position: absolute;
+  top: calc(-1 * var(--space-1));
+  right: calc(-1 * var(--space-1));
+  min-width: var(--space-5);
+  height: var(--space-5);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--domain-booking);
+  color: var(--text-inverse);
+  font-size: var(--text-caption-size);
+  font-weight: var(--text-label-weight);
+  line-height: var(--space-5);
+  text-align: center;
+}
+
+.filters {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  background: var(--surface-page);
+}
+
+.search {
+  width: 100%;
+  height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.search:focus {
+  outline: none;
+  border-color: var(--domain-booking);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.chips {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.chips::-webkit-scrollbar {
+  display: none;
+}
+
+.chip {
+  flex-shrink: 0;
+  height: var(--control-h);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: var(--text-label-weight);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chipActive {
+  border-color: var(--domain-booking);
+  background: var(--domain-booking);
+  color: var(--text-inverse);
+}
+
+.notice {
+  margin: var(--space-6) 0;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (width >= 640px) {
+  .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-4);
+  }
+}
+
+@media (width >= 960px) {
+  .grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
+}
+
+.skeleton {
+  min-height: calc(var(--space-8) * 6);
+  background: var(--surface-sunken);
+}
+
+.imageBox {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  max-width: 100%;
+  background: var(--domain-booking-tint);
+}
+
+.image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.imagePlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--domain-booking);
+  font-family: var(--font-display);
+  font-size: var(--text-kpi-size);
+  font-weight: var(--text-h1-weight);
+}
+
+.inCart {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--domain-booking);
+  color: var(--text-inverse);
+  font-size: var(--text-caption-size);
+  font-weight: var(--text-label-weight);
+}
+
+.cardBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+}
+
+.cardCategory {
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cardName {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-body-size);
+  font-weight: var(--text-h3-weight);
+  line-height: var(--text-body-line);
+}
+
+.cardPrice {
+  margin-bottom: var(--space-2);
+  color: var(--text-primary);
+  font-weight: var(--text-label-weight);
+  font-variant-numeric: tabular-nums;
+}
+
+.addButton {
+  margin-top: auto;
+  height: var(--control-h-touch);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--domain-booking);
+  color: var(--text-inverse);
+  font: inherit;
+  font-weight: var(--text-label-weight);
+  cursor: pointer;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  height: var(--control-h-touch);
+  border: 1px solid var(--domain-booking);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.stepperButton {
+  width: var(--control-h-touch);
+  height: 100%;
+  border: 0;
+  background: var(--domain-booking-tint);
+  color: var(--domain-booking);
+  font-size: var(--text-h2-size);
+  font-weight: var(--text-h1-weight);
+  cursor: pointer;
+}
+
+.stepperButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.stepperValue {
+  flex: 1;
+  color: var(--text-primary);
+  font-weight: var(--text-label-weight);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.cartBar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 3;
+  padding: var(--space-3) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom));
+  background: linear-gradient(to top, var(--surface-page) 70%, transparent);
+}
+
+.cartBarButton {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 640px;
+  min-height: var(--control-h-pos);
+  margin: 0 auto;
+  padding: 0 var(--space-5);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--domain-booking);
+  box-shadow: var(--shadow-raised);
+  color: var(--text-inverse);
+  font: inherit;
+  cursor: pointer;
+}
+
+.cartBarCount {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--overlay-scrim);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+}
+
+.cartBarLabel {
+  flex: 1;
+  font-weight: var(--text-h3-weight);
+  text-align: left;
+}
+
+.cartBarTotal {
+  font-weight: var(--text-h3-weight);
+  font-variant-numeric: tabular-nums;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: var(--overlay-scrim);
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 640px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-4) calc(var(--space-5) + env(safe-area-inset-bottom));
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--surface-card);
+  box-shadow: var(--shadow-raised);
+}
+
+@media (width >= 640px) {
+  .backdrop {
+    align-items: center;
+    padding: var(--space-4);
+  }
+
+  .sheet {
+    border-radius: var(--radius-lg);
+  }
+}
+
+.sheetHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.sheetTitle {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-h2-size);
+  font-weight: var(--text-h2-weight);
+}
+
+.sheetTitle:focus {
+  outline: none;
+}
+
+.closeButton {
+  width: var(--control-h-touch);
+  height: var(--control-h-touch);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.lines {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.lineThumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--space-8) * 2);
+  height: calc(var(--space-8) * 2);
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--domain-booking-tint);
+  color: var(--domain-booking);
+  font-family: var(--font-display);
+  font-size: var(--text-h2-size);
+}
+
+.lineThumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.lineInfo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.lineInfo .stepper {
+  width: calc(var(--control-h-touch) * 3);
+  margin-top: var(--space-1);
+}
+
+.lineName {
+  color: var(--text-primary);
+  font-weight: var(--text-label-weight);
+}
+
+.lineUnit {
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+}
+
+.lineEnd {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.lineTotal {
+  color: var(--text-primary);
+  font-weight: var(--text-label-weight);
+  font-variant-numeric: tabular-nums;
+}
+
+.removeLink,
+.textButton {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.removeLink {
+  color: var(--state-danger);
+  font-size: var(--text-caption-size);
+}
+
+.textButton {
+  color: var(--text-secondary);
+}
+
+.subtotal {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-primary);
+  font-size: var(--text-h3-size);
+  font-weight: var(--text-h3-weight);
+  font-variant-numeric: tabular-nums;
+}
+
+.hint {
+  margin: calc(-1 * var(--space-3)) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+}
+
+.payment {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.paymentLegend {
+  margin-bottom: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+}
+
+.paymentOption {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.paymentOptionSelected {
+  border-color: var(--domain-booking);
+  background: var(--domain-booking-tint);
+}
+
+.sheetActions {
+  display: flex;
+  justify-content: space-between;
+}

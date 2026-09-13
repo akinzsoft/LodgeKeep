@@ -4,6 +4,7 @@ import { Card, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney } from '../../shared/money.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
+import { clearCart } from '../cartStorage.js';
 import { qrOrderingApi, ApiError } from '../../shared/api/index.js';
 import styles from '../QrOrderScreen.module.css';
 import formStyles from '../QrOrderForm.module.css';
@@ -93,6 +94,8 @@ export function CheckoutScreen() {
     setCheckoutFailure(null);
     try {
       const result = await submitOrder();
+      // The order exists now; the menu should start from an empty cart next time.
+      clearCart(token);
 
       if (initialPaymentMethod === 'room_charge') {
         navigate(`../orders/${result.id}/room-charge`, { relative: 'path' });
