@@ -38,3 +38,31 @@ export function sumMoney(values) {
 export function multiplyMoney(amount, quantity) {
   return fromCents(toCents(amount) * BigInt(quantity));
 }
+
+/**
+ * The Register redesign's "Service %" input needs a genuinely non-integer
+ * multiplier — `multiplyMoney` above deliberately only accepts a whole
+ * quantity. Ported to match `backend/src/shared/money.js`'s own
+ * `percentOfMoney` exactly — same 4-decimal-place rate scaling (matching
+ * `taxes.rate`'s real column precision there, not an arbitrary frontend
+ * choice) and the same round-half-up formula, computed entirely in scaled
+ * BigInt integers, never a float division.
+ *
+ * Code-review fix: an earlier draft here scaled the rate to only 2 decimal
+ * places and silently TRUNCATED (not rounded) anything beyond that — e.g.
+ * "5.999" silently became "5.99", a real, if narrow, discrepancy against
+ * this function's own "matches the backend" claim. `frontend/src/shared/
+ * __tests__/money.test.js` now proves a 4-decimal-place rate rounds
+ * correctly instead of truncating.
+ */
+export function percentOfMoney(amount, percent) {
+  const amountCents = toCents(amount);
+  const [rateWhole, rateFraction = ''] = String(percent || '0').split('.');
+  const rateScaled = BigInt(rateWhole || '0') * 10000n + BigInt(`${rateFraction}0000`.slice(0, 4) || '0');
+  const numerator = amountCents * rateScaled;
+  const denominator = 100n * 10000n;
+  const negative = numerator < 0n;
+  const absNumerator = negative ? -numerator : numerator;
+  const roundedAbs = (absNumerator * 2n + denominator) / (2n * denominator);
+  return fromCents(negative ? -roundedAbs : roundedAbs);
+}

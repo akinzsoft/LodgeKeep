@@ -333,6 +333,16 @@ async function voidOrder(req, res, next) {
   }
 }
 
+/** Read-only preview — no `req.audit`, matching `getOrder`/`listOrders`; nothing is written. */
+async function previewSettlement(req, res, next) {
+  try {
+    const preview = await service.previewSettlement({ context: req.context, orderId: req.params.id });
+    res.status(200).json(ok(preview));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function settleOrder(req, res, next) {
   try {
     await runIdempotentMutation(req, res, {
@@ -455,6 +465,7 @@ module.exports = {
   voidOrderItem,
   assignItemSplitGroup,
   voidOrder,
+  previewSettlement,
   settleOrder,
   voidSettlement,
   listShifts,

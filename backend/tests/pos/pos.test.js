@@ -13,11 +13,16 @@
  * ── AMBIENT TAX ──────────────────────────────────────────────────────────
  *
  * `tests/helpers/fixtures.js` seeds a real 7.5% `VAT` tax
- * (`applies_to: 'all'`) on `ctx.a`'s property — it applies to `pos_charge`
- * exactly as it does to `room_charge` (`applies_to: 'all'` matches any
- * charge type), so every settlement in this file expects it: a $20.00
- * item's tax_amount is always $1.50 (`cashiering.test.js`'s own header
- * establishes this same convention for room charges).
+ * (`applies_to: 'all'`) on BOTH tenants' first property (`ctx.a` and
+ * `ctx.b` alike — confirmed by reading `seedTwoTenants` directly, not
+ * assumed) — it applies to `pos_charge` exactly as it does to
+ * `room_charge` (`applies_to: 'all'` matches any charge type), so every
+ * settlement in this file expects it: a $20.00 item's tax_amount is
+ * always $1.50 (`cashiering.test.js`'s own header establishes this same
+ * convention for room charges). This file's own settlement-preview tests
+ * mostly use `ctx.a` for this reason; the one exception (a genuinely
+ * isolated inclusive-tax scenario) deliberately targets `ctx.b` instead,
+ * removing its ambient VAT row first — see that test's own comment.
  *
  * Cross-tenant isolation for every POS table already comes free from
  * tests/isolation's ISO-* suite via tests/helpers/entities.js.
@@ -26,6 +31,7 @@
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { sumMoney } = require('../../src/shared/money');
 
 describe('POS (PLAN.md Phase 4)', () => {
   const t = useTestApp();
@@ -383,6 +389,164 @@ describe('POS (PLAN.md Phase 4)', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Settlement preview — read-only, never commits anything
+  // -----------------------------------------------------------------------
+
+  // Gap closure (this session's own "test and review Register" pass): the
+  // Register screen's settlement panel used to omit tax entirely from its
+  // "Amount to charge" preview — a real, live-confirmed discrepancy (see
+  // `RegisterTab.jsx`'s own header). This is the endpoint that closes it,
+  // reusing the exact same tax computation `settleOrder` itself uses.
+  describe('GET /pos/orders/:id/settlement-preview', () => {
+    it('previews the real subtotal and tax for an ungrouped tab, computed against the ambient 7.5% VAT', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+      const setup = await freshOutletSetup();
+      const order = await openOrder(token, setup);
+      await addItem(token, order.id, { menuItemId: setup.menuItemId, quantity: 1 });
+
+      const res = await t.request.get(`/api/v1/pos/orders/${order.id}/settlement-preview`).set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.groups).toEqual([{ splitGroup: null, subtotal: '20.00', taxAmount: '1.50' }]);
+    });
+
+    it('previews each split group independently — a tab split into two groups', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+      const setup = await freshOutletSetup();
+      const order = await openOrder(token, setup);
+      const added1 = await addItem(token, order.id, { menuItemId: setup.menuItemId, quantity: 1 });
+      const item1 = added1.items[0];
+      const added2 = await addItem(token, order.id, { menuItemId: setup.menuItemId, quantity: 2 });
+      const item2 = added2.items[1];
+
+      await t.request
+        .post(`/api/v1/pos/orders/${order.id}/items/${item1.id}/split-group`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ split_group: 1 })
+        .expect(200);
+      await t.request
+        .post(`/api/v1/pos/orders/${order.id}/items/${item2.id}/split-group`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ split_group: 2 })
+        .expect(200);
+
+      const res = await t.request.get(`/api/v1/pos/orders/${order.id}/settlement-preview`).set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      const byGroup = Object.fromEntries(res.body.data.groups.map((g) => [g.splitGroup, g]));
+      expect(byGroup[1]).toEqual({ splitGroup: 1, subtotal: '20.00', taxAmount: '1.50' });
+      expect(byGroup[2]).toEqual({ splitGroup: 2, subtotal: '40.00', taxAmount: '3.00' });
+    });
+
+    // Correctness nuance a naive "always add tax on top of the raw item
+    // total" client-side implementation would get wrong: for an INCLUSIVE
+    // tax, `subtotal` (the tax engine's own `netAmount`) is already the
+    // item total minus the tax baked into it — `subtotal + taxAmount` must
+    // equal the raw item total exactly, proving the frontend's grand-total
+    // formula (`sumMoney([subtotal, taxAmount, tip, service])`) can never
+    // double-count tax regardless of which tax mode a property configures.
+    it('an inclusive tax: subtotal is the net amount, and subtotal + tax equals the true item total exactly', async () => {
+      // Uses ctx.b, not ctx.a — ctx.a's property already carries the file's
+      // own ambient 7.5% EXCLUSIVE VAT fixture (this file's own header),
+      // and a real tax row inserted directly here lives for the rest of
+      // this file's shared transaction, not just this one test. Inserting
+      // an inclusive tax onto ctx.a's property would stack with that
+      // ambient one and leak into every later test in this file that
+      // shares it — confirmed the hard way, not guessed: an earlier draft
+      // of this test did exactly that and broke a later, unrelated
+      // settlement test's own expected tax amount.
+      await grantRoleToUser({ tenant: ctx.b, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ tenant: ctx.b, userId: ctx.b.users[1].id });
+      // ctx.b's property carries no current_business_date by default
+      // (only ctx.a's is set, in this file's own top-level beforeAll) —
+      // without one, resolveApplicableTaxVersions has no date to resolve
+      // an effective-dated tax version against, and this test's own tax
+      // row would silently never apply.
+      await t.trx('properties').where({ id: ctx.b.properties[0].id }).update({ current_business_date: '2027-03-01' });
+      // `tests/helpers/fixtures.js`'s own `seedTwoTenants` seeds the
+      // identical ambient 7.5% EXCLUSIVE VAT onto BOTH tenants' first
+      // property, not just ctx.a's (confirmed by reading it directly —
+      // this file's own header comment undersells it as ctx.a-only).
+      // Removed here so this test measures exactly one, cleanly inclusive
+      // tax — nothing else in this file uses ctx.b, so this can't affect
+      // any other test.
+      await t.trx('taxes').where({ property_id: ctx.b.properties[0].id, tax_code: 'VAT' }).del();
+      const setup = await freshOutletSetup(ctx.b, { price: '107.50' });
+      await t.trx('taxes').insert({
+        tenant_id: ctx.b.id,
+        property_id: setup.propertyId,
+        tax_code: `INCL-${Date.now()}`,
+        name: 'Inclusive test tax',
+        rate: '7.50',
+        applies_to: 'all',
+        effective_from: '2020-01-01',
+        is_inclusive: true,
+        calculation_method: 'percentage',
+        priority: 1,
+        is_compound: false,
+        rounding_method: 'half_up',
+      });
+      const order = await openOrder(token, setup);
+      await addItem(token, order.id, { menuItemId: setup.menuItemId, quantity: 1 });
+
+      const res = await t.request.get(`/api/v1/pos/orders/${order.id}/settlement-preview`).set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      const group = res.body.data.groups[0];
+      expect(sumMoney([group.subtotal, group.taxAmount])).toBe('107.50');
+      expect(group.subtotal).not.toBe('107.50'); // genuinely net of the inclusive tax, not just echoing the raw price
+    });
+
+    it('is genuinely read-only — no settlement row is created and the order stays open', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+      const setup = await freshOutletSetup();
+      const order = await openOrder(token, setup);
+      await addItem(token, order.id, { menuItemId: setup.menuItemId, quantity: 1 });
+
+      await t.request.get(`/api/v1/pos/orders/${order.id}/settlement-preview`).set('Authorization', `Bearer ${token}`).expect(200);
+
+      const orderRow = await t.trx('pos_orders').where({ id: order.id }).first();
+      expect(orderRow.status).toBe('open');
+      const settlementRows = await t.trx('pos_order_settlements').where({ pos_order_id: order.id });
+      expect(settlementRows).toHaveLength(0);
+    });
+
+    it('front_desk/cashier/housekeeping get 403 — same pos.operate gate as the rest of the register flow', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'cashier' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+      const setup = await freshOutletSetup();
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 0, role: 'manager' });
+      const managerToken = tokenFor({ userId: ctx.a.users[0].id });
+      const order = await openOrder(managerToken, setup);
+
+      const res = await t.request.get(`/api/v1/pos/orders/${order.id}/settlement-preview`).set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(403);
+    });
+
+    it('a friendly VALIDATION_ORDER_NOT_FOUND for a nonexistent order (matching settleOrder\'s own convention), 409 for an already-settled one', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+
+      const missing = await t.request.get('/api/v1/pos/orders/999999999/settlement-preview').set('Authorization', `Bearer ${token}`);
+      expect(missing.status).toBe(400);
+      expect(missing.body.error.code).toBe('VALIDATION_ORDER_NOT_FOUND');
+
+      const setup = await freshOutletSetup();
+      const order = await openOrder(token, setup);
+      await addItem(token, order.id, { menuItemId: setup.menuItemId, quantity: 1 });
+      await t.request
+        .post(`/api/v1/pos/orders/${order.id}/settle`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ settlements: [{ method: 'cash' }] })
+        .expect(200);
+
+      const afterSettle = await t.request.get(`/api/v1/pos/orders/${order.id}/settlement-preview`).set('Authorization', `Bearer ${token}`);
+      expect(afterSettle.status).toBe(409);
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Settlement
   // -----------------------------------------------------------------------
 
@@ -642,6 +806,35 @@ describe('POS (PLAN.md Phase 4)', () => {
         .set('Idempotency-Key', idemKey())
         .send({ settlements: [{ method: 'room_charge', room_charge: { reservation_id: guest.reservationId } }] });
       expect(res.status).toBe(400);
+    });
+
+    // Bug fix (this session's own "test and review Register" pass, live-
+    // confirmed against the real dev database): `RegisterTab.jsx` could
+    // submit a room_charge settlement with no guest ever selected — the
+    // JSON body then carries `room_charge` with no `reservation_id` key at
+    // all (JSON.stringify drops the `undefined` value). Before this fix,
+    // `where({ id: undefined })` threw a raw, uncaught mysql2 exception —
+    // a bare 500, not a validation error a person could act on.
+    it('rejects charge-to-room with no guest/reservation selected — a friendly error, never a raw 500', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+      const setup = await freshOutletSetup();
+      const order = await openOrder(token, setup);
+      await addItem(token, order.id, { menuItemId: setup.menuItemId, quantity: 1 });
+
+      const res = await t.request
+        .post(`/api/v1/pos/orders/${order.id}/settle`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ settlements: [{ method: 'room_charge', room_charge: { auth_method: 'pin', auth_reference: 'x' } }] });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_MISSING_FIELD');
+
+      // The order was never partially processed — still open, no settlement row.
+      const orderRow = await t.trx('pos_orders').where({ id: order.id }).first();
+      expect(orderRow.status).toBe('open');
+      const settlementRows = await t.trx('pos_order_settlements').where({ pos_order_id: order.id });
+      expect(settlementRows).toHaveLength(0);
     });
 
     it('a post-settlement void requires pos.manage, not just pos.operate, and voids the underlying folio line for a room charge', async () => {
