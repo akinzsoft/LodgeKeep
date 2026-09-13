@@ -84,6 +84,10 @@
   padding: 0 var(--space-2) 0 var(--space-3);
 }
 
+.tabLabelButton:disabled {
+  cursor: not-allowed;
+}
+
 .tabCloseButton {
   display: inline-flex;
   align-items: center;
@@ -587,14 +591,14 @@
   gap: var(--space-2);
 }
 
-/* Color-correction pass (user-reported): all 3 tender buttons share this
-   exact look, always — no active/selected state changes it (see
-   `RegisterTab.jsx`'s own comment at this button's render site for why).
-   `--pos-register-payment-border`/`-payment-text` are dedicated tokens,
-   distinct from the card border/secondary-text tokens used elsewhere on
-   this panel, matching the user's own precisely specified values for this
-   one element. */
+/* The 3 tender buttons share one equal-weight look. Follow-up (user-
+   reported: with no visible selected state the buttons felt "not
+   functional"): the chosen tender now gets a thin brass border and a small
+   check — no fill, so the amber checkout button stays the only saturated
+   control. Selection is still exposed via `aria-pressed`, which is also
+   what the selected style keys off. */
 .paymentButton {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -615,6 +619,22 @@
 .paymentButton:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.paymentButton[aria-pressed='true'] {
+  border-color: var(--pos-register-brass-text);
+  color: var(--pos-register-text-primary);
+}
+
+.paymentButton[aria-pressed='true']::after {
+  content: '✓' / ''; /* empty alt text: decorative — aria-pressed already announces the selection */
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-2);
+  color: var(--pos-register-brass-text);
+  font-size: var(--text-caption-size);
+  font-weight: 700;
+  line-height: 1;
 }
 
 .roomChargeLink {
@@ -760,15 +780,54 @@
   cursor: pointer;
 }
 
-/* "Tab settled" banner — rendered in the light shell (before the dark
-   panel even mounts, since there's no active order once settled), so it
-   deliberately does NOT use the pos-register-* dark tokens. */
-.runningTotal {
+/* The post-checkout receipt — shown where the order panel was, on the same
+   dark panel palette, so a completed sale never reads as a blank page. */
+.receiptPanel {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 32rem;
+  margin-top: var(--space-2);
+  padding: var(--space-5);
+  border: 1px solid var(--pos-register-card-border);
+  border-radius: var(--radius-lg);
+  background: var(--pos-register-panel-bg);
+  color: var(--pos-register-text-primary);
+  font-family: var(--font-sans);
+}
+
+.receiptHeading {
+  margin: 0;
+  font-size: var(--text-h2-size);
+  line-height: var(--text-h2-line);
+  font-weight: var(--text-h2-weight);
+  color: var(--pos-register-text-primary);
+}
+
+.receiptMeta {
+  margin: 0;
+  font-size: var(--text-label-size);
+  color: var(--pos-register-text-secondary);
+}
+
+.receiptLines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--pos-register-card-border);
+}
+
+/* Brass, not amber — amber stays reserved for "Send to Bar & Checkout". */
+.newSaleButton {
   min-height: var(--control-h-pos);
-  font-size: var(--text-h1-size);
+  margin-top: var(--space-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--pos-register-brass);
+  color: var(--text-inverse); /* white on brass: 4.85:1 — the panel's cream text only reaches 3.9:1 here */
+  font-family: var(--font-sans);
+  font-size: var(--text-h3-size);
   font-weight: 700;
-  color: var(--text-primary);
+  cursor: pointer;
 }
