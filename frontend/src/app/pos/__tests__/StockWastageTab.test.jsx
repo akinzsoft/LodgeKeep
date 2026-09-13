@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StockWastageTab } from '../StockWastageTab.jsx';
 import { ApiError } from '../../../shared/api/index.js';
+import { selectWhenLoaded } from './selectWhenLoaded.js';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
@@ -24,8 +25,8 @@ const STOCK_ITEM = { id: '20', name: 'Vodka', unit: 'ml' };
 
 async function selectOutletAndItem() {
   render(<StockWastageTab />);
-  await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '1');
-  await userEvent.selectOptions(await screen.findByLabelText('Stock item'), '20');
+  await selectWhenLoaded('Outlet', '1');
+  await selectWhenLoaded('Stock item', '20');
 }
 
 describe('<StockWastageTab>', () => {
@@ -38,7 +39,7 @@ describe('<StockWastageTab>', () => {
   it('shows a real backend error when stock items fail to load for the selected outlet', async () => {
     mocks.listStockItems.mockRejectedValue(new Error('boom'));
     render(<StockWastageTab />);
-    await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '1');
+    await selectWhenLoaded('Outlet', '1');
     expect(await screen.findByText('Could not load stock items for this outlet.')).toBeInTheDocument();
   });
 
