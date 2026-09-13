@@ -1,12 +1,25 @@
 .nameOnly {
+  overflow: hidden;
   font-size: var(--text-label-size);
   font-weight: var(--text-label-weight);
   color: var(--text-primary);
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@media (width <= 639px) {
+  .nameOnly {
+    max-width: 7rem;
+  }
+
+  .select {
+    max-width: 9rem;
+  }
 }
 
 .switcher {
   display: inline-flex;
+  min-width: 0;
 }
 
 .select {

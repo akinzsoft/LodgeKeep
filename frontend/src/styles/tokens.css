@@ -18,58 +18,81 @@
  */
 
 :root {
+  /*
+   * "Lodgekeep warm" palette (user-supplied reference design): a warm cream
+   * canvas, white cards with a warm hairline border, a dark charcoal
+   * sidebar, brass as the primary accent and deep teal as the secondary,
+   * brick reserved for negative/down signals. Inter for UI text; Fraunces
+   * (--font-display) only for the Home greeting and the sidebar wordmark.
+   */
+
   /* ---- surfaces ---- */
-  --surface-page: #F4F6FB; /* app background — never pure white */
+  --surface-page: #FAF8F4; /* warm cream canvas — never pure white */
   --surface-card: #FFFFFF; /* cards, tables, modals */
-  --surface-sunken: #EDF0F7; /* inset areas, table zebra rows */
-  --border: #E3E8F0; /* hairline dividers */
-  --border-strong: #CBD3E1; /* input borders, emphasis */
+  --surface-sunken: #F4F0E8; /* inset areas, table headers, hover rows */
+  --border: #EAE4D6; /* warm hairline dividers */
+  --border-strong: #D9D0BF; /* input borders, emphasis */
 
   /* ---- text ---- */
-  --text-primary: #1C2434; /* headings, KPI numerals */
-  --text-secondary: #5A6478; /* labels, supporting copy */
-  --text-muted: #8A93A6; /* hints, placeholders, timestamps */
+  --text-primary: #1F2926; /* headings, KPI numerals */
+  --text-secondary: #5C6B66; /* labels, supporting copy */
+  --text-muted: #6E7873; /* hints, placeholders, timestamps — darker than the reference's #8B9490 (3.1:1) to reach WCAG AA 4.5:1 on white */
   --text-inverse: #FFFFFF; /* text on filled buttons/badges */
 
+  /* ---- the primary accent — buttons, active nav, focus, links ---- */
+  --accent: #8A6D3B; /* brass */
+  --accent-hover: #735A2F;
+  --accent-tint: #F3EDE2;
+  --accent-ring: rgba(138, 109, 59, 0.25); /* input focus halo */
+  --accent-secondary: #2E5850; /* deep teal — avatars, secondary emphasis */
+  --accent-secondary-tint: #E3ECE9;
+
+  /* ---- dark sidebar ---- */
+  --sidebar-bg: #14191C;
+  --sidebar-border: #232A2E;
+  --sidebar-text: #D9DDD9;
+  --sidebar-text-muted: #8B9490;
+  --sidebar-hover-bg: #1D2327;
+  --sidebar-active-bg: #3A3222; /* brass, deepened for the charcoal ground */
+  --sidebar-active-text: #F4EEE1;
+
   /* ---- domain accents — assigned by meaning, reused on every screen ---- */
-  --domain-booking: #7F77DD; /* reservations, bookings */
-  --domain-rooms: #EF9F27; /* rooms, inventory, housekeeping */
-  --domain-guest: #639922; /* profiles, guests, CRM */
-  --domain-money: #1D9E75; /* cashiering, revenue, AR */
+  --domain-booking: #8A6D3B; /* reservations, bookings — shares the brass accent */
+  --domain-rooms: #9A6A26; /* rooms, inventory, housekeeping — ochre */
+  --domain-guest: #2E5850; /* profiles, guests, CRM — teal */
+  --domain-money: #4A7058; /* cashiering, revenue, AR — sage */
 
   /*
    * Domain tints, for icon-badge backgrounds — DESIGN_SYSTEM.md §1: "define
    * these alongside rather than computing opacity at render time, which
-   * produces muddy results over the sunken surface." Each is the matching
-   * accent's hue at roughly 15% saturation against --surface-card, computed
-   * once here rather than left to a runtime rgba() mix.
+   * produces muddy results over the sunken surface."
    */
-  --domain-booking-tint: #EDEBFB;
-  --domain-rooms-tint: #FCEFDB;
-  --domain-guest-tint: #E8F1DD;
-  --domain-money-tint: #DFF3EC;
+  --domain-booking-tint: #F3EDE2;
+  --domain-rooms-tint: #F5EBD8;
+  --domain-guest-tint: #E3ECE9;
+  --domain-money-tint: #E4EDE6;
 
   /* ---- semantic state — meaning, never decoration ---- */
-  --state-success: #1D9E75;
-  --state-success-bg: #E1F5EE;
-  --state-warning: #BA7517;
-  --state-warning-bg: #FAEEDA;
-  --state-danger: #D14343;
-  --state-danger-bg: #FCEBEB;
-  --state-info: #378ADD;
-  --state-info-bg: #E6F1FB;
-  --state-neutral: #8A93A6;
-  --state-neutral-bg: #F1EFE8;
+  --state-success: #2E6B4F;
+  --state-success-bg: #E5EFE9;
+  --state-warning: #93641C;
+  --state-warning-bg: #F6EDDA;
+  --state-danger: #B5482F; /* brick — negative/down/destructive only */
+  --state-danger-bg: #F6E4DE;
+  --state-info: #2E5850;
+  --state-info-bg: #E3ECE9;
+  --state-neutral: #5C6B66;
+  --state-neutral-bg: #EFEBE3;
 
-  /* ---- accents and chart series — Home dashboard ---- */
-  --accent: #8A6D3B; /* brass */
-  --accent-secondary: #2E5850; /* deep teal */
+  /* ---- charts — ordered series colours ---- */
   --chart-1: #8A6D3B; /* brass */
   --chart-2: #2E5850; /* teal */
   --chart-3: #B5482F; /* brick */
   --chart-4: #CDB791; /* tan */
   --chart-1-tint: #F3EDE2;
   --chart-2-tint: #E3ECE9;
+
+  --overlay-scrim: rgba(20, 25, 28, 0.5); /* modal/drawer backdrops */
 
   /* ---- spacing & sizing — every value a multiple of 4px ---- */
   --space-1: 4px;
@@ -80,13 +103,13 @@
   --space-6: 32px;
   --space-8: 48px;
 
-  --radius-sm: 6px; /* pills, badges, inputs */
-  --radius-md: 10px; /* buttons, small cards */
-  --radius-lg: 14px; /* cards, modals */
+  --radius-sm: 6px; /* inputs, small badges */
+  --radius-md: 8px; /* buttons, small cards */
+  --radius-lg: 10px; /* cards, modals */
   --radius-full: 999px; /* fully rounded pills, avatars, progress bars */
 
-  --shadow-card: 0 1px 3px rgba(28, 36, 52, 0.06), 0 1px 2px rgba(28, 36, 52, 0.04);
-  --shadow-raised: 0 4px 12px rgba(28, 36, 52, 0.08);
+  --shadow-card: 0 1px 2px rgba(31, 41, 38, 0.03); /* the reference's cards read by their border, not a lift */
+  --shadow-raised: 0 12px 32px rgba(20, 25, 28, 0.14);
 
   --sidebar-w: 248px;
   --sidebar-w-collapsed: 72px;
@@ -97,19 +120,19 @@
 
   /* ---- typography ---- */
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-display: 'Fraunces', 'Georgia', 'Times New Roman', serif; /* Home greeting only */
+  --font-display: 'Fraunces', 'Georgia', 'Times New Roman', serif; /* Home greeting + sidebar wordmark only */
   --font-mono: 'JetBrains Mono', ui-monospace, monospace; /* folio amounts, confirmation codes, IDs */
 
   /* size/line-height/weight, split into three custom properties per style —
      a single shorthand string can't be consumed individually by
      font-size/line-height/font-weight declarations in a component's CSS. */
-  --text-kpi-size: 30px;
+  --text-kpi-size: 28px;
   --text-kpi-line: 1.2;
-  --text-kpi-weight: 600;
+  --text-kpi-weight: 700;
 
   --text-h1-size: 24px;
   --text-h1-line: 1.3;
-  --text-h1-weight: 600;
+  --text-h1-weight: 700;
 
   --text-h2-size: 19px;
   --text-h2-line: 1.35;
@@ -133,7 +156,7 @@
 
   /* ---- motion ---- */
   --toast-duration: 4000ms; /* DESIGN_SYSTEM.md §2: success toast auto-dismisses after ~4s */
-  --transition-fast: 120ms ease;
+  --transition-fast: 150ms ease;
 
   /*
    * POS Register panel — scoped to `app/pos/RegisterTab.jsx` only, never
@@ -192,8 +215,20 @@
  * each component to remember.
  */
 :focus-visible {
-  outline: 2px solid var(--domain-booking);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/*
+ * No global box-sizing reset ever existed, so every `width: 100%` input with
+ * its own padding and border rendered wider than its grid cell — visible as
+ * overlapping date fields on Booking's availability search. Border-box is
+ * what every form module here was already written assuming.
+ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 body {
@@ -203,6 +238,45 @@ body {
   font-size: var(--text-body-size);
   line-height: var(--text-body-line);
   font-weight: var(--text-body-weight);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11', 'ss01'; /* Inter's straight-sided 1/l and open digits — crisper in dense tables */
+}
+
+/*
+ * Form controls, styled once for the whole app. Every screen's own form
+ * module already sets borders/radius/height through tokens; this adds the
+ * modern focus halo and hover affordance they all share, without touching
+ * each of the ~15 per-module form stylesheets.
+ */
+input:not([type='checkbox'], [type='radio'], [type='range'], [type='file']),
+select,
+textarea {
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+input:not([type='checkbox'], [type='radio'], [type='range'], [type='file']):hover,
+select:hover,
+textarea:hover {
+  border-color: var(--text-muted);
+}
+
+input:not([type='checkbox'], [type='radio'], [type='range'], [type='file']):focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--accent);
+}
+
+::selection {
+  background: var(--accent-tint);
+  color: var(--text-primary);
 }
 
 /*

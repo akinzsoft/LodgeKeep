@@ -1,8 +1,13 @@
+/*
+ * Dark charcoal sidebar (the user-supplied reference design): light text on
+ * `--sidebar-bg`, brass active pill, serif wordmark. Every colour comes from
+ * `tokens.css`'s `--sidebar-*` block.
+ */
 .sidebar {
   width: var(--sidebar-w);
   flex-shrink: 0;
-  background: var(--surface-card);
-  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  color: var(--sidebar-text);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -26,22 +31,29 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-4);
-  border-bottom: 1px solid var(--border);
+  min-height: var(--topbar-h);
+  padding: 0 var(--space-4);
 }
 
+/* LodgeKeep's own full-colour mark sits on a light tile so it stays legible
+   on the charcoal ground. */
 .brandIcon {
-  width: var(--control-h);
-  height: var(--control-h);
+  width: 36px;
+  height: 36px;
   flex-shrink: 0;
+  padding: var(--space-1);
+  border-radius: var(--radius-md);
+  background: var(--surface-page);
   object-fit: contain;
 }
 
 .brandWordmark {
-  font-size: var(--text-h3-size);
-  line-height: var(--text-h3-line);
-  font-weight: var(--text-h3-weight);
-  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--sidebar-active-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -51,8 +63,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-4);
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  border-bottom: 1px solid var(--sidebar-border);
 }
 
 .avatar,
@@ -67,29 +79,40 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--domain-booking-tint);
-  color: var(--domain-booking);
-  font-weight: 600;
+  background: var(--accent-secondary);
+  color: var(--text-inverse);
+  font-size: var(--text-label-size);
+  font-weight: 700;
 }
 
+.userText {
+  min-width: 0;
+}
+
+/* Signed-in names can still be full email addresses (a session missing its
+   name fields) — one ellipsized line instead of wrapping mid-address. */
 .userName {
   margin: 0;
+  overflow: hidden;
   font-size: var(--text-label-size);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--sidebar-active-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .userRole {
   margin: 0;
   font-size: var(--text-caption-size);
-  color: var(--text-secondary);
+  color: var(--sidebar-text-muted);
+  text-transform: capitalize;
 }
 
 .quickAccess {
   display: flex;
   justify-content: space-around;
   padding: var(--space-3) var(--space-2);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--sidebar-border);
 }
 
 .quickAccessIcon {
@@ -99,34 +122,24 @@
   min-width: var(--control-h-touch);
   min-height: var(--control-h-touch);
   border-radius: var(--radius-md);
-  color: var(--text-secondary);
+  color: var(--sidebar-text-muted);
   cursor: pointer;
 }
 
 .quickAccessIcon:hover {
-  background: var(--surface-sunken);
+  background: var(--sidebar-hover-bg);
 }
 
 .group {
-  padding: var(--space-3) var(--space-2);
+  padding: var(--space-4) var(--space-2) 0;
 }
 
 .groupLabel {
   margin: 0 0 var(--space-2);
   padding: 0 var(--space-3);
-
-  /* DESIGN_SYSTEM.md §1's type scale bottoms out at --text-caption-size
-     (12px) and states "never below 12px" outright — this used to be a
-     hardcoded 11px, which broke both rules at once. */
-  font-size: var(--text-caption-size);
+  font-size: var(--text-caption-size); /* DESIGN_SYSTEM.md §1: never below 12px */
   font-weight: 600;
-
-  /* No letter-spacing token exists in tokens.css; DESIGN_SYSTEM.md §1
-     doesn't define one, so this stays a literal — an intentional, narrow
-     exception rather than an oversight. */
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-  text-transform: uppercase;
+  color: var(--sidebar-text-muted);
 }
 
 .list {
@@ -141,37 +154,68 @@
 .item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: var(--space-3);
   width: 100%;
   min-height: var(--control-h-touch);
   padding: 0 var(--space-3);
   border: none;
   border-radius: var(--radius-md);
   background: none;
-  color: var(--text-secondary);
+  color: var(--sidebar-text);
   font-family: var(--font-sans);
   font-size: var(--text-body-size);
+  font-weight: 500;
   text-align: left;
   cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .item:hover {
-  background: var(--surface-sunken);
+  background: var(--sidebar-hover-bg);
+  color: var(--sidebar-active-text);
+}
+
+.itemIcon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--sidebar-text-muted);
+  transition: color var(--transition-fast);
 }
 
 /* DESIGN_SYSTEM.md §1: "Active item highlighted with a tinted background
    pill, not just bold text." */
-.active {
-  background: var(--domain-booking-tint);
-  color: var(--domain-booking);
+.active,
+.active:hover {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active-text);
   font-weight: 600;
 }
 
-/* Referenced by Sidebar.jsx as styles.itemLabel but never previously
-   defined here — the label span rendered with no class at all and inherited
-   only .item's styles by cascade luck. Truncation needs its own class:
-   .item is a flex row, and without min-width: 0 on this child, a long label
-   pushes the badge out of view rather than ellipsizing. */
+.active .itemIcon {
+  color: var(--sidebar-active-text);
+}
+
+.item:hover .itemIcon {
+  color: var(--sidebar-text);
+}
+
+.active:hover .itemIcon {
+  color: var(--sidebar-active-text);
+}
+
+.collapsed .item {
+  justify-content: center;
+  padding: 0;
+}
+
+.collapsed .userPanel {
+  justify-content: center;
+  padding: var(--space-2) 0 var(--space-4);
+}
+
+/* Truncation needs its own class: .item is a flex row, and without
+   min-width: 0 on this child, a long label pushes the badge out of view
+   rather than ellipsizing. */
 .itemLabel {
   overflow: hidden;
   min-width: 0;
@@ -180,15 +224,12 @@
 }
 
 .itemBadge {
-  background: var(--state-info-bg);
-  color: var(--state-info);
-  border-radius: var(--radius-sm);
+  margin-left: auto;
+  background: var(--accent);
+  color: var(--text-inverse);
+  border-radius: var(--radius-full);
   padding: var(--space-1) var(--space-2);
-
-  /* Was 2px — off the 4px spacing grid DESIGN_SYSTEM.md §1 requires
-     ("all spacing is a multiple of 4px"). --space-1 (4px) is the closest
-     step and keeps the badge's vertical rhythm on-grid. */
-  font-size: var(--text-caption-size); /* was a hardcoded 11px — see .groupLabel's note */
+  font-size: var(--text-caption-size);
   font-weight: 700;
   flex-shrink: 0;
 }

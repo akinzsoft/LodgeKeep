@@ -22,3 +22,12 @@
   color: var(--state-warning);
   font-weight: var(--text-label-weight);
 }
+
+/* Phone width: the top bar can't fit the label, the date, the property name
+   and the user menu on one 390px row — the date itself stays. */
+@media (width <= 639px) {
+  .label,
+  .note {
+    display: none;
+  }
+}

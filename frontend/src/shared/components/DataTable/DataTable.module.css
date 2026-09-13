@@ -8,6 +8,7 @@
 .scroll {
   max-height: 480px;
   overflow: auto;
+  background: var(--surface-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }
@@ -23,21 +24,31 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--surface-card);
-  border-bottom: 1px solid var(--border-strong);
-  padding: var(--space-3);
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-3) var(--space-4);
   text-align: left;
-  font-size: var(--text-label-size);
-  font-weight: var(--text-label-weight);
-  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--text-muted);
 }
 
 .table tbody td {
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
 }
 
-.table tbody tr:nth-child(even) {
+/* Hover highlight instead of zebra striping — lighter, and it tracks the
+   row the pointer is actually on. */
+.table tbody tr {
+  transition: background var(--transition-fast);
+}
+
+.table tbody tr:hover {
   background: var(--surface-sunken);
 }
 
@@ -78,6 +89,7 @@
   .scroll {
     max-height: none;
     overflow: visible;
+    background: none;
     border: none;
   }
 
@@ -96,13 +108,13 @@
   .table tbody tr {
     background: var(--surface-card);
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     box-shadow: var(--shadow-card);
     margin-bottom: var(--space-3);
-    padding: var(--space-3);
+    padding: var(--space-3) var(--space-4);
   }
 
-  .table tbody tr:nth-child(even) {
+  .table tbody tr:hover {
     background: var(--surface-card);
   }
 
@@ -122,9 +134,11 @@
 
   .table tbody td::before {
     content: attr(data-label);
-    font-size: var(--text-label-size);
-    font-weight: var(--text-label-weight);
-    color: var(--text-secondary);
+    font-size: var(--text-caption-size);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
     text-align: left;
   }
 

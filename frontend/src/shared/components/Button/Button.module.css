@@ -11,36 +11,50 @@
   font-size: var(--text-label-size);
   font-weight: 600;
   line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
-  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 .button:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.5;
+}
+
+.button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .compact {
   min-height: var(--control-h);
+  padding: 0 var(--space-3);
 }
 
 .primary {
-  background: var(--domain-booking);
+  background: var(--accent);
   color: var(--text-inverse);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--domain-booking) 88%, black);
+  background: var(--accent-hover);
 }
 
 .secondary {
   background: var(--surface-card);
   border-color: var(--border-strong);
   color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
 .secondary:hover:not(:disabled) {
   background: var(--surface-sunken);
+  border-color: var(--text-muted);
 }
 
 .danger {

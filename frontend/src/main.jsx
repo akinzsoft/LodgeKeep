@@ -1,5 +1,14 @@
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+// Inter was always named first in `--font-sans` but never actually loaded,
+// so every screen silently rendered in the OS fallback. Self-hosted (no
+// runtime CDN call) so it also works on an offline front-desk terminal.
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
+import '@fontsource/inter/700.css';
+// Display serif — only the Home greeting and the sidebar wordmark use it.
+import '@fontsource/fraunces/600.css';
 import './styles/tokens.css';
 import styles from './main.module.css';
 import { AuthProvider, useAuth } from './app/auth/index.js';
@@ -176,7 +185,10 @@ function Demo() {
   // own header) never submitted a login form this page load, so it carries
   // no email at all — the same "Property {id}" labelled-placeholder
   // precedent this file already uses for the missing property name.
-  const displayName = user.email ?? `User ${user.userId}`;
+  // The user's real name (login/refresh carry it) — email only as a
+  // fallback for a session somehow missing both name fields.
+  const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ');
+  const displayName = fullName || user.email || `User ${user.userId}`;
 
   // Real property records, resolved by id — `null` while still loading (the
   // effect above hasn't resolved yet) is treated the same as "no match

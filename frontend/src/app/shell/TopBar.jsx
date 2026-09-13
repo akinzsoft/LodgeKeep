@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { initialsFor } from './initials.js';
 import { PropertySwitcher } from './PropertySwitcher.jsx';
 import { BusinessDateIndicator } from './BusinessDateIndicator.jsx';
 import styles from './TopBar.module.css';
@@ -101,7 +102,7 @@ export function TopBar({
     <img className={styles.avatar} src={user.avatarUrl} alt="" />
   ) : (
     <span className={styles.avatarFallback} aria-hidden="true">
-      {user.name.charAt(0)}
+      {initialsFor(user.name)}
     </span>
   );
 
