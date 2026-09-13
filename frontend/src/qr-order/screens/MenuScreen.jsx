@@ -118,6 +118,7 @@ export function MenuScreen() {
             <h2 className={styles.category}>{category}</h2>
             {items.map((item) => (
               <div key={item.id} className={styles.itemRow}>
+                {item.image_url && <img className={styles.itemImage} src={item.image_url} alt="" loading="lazy" />}
                 <div className={styles.itemInfo}>
                   <span className={styles.itemName}>{item.name}</span>
                   <Money amount={item.price} currencyCode="NGN" />

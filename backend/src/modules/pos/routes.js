@@ -20,6 +20,7 @@
 
 const { Router } = require('express');
 const controller = require('./controller');
+const { receiveImage } = require('./menu-images');
 const { requirePermission } = require('../../auth');
 
 function posRouter() {
@@ -40,6 +41,8 @@ function posRouter() {
   router.patch('/pos/menu-items/:id', requirePermission('pos.manage'), controller.updateMenuItem);
   router.post('/pos/menu-items/:id/set-availability', requirePermission('pos.operate'), controller.setMenuItemAvailability);
   router.post('/pos/menu-items/:id/archive', requirePermission('pos.manage'), controller.archiveMenuItem);
+  router.post('/pos/menu-items/:id/image', requirePermission('pos.manage'), receiveImage, controller.uploadMenuItemImage);
+  router.delete('/pos/menu-items/:id/image', requirePermission('pos.manage'), controller.removeMenuItemImage);
 
   router.get('/pos/guests/in-house', requirePermission('pos.operate'), controller.findInHouseForCharge);
 

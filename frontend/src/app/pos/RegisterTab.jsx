@@ -585,8 +585,18 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
         total: sumMoney([settlement.subtotal, settlement.tax_amount, settlement.tip_amount, settlement.service_charge]),
       };
     });
+    const rows = result.settlements ?? [];
     return {
+      orderId: activeOrder.order.id,
       tableLabel: activeOrder.order.table_label || `Tab #${activeOrder.order.id}`,
+      propertyName: activeProperty.name ?? null,
+      propertyAddress: activeProperty.address ?? null,
+      cashier: currentUserLabel ?? null,
+      settledAt: new Date().toISOString(),
+      subtotal: sumMoney(rows.map((row) => row.subtotal)),
+      tax: sumMoney(rows.map((row) => row.tax_amount)),
+      serviceCharge: sumMoney(rows.map((row) => row.service_charge)),
+      tips: sumMoney(rows.map((row) => row.tip_amount)),
       currencyCode: activeProperty.base_currency,
       items: groupOrderItems(unvoidedItems).map((group) => ({
         key: `${group.menuItemId}:${group.splitGroup ?? 'none'}`,
@@ -750,7 +760,9 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const selectedOutlet = (outlets ?? []).find((o) => o.id === outletId);
 
   return (
-    <div className={formStyles.form}>
+    <>
+    {/* Everything on screen is hidden when printing; only the receipt below prints. */}
+    <div className={`${formStyles.form} ${styles.noPrint}`}>
       {error && (
         <p role="alert" className={formStyles.errorBanner}>
           {error}
@@ -882,6 +894,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                 <div className={styles.menuGrid}>
                   {filteredMenuItems.map((item) => (
                     <div key={item.id} className={`${styles.menuCard} ${!item.is_available ? styles.menuCardSoldOut : ''}`.trim()}>
+                      {/* Decorative: the name right below already identifies the item. */}
+                      {item.image_url && <img className={styles.menuCardImage} src={item.image_url} alt="" loading="lazy" />}
                       <span className={styles.menuCardName}>{item.name}</span>
                       <div className={styles.menuCardFooter}>
                         {item.is_available ? (
@@ -1100,7 +1114,127 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
           )}
       </>
     </div>
+    {settleResult && <PrintableReceipt receipt={settleResult} />}
+    </>
   );
+}
+
+/**
+ * The paper receipt — an 80mm thermal-roll layout that is invisible on
+ * screen and is the only thing on the page when printing (the browser's
+ * print dialog sends it to the terminal's receipt printer). Built from the
+ * same snapshot the on-screen receipt card uses, so the two never disagree.
+ */
+function PrintableReceipt({ receipt }) {
+  const { currencyCode } = receipt;
+  const settled = new Date(receipt.settledAt);
+  const splitBill = receipt.settlements.length > 1;
+  return (
+    <div className={styles.printReceipt} data-testid="printable-receipt">
+      {receipt.propertyName && <p className={styles.printTitle}>{receipt.propertyName}</p>}
+      {receipt.propertyAddress && <p className={styles.printCentered}>{receipt.propertyAddress}</p>}
+      <p className={styles.printCentered}>Receipt #{receipt.orderId}</p>
+      <p className={styles.printCentered}>{settled.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</p>
+      <p className={styles.printRow}>
+        <span>{receipt.tableLabel}</span>
+        {receipt.cashier && <span>Served by {receipt.cashier}</span>}
+      </p>
+
+      <hr className={styles.printRule} />
+      {receipt.items.map((item) => (
+        <p key={item.key} className={styles.printRow}>
+          <span>
+            {item.quantity} × {item.name}
+          </span>
+          <Money amount={multiplyMoney(item.unitPrice, item.quantity)} currencyCode={currencyCode} />
+        </p>
+      ))}
+
+      <hr className={styles.printRule} />
+      <p className={styles.printRow}>
+        <span>Subtotal</span>
+        <Money amount={receipt.subtotal} currencyCode={currencyCode} />
+      </p>
+      {receipt.tax !== ZERO && (
+        <p className={styles.printRow}>
+          <span>Tax</span>
+          <Money amount={receipt.tax} currencyCode={currencyCode} />
+        </p>
+      )}
+      {receipt.serviceCharge !== ZERO && (
+        <p className={styles.printRow}>
+          <span>Service ({SERVICE_CHARGE_PERCENT}%)</span>
+          <Money amount={receipt.serviceCharge} currencyCode={currencyCode} />
+        </p>
+      )}
+      {receipt.tips !== ZERO && (
+        <p className={styles.printRow}>
+          <span>Tip</span>
+          <Money amount={receipt.tips} currencyCode={currencyCode} />
+        </p>
+      )}
+      <p className={`${styles.printRow} ${styles.printTotal}`}>
+        <span>TOTAL</span>
+        <Money amount={receipt.grandTotal} currencyCode={currencyCode} />
+      </p>
+
+      <hr className={styles.printRule} />
+      {receipt.settlements.map((settlement) => (
+        <p key={settlement.splitGroup ?? 'all'} className={styles.printRow}>
+          <span>
+            {splitBill ? `${settlement.splitGroup ? `Group ${settlement.splitGroup}` : 'Ungrouped'}: ` : ''}
+            {settlement.tenderLabel}
+            {settlement.roomNumber ? ` · Room ${settlement.roomNumber}` : ''}
+            {settlement.guestName ? ` (${settlement.guestName})` : ''}
+          </span>
+          <Money amount={settlement.total} currencyCode={currencyCode} />
+        </p>
+      ))}
+
+      <p className={styles.printCentered}>Thank you!</p>
+    </div>
+  );
+}
+
+const RECEIPT_PAGE_STYLE_ID = 'pos-receipt-page-size';
+const RECEIPT_MARGIN_MM = 3;
+const PX_PER_MM = 96 / 25.4;
+
+/**
+ * Sizes the printed page to the receipt: 80mm wide and exactly as long as
+ * the receipt. Chromium ignores `size: 80mm auto`, and a fixed height would
+ * feed blank roll after every sale, so the height is measured and written
+ * as a real length before printing.
+ */
+function sizeReceiptPage() {
+  const receipt = document.querySelector('[data-testid="printable-receipt"]');
+  if (!receipt) return;
+  const previous = receipt.style.cssText;
+  receipt.style.cssText = 'display:block;position:absolute;left:-10000px;top:0;visibility:hidden;';
+  const heightMm = Math.ceil(receipt.getBoundingClientRect().height / PX_PER_MM) + RECEIPT_MARGIN_MM * 2;
+  receipt.style.cssText = previous;
+  if (!heightMm || heightMm <= RECEIPT_MARGIN_MM * 2) return;
+
+  let style = document.getElementById(RECEIPT_PAGE_STYLE_ID);
+  if (!style) {
+    style = document.createElement('style');
+    style.id = RECEIPT_PAGE_STYLE_ID;
+    document.head.appendChild(style);
+  }
+  style.textContent = `@page receipt { size: 80mm ${heightMm}mm; margin: ${RECEIPT_MARGIN_MM}mm; }`;
+}
+
+/**
+ * Opens the print dialog for the receipt. Guarded so an environment with no
+ * print support (or a blocked dialog) never breaks the checkout flow.
+ */
+function printReceipt() {
+  try {
+    sizeReceiptPage();
+    if (typeof window !== 'undefined' && typeof window.print === 'function') window.print();
+  } catch {
+    // Printing is a convenience — the on-screen receipt still shows the sale.
+  }
 }
 
 /**
@@ -1110,8 +1244,17 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
  */
 function SettlementReceipt({ receipt, onNewSale }) {
   const headingRef = useRef(null);
+  // A ref, not just the effect, so the receipt prints once even when React
+  // runs mount effects twice (StrictMode in development) — found printing
+  // twice when checked in a real browser.
+  const autoPrintedRef = useRef(false);
   useEffect(() => {
     headingRef.current?.focus();
+    // Prints once, as soon as the sale is confirmed; "Print receipt" reprints.
+    if (!autoPrintedRef.current) {
+      autoPrintedRef.current = true;
+      printReceipt();
+    }
   }, []);
   const splitBill = receipt.settlements.length > 1;
   return (
@@ -1150,6 +1293,9 @@ function SettlementReceipt({ receipt, onNewSale }) {
         <Money amount={receipt.grandTotal} currencyCode={receipt.currencyCode} />
       </div>
 
+      <button type="button" className={styles.printButton} onClick={printReceipt}>
+        Print receipt
+      </button>
       <button type="button" className={styles.newSaleButton} onClick={onNewSale}>
         New sale
       </button>

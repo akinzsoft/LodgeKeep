@@ -1,4 +1,4 @@
-import { request, requestWithMeta, requestBlob } from './client.js';
+import { request, requestWithMeta, requestBlob, requestMultipart } from './client.js';
 
 /**
  * PLAN.md Phase 4's POS core module. Same shape as `cashiering.js`/
@@ -60,6 +60,17 @@ export function listMenuItems(outletId) {
 
 export function createMenuItem({ outletId, name, category, price, modifiers }) {
   return request('/pos/menu-items', { method: 'POST', body: { outlet_id: outletId, name, category, price, modifiers } });
+}
+
+/** Photo for a menu item (JPG/PNG/WebP, ≤ 2 MB) — replaces any existing one. Returns the updated item, with `image_url`. */
+export function uploadMenuItemImage(id, file) {
+  const formData = new FormData();
+  formData.append('image', file);
+  return requestMultipart(`/pos/menu-items/${id}/image`, formData);
+}
+
+export function removeMenuItemImage(id) {
+  return request(`/pos/menu-items/${id}/image`, { method: 'DELETE' });
 }
 
 export function updateMenuItem(id, changes) {

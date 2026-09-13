@@ -203,6 +203,31 @@ async function updateMenuItem(req, res, next) {
 }
 
 /** The stock-out toggle — deliberately `pos.operate`, not `pos.manage` (see routes.js): PRODUCT_REQUIREMENTS.md §3.4 asks for this without an admin edit. */
+/** `POST /pos/menu-items/:id/image` (multipart, field `image`) — see `menu-images.js` for validation and storage. */
+async function uploadMenuItemImage(req, res, next) {
+  try {
+    const before = await service.getMenuItem({ context: req.context, id: req.params.id });
+    if (!before) return notFound(res);
+    const menuItem = await service.setMenuItemImage({ context: req.context, id: req.params.id, buffer: req.file.buffer });
+    await req.audit({ entityType: 'pos_menu_items', entityId: menuItem.id, action: 'set_image', beforeState: { image_path: before.image_path }, afterState: { image_path: menuItem.image_path } });
+    res.status(200).json(ok(menuItem));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function removeMenuItemImage(req, res, next) {
+  try {
+    const before = await service.getMenuItem({ context: req.context, id: req.params.id });
+    if (!before) return notFound(res);
+    const menuItem = await service.removeMenuItemImage({ context: req.context, id: req.params.id });
+    await req.audit({ entityType: 'pos_menu_items', entityId: menuItem.id, action: 'remove_image', beforeState: { image_path: before.image_path }, afterState: { image_path: null } });
+    res.status(200).json(ok(menuItem));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function setMenuItemAvailability(req, res, next) {
   try {
     const before = await service.getMenuItem({ context: req.context, id: req.params.id });
@@ -584,6 +609,8 @@ module.exports = {
   createMenuItem,
   updateMenuItem,
   setMenuItemAvailability,
+  uploadMenuItemImage,
+  removeMenuItemImage,
   archiveMenuItem,
   findInHouseForCharge,
   listOrders,

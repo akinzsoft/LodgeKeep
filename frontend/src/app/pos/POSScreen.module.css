@@ -70,3 +70,11 @@
   flex-direction: column;
   gap: var(--space-2);
 }
+
+/* A printed receipt is the only thing on the paper — see RegisterTab's print styles. */
+@media print {
+  .title,
+  .tabs {
+    display: none;
+  }
+}

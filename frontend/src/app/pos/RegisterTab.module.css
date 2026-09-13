@@ -254,6 +254,14 @@
   background: var(--pos-register-card-bg);
 }
 
+.menuCardImage {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+}
+
 .menuCardSoldOut {
   opacity: 0.5;
 }
@@ -839,4 +847,86 @@
   font-size: var(--text-h3-size);
   font-weight: 700;
   cursor: pointer;
+}
+
+/* Reprints the paper receipt — secondary to "New sale", so outlined, not filled. */
+.printButton {
+  min-height: var(--control-h-pos);
+  margin-top: var(--space-2);
+  border: 1px solid var(--pos-register-brass);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--pos-register-brass-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-h3-size);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/*
+ * The 80mm paper receipt. Hidden on screen; when printing, it is the only
+ * thing on the page (the app chrome hides itself, `.noPrint` hides the
+ * Register, POSScreen hides its title and tabs). It prints on a named page
+ * so the roll size never affects any other screen's printing; the page's
+ * exact length is set just before printing (`sizeReceiptPage`), and the
+ * size below is only the fallback if that did not run.
+ *
+ * Typography sits outside the print media query so the receipt measures at
+ * its printed height before the dialog opens.
+ */
+.printReceipt {
+  display: none;
+  width: 74mm;
+  color: var(--text-primary);
+  background: var(--surface-card);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption-size);
+  line-height: 1.35;
+}
+
+.printReceipt p {
+  margin: 0 0 var(--space-1);
+}
+
+.printTitle {
+  font-size: var(--text-h3-size);
+  font-weight: 700;
+  text-align: center;
+}
+
+.printCentered {
+  text-align: center;
+}
+
+.printRow {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.printTotal {
+  font-size: var(--text-h3-size);
+  font-weight: 700;
+}
+
+.printRule {
+  margin: var(--space-1) 0;
+  border: none;
+  border-top: 1px dashed var(--text-primary);
+}
+
+@page receipt {
+  size: 80mm 200mm;
+  margin: 3mm;
+}
+
+@media print {
+  .noPrint {
+    display: none;
+  }
+
+  .printReceipt {
+    display: block;
+    page: receipt;
+  }
 }

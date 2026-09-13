@@ -35,6 +35,17 @@ import formStyles from './POSForm.module.css';
  * own sibling `create*` form's fields — `status` stays reachable only
  * through Archive, matching `RoomTypesTab.jsx`'s own precedent.
  */
+const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
+const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
+/** A client-side pre-check so an oversized or wrong-type file fails fast; the server checks the real bytes regardless. */
+function photoProblem(file) {
+  if (!file) return null;
+  if (!PHOTO_TYPES.includes(file.type)) return 'The photo must be a JPG, PNG, or WebP image.';
+  if (file.size > MAX_PHOTO_BYTES) return 'The photo must be 2 MB or smaller.';
+  return null;
+}
+
 export function SetupTab({ activeProperty }) {
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState(null);
@@ -64,6 +75,11 @@ export function SetupTab({ activeProperty }) {
   const [menuEditForm, setMenuEditForm] = useState({ name: '', category: '', price: '' });
   const [menuEditSubmitting, setMenuEditSubmitting] = useState(false);
   const [menuEditError, setMenuEditError] = useState(null);
+  // Photo files chosen in the add / edit forms, uploaded after the item saves.
+  const [menuPhoto, setMenuPhoto] = useState(null);
+  const [menuEditPhoto, setMenuEditPhoto] = useState(null);
+  const [menuEditImageUrl, setMenuEditImageUrl] = useState(null);
+  const [photoInputKey, setPhotoInputKey] = useState(0);
 
   async function reload() {
     try {
@@ -188,12 +204,27 @@ export function SetupTab({ activeProperty }) {
     event.preventDefault();
     setMenuSubmitting(true);
     setMenuError(null);
+    const problem = photoProblem(menuPhoto);
+    if (problem) {
+      setMenuError(problem);
+      setMenuSubmitting(false);
+      return;
+    }
+    let created = null;
     try {
-      await posApi.createMenuItem({ outletId: selectedOutletId, ...menuForm });
+      created = await posApi.createMenuItem({ outletId: selectedOutletId, ...menuForm });
+      // The item exists now — clear the form straight away, so a retry after
+      // a failed photo upload can never add the same item a second time.
       setMenuForm({ name: '', category: '', price: '' });
+      setMenuPhoto(null);
+      setPhotoInputKey((key) => key + 1);
+      if (menuPhoto) await posApi.uploadMenuItemImage(created.id, menuPhoto);
       await reloadOutletDetail(selectedOutletId);
     } catch (caught) {
-      setMenuError(caught instanceof ApiError ? caught.message : 'Could not create this item.');
+      const message = caught instanceof ApiError ? caught.message : 'Could not create this item.';
+      // The item itself saved; only the photo failed — say so, and show the new item.
+      setMenuError(created ? `The item was added, but its photo was not: ${message} Use Edit to add the photo.` : message);
+      if (created) await reloadOutletDetail(selectedOutletId);
     } finally {
       setMenuSubmitting(false);
     }
@@ -203,20 +234,45 @@ export function SetupTab({ activeProperty }) {
     setEditingMenuItemId(item.id);
     setMenuEditError(null);
     setMenuEditForm({ name: item.name, category: item.category, price: item.price });
+    setMenuEditPhoto(null);
+    setMenuEditImageUrl(item.image_url ?? null);
   }
 
   async function handleEditMenuItem(event) {
     event.preventDefault();
     setMenuEditSubmitting(true);
     setMenuEditError(null);
+    const problem = photoProblem(menuEditPhoto);
+    if (problem) {
+      setMenuEditError(problem);
+      setMenuEditSubmitting(false);
+      return;
+    }
+    let saved = false;
     try {
       await posApi.updateMenuItem(editingMenuItemId, menuEditForm);
+      saved = true;
+      if (menuEditPhoto) await posApi.uploadMenuItemImage(editingMenuItemId, menuEditPhoto);
       setEditingMenuItemId(null);
       await reloadOutletDetail(selectedOutletId);
     } catch (caught) {
-      setMenuEditError(caught instanceof ApiError ? caught.message : 'Could not update this item.');
+      const message = caught instanceof ApiError ? caught.message : 'Could not update this item.';
+      // The changes saved; only the photo failed — say so, and refresh the list to show them.
+      setMenuEditError(saved ? `Your changes were saved, but the photo was not: ${message}` : message);
+      if (saved) await reloadOutletDetail(selectedOutletId);
     } finally {
       setMenuEditSubmitting(false);
+    }
+  }
+
+  async function handleRemovePhoto() {
+    setMenuEditError(null);
+    try {
+      await posApi.removeMenuItemImage(editingMenuItemId);
+      setMenuEditImageUrl(null);
+      await reloadOutletDetail(selectedOutletId);
+    } catch (caught) {
+      setMenuEditError(caught instanceof ApiError ? caught.message : 'Could not remove this photo.');
     }
   }
 
@@ -453,6 +509,16 @@ export function SetupTab({ activeProperty }) {
                   required
                 />
               </label>
+              <label className={formStyles.field}>
+                <span className={formStyles.label}>Photo (optional)</span>
+                <input
+                  key={photoInputKey}
+                  className={formStyles.fileInput}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => setMenuPhoto(e.target.files?.[0] ?? null)}
+                />
+              </label>
               <div className={formStyles.actionsRow}>
                 <Button type="submit" loading={menuSubmitting}>
                   Add item
@@ -463,6 +529,11 @@ export function SetupTab({ activeProperty }) {
               state={menuItems === null ? 'loading' : menuItems.length === 0 ? 'empty' : 'success'}
               emptyMessage="No menu items yet."
               columns={[
+                {
+                  key: 'image_url',
+                  label: 'Photo',
+                  render: (row) => (row.image_url ? <img className={formStyles.thumb} src={row.image_url} alt={`Photo of ${row.name}`} loading="lazy" /> : '—'),
+                },
                 { key: 'name', label: 'Name' },
                 { key: 'category', label: 'Category' },
                 { key: 'price', label: 'Price', align: 'right', render: (row) => <Money amount={row.price} currencyCode={activeProperty.base_currency} /> },
@@ -512,6 +583,27 @@ export function SetupTab({ activeProperty }) {
                     required
                   />
                 </label>
+                <div className={formStyles.field}>
+                  <span className={formStyles.label}>Photo</span>
+                  {menuEditImageUrl ? (
+                    <img className={formStyles.photoPreview} src={menuEditImageUrl} alt={`Current photo of ${menuEditForm.name}`} />
+                  ) : (
+                    <span className={formStyles.hint}>No photo yet.</span>
+                  )}
+                  <input
+                    key={editingMenuItemId}
+                    className={formStyles.fileInput}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    aria-label={menuEditImageUrl ? 'Replace photo' : 'Add photo'}
+                    onChange={(e) => setMenuEditPhoto(e.target.files?.[0] ?? null)}
+                  />
+                  {menuEditImageUrl && (
+                    <Button type="button" size="compact" variant="ghost" onClick={handleRemovePhoto}>
+                      Remove photo
+                    </Button>
+                  )}
+                </div>
                 <div className={formStyles.actionsRow}>
                   <Button type="submit" loading={menuEditSubmitting}>
                     Save changes

@@ -54,6 +54,7 @@ const { arRouter } = require('./modules/ar');
 const { groupBlocksRouter } = require('./modules/group-blocks');
 const { platformConsoleRouter, staffImpersonationRouter } = require('./modules/platform');
 const { signupRouter } = require('./modules/signup');
+const { menuImageMediaRouter } = require('./modules/pos/menu-images');
 const { billingRouter, billingWebhookRouter } = require('./modules/billing');
 const { offboardingRouter } = require('./modules/offboarding');
 const { migrationRouter } = require('./modules/migration');
@@ -215,6 +216,9 @@ function createApp() {
   // path prefix so a guest's raw token never collides with any staff
   // route shape.
   app.use('/api/v1/qr-order', buildQrOrderRouter());
+  // Public menu item photos — no tenant or token in scope for an <img>
+  // request; see `modules/pos/menu-images.js` for why this is safe.
+  app.use('/api/v1/media', menuImageMediaRouter());
   app.use('/api/v1/platform', buildPlatformRouter());
   app.use('/api/v1', buildStaffRouter());
 

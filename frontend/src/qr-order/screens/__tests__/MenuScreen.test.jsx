@@ -14,7 +14,7 @@ vi.mock('../../../shared/api/index.js', async () => {
 const MENU = {
   outlet: { id: '1', name: 'Poolside Bar', type: 'bar' },
   items: [
-    { id: '10', name: 'Chapman', category: 'Drinks', price: '20.00', is_available: true },
+    { id: '10', name: 'Chapman', category: 'Drinks', price: '20.00', is_available: true, image_url: '/api/v1/media/menu-items/chapman.png' },
     { id: '11', name: 'Suya', category: 'Snacks', price: '15.00', is_available: true },
   ],
 };
@@ -42,6 +42,10 @@ describe('<MenuScreen>', () => {
     expect(screen.getByText('Chapman')).toBeInTheDocument();
     expect(screen.getByText('Suya')).toBeInTheDocument();
     expect(mocks.getMenu).toHaveBeenCalledWith(TOKEN);
+    // An item with a photo shows it; one without shows none.
+    const images = document.querySelectorAll('img');
+    expect(images).toHaveLength(1);
+    expect(images[0]).toHaveAttribute('src', '/api/v1/media/menu-items/chapman.png');
   });
 
   it('shows a real backend error when the menu fails to load', async () => {
