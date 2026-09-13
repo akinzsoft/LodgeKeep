@@ -172,6 +172,11 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const [settlementPreview, setSettlementPreview] = useState(null);
   const [previewError, setPreviewError] = useState(null);
   const [voidingRow, setVoidingRow] = useState(null);
+  // `{ order, itemCount }` while the "remove a tab that still has items"
+  // confirmation is open; `removingTabId` disables that tab's ✕ while its
+  // own check/void request is in flight.
+  const [removingTab, setRemovingTab] = useState(null);
+  const [removingTabId, setRemovingTabId] = useState(null);
   const [splitModalOpen, setSplitModalOpen] = useState(false);
   const [openingTab, setOpeningTab] = useState(false);
   // Bug fix (code-review pass on the settlement-preview fix): a preview
@@ -294,6 +299,60 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     } finally {
       setOpeningTab(false);
     }
+  }
+
+  /**
+   * User-reported: "+ New tab" had no counterpart — every tab ever opened at
+   * an outlet stayed in the strip until settled, with no way to close one.
+   * Removing a tab voids it (`POST /pos/orders/:id/void`, which already
+   * existed and was wrapped in `posApi.voidOrder` but never called) — the
+   * order row is kept, marked void with a reason, never deleted
+   * (ARCHITECTURE.md §8). An empty tab closes immediately, since nothing
+   * rung up can be lost; a tab that still has items asks for confirmation
+   * and a reason first, recorded in the audit trail, so a served round
+   * can't disappear in one click. Item counts come from a fresh `getOrder`,
+   * not the tab strip's list row, which carries no items.
+   */
+  async function handleRemoveTab(order) {
+    setError(null);
+    setRemovingTabId(order.id);
+    try {
+      const detail = await posApi.getOrder(order.id);
+      const itemCount = detail.items.filter((item) => !item.voided_at).length;
+      if (itemCount === 0) {
+        await closeTab(order, 'Empty tab removed from the Register');
+      } else {
+        setRemovingTab({ order, itemCount });
+      }
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not remove this tab.');
+    } finally {
+      setRemovingTabId(null);
+    }
+  }
+
+  async function confirmRemoveTab(reason) {
+    const { order } = removingTab;
+    setRemovingTab(null);
+    setError(null);
+    try {
+      await closeTab(order, reason);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not remove this tab.');
+    }
+  }
+
+  async function closeTab(order, reason) {
+    await posApi.voidOrder(order.id, reason);
+    setOpenOrders((prev) => prev.filter((open) => open.id !== order.id));
+    if (String(activeOrderId) === String(order.id)) {
+      // Discard any load still in flight for the tab that just closed, so
+      // it can't land afterwards and redraw a voided tab's panel.
+      orderLoadRequestIdRef.current += 1;
+      setSplitModalOpen(false);
+    }
+    setActiveOrderId((current) => (String(current) === String(order.id) ? null : current));
+    setActiveOrder((current) => (current && String(current.order.id) === String(order.id) ? null : current));
   }
 
   function switchToTab(order) {
@@ -615,16 +674,29 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
 
             {outletId && (
               <div className={styles.compactTabs}>
-                {openOrders.map((order) => (
-                  <button
-                    key={order.id}
-                    type="button"
-                    className={`${styles.tabChip} ${activeOrderId === order.id ? styles.tabChipActive : ''}`.trim()}
-                    onClick={() => switchToTab(order)}
-                  >
-                    {order.table_label || `Tab #${order.id}`}
-                  </button>
-                ))}
+                {openOrders.map((order) => {
+                  const label = order.table_label || `Tab #${order.id}`;
+                  return (
+                    // Two sibling buttons in one chip (never a button nested
+                    // in a button): the label switches to the tab, the ✕
+                    // removes it.
+                    <span key={order.id} className={`${styles.tabChip} ${styles.tabGroup} ${activeOrderId === order.id ? styles.tabChipActive : ''}`.trim()}>
+                      <button type="button" className={styles.tabLabelButton} onClick={() => switchToTab(order)}>
+                        {label}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.tabCloseButton}
+                        onClick={() => handleRemoveTab(order)}
+                        disabled={isOffline || removingTabId === order.id}
+                        aria-label={`Remove ${label}`}
+                        title="Remove tab"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  );
+                })}
                 <button type="button" className={styles.tabChip} onClick={handleNewTab} disabled={isOffline || openingTab}>
                   + New tab
                 </button>
@@ -861,6 +933,17 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                 </div>
               </form>
             </div>
+          )}
+
+          {removingTab && (
+            <ConfirmDialog
+              title="Remove tab"
+              consequence={`"${removingTab.order.table_label || `Tab #${removingTab.order.id}`}" still has ${removingTab.itemCount} item${removingTab.itemCount === 1 ? '' : 's'} on it. Removing it voids the whole tab. This cannot be undone.`}
+              requireReason
+              confirmLabel="Remove tab"
+              onConfirm={confirmRemoveTab}
+              onCancel={() => setRemovingTab(null)}
+            />
           )}
 
           {voidingRow && (
