@@ -34,10 +34,30 @@ function addDays(dateStr, days) {
  * tape chart exists for ("what's the booking pressure across dates,
  * room type by room type") without claiming a room-level view this
  * pass's data model cannot actually support before check-in.
+ *
+ * Bug fix (found while live-testing the Booking screen, not by inspection):
+ * `windowStart`'s initial value defaulted to the BROWSER's own wall-clock
+ * "today" — ARCHITECTURE.md §6's "business date ≠ wall clock" rule violated
+ * in exactly the one place on this whole screen it hadn't already been
+ * checked (`AvailabilityTab`'s own "rooms free right now" panel already
+ * compares against `activeProperty.current_business_date`, never `new
+ * Date()`). `BookingScreen` was already passing `activeProperty` down to
+ * this component; nothing here ever read it. A property whose business date
+ * has drifted from calendar-today (a lapsed night audit, or simply a
+ * different timezone) would open this chart on the wrong window by
+ * default — silently correct only by coincidence on any day the two happen
+ * to match, which is exactly why this went unnoticed until now. Falls back
+ * to wall-clock only when the property genuinely has no business date yet
+ * (`current_business_date: null` — not yet opened, PRODUCT_REQUIREMENTS.md
+ * §3.19's own setup wizard hasn't reached that step), the same graceful
+ * degradation `BusinessDateIndicator`'s own "Not set" fallback already
+ * established rather than crashing on a null date string.
  */
-export function TapeChartTab() {
+export function TapeChartTab({ activeProperty }) {
   const [roomTypes, setRoomTypes] = useState(null);
-  const [windowStart, setWindowStart] = useState(new Date().toISOString().slice(0, 10));
+  const [windowStart, setWindowStart] = useState(
+    activeProperty?.current_business_date ?? new Date().toISOString().slice(0, 10)
+  );
   const [grid, setGrid] = useState(null);
   const [error, setError] = useState(null);
 
