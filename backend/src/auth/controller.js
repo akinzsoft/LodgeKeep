@@ -7,6 +7,7 @@
 
 const { ok } = require('../shared/response');
 const service = require('./service');
+const { resolveMyPermissions } = require('./rbac');
 const { ValidationError, TokenInvalidError } = require('./errors');
 const { REFRESH_TTL_HOURS } = require('./tokens');
 const {
@@ -137,6 +138,16 @@ async function switchProperty(req, res, next) {
     res
       .status(200)
       .json(ok({ accessToken: result.accessToken, activePropertyId: result.activePropertyId, role: result.role }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** GET /api/v1/auth/me/permissions — the signed-in staff member's role and granted permission keys at their active property. */
+async function myPermissions(req, res, next) {
+  try {
+    const result = await resolveMyPermissions(req.context);
+    res.status(200).json(ok({ propertyId: req.context.propertyId ? String(req.context.propertyId) : null, ...result }));
   } catch (error) {
     next(error);
   }
@@ -342,6 +353,7 @@ module.exports = {
   staffRefresh,
   staffLogout,
   switchProperty,
+  myPermissions,
   requestPasswordReset,
   completePasswordReset,
   acceptInvitation,

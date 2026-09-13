@@ -45,6 +45,10 @@ function staffAuthRouter({ resolveTenant }) {
 
   // Authenticated — tenant comes from the verified token, not the Host header.
   router.post('/switch-property', authenticate('staff'), controller.switchProperty);
+  // What this user may do at their active property — drives the role-aware
+  // sidebar. Ungated by design: every authenticated staff member may read
+  // their own grants; the permission checks on each real route are unchanged.
+  router.get('/me/permissions', authenticate('staff'), controller.myPermissions);
 
   return router;
 }
