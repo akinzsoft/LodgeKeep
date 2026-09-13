@@ -172,7 +172,15 @@ describe('<MenuScreen>', () => {
     expect(within(bar).getByText(/60\.00/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Add Suya to cart' }));
-    await waitFor(() => expect(JSON.parse(window.sessionStorage.getItem(STORAGE_KEY))).toMatchObject({ 10: 3, 11: 1 }));
+    await waitFor(() => expect(JSON.parse(window.sessionStorage.getItem(STORAGE_KEY))).toEqual({ 10: 3, 11: 1 }));
+  });
+
+  it('keeps the remembered cart untouched when the menu fails to load', async () => {
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ 10: 3 }));
+    mocks.getMenu.mockRejectedValue(new Error('boom'));
+    renderScreen();
+    await screen.findByText('Could not load the menu.');
+    expect(JSON.parse(window.sessionStorage.getItem(STORAGE_KEY))).toEqual({ 10: 3 });
   });
 
   it('still works when storage is unavailable', async () => {
