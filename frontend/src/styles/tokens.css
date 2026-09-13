@@ -122,6 +122,36 @@
   /* ---- motion ---- */
   --toast-duration: 4000ms; /* DESIGN_SYSTEM.md §2: success toast auto-dismisses after ~4s */
   --transition-fast: 120ms ease;
+
+  /*
+   * POS Register panel — scoped to `app/pos/RegisterTab.jsx` only, never
+   * used elsewhere, the same "the one place the admin design language
+   * bends" carve-out `--control-h-pos` above already established for this
+   * exact screen. This is a deliberately fixed dark panel embedded within
+   * the light app shell (a restaurant-POS convention: legible under bright
+   * kitchen/bar lighting, high contrast against a bar top) — it does not
+   * invert or lighten under the app's own light/dark preference, the same
+   * way a code editor's own theme is typically independent of the OS
+   * theme. All literal colour values live here, once, per this file's own
+   * governing rule; the component's own CSS module references them via
+   * var() only.
+   */
+  --pos-register-panel-bg: #14191C;
+  --pos-register-rail-bg: #0F1315;
+  --pos-register-card-bg: #1D2327;
+  --pos-register-card-border: #262C2F;
+  --pos-register-ticket-bg: #181D20;
+  --pos-register-text-primary: #EDE7DA;
+  --pos-register-text-secondary: #9AA0A3;
+  --pos-register-brass: #8A6D3B;
+  --pos-register-brass-text: #D9C79A;
+  --pos-register-brass-tint: rgba(138, 109, 59, 0.22); /* active category rail item */
+  --pos-register-teal: #2E5850; /* "Open" status pill */
+  --pos-register-amber: #F2C94C; /* the one saturated color on the panel — checkout button only */
+  --pos-register-amber-text: #1A1508; /* dark text for contrast against the amber button */
+  --pos-register-danger: #B5482F; /* remove/void actions only */
+  --pos-register-card-radius: 11px; /* the design brief's own explicit menu-card radius — distinct from --radius-md (10px)/--radius-lg (14px), not an approximation of either */
+  --pos-register-overlay-scrim: rgba(0, 0, 0, 0.55); /* the split-bill modal's own backdrop — darker than the light shell's --shadow-raised-adjacent scrim, matching this panel's own dark palette rather than ConfirmDialog.module.css's light-shell tint */
 }
 
 /*

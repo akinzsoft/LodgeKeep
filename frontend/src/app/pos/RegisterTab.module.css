@@ -4,24 +4,15 @@
  * This is the one place where the admin design language bends — bigger
  * targets, fewer words, no dense tables." Every interactive element here
  * uses --control-h-pos (64px), not --control-h-touch (44px).
+ *
+ * Visual redesign (user-reported): the order-taking surface itself (rail +
+ * menu + ticket) is a dark panel embedded in the light app shell — see
+ * `tokens.css`'s own `--pos-register-*` block for why this is a deliberate,
+ * fixed-dark exception rather than a themed surface. The outlet/terminal
+ * picker and the multi-tab strip stay in the light shell, above the panel
+ * — they're station setup, not the order-taking surface itself.
  */
 
-.layout {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--space-4);
-  align-items: start;
-}
-
-@media (width >= 900px) {
-  .layout {
-    grid-template-columns: 2fr 1fr;
-  }
-}
-
-/* Outlet/terminal pickers, styled as a slim utility bar rather than a
-   prominent form — this screen's job is taking orders, not station setup,
-   which happens once per shift and should get out of the way visually. */
 .stationBar {
   display: flex;
   flex-wrap: wrap;
@@ -41,197 +32,557 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 .tabChip {
-  min-height: var(--control-h-pos);
+  min-height: var(--control-h-touch);
   padding: 0 var(--space-4);
   border-radius: var(--radius-md);
   border: 2px solid var(--border-strong);
   background: var(--surface-card);
   color: var(--text-primary);
   font-family: var(--font-sans);
-  font-size: var(--text-h3-size);
+  font-size: var(--text-label-size);
   font-weight: 600;
   cursor: pointer;
 }
 
 .tabChipActive {
-  border-color: var(--domain-money);
-  background: var(--domain-money-tint);
+  border-color: var(--pos-register-brass);
+  background: var(--pos-register-brass-tint);
+  color: var(--pos-register-brass-text);
 }
 
-.menuControls {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
-}
+/* ---- the dark panel itself ---- */
 
-.searchInput {
-  min-height: var(--control-h-pos);
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-md);
-  border: 2px solid var(--border-strong);
-  background: var(--surface-card);
-  color: var(--text-primary);
+.panel {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  margin-top: var(--space-4);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--pos-register-card-border);
+  background: var(--pos-register-panel-bg);
+  overflow: hidden;
   font-family: var(--font-sans);
-  font-size: var(--text-h3-size);
-  width: 100%;
+  color: var(--pos-register-text-primary);
 }
 
-.categoryTabs {
+@media (width >= 900px) {
+  .panel {
+    grid-template-columns: 88px 1fr 310px;
+    height: 78vh;
+  }
+}
+
+.rail {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: row;
   gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--pos-register-rail-bg);
   overflow-x: auto;
 }
 
-.categoryChip {
-  min-height: var(--control-h-touch);
-  padding: 0 var(--space-4);
-  border-radius: 999px;
-  border: 2px solid var(--border-strong);
-  background: var(--surface-card);
-  color: var(--text-secondary);
-  font-family: var(--font-sans);
-  font-size: var(--text-label-size);
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
+@media (width >= 900px) {
+  .rail {
+    flex-direction: column;
+    overflow: visible auto;
+  }
 }
 
-.categoryChipActive {
-  border-color: var(--domain-money);
-  background: var(--domain-money-tint);
-  color: var(--text-primary);
-}
-
-.menuGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: var(--space-3);
-}
-
-.menuTile {
-  min-height: var(--control-h-pos);
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  border: 2px solid var(--border-strong);
-  background: var(--surface-card);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: var(--text-h3-size);
-  font-weight: 600;
-  cursor: pointer;
+.railItem {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
+  flex-shrink: 0;
+  width: 72px;
+  min-height: var(--control-h-touch);
+  padding: var(--space-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--pos-register-text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-caption-size);
+  font-weight: 600;
   text-align: center;
+  cursor: pointer;
 }
 
-.menuTile:disabled {
+.railItemActive {
+  background: var(--pos-register-brass-tint);
+  color: var(--pos-register-brass-text);
+}
+
+.menuColumn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.menuColumnHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.menuColumnTitle {
+  margin: 0;
+  font-size: var(--text-h2-size);
+  line-height: var(--text-h2-line);
+  font-weight: var(--text-h2-weight);
+  color: var(--pos-register-text-primary);
+  text-transform: capitalize;
+}
+
+.menuColumnSubtitle {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-label-size);
+  color: var(--pos-register-text-secondary);
+}
+
+.searchInput {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--pos-register-card-border);
+  background: var(--pos-register-card-bg);
+  color: var(--pos-register-text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-size);
+  width: 100%;
+  max-width: 16rem;
+}
+
+.searchInput::placeholder {
+  color: var(--pos-register-text-secondary);
+}
+
+.menuGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-3);
+}
+
+@media (width >= 640px) {
+  .menuGrid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.menuCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: var(--control-h-pos);
+  padding: var(--space-3);
+  border-radius: var(--pos-register-card-radius);
+  border: 1px solid var(--pos-register-card-border);
+  background: var(--pos-register-card-bg);
+}
+
+.menuCardSoldOut {
   opacity: 0.5;
-  cursor: not-allowed;
+}
+
+.menuCardName {
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  color: var(--pos-register-text-primary);
+}
+
+.menuCardFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.menuCardPrice {
+  font-size: var(--text-body-size);
+  font-weight: 700;
+  color: var(--pos-register-brass-text);
 }
 
 .soldOutBadge {
   font-size: var(--text-caption-size);
   font-weight: 600;
-  color: var(--state-danger);
+  color: var(--pos-register-danger);
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
 
-/* The order/cart panel — sticky on desktop so the running total and
-   Settle button stay visible while the menu grid above scrolls, the same
-   "cart always in view" shape a real POS checkout screen needs. */
-.orderPanel {
+.addButton {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: var(--pos-register-brass);
+  color: var(--pos-register-brass-text);
+  font-size: var(--text-h3-size);
+  font-weight: 700;
+  line-height: 1;
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
 }
 
-@media (width >= 900px) {
-  .orderPanel {
-    position: sticky;
-    top: var(--space-4);
-  }
+.addButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-.orderLines {
+/* ---- the always-visible order ticket ---- */
+
+.ticket {
   display: flex;
   flex-direction: column;
-  max-height: 60vh;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--pos-register-ticket-bg);
+  border-left: 1px solid var(--pos-register-card-border);
+  min-width: 0;
   overflow-y: auto;
 }
 
-.tabLine {
+.ticketHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2);
-  min-height: var(--control-h-pos);
-  padding: 0 var(--space-2);
-  border-bottom: 1px solid var(--border);
-  font-size: var(--text-h3-size);
 }
 
-.tabLineName {
+.ticketTitle {
+  margin: 0;
+  font-size: var(--text-h3-size);
+  font-weight: 700;
+  color: var(--pos-register-text-primary);
+}
+
+.statusPill {
+  padding: var(--space-1) var(--space-3);
+  border-radius: 999px;
+  background: var(--pos-register-teal);
+  color: var(--pos-register-text-primary);
+  font-size: var(--text-caption-size);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.ticketMeta {
+  margin: 0;
+  font-size: var(--text-caption-size);
+  color: var(--pos-register-text-secondary);
+}
+
+.ticketLines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1;
+  overflow-y: auto;
+}
+
+.ticketEmpty {
+  margin: 0;
+  padding: var(--space-4) 0;
+  color: var(--pos-register-text-secondary);
+  font-size: var(--text-label-size);
+  text-align: center;
+}
+
+.ticketLine {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--pos-register-card-border);
+}
+
+.ticketLineInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ticketLineName {
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  color: var(--pos-register-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticketLineUnitPrice {
+  font-size: var(--text-caption-size);
+  color: var(--pos-register-text-secondary);
+}
+
+
+.ticketLineActions {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
-.quantityBadge {
-  display: inline-flex;
+.stepperButton {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--pos-register-card-border);
+  background: transparent;
+  color: var(--pos-register-text-primary);
+  font-size: var(--text-body-size);
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 2.25rem;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  background: var(--domain-money-tint);
-  color: var(--text-primary);
-  font-size: var(--text-label-size);
-  font-weight: 700;
+  cursor: pointer;
 }
 
-.tabLineActions {
+.stepperButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.stepperQuantity {
+  min-width: 1.25rem;
+  text-align: center;
+  font-size: var(--text-label-size);
+  font-weight: 700;
+  color: var(--pos-register-text-primary);
+}
+
+.removeButton {
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--pos-register-danger);
+  font-size: var(--text-label-size);
+  cursor: pointer;
   display: flex;
   align-items: center;
+  justify-content: center;
+}
+
+.removeButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.splitSummary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--pos-register-card-border);
+  color: var(--pos-register-text-secondary);
+  font-size: var(--text-label-size);
+}
+
+.splitSummary p {
+  margin: 0;
+}
+
+.manageSplitButton {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--pos-register-card-border);
+  background: var(--pos-register-card-bg);
+  color: var(--pos-register-text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.manageSplitButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.checkoutForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--pos-register-card-border);
+}
+
+.checkoutActions {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
 }
 
-.tabLineVoided {
-  text-decoration: line-through;
-  color: var(--text-secondary);
+.splitLink {
+  align-self: center;
+  border: none;
+  background: none;
+  color: var(--pos-register-text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-caption-size);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
-.runningTotal {
+/* The one saturated color on the whole panel — everything else is
+   deliberately muted so this is the thing the eye lands on. Left as a
+   plain, fully custom-styled button (not the shared `Button` component,
+   whose own variants assume the light app shell) — the same choice this
+   file already makes for every other control inside the dark panel. */
+.checkoutButton {
+  width: 100%;
+  min-height: var(--control-h-pos);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--pos-register-amber);
+  color: var(--pos-register-amber-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-h3-size);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.checkoutButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- settlement fields, shared between the inline checkout and the split modal ---- */
+
+/* Code-review fix: `SettlementFields`/the split modal used `formStyles.*`
+   (POSForm.module.css) for their own field labels/inputs/selects — that
+   module's `.label` sets an explicit `color: var(--text-primary)`, a
+   near-black tuned for the light shell, which rendered as near-invisible
+   text directly on this panel's dark backgrounds (no light card sits
+   behind it the way the error/empty-state banners already have their own
+   light background). `.input`/`.select` themselves stayed legible (a
+   light-mode box on a dark backdrop), just visually inconsistent with the
+   rest of this deliberately dark, restyled screen. These three replace
+   `formStyles.label`/`.input`/`.select` everywhere inside the dark panel. */
+.fieldLabel {
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  color: var(--pos-register-text-secondary);
+}
+
+.darkInput,
+.darkSelect {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--pos-register-card-border);
+  border-radius: var(--radius-sm);
+  background: var(--pos-register-card-bg);
+  color: var(--pos-register-text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-size);
+  width: 100%;
+}
+
+.darkInput::placeholder {
+  color: var(--pos-register-text-secondary);
+}
+
+.settlementLine {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: var(--control-h-pos);
-  font-size: var(--text-h1-size);
-  font-weight: 700;
+  font-size: var(--text-label-size);
+  color: var(--pos-register-text-secondary);
 }
 
-.settleButton {
-  width: 100%;
-  min-height: var(--control-h-pos);
+.settlementGrandTotal {
   font-size: var(--text-h3-size);
+  font-weight: 700;
+  color: var(--pos-register-text-primary);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--pos-register-card-border);
 }
 
-/* The settlement panel — its own overlay rather than an inline form
-   appended below the order, so completing a sale reads as a distinct,
-   focused step (the same "checkout screen" transition a real POS gives
-   you), matching `ConfirmDialog.module.css`'s own overlay token values. */
+/* Bug fix (code-review pass): a leftover 2-column grid from the earlier
+   4-button (2×2) payment layout — PAYMENT_METHODS is now exactly 3
+   buttons (Cash/Card/NQR), which under a 2-column grid wrapped onto two
+   rows with an empty cell instead of one clean row of 3. */
+.paymentMethodRow {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+}
+
+.paymentButton {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: var(--control-h-touch);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--pos-register-card-border);
+  background: var(--pos-register-card-bg);
+  color: var(--pos-register-text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-caption-size);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.paymentButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.paymentButtonActive {
+  border-color: var(--pos-register-brass);
+  background: var(--pos-register-brass-tint);
+  color: var(--pos-register-brass-text);
+}
+
+.roomChargeLink {
+  align-self: center;
+  border: none;
+  background: none;
+  color: var(--pos-register-text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-caption-size);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.roomChargeLink:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.roomChargeLinkActive {
+  color: var(--pos-register-brass-text);
+  font-weight: 600;
+}
+
+/* ---- the split-bill modal — the same dark palette, a focused overlay ---- */
+
 .settlementOverlay {
   position: fixed;
   inset: 0;
-  background: rgba(28, 36, 52, 0.45);
+  background: var(--pos-register-overlay-scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -241,7 +592,8 @@
 }
 
 .settlementPanel {
-  background: var(--surface-card);
+  background: var(--pos-register-panel-bg);
+  border: 1px solid var(--pos-register-card-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-raised);
   padding: var(--space-5);
@@ -252,6 +604,8 @@
   gap: var(--space-4);
   max-height: calc(100vh - var(--space-8));
   overflow-y: auto;
+  font-family: var(--font-sans);
+  color: var(--pos-register-text-primary);
 }
 
 .settlementTitle {
@@ -259,14 +613,33 @@
   font-size: var(--text-h2-size);
   line-height: var(--text-h2-line);
   font-weight: var(--text-h2-weight);
+  color: var(--pos-register-text-primary);
+}
+
+.splitItemList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.splitItemRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--pos-register-card-border);
+  font-size: var(--text-label-size);
 }
 
 .settlementGroup {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
   padding-bottom: var(--space-4);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pos-register-card-border);
 }
 
 .settlementGroup:last-of-type {
@@ -276,34 +649,65 @@
 
 .settlementGroupTitle {
   margin: 0;
-  font-size: var(--text-label-size);
-  font-weight: var(--text-label-weight);
-  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  font-weight: 700;
+  color: var(--pos-register-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
 
-.settlementLine {
+/* Code-review fix: the split modal's own "Confirm settlement"/"Cancel"
+   used the shared `Button` component (`--domain-booking` blue / plain
+   grey text — tuned for the light shell) — restyled to match the panel's
+   own dark palette, matching `.checkoutButton`'s reasoning. Brass, not
+   amber: this design reserves amber for the one primary "Send to Bar &
+   Checkout" action; a second amber button here would contradict that. */
+.modalActionsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.confirmButton {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--pos-register-brass);
+  color: var(--pos-register-brass-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-size);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.confirmButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cancelButton {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--pos-register-card-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--pos-register-text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* "Tab settled" banner — rendered in the light shell (before the dark
+   panel even mounts, since there's no active order once settled), so it
+   deliberately does NOT use the pos-register-* dark tokens. */
+.runningTotal {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: var(--text-body-size);
-}
-
-.settlementGrandTotal {
-  font-size: var(--text-h2-size);
+  min-height: var(--control-h-pos);
+  font-size: var(--text-h1-size);
   font-weight: 700;
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border);
-}
-
-.paymentMethodRow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.paymentMethodRow > * {
-  flex: 1;
-  min-width: 8rem;
+  color: var(--text-primary);
 }

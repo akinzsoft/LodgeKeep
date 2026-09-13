@@ -386,6 +386,56 @@ function groupKey(splitGroup) {
 }
 
 /**
+ * Read-only, non-mutating preview of what `settleOrder` will actually
+ * charge per split group — found necessary by this session's own "test
+ * and review Register" pass: the Register screen's settlement panel had
+ * no way to preview the real, tax-inclusive amount before confirming (see
+ * `RegisterTab.jsx`'s own header for the live-confirmed discrepancy this
+ * closes). Reuses the EXACT same `resolveApplicableTaxVersions`/
+ * `computeChargeWithTax` calls `settleOrder` itself calls below — never a
+ * second, parallel tax algorithm (ARCHITECTURE.md §12). Tax depends only
+ * on the order's own items and business_date, never on settlement method
+ * or tip/service charge — `cash`/`card`/`room_charge` all compute it
+ * identically (confirmed directly against `settleOrder`'s own two
+ * branches) — so this takes no method/tip/service-charge input at all,
+ * just the order id, and returns one entry per split group actually
+ * present, mirroring the shape `settleOrder` itself expects one
+ * settlement per.
+ *
+ * `subtotal` here is the tax engine's own `netAmount`, not the raw item
+ * total — for an EXCLUSIVE tax the two are equal, but for an INCLUSIVE
+ * tax `netAmount` is the item total minus the tax portion baked into it
+ * (`computeChargeWithTax`'s own header). A caller that renders "Subtotal"
+ * from this response and then adds `taxAmount` on top gets the correct
+ * grand total either way; recomputing "Subtotal" from the raw items
+ * client-side instead would double-count tax the moment a property
+ * configures an inclusive one.
+ */
+async function previewSettlement({ context, orderId }) {
+  const db = scopedDb().for(context);
+  const order = await db.table('pos_orders').where({ id: orderId }).first();
+  if (!order) throw new OrderNotFoundError();
+  if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
+
+  const items = await db.table('pos_order_items').where({ pos_order_id: orderId }).whereNull('voided_at');
+  const property = await db.table('properties').where({ id: order.property_id }).first('current_business_date', 'base_currency');
+  const businessDate = property?.current_business_date;
+  const allTaxRows = await db.table('taxes');
+  const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType: 'pos_charge' });
+
+  const groupKeys = [...new Set(items.map((item) => groupKey(item.split_group)))];
+  const groups = groupKeys.map((key) => {
+    const splitGroup = key === 'null' ? null : Number(key);
+    const groupItems = items.filter((item) => groupKey(item.split_group) === key);
+    const baseAmount = sumMoney(groupItems.map(computeItemLineTotal));
+    const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
+    return { splitGroup, subtotal: netAmount, taxAmount: sumMoney(taxLines.map((t) => t.amount)) };
+  });
+
+  return { orderId: order.id, currency: property?.base_currency, groups };
+}
+
+/**
  * `trx`-based — called from `runIdempotentMutation`'s handler (financial
  * mutation, ARCHITECTURE.md §7). Locks the order, verifies the requested
  * settlements exactly partition its unvoided items by split_group — every
@@ -451,6 +501,19 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
 
     if (settlement.method === 'room_charge') {
       const roomCharge = settlement.roomCharge ?? {};
+      // Bug fix (this session's "test and review Register" pass, live-
+      // confirmed): with no reservationId, `where({ id: undefined })` below
+      // threw a raw, uncaught mysql2 "undefined binding" exception — not an
+      // AppError, so it fell through to a bare 500 instead of telling the
+      // cashier what actually went wrong. A cashier can reach this by
+      // choosing "Charge to room" and never selecting a guest.
+      if (!roomCharge.reservationId) {
+        throw new ValidationError(
+          'MISSING_FIELD',
+          'A guest must be selected before this settlement can be charged to a room.',
+          [{ field: 'roomCharge.reservationId', issue: 'missing' }]
+        );
+      }
       const reservation = await trx.table('reservations').where({ id: roomCharge.reservationId }).first();
       if (!reservation || reservation.status !== 'checked_in') {
         throw new RoomChargeRejectedError('the room has no in-house reservation.');
@@ -679,6 +742,7 @@ module.exports = {
   assignItemSplitGroup,
   voidOrder,
   computeItemLineTotal,
+  previewSettlement,
   settleOrder,
   voidSettlement,
   listShifts,
