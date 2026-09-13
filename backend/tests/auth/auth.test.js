@@ -373,6 +373,18 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
       );
     });
 
+    it("carries the user's real first/last name on both login and refresh, so the Home greeting never falls back to an email", async () => {
+      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+        email: loginable.email,
+        password: STRONG_PASSWORD,
+      });
+      expect(login.body.data).toMatchObject({ firstName: 'Logs', lastName: 'In' });
+
+      const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', refreshCookieHeader(login));
+      expect(rotated.status).toBe(200);
+      expect(rotated.body.data).toMatchObject({ firstName: 'Logs', lastName: 'In' });
+    });
+
     it('restores the active property across a refresh when the caller supplies it, re-verified rather than trusted', async () => {
       const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
         email: loginable.email,

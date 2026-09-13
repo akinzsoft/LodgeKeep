@@ -1,0 +1,101 @@
+/* `overflow: hidden` + `min-width: 0` let the container shrink with its card
+   (so ResizeObserver reports the real width) even while the SVG inside still
+   carries the previous, wider pixel width for one frame. */
+.chartContainer {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chart {
+  display: block;
+}
+
+.gridLine {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.axisLabel {
+  fill: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-caption-size);
+}
+
+.seriesLine {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.tonePrimary {
+  stroke: var(--chart-1);
+}
+
+.toneSecondary {
+  stroke: var(--chart-2);
+}
+
+.donut {
+  display: block;
+  width: 100%;
+  max-width: 11rem;
+  margin: 0 auto;
+}
+
+.donutTrack {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 14;
+}
+
+.donutSegment {
+  fill: none;
+  stroke-width: 14;
+}
+
+.segment1 {
+  stroke: var(--chart-1);
+  background: var(--chart-1);
+}
+
+.segment2 {
+  stroke: var(--chart-2);
+  background: var(--chart-2);
+}
+
+.segment3 {
+  stroke: var(--chart-3);
+  background: var(--chart-3);
+}
+
+.segment4 {
+  stroke: var(--chart-4);
+  background: var(--chart-4);
+}
+
+.donutValue {
+  fill: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* Donut text sizes are viewBox units, not CSS pixels — the 120-unit donut
+   renders at up to 11rem (176px), a ~1.47x scale, so 8.5 units lands at
+   ~12.5px on screen, just above DESIGN_SYSTEM.md §1's 12px floor. */
+.donutCaption {
+  fill: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 8.5px;
+}
+
+.sparkline {
+  display: block;
+  width: 7.5rem;
+  height: 2.25rem;
+  overflow: visible;
+}
