@@ -57,9 +57,20 @@ async function resolveByCustomDomain(scoped, hostname) {
 /**
  * Resolves `req.tenantId` from the Host header (or the dev override) before
  * any route handler runs. A request whose host resolves to no tenant at all
- * gets the bare 404 API.md §5 uses for "does not exist" — deliberately
- * indistinguishable from any other unresolved lookup, so probing hostnames
- * reveals nothing.
+ * gets a 404, still API.md §5's own status code for "does not exist" — but
+ * with a real, human-readable message rather than the generic `notFound()`
+ * helper's bare "Not found." (user-reported: that string means nothing to a
+ * person who has simply mistyped or bookmarked the wrong address, and this
+ * is very often the very first thing a real visitor sees, on the login
+ * screen itself). This is a genuinely different situation from the one
+ * `notFound()` exists to protect — that helper's "indistinguishable from any
+ * other unresolved lookup" reasoning is about a record INSIDE an
+ * already-resolved tenant possibly belonging to someone else, where the
+ * wording must never hint "exists, but not yours" apart from "does not
+ * exist at all." Host resolution runs before ANY tenant or auth context
+ * exists — there is no cross-tenant record to accidentally confirm, so a
+ * clearer message here costs nothing: it still says nothing about whether
+ * any OTHER address is a real tenant, only that THIS one resolved to none.
  *
  * PLAN.md Phase 5 gap closure: this used to require `status === 'active'`,
  * which meant a `trial`-status tenant — the schema's own default, so every
@@ -107,7 +118,10 @@ function resolveTenant({ db, systemContext }) {
       }
 
       if (!tenantRow) {
-        res.status(404).json(fail(null, 'Not found.', { requestId: req.requestId }));
+        // `code: null`, matching every other 404 in this codebase (API.md
+        // §3: 404 carries no code prefix at all, by design) — only the
+        // MESSAGE improves here, not the machine-readable shape.
+        res.status(404).json(fail(null, 'No organization is registered at this address.', { requestId: req.requestId }));
         return;
       }
 

@@ -107,6 +107,29 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
   }
 
   // ==================================================================
+  // Gap closure (user-reported): the bare 404 an unresolved Host/tenant
+  // slug returned ("Not found.") gave no real information to a person who
+  // simply mistyped or bookmarked the wrong address — often the very first
+  // thing they'd see, on the login screen itself. Fixed in
+  // src/auth/tenant-resolution.js: only the MESSAGE changed, still a bare
+  // 404 with `code: null` (API.md §3's own documented shape for this status
+  // — untouched, deliberately, unlike the fix's first draft which also
+  // added a real error code before that convention was checked).
+  // ==================================================================
+  describe('resolveTenant: an unresolved Host/tenant slug', () => {
+    it('returns a real, human-readable message, not the generic "Not found."', async () => {
+      const res = await t.request.post('/api/v1/auth/login').set('X-Tenant-Slug', 'no-such-organization').send({
+        email: 'anyone@example.com',
+        password: 'whatever-password',
+      });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBeNull();
+      expect(res.body.error.message).toBe('No organization is registered at this address.');
+    });
+  });
+
+  // ==================================================================
   // AUTH-1 — valid credentials
   // ==================================================================
   describe('AUTH-1: valid credentials', () => {
