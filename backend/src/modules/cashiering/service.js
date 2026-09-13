@@ -775,7 +775,7 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
  * not a stale object, now decides which of two racing callers actually
  * gets to apply the effect.
  */
-async function applyGatewayResult({ trx, payment, gatewayStatus, providerPaymentId, userId }) {
+async function applyGatewayResult({ trx, payment, gatewayStatus, providerPaymentId, channel, userId }) {
   // A Register checkout cancelled locally (tab voided, tender switched) is
   // still payable on Paystack's side. If the guest pays it anyway, the money
   // is real: record the capture rather than drop it, so a refund can find it.
@@ -794,6 +794,7 @@ async function applyGatewayResult({ trx, payment, gatewayStatus, providerPayment
       .update({
         status: 'CAPTURED',
         captured_at: now,
+        ...(channel ? { provider_channel: channel } : {}),
         ...(lateRegisterCapture ? { failure_reason: 'Captured after its Register checkout was cancelled; no settlement uses it, so it needs a refund.' } : {}),
         provider_payment_id: providerPaymentId ?? payment.provider_payment_id,
       });
@@ -868,6 +869,7 @@ async function verifyPayment({ context, paymentId, userId }) {
       payment,
       gatewayStatus: result.status === 'success' ? 'success' : 'failed',
       providerPaymentId: result.providerPaymentId,
+      channel: result.channel,
       userId,
     })
   );
@@ -919,7 +921,7 @@ async function handlePaystackWebhook({ rawBody, signatureHeader, parsedBody }) {
     const context = workerContext({ tenantId: rawPayment.tenant_id, propertyId: rawPayment.property_id });
     const scopedForTenant = scopedDb().for(context);
     await scopedForTenant.transaction((trx) =>
-      applyGatewayResult({ trx, payment: rawPayment, gatewayStatus, providerPaymentId: String(parsedBody?.data?.id ?? '') })
+      applyGatewayResult({ trx, payment: rawPayment, gatewayStatus, providerPaymentId: String(parsedBody?.data?.id ?? ''), channel: parsedBody?.data?.channel })
     );
     await platformDb.table('payment_webhook_events').where({ id: eventRowId }).update({
       tenant_id: rawPayment.tenant_id,

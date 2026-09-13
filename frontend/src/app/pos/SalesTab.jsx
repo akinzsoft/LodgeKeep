@@ -8,8 +8,21 @@ import styles from './SalesTab.module.css';
 
 const TENDER_LABELS = { cash: 'Cash', card: 'Card', nqr: 'NQR', room_charge: 'Charge to room' };
 
+// Paystack's own channel names, for a Card checkout paid some other way.
+const CHANNEL_LABELS = { card: 'card', ussd: 'USSD', bank: 'bank', bank_transfer: 'bank transfer', qr: 'QR', mobile_money: 'mobile money', eft: 'EFT', apple_pay: 'Apple Pay' };
+
 function tenderLabel(tender) {
   return TENDER_LABELS[tender] ?? tender;
+}
+
+/** One check's payment in words: "Cash", "Card · USSD", "Charge to room · Room 205 (Ada Bello)". */
+function describePayment(payment) {
+  const parts = [tenderLabel(payment.tender)];
+  if (payment.channel && payment.channel !== payment.tender && !(payment.tender === 'nqr' && payment.channel === 'qr')) {
+    parts.push(CHANNEL_LABELS[payment.channel] ?? payment.channel);
+  }
+  if (payment.roomNumber) parts.push(`Room ${payment.roomNumber}${payment.guestName ? ` (${payment.guestName})` : ''}`);
+  return parts.join(' · ');
 }
 
 function formatTime(iso) {
@@ -213,7 +226,7 @@ export function SalesTab({ activeProperty, isOffline = false }) {
         columns={[
           { key: 'settledAt', label: 'Settled', render: (row) => formatTime(row.settledAt) },
           { key: 'tableLabel', label: 'Tab', render: (row) => row.tableLabel || `Tab #${row.orderId}` },
-          { key: 'tenders', label: 'Paid by', render: (row) => row.tenders.map(tenderLabel).join(' + ') },
+          { key: 'tenders', label: 'Paid by', render: (row) => (row.payments?.length ? row.payments.map(describePayment).join(' + ') : row.tenders.map(tenderLabel).join(' + ')) },
           { key: 'itemCount', label: 'Items', align: 'right' },
           { key: 'cashier', label: 'Cashier', render: (row) => row.cashier ?? (row.source === 'guest' ? 'Guest order' : '—') },
           { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={currencyCode} /> },

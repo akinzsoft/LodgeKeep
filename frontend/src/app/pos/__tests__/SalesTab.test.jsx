@@ -42,8 +42,12 @@ const REPORT = {
     { menuItemId: '1', name: 'Beer', quantity: 3, sales: '60.00' },
   ],
   tabs: [
-    { orderId: '9', tableLabel: 'Table 1', source: 'staff', businessDate: '2027-03-01', settledAt: '2027-03-01T20:15:00Z', cashier: 'Ada Bello', tenders: ['cash'], itemCount: 2, total: '46.00' },
-    { orderId: '10', tableLabel: '', source: 'guest', businessDate: '2027-03-01', settledAt: '2027-03-01T21:00:00Z', cashier: null, tenders: ['nqr'], itemCount: 1, total: '23.00' },
+    { orderId: '9', tableLabel: 'Table 1', source: 'staff', businessDate: '2027-03-01', settledAt: '2027-03-01T20:15:00Z', cashier: 'Ada Bello', tenders: ['cash'], payments: [{ tender: 'cash', channel: null, roomNumber: null, guestName: null, total: '46.00' }], itemCount: 2, total: '46.00' },
+    { orderId: '10', tableLabel: '', source: 'guest', businessDate: '2027-03-01', settledAt: '2027-03-01T21:00:00Z', cashier: null, tenders: ['nqr'], payments: [{ tender: 'nqr', channel: 'qr', roomNumber: null, guestName: null, total: '23.00' }], itemCount: 1, total: '23.00' },
+    { orderId: '11', tableLabel: 'Table 4', source: 'staff', businessDate: '2027-03-01', settledAt: '2027-03-01T21:30:00Z', cashier: 'Ada Bello', tenders: ['room_charge', 'card'], payments: [
+      { tender: 'room_charge', channel: null, roomNumber: '205', guestName: 'Sam Okoro', total: '10.00' },
+      { tender: 'card', channel: 'ussd', roomNumber: null, guestName: null, total: '13.00' },
+    ], itemCount: 2, total: '23.00' },
   ],
   unsettledCardPayments: [],
 };
@@ -77,6 +81,8 @@ describe('<SalesTab>', () => {
     expect(tenderRows[0]).toHaveTextContent('1');
     expect(screen.getByText('Beer').closest('tr')).toHaveTextContent('3');
     expect(screen.getByText('Table 1').closest('tr')).toHaveTextContent('Ada Bello');
+    // A room charge names the room and guest; a Card check paid another way names the channel.
+    expect(screen.getByText('Table 4').closest('tr')).toHaveTextContent('Charge to room · Room 205 (Sam Okoro) + Card · USSD');
     // A guest QR order has no cashier and no table label.
     expect(screen.getByText('Tab #10').closest('tr')).toHaveTextContent('Guest order');
   });

@@ -117,6 +117,7 @@ describe('POS sales report', () => {
     // 2. NQR: 1 wine = 40.00 + 3.00 + 3.00 = 46.00
     const nqrTab = await openTab('Table 2', [[outlet.wineId, 1]]);
     const nqrPayment = await capturedCardPayment(nqrTab, 'nqr');
+    await t.trx('payments').where({ id: nqrPayment }).update({ provider_channel: 'qr' });
     expect((await settle(nqrTab, [{ method: 'card', service_charge: '3.00', payment_id: nqrPayment }])).status).toBe(200);
 
     // 3. Split tab: group 1 (beer) card, group 2 (wine) cash — then the cash check is voided.
@@ -174,6 +175,50 @@ describe('POS sales report', () => {
       { menuItemId: String(outlet.beerId), name: 'Beer', quantity: 3, sales: '60.00' },
       { menuItemId: String(outlet.wineId), name: 'Wine, red', quantity: 1, sales: '40.00' },
     ]);
+  });
+
+  it('shows the Paystack channel each card check was actually paid through', () => {
+    const nqr = report.tabs.find((tab) => tab.tableLabel === 'Table 2');
+    expect(nqr.payments).toEqual([{ tender: 'nqr', channel: 'qr', roomNumber: null, guestName: null, total: '46.00' }]);
+  });
+
+  it('names the room and guest a charge-to-room tab was billed to', async () => {
+    const propertyId = ctx.a.properties[0].id;
+    const [roomTypeId] = await t.trx('room_types').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: 'SR-RT', name: 'Sales RT', default_occupancy: 2, base_rate: '150.00' });
+    const [roomId] = await t.trx('rooms').insert({ tenant_id: ctx.a.id, property_id: propertyId, room_type_id: roomTypeId, room_number: 'S-205', status: 'active', front_desk_status: 'occupied' });
+    const [rateCodeId] = await t.trx('rate_codes').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: 'SR-RATE', base_rate: '150.00', currency: 'NGN', valid_from: '2026-01-01' });
+    const [reservationId] = await t.trx('reservations').insert({
+      tenant_id: ctx.a.id,
+      property_id: propertyId,
+      guest_id: ctx.a.guests[0].id,
+      room_type_id: roomTypeId,
+      rate_code_id: rateCodeId,
+      arrival_date: BUSINESS_DATE,
+      departure_date: '2027-03-05',
+      adults: 1,
+      children: 0,
+      status: 'checked_in',
+      confirmation_number: `SRROOM${Date.now()}`.slice(0, 26),
+      checked_in_at: new Date(),
+    });
+    await t.trx('reservation_rooms').insert({ tenant_id: ctx.a.id, property_id: propertyId, reservation_id: reservationId, room_id: roomId, effective_from: new Date(Date.now() - 60_000), effective_to: null });
+    await t.trx('folios').insert({ tenant_id: ctx.a.id, property_id: propertyId, reservation_id: reservationId, folio_number: `SRF${Date.now()}`.slice(0, 26), status: 'open', balance: '0.00', currency: 'NGN' });
+
+    const roomTab = await openTab('Table 9', [[outlet.beerId, 1]]);
+    const settled = await settle(roomTab, [{ method: 'room_charge', service_charge: '1.50', room_charge: { reservation_id: reservationId, auth_method: 'pin', auth_reference: 'PIN entered' } }]);
+    expect(settled.status).toBe(200);
+    // Its own business date, so the shared report the other tests read stays unchanged.
+    await t.trx('pos_order_settlements').where({ id: settled.body.data.settlements[0].id }).update({ business_date: '2027-03-02' });
+
+    const res = await getReport({ date_from: '2027-03-02', date_to: '2027-03-02' });
+    const guest = await t.trx('guests').where({ id: ctx.a.guests[0].id }).first();
+    const tab = res.body.data.tabs.find((row) => row.tableLabel === 'Table 9');
+    expect(tab.payments).toEqual([
+      expect.objectContaining({ tender: 'room_charge', roomNumber: 'S-205', guestName: `${guest.first_name} ${guest.last_name}` }),
+    ]);
+
+    const csv = await getReport({ date_from: '2027-03-02', date_to: '2027-03-02', format: 'csv', section: 'tabs' });
+    expect(csv.text).toContain(`room_charge Room S-205 (${guest.first_name} ${guest.last_name})`);
   });
 
   it('lists each settled tab with its tenders, item count, cashier, and total', () => {

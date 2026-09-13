@@ -448,10 +448,19 @@ async function verifyPaystackPayment(req, res, next) {
   }
 }
 
+/** e.g. "cash", "card via ussd", "room_charge Room 05 (Ada Bello)" — the CSV's plain-text form of one check's payment. */
+function describeSettlementPayment(payment) {
+  let text = payment.tender;
+  if (payment.channel && payment.channel !== payment.tender) text += ` via ${payment.channel}`;
+  if (payment.roomNumber) text += ` Room ${payment.roomNumber}`;
+  if (payment.guestName) text += ` (${payment.guestName})`;
+  return text;
+}
+
 const SALES_CSV_SECTIONS = {
   tabs: {
     columns: ['businessDate', 'settledAt', 'tableLabel', 'source', 'tenders', 'itemCount', 'cashier', 'total'],
-    rows: (report) => report.tabs.map((tab) => ({ ...tab, settledAt: new Date(tab.settledAt).toISOString(), tenders: tab.tenders.join(' + ') })),
+    rows: (report) => report.tabs.map((tab) => ({ ...tab, settledAt: new Date(tab.settledAt).toISOString(), tenders: tab.payments.map(describeSettlementPayment).join(' + ') })),
   },
   items: { columns: ['name', 'quantity', 'sales'], rows: (report) => report.topItems },
   tenders: { columns: ['tender', 'checks', 'total'], rows: (report) => report.byTender },

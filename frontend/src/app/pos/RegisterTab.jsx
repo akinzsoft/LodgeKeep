@@ -15,8 +15,9 @@ const AUTH_METHODS = [
 ];
 
 // Card and NQR both collect the money on screen through Paystack before the
-// tab settles (`collectPaystackPayment`): Card opens a card-only checkout,
-// NQR a QR-only one the guest scans with their banking app. Both settle as
+// tab settles (`collectPaystackPayment`): Card opens Paystack with every
+// channel the merchant account supports (card, USSD, transfer, ...), NQR a
+// QR-only checkout the guest scans with their banking app. Both settle as
 // `method: 'card'`; `tender` is what tells them apart on the settlement.
 // The three primary tender buttons the reference design shows in one row.
 // "Charge to room" is real, tested, pre-existing functionality this

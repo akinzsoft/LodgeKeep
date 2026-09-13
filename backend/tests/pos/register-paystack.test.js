@@ -110,14 +110,16 @@ describe('POS Register — Paystack card/NQR checkout', () => {
     await t.trx('payments').where({ id: paymentId }).update({ status: 'CAPTURED', captured_at: new Date() });
   }
 
-  it('prices the check server-side (net + tax + 7.5% service) and opens a card-only Paystack checkout', async () => {
+  it('prices the check server-side (net + tax + 7.5% service) and opens Paystack with every channel the account supports', async () => {
     const { orderId } = await openTabWithItem();
     const res = await startCheckout(orderId, { tender: 'card', amount: '1.00' });
 
     expect(res.status).toBe(201);
     expect(res.body.meta.accessCode).toBe('reg-access');
     expect(res.body.data).toMatchObject({ amount: '23.00', tender: 'card', settlement_target: 'pos_register', status: 'PENDING' });
-    expect(paystack.initializeTransaction).toHaveBeenCalledWith(expect.objectContaining({ amount: '23.00', channels: ['card'] }));
+    expect(paystack.initializeTransaction).toHaveBeenCalledWith(expect.objectContaining({ amount: '23.00' }));
+    // No channel restriction for Card — the guest can pay by card, USSD, transfer, etc.
+    expect(paystack.initializeTransaction.mock.calls[0][0].channels).toBeUndefined();
     // No customer email given — the cashier's own address stands in for Paystack's receipt.
     expect(paystack.initializeTransaction.mock.calls[0][0].email).toBe(ctx.a.users[1].email);
   });
@@ -181,16 +183,17 @@ describe('POS Register — Paystack card/NQR checkout', () => {
   });
 
   describe('verify', () => {
-    it('captures the payment when Paystack reports success', async () => {
+    it('captures the payment when Paystack reports success, recording the channel the guest used', async () => {
       const { orderId } = await openTabWithItem();
       const started = await startCheckout(orderId, { tender: 'card' });
-      paystack.verifyTransaction.mockResolvedValue({ status: 'success', providerPaymentId: '999' });
+      paystack.verifyTransaction.mockResolvedValue({ status: 'success', providerPaymentId: '999', channel: 'ussd' });
 
       const res = await t.request
         .post(`/api/v1/pos/orders/${orderId}/paystack-checkout/${started.body.data.id}/verify`)
         .set('Authorization', `Bearer ${token}`);
       expect(res.status).toBe(200);
       expect(res.body.data.status).toBe('CAPTURED');
+      expect(res.body.data.provider_channel).toBe('ussd');
       // Capture alone never settles a Register tab — the cashier's settle call does.
       const order = await t.trx('pos_orders').where({ id: orderId }).first();
       expect(order.status).toBe('open');

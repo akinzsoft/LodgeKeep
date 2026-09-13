@@ -42,6 +42,7 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
     .table('pos_order_settlements')
     .joinScoped('pos_orders', (join) => join.on('pos_orders.id', '=', 'pos_order_settlements.pos_order_id'))
     .joinScoped('users', (join) => join.on('users.id', '=', 'pos_order_settlements.settled_by_user_id'), { type: 'left' })
+    .joinScoped('payments', (join) => join.on('payments.id', '=', 'pos_order_settlements.payment_id'), { type: 'left' })
     .whereNull('pos_order_settlements.voided_at')
     .whereBetween('pos_order_settlements.business_date', [dateFrom, dateTo]);
   if (outletId) query = query.where('pos_orders.outlet_id', outletId);
@@ -58,6 +59,8 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
       'pos_order_settlements.service_charge as service_charge',
       'pos_order_settlements.settled_at as settled_at',
       'pos_order_settlements.business_date as business_date',
+      'pos_order_settlements.folio_id as folio_id',
+      'payments.provider_channel as provider_channel',
       'pos_orders.table_label as table_label',
       'pos_orders.source as source',
       'pos_orders.outlet_id as outlet_id',
@@ -65,6 +68,44 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
       'users.last_name as cashier_last_name'
     )
     .orderBy('pos_order_settlements.settled_at', 'desc');
+}
+
+/**
+ * Room and guest for each charge-to-room settlement: folio → reservation →
+ * the room the guest occupied when the charge posted (falling back to the
+ * latest assignment), plus the guest's name. Keyed by folio id.
+ */
+async function roomChargeTargets({ db, settlements }) {
+  const folioIds = [...new Set(settlements.filter((row) => row.folio_id).map((row) => String(row.folio_id)))];
+  if (folioIds.length === 0) return new Map();
+
+  const folios = await db
+    .table('folios')
+    .joinScoped('reservations', (join) => join.on('reservations.id', '=', 'folios.reservation_id'))
+    .joinScoped('guests', (join) => join.on('guests.id', '=', 'reservations.guest_id'), { type: 'left' })
+    .whereIn('folios.id', folioIds)
+    .select('folios.id as folio_id', 'folios.reservation_id as reservation_id', 'guests.first_name as first_name', 'guests.last_name as last_name');
+  const reservationIds = [...new Set(folios.map((row) => String(row.reservation_id)))];
+  const assignments = reservationIds.length === 0
+    ? []
+    : await db
+      .table('reservation_rooms')
+      .joinScoped('rooms', (join) => join.on('rooms.id', '=', 'reservation_rooms.room_id'))
+      .whereIn('reservation_rooms.reservation_id', reservationIds)
+      .select('reservation_rooms.reservation_id as reservation_id', 'reservation_rooms.effective_from as effective_from', 'reservation_rooms.effective_to as effective_to', 'rooms.room_number as room_number')
+      .orderBy('reservation_rooms.effective_from', 'desc');
+
+  const settledAtByFolio = new Map(settlements.filter((row) => row.folio_id).map((row) => [String(row.folio_id), new Date(row.settled_at)]));
+  const targets = new Map();
+  for (const folio of folios) {
+    const settledAt = settledAtByFolio.get(String(folio.folio_id));
+    const rooms = assignments.filter((a) => String(a.reservation_id) === String(folio.reservation_id));
+    const atCharge = rooms.find((a) => new Date(a.effective_from) <= settledAt && (!a.effective_to || new Date(a.effective_to) > settledAt));
+    const room = atCharge ?? rooms[0];
+    const guestName = [folio.first_name, folio.last_name].filter(Boolean).join(' ') || null;
+    targets.set(String(folio.folio_id), { roomNumber: room?.room_number ?? null, guestName });
+  }
+  return targets;
 }
 
 async function listUnsettledCardPayments({ db, outletId }) {
@@ -114,6 +155,7 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId }) {
   const db = scopedDb().for(context);
   const property = await db.table('properties').where({ id: context.propertyId }).first('base_currency');
   const settlements = await listStandingSettlements({ db, dateFrom, dateTo, outletId });
+  const roomTargets = await roomChargeTargets({ db, settlements });
 
   const byTender = new Map(TENDERS.map((tender) => [tender, { tender, checks: 0, amounts: [] }]));
   const tabs = new Map();
@@ -137,12 +179,24 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId }) {
         settledAt: row.settled_at,
         cashier: cashierName(row),
         tenders: [],
+        payments: [],
         amounts: [],
         groups: new Set(),
       });
     }
     const tab = tabs.get(key);
     if (!tab.tenders.includes(tender)) tab.tenders.push(tender);
+    // One entry per check: how it was paid, the Paystack channel the guest
+    // actually used (a Card checkout can be paid by USSD or transfer), and,
+    // for a room charge, which room and guest it was billed to.
+    const target = row.folio_id ? roomTargets.get(String(row.folio_id)) : null;
+    tab.payments.push({
+      tender,
+      channel: row.provider_channel ?? null,
+      roomNumber: target?.roomNumber ?? null,
+      guestName: target?.guestName ?? null,
+      total,
+    });
     tab.amounts.push(total);
     tab.groups.add(groupKey(row.split_group));
   }
