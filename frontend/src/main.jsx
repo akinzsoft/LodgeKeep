@@ -273,7 +273,7 @@ function Demo() {
         </p>
       )}
       {screenKey === 'setup' ? (
-        <SetupScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} />
+        <SetupScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} onPropertiesChanged={reloadProperties} />
       ) : screenKey === 'booking' ? (
         <BookingScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} />
       ) : screenKey === 'housekeeping' ? (

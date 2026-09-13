@@ -88,6 +88,35 @@ async function updateProperty(req, res, next) {
   }
 }
 
+/** `POST /properties/:id/logo` (multipart field `image`, `setup.manage`) — see `shared/image-store.js` for validation and storage. */
+async function uploadPropertyLogo(req, res, next) {
+  try {
+    const { id } = req.params;
+    const before = await service.getProperty({ context: req.context, id });
+    if (!before) return notFound(res);
+    const property = await service.setPropertyLogo({ context: req.context, id, buffer: req.file.buffer });
+    if (!property) return notFound(res);
+    await req.audit({ entityType: 'properties', entityId: id, action: 'set_logo', beforeState: { logo_url: before.logo_url }, afterState: { logo_url: property.logo_url } });
+    res.status(200).json(ok(property));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function removePropertyLogo(req, res, next) {
+  try {
+    const { id } = req.params;
+    const before = await service.getProperty({ context: req.context, id });
+    if (!before) return notFound(res);
+    const property = await service.removePropertyLogo({ context: req.context, id });
+    if (!property) return notFound(res);
+    await req.audit({ entityType: 'properties', entityId: id, action: 'remove_logo', beforeState: { logo_url: before.logo_url }, afterState: { logo_url: null } });
+    res.status(200).json(ok(property));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function listProperties(req, res, next) {
   try {
     const properties = await service.listProperties({ context: req.context });
@@ -685,6 +714,8 @@ async function resolveTax(req, res, next) {
 module.exports = {
   createProperty,
   updateProperty,
+  uploadPropertyLogo,
+  removePropertyLogo,
   listProperties,
   getProperty,
   getEmailSettings,

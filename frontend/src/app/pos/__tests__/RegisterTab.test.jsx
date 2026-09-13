@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   settleOrder: vi.fn(),
   findInHouseForCharge: vi.fn(),
   voidOrder: vi.fn(),
+  renameOrder: vi.fn(),
   startPaystackCheckout: vi.fn(),
   verifyPaystackPayment: vi.fn(),
 }));
@@ -49,6 +50,12 @@ function settlementRow(overrides) {
 /** A single ×1 House Cocktail's real preview (subtotal 20.00, tax 1.50 at the ambient 7.5% VAT this session's backend tests already establish as the fixture convention). */
 const SINGLE_ITEM_PREVIEW = { orderId: '9', currency: 'NGN', groups: [{ splitGroup: null, subtotal: '20.00', taxAmount: '1.50' }] };
 
+/** "+ New tab", then accept the suggested name in the tab-name dialog. */
+async function clickNewTab() {
+  await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Open tab' }));
+}
+
 /** Picks the outlet and terminal, waiting for each option to load first — see `selectWhenLoaded` for the race this avoids. */
 async function selectStation() {
   await selectWhenLoaded('Outlet', 'Main Bar');
@@ -62,7 +69,7 @@ async function openNewTab(initialItems = []) {
   await selectStation();
   mocks.openOrder.mockResolvedValue(order);
   mocks.getOrder.mockResolvedValueOnce({ order, items: initialItems, settlements: [] });
-  await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
+  await clickNewTab();
   await screen.findByText('Order Ticket');
   return order;
 }
@@ -94,7 +101,7 @@ describe('<RegisterTab>', () => {
     render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await selectStation();
-    await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
+    await clickNewTab();
 
     expect(mocks.openOrder).toHaveBeenCalledWith(expect.objectContaining({ outletId: '1', terminalId: '2', tableLabel: 'Table 1' }));
 
@@ -156,6 +163,7 @@ describe('<RegisterTab>', () => {
       mocks.openOrder.mockResolvedValue(next);
       mocks.getOrder.mockResolvedValueOnce({ order: next, items: [], settlements: [] });
       await userEvent.click(await screen.findByRole('button', { name: 'New sale' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Open tab' }));
 
       expect(await screen.findByRole('region', { name: 'Order ticket' })).toBeInTheDocument();
       expect(screen.queryByRole('region', { name: 'Sale receipt' })).not.toBeInTheDocument();
@@ -276,7 +284,7 @@ describe('<RegisterTab>', () => {
         order: { ...order, status: 'settled' },
         settlements: [settlementRow({ subtotal: '40.00', tax_amount: '3.00', service_charge: '3.00' })],
       });
-      await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
+      await clickNewTab();
       await screen.findByText('Subtotal');
       await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
       await screen.findByRole('region', { name: 'Sale receipt' });
@@ -288,6 +296,21 @@ describe('<RegisterTab>', () => {
 
       await userEvent.click(screen.getByRole('button', { name: 'Print receipt' }));
       expect(window.print).toHaveBeenCalledTimes(2);
+    });
+
+    it('prints the property logo at the top when one is set', async () => {
+      const order = { id: '9', table_label: 'Table 3', status: 'open' };
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN', name: 'Alpha Hotels', logo_url: '/api/v1/media/property-logos/logo.png' }} />);
+      await selectStation();
+      mocks.openOrder.mockResolvedValue(order);
+      mocks.getOrder.mockResolvedValueOnce({ order, items: [orderItem()], settlements: [] });
+      mocks.settleOrder.mockResolvedValue({ order: { ...order, status: 'settled' }, settlements: [settlementRow()] });
+      await clickNewTab();
+      await screen.findByText('Subtotal');
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+      await screen.findByRole('region', { name: 'Sale receipt' });
+
+      expect(within(screen.getByTestId('printable-receipt')).getByAltText('Alpha Hotels')).toHaveAttribute('src', '/api/v1/media/property-logos/logo.png');
     });
 
     it('prints the property, receipt number, cashier, items, totals, and how it was paid', async () => {
@@ -527,6 +550,47 @@ describe('<RegisterTab>', () => {
     });
   });
 
+  it('asks for a tab name, and opens the tab under the name the cashier typed', async () => {
+    const order = { id: '9', table_label: 'Pool bar – John', status: 'open' };
+    mocks.openOrder.mockResolvedValue(order);
+    mocks.getOrder.mockResolvedValue({ order, items: [], settlements: [] });
+    render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
+    await selectStation();
+
+    await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Name this tab' });
+    const input = within(dialog).getByLabelText('Tab name');
+    expect(input).toHaveValue('Table 1');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Pool bar – John');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Open tab' }));
+
+    expect(mocks.openOrder).toHaveBeenCalledWith(expect.objectContaining({ tableLabel: 'Pool bar – John' }));
+    expect(await screen.findByRole('button', { name: 'Pool bar – John' })).toBeInTheDocument();
+  });
+
+  it('cancelling the name dialog opens no tab', async () => {
+    render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
+    await selectStation();
+    await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
+    await userEvent.click(within(await screen.findByRole('dialog', { name: 'Name this tab' })).getByRole('button', { name: 'Cancel' }));
+    expect(mocks.openOrder).not.toHaveBeenCalled();
+  });
+
+  it('renames the open tab from the ticket header', async () => {
+    const order = await openNewTab([]);
+    mocks.renameOrder.mockResolvedValue({ ...order, table_label: 'Room 205' });
+    await userEvent.click(screen.getByRole('button', { name: /^Rename / }));
+    const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
+    const input = within(dialog).getByLabelText('Tab name');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Room 205');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save name' }));
+
+    expect(mocks.renameOrder).toHaveBeenCalledWith('9', 'Room 205');
+    expect(await screen.findByRole('button', { name: 'Room 205' })).toBeInTheDocument();
+  });
+
   it('reference-design fix: a second new tab is auto-labelled "Table 2", not left blank', async () => {
     mocks.listOrders.mockResolvedValue([{ id: '9', table_label: 'Table 1', status: 'open' }]);
     mocks.openOrder.mockResolvedValue({ id: '10', table_label: 'Table 2', status: 'open' });
@@ -536,7 +600,7 @@ describe('<RegisterTab>', () => {
     await selectStation();
     await screen.findByRole('button', { name: 'Table 1' }); // the pre-existing open tab
 
-    await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
+    await clickNewTab();
     expect(mocks.openOrder).toHaveBeenCalledWith(expect.objectContaining({ tableLabel: 'Table 2' }));
   });
 
@@ -547,7 +611,7 @@ describe('<RegisterTab>', () => {
 
     render(<RegisterTab activeProperty={{ base_currency: 'KES' }} />);
     await selectStation();
-    await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
+    await clickNewTab();
 
     // KES formats as "Ksh" via Intl (confirmed directly against the real
     // Intl.NumberFormat output, not assumed) — proves the currency

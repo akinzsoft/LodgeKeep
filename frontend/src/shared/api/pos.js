@@ -125,6 +125,11 @@ export function assignItemSplitGroup(orderId, itemId, splitGroup) {
   return request(`/pos/orders/${orderId}/items/${itemId}/split-group`, { method: 'POST', body: { split_group: splitGroup } });
 }
 
+/** Renames an open tab ("Table 4", "Pool bar – John", "Room 205"). */
+export function renameOrder(orderId, tableLabel) {
+  return request(`/pos/orders/${orderId}/rename`, { method: 'POST', body: { table_label: tableLabel } });
+}
+
 export function voidOrder(orderId, reason) {
   return request(`/pos/orders/${orderId}/void`, { method: 'POST', body: { reason } });
 }

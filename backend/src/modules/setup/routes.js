@@ -26,6 +26,7 @@
 
 const { Router } = require('express');
 const controller = require('./controller');
+const { receiveImage } = require('../../shared/image-store');
 const { requirePermission } = require('../../auth');
 
 function setupRouter() {
@@ -35,6 +36,10 @@ function setupRouter() {
   router.get('/properties', controller.listProperties);
   router.get('/properties/:id', controller.getProperty);
   router.patch('/properties/:id', controller.updateProperty);
+  // The logo appears on receipts and every email — a Setup change like any
+  // other, so `setup.manage`, unlike the bootstrap-only ungated routes above.
+  router.post('/properties/:id/logo', requirePermission('setup.manage'), receiveImage, controller.uploadPropertyLogo);
+  router.delete('/properties/:id/logo', requirePermission('setup.manage'), controller.removePropertyLogo);
 
   router.get('/setup/progress', controller.getSetupProgress);
 

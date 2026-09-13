@@ -356,6 +356,18 @@ async function assignItemSplitGroup(req, res, next) {
   }
 }
 
+async function renameOrder(req, res, next) {
+  try {
+    const before = await service.getOrder({ context: req.context, id: req.params.id });
+    if (!before) return notFound(res);
+    const order = await service.renameOrder({ context: req.context, orderId: req.params.id, tableLabel: req.body?.table_label });
+    await req.audit({ entityType: 'pos_orders', entityId: order.id, action: 'rename', beforeState: { table_label: before.table_label }, afterState: { table_label: order.table_label } });
+    res.status(200).json(ok(order));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function voidOrder(req, res, next) {
   try {
     const reason = require_(req.body, 'reason');
@@ -484,7 +496,7 @@ function describeSettlementPayment(payment) {
 
 const SALES_CSV_SECTIONS = {
   tabs: {
-    columns: ['businessDate', 'settledAt', 'tableLabel', 'source', 'tenders', 'itemCount', 'cashier', 'total'],
+    columns: ['orderId', 'businessDate', 'settledAt', 'tableLabel', 'source', 'tenders', 'itemCount', 'cashier', 'total'],
     rows: (report) => report.tabs.map((tab) => ({ ...tab, settledAt: new Date(tab.settledAt).toISOString(), tenders: tab.payments.map(describeSettlementPayment).join(' + ') })),
   },
   items: { columns: ['name', 'quantity', 'sales'], rows: (report) => report.topItems },
@@ -620,6 +632,7 @@ module.exports = {
   voidOrderItem,
   assignItemSplitGroup,
   voidOrder,
+  renameOrder,
   previewSettlement,
   settleOrder,
   startPaystackCheckout,

@@ -403,6 +403,26 @@ async function assignItemSplitGroup({ context, orderItemId, splitGroup }) {
   });
 }
 
+/**
+ * Renames an open tab — the name cashiers and reports know it by ("Table 4",
+ * "Pool bar – John", "Room 205"). Locks the order like every tab mutation;
+ * a settled or voided tab keeps the name it closed with.
+ */
+async function renameOrder({ context, orderId, tableLabel }) {
+  const name = typeof tableLabel === 'string' ? tableLabel.trim() : '';
+  if (!name || name.length > 60) {
+    throw new ValidationError('INVALID_TAB_NAME', 'A tab name is required, up to 60 characters.', [{ field: 'table_label', issue: name ? 'too_long' : 'missing' }]);
+  }
+  const db = scopedDb().for(context);
+  return db.transaction(async (trx) => {
+    const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
+    if (!order) throw new OrderNotFoundError();
+    if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
+    await trx.table('pos_orders').where({ id: orderId }).update({ table_label: name });
+    return trx.table('pos_orders').where({ id: orderId }).first();
+  });
+}
+
 async function voidOrder({ context, orderId, reason, userId }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to void an order.', [{ field: 'reason', issue: 'missing' }]);
   const db = scopedDb().for(context);
@@ -963,6 +983,7 @@ module.exports = {
   voidOrderItem,
   assignItemSplitGroup,
   voidOrder,
+  renameOrder,
   computeItemLineTotal,
   previewSettlement,
   settleOrder,

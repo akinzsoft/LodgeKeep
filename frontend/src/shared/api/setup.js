@@ -1,4 +1,4 @@
-import { request } from './client.js';
+import { requestMultipart, request } from './client.js';
 
 /**
  * PLAN.md Phase 1's setup module — property, room types, room inventory,
@@ -21,6 +21,17 @@ export function createProperty(body) {
 
 export function updateProperty(id, body) {
   return request(`/properties/${id}`, { method: 'PATCH', body });
+}
+
+/** The property's logo (JPG/PNG/WebP, ≤ 2 MB) — shown on POS receipts and in every email. Returns the updated property. */
+export function uploadPropertyLogo(id, file) {
+  const formData = new FormData();
+  formData.append('image', file);
+  return requestMultipart(`/properties/${id}/logo`, formData);
+}
+
+export function removePropertyLogo(id) {
+  return request(`/properties/${id}/logo`, { method: 'DELETE' });
 }
 
 /** PLAN.md Phase 1 gap closure — the setup wizard's progress/resume state, computed fresh on every call. @returns {Promise<{steps: {key: string, label: string, complete: boolean, optional?: boolean}[], operational: boolean}>} */

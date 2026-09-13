@@ -7,20 +7,29 @@ import formStyles from './SetupForm.module.css';
 /**
  * PropertyTab — PRODUCT_REQUIREMENTS.md §3.19: "name, address, contact
  * details, timezone, currency ... opening business date." Contact details
- * (phone/email) and logo/brand colours are named in the same spec sentence
- * but have no backend field yet (the properties table carries
- * name/slug/address/timezone/base_currency/current_business_date/logo_url/
- * theme — logo_url/theme exist in the schema but no upload flow was built
- * this pass) — this form covers exactly what `POST/PATCH /properties`
- * accepts today.
+ * (phone/email) and brand colours are named in the same spec sentence but
+ * have no backend field yet — this form covers exactly what
+ * `POST/PATCH /properties` accepts today.
+ *
+ * The logo (user-requested: "each tenant admin can upload their logo which
+ * will appear in receipt and mails") is its own card while editing a
+ * property — uploaded straight away through `POST /properties/:id/logo`
+ * (`setup.manage`), not part of the form's Save, since a file is not a
+ * field the PATCH carries.
  *
  * The MFA checkbox (gap closure, user-reported: "enable or disable mfa
  * verication code on the setup") only appears while editing — it has no
  * meaning at creation time, the same reasoning the slug/business-date
  * fields already apply for the opposite case.
  */
+const LOGO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+
 export function PropertyTab({ properties, onPropertiesChanged }) {
   const [editingId, setEditingId] = useState(null);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const [logoError, setLogoError] = useState(null);
+  const [logoInputKey, setLogoInputKey] = useState(0);
   const [form, setForm] = useState(emptyForm());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -32,6 +41,7 @@ export function PropertyTab({ properties, onPropertiesChanged }) {
 
   function startEdit(property) {
     setEditingId(property.id);
+    setLogoError(null);
     setForm({
       name: property.name,
       slug: property.slug,
@@ -83,6 +93,48 @@ export function PropertyTab({ properties, onPropertiesChanged }) {
       setError(caught instanceof ApiError ? caught.message : 'Could not save the property.');
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  const editingProperty = editingId ? properties.find((p) => String(p.id) === String(editingId)) : null;
+
+  async function handleLogoChosen(file) {
+    if (!file) return;
+    setLogoError(null);
+    if (!LOGO_TYPES.includes(file.type)) {
+      setLogoError('The logo must be a JPG, PNG, or WebP image.');
+      setLogoInputKey((key) => key + 1);
+      return;
+    }
+    if (file.size > MAX_LOGO_BYTES) {
+      setLogoError('The logo must be 2 MB or smaller.');
+      setLogoInputKey((key) => key + 1);
+      return;
+    }
+    setLogoBusy(true);
+    try {
+      await setupApi.uploadPropertyLogo(editingId, file);
+      setToast('Logo updated');
+      await onPropertiesChanged();
+    } catch (caught) {
+      setLogoError(caught instanceof ApiError ? caught.message : 'Could not upload the logo.');
+    } finally {
+      setLogoBusy(false);
+      setLogoInputKey((key) => key + 1);
+    }
+  }
+
+  async function handleRemoveLogo() {
+    setLogoError(null);
+    setLogoBusy(true);
+    try {
+      await setupApi.removePropertyLogo(editingId);
+      setToast('Logo removed');
+      await onPropertiesChanged();
+    } catch (caught) {
+      setLogoError(caught instanceof ApiError ? caught.message : 'Could not remove the logo.');
+    } finally {
+      setLogoBusy(false);
     }
   }
 
@@ -204,6 +256,41 @@ export function PropertyTab({ properties, onPropertiesChanged }) {
           </div>
         </form>
       </Card>
+
+      {editingProperty && (
+        <Card title="Logo">
+          <p className={formStyles.hint}>Shown at the top of printed POS receipts and every email guests and staff receive. JPG, PNG, or WebP, up to 2 MB — a wide logo on a transparent or white background works best.</p>
+          {logoError && (
+            <p role="alert" className={formStyles.errorBanner}>
+              {logoError}
+            </p>
+          )}
+          <div className={formStyles.logoRow}>
+            {editingProperty.logo_url ? (
+              <img className={formStyles.logoPreview} src={editingProperty.logo_url} alt={`${editingProperty.name} logo`} />
+            ) : (
+              <span className={formStyles.hint}>No logo yet — the property name is used instead.</span>
+            )}
+          </div>
+          <div className={formStyles.actionsRow}>
+            <label className={formStyles.field}>
+              <span className={formStyles.label}>{editingProperty.logo_url ? 'Replace logo' : 'Upload logo'}</span>
+              <input
+                key={logoInputKey}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                disabled={logoBusy}
+                onChange={(event) => handleLogoChosen(event.target.files?.[0] ?? null)}
+              />
+            </label>
+            {editingProperty.logo_url && (
+              <Button type="button" variant="ghost" disabled={logoBusy} onClick={handleRemoveLogo}>
+                Remove logo
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
 
       {toast && (
         <div className={formStyles.toastLayer}>

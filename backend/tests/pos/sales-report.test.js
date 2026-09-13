@@ -249,7 +249,7 @@ describe('POS sales report', () => {
     expect(items.text).toBe('name,quantity,sales\nBeer,3,60.00\n"Wine, red",1,40.00');
 
     const tabs = await getReport({ date_from: BUSINESS_DATE, date_to: BUSINESS_DATE, format: 'csv' });
-    expect(tabs.text.split('\n')[0]).toBe('businessDate,settledAt,tableLabel,source,tenders,itemCount,cashier,total');
+    expect(tabs.text.split('\n')[0]).toBe('orderId,businessDate,settledAt,tableLabel,source,tenders,itemCount,cashier,total');
     expect(tabs.text.split('\n')).toHaveLength(4);
   });
 

@@ -20,7 +20,7 @@
 
 const { Router } = require('express');
 const controller = require('./controller');
-const { receiveImage } = require('./menu-images');
+const { receiveImage } = require('../../shared/image-store');
 const { requirePermission } = require('../../auth');
 
 function posRouter() {
@@ -52,6 +52,7 @@ function posRouter() {
   router.post('/pos/orders/:id/items', requirePermission('pos.operate'), controller.addItem);
   router.post('/pos/orders/:id/items/:itemId/void', requirePermission('pos.operate'), controller.voidOrderItem);
   router.post('/pos/orders/:id/items/:itemId/split-group', requirePermission('pos.operate'), controller.assignItemSplitGroup);
+  router.post('/pos/orders/:id/rename', requirePermission('pos.operate'), controller.renameOrder);
   router.post('/pos/orders/:id/void', requirePermission('pos.operate'), controller.voidOrder);
   router.get('/pos/orders/:id/settlement-preview', requirePermission('pos.operate'), controller.previewSettlement);
   router.post('/pos/orders/:id/paystack-checkout', requirePermission('pos.operate'), controller.startPaystackCheckout);
