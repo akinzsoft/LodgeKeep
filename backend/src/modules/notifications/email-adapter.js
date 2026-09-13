@@ -32,15 +32,27 @@ const { decrypt } = require('../../shared/encryption');
  * only ever authored as `body_html`, so this derives a reasonable plain-text
  * fallback from it rather than requiring a second, hand-maintained template
  * field per event. A generic tag-stripper is genuinely sufficient here: this
- * codebase's own templates (`DEFAULT_TEMPLATES`) are simple `<p>`/`<a>`
- * markup, never a full HTML document.
+ * codebase's own templates are simple `<p>`/`<a>`/table markup inside the
+ * branded shell (`email-layout.js`); the document head, the hidden inbox
+ * preheader, and images are dropped, and table rows become lines.
  */
 function htmlToText(html) {
   return html
+    .replace(/<(head|style|title)[^>]*>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<div[^>]*display:none[^>]*>[\s\S]*?<\/div>/gi, '')
     .replace(/<a\s[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi, '$2 ($1)')
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<\/(p|h1|h2|div|tr)>/gi, '\n\n')
+    .replace(/<\/td>/gi, '  ')
     .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -52,9 +64,10 @@ function htmlToText(html) {
  */
 const consoleAdapter = {
   name: 'console',
-  async send({ to, subject, html }) {
+  async send({ to, subject, html, attachments }) {
     const providerRef = `console-${crypto.randomUUID()}`;
-    console.log(`[email:console] to=${to} subject="${subject}" ref=${providerRef}\n${html}`);
+    const attached = attachments?.length ? ` attachments=${attachments.map((a) => a.filename).join(',')}` : '';
+    console.log(`[email:console] to=${to} subject="${subject}" ref=${providerRef}${attached}\n${html}`);
     return { providerRef, status: 'sent' };
   },
 };
@@ -98,7 +111,7 @@ function buildSmtpTransport() {
   return smtpTransport;
 }
 
-async function sendViaTransport(transport, { to, subject, html, fromAddress, fromName }) {
+async function sendViaTransport(transport, { to, subject, html, attachments, fromAddress, fromName }) {
   if (!fromAddress) {
     throw new Error('An SMTP "From" address is required (SMTP_FROM/SMTP_USER, or a property’s own email settings).');
   }
@@ -113,13 +126,15 @@ async function sendViaTransport(transport, { to, subject, html, fromAddress, fro
     subject,
     html,
     text: htmlToText(html),
+    // Inline images (the property logo, referenced as `cid:` in the HTML).
+    ...(attachments?.length ? { attachments } : {}),
   });
   return { providerRef: info.messageId, status: 'sent' };
 }
 
 const smtpAdapter = {
   name: 'smtp',
-  async send({ to, subject, html }) {
+  async send({ to, subject, html, attachments }) {
     // Host validated first — "which server" is more fundamental than "who
     // it's from", and building the transport is what actually needs it.
     const transport = buildSmtpTransport();
@@ -127,6 +142,7 @@ const smtpAdapter = {
       to,
       subject,
       html,
+      attachments,
       fromAddress: process.env.SMTP_FROM || process.env.SMTP_USER,
       fromName: process.env.SMTP_FROM_NAME || 'LodgeKeep',
     });
@@ -176,7 +192,7 @@ async function resolveEmailAdapter({ db, propertyId }) {
 function buildPropertySmtpAdapter(row) {
   return {
     name: 'smtp',
-    async send({ to, subject, html }) {
+    async send({ to, subject, html, attachments }) {
       const transport = buildTransport({
         host: row.smtp_host,
         port: Number(row.smtp_port || 587),
@@ -187,6 +203,7 @@ function buildPropertySmtpAdapter(row) {
         to,
         subject,
         html,
+        attachments,
         fromAddress: row.smtp_from || row.smtp_user,
         fromName: row.smtp_from_name || 'LodgeKeep',
       });

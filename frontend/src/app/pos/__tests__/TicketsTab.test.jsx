@@ -26,7 +26,7 @@ describe('<TicketsTab>', () => {
   });
 
   it('shows each open tab with its real item names, resolved from the menu — not a bare id', async () => {
-    mocks.listOrders.mockResolvedValue([{ id: '7', table_label: 'T3' }]);
+    mocks.listOrders.mockResolvedValue([{ id: '7', table_label: 'Table 3' }]);
     mocks.listMenuItems.mockResolvedValue([{ id: '3', name: 'House Cocktail' }]);
     mocks.getOrder.mockResolvedValue({
       order: { id: '7' },
@@ -35,7 +35,8 @@ describe('<TicketsTab>', () => {
     });
     render(<TicketsTab />);
 
-    expect(await screen.findByText('Table T3')).toBeInTheDocument();
+    // The tab's own name with its receipt number — never "Table Table 3" (bug fix: the title used to prefix "Table" onto names that already had it).
+    expect(await screen.findByText('#7 · Table 3')).toBeInTheDocument();
     expect(screen.getByText('House Cocktail')).toBeInTheDocument();
   });
 });

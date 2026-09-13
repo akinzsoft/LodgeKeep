@@ -189,6 +189,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const [removingTabId, setRemovingTabId] = useState(null);
   const [splitModalOpen, setSplitModalOpen] = useState(false);
   const [openingTab, setOpeningTab] = useState(false);
+  // `{ mode: 'new', value }` or `{ mode: 'rename', orderId, value }` while the tab-name dialog is open.
+  const [tabNameDialog, setTabNameDialog] = useState(null);
   // Bug fix (code-review pass on the settlement-preview fix): a preview
   // fetch has no natural cancellation — a cashier can switch tabs (or an
   // item change can fire a new fetch) while a slow fetch is still in
@@ -274,7 +276,13 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     }
   }
 
-  async function handleNewTab() {
+  /**
+   * "+ New tab" asks the cashier what to call the tab (user-requested: a
+   * proper name instead of an automatic "Table 1" — e.g. "Table 4",
+   * "Pool bar – John", "Room 205"), pre-filled with the next "Table N" so
+   * the common case is still one extra tap.
+   */
+  function handleNewTab() {
     if (openingTab) return;
     setSettleResult(null);
     if (!terminalId) {
@@ -282,6 +290,31 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       return;
     }
     setError(null);
+    setTabNameDialog({ mode: 'new', value: `Table ${openOrders.length + 1}` });
+  }
+
+  async function submitTabName(event) {
+    event.preventDefault();
+    const name = tabNameDialog.value.trim();
+    if (!name) return;
+    if (tabNameDialog.mode === 'new') {
+      setTabNameDialog(null);
+      await openNamedTab(name);
+      return;
+    }
+    const { orderId } = tabNameDialog;
+    setTabNameDialog(null);
+    try {
+      const renamed = await posApi.renameOrder(orderId, name);
+      setOpenOrders((prev) => prev.map((order) => (String(order.id) === String(orderId) ? { ...order, table_label: renamed.table_label } : order)));
+      setActiveOrder((current) => (current && String(current.order.id) === String(orderId) ? { ...current, order: { ...current.order, table_label: renamed.table_label } } : current));
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not rename this tab.');
+    }
+  }
+
+  async function openNamedTab(tableLabel) {
+    if (openingTab) return;
     setOpeningTab(true);
     try {
       // Reference-design fix: `tableLabel` was always sent blank, so every
@@ -299,7 +332,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       // re-entry). The `openingTab` guard above disables the button for
       // the whole request, which prevents the double-tap outright rather
       // than just fixing the resulting label collision.
-      const order = await posApi.openOrder({ outletId, terminalId, tableLabel: `Table ${openOrders.length + 1}` });
+      const order = await posApi.openOrder({ outletId, terminalId, tableLabel });
       // Functional update (code-review fix) — closing over a stale
       // `openOrders` snapshot would let a concurrent update silently drop
       // this real, already-server-created order from the tab strip.
@@ -590,6 +623,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       orderId: activeOrder.order.id,
       tableLabel: activeOrder.order.table_label || `Tab #${activeOrder.order.id}`,
       propertyName: activeProperty.name ?? null,
+      propertyLogoUrl: activeProperty.logo_url ?? null,
       propertyAddress: activeProperty.address ?? null,
       cashier: currentUserLabel ?? null,
       settledAt: new Date().toISOString(),
@@ -930,6 +964,16 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                   {currentUserLabel ? `Server: ${currentUserLabel}` : selectedTerminal?.device_ref || ''}
                   {' · '}
                   {activeOrder.order.table_label || `Tab #${activeOrder.order.id}`}
+                  {' · '}
+                  <button
+                    type="button"
+                    className={styles.renameLink}
+                    onClick={() => setTabNameDialog({ mode: 'rename', orderId: activeOrder.order.id, value: activeOrder.order.table_label ?? '' })}
+                    disabled={isOffline || settling}
+                    aria-label={`Rename ${activeOrder.order.table_label || `Tab #${activeOrder.order.id}`}`}
+                  >
+                    Rename
+                  </button>
                 </p>
 
                 <div className={styles.ticketLines}>
@@ -1087,6 +1131,44 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
             </div>
           )}
 
+          {tabNameDialog && (
+            <div className={styles.settlementOverlay} role="presentation" onClick={() => setTabNameDialog(null)}>
+              <form
+                className={styles.settlementPanel}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="tab-name-title"
+                onSubmit={submitTabName}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <h2 id="tab-name-title" className={styles.settlementTitle}>
+                  {tabNameDialog.mode === 'new' ? 'Name this tab' : 'Rename tab'}
+                </h2>
+                <label className={formStyles.form}>
+                  <span className={styles.fieldLabel}>Tab name</span>
+                  <input
+                    className={styles.darkInput}
+                    value={tabNameDialog.value}
+                    maxLength={60}
+                    autoFocus
+                    onFocus={(event) => event.target.select()}
+                    onChange={(event) => setTabNameDialog({ ...tabNameDialog, value: event.target.value })}
+                    placeholder="e.g. Table 4, Pool bar – John, Room 205"
+                    required
+                  />
+                </label>
+                <div className={styles.modalActionsRow}>
+                  <button type="submit" className={styles.confirmButton} disabled={!tabNameDialog.value.trim()}>
+                    {tabNameDialog.mode === 'new' ? 'Open tab' : 'Save name'}
+                  </button>
+                  <button type="button" className={styles.cancelButton} onClick={() => setTabNameDialog(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
           {removingTab && (
             <ConfirmDialog
               title="Remove tab"
@@ -1131,6 +1213,7 @@ function PrintableReceipt({ receipt }) {
   const splitBill = receipt.settlements.length > 1;
   return (
     <div className={styles.printReceipt} data-testid="printable-receipt">
+      {receipt.propertyLogoUrl && <img className={styles.printLogo} src={receipt.propertyLogoUrl} alt={receipt.propertyName ?? 'Logo'} />}
       {receipt.propertyName && <p className={styles.printTitle}>{receipt.propertyName}</p>}
       {receipt.propertyAddress && <p className={styles.printCentered}>{receipt.propertyAddress}</p>}
       <p className={styles.printCentered}>Receipt #{receipt.orderId}</p>
@@ -1228,13 +1311,31 @@ function sizeReceiptPage() {
  * Opens the print dialog for the receipt. Guarded so an environment with no
  * print support (or a blocked dialog) never breaks the checkout flow.
  */
-function printReceipt() {
+async function printReceipt() {
   try {
+    await receiptImagesReady();
     sizeReceiptPage();
     if (typeof window !== 'undefined' && typeof window.print === 'function') window.print();
   } catch {
     // Printing is a convenience — the on-screen receipt still shows the sale.
   }
+}
+
+/**
+ * Waits (briefly) for the receipt's logo to finish loading, so the first
+ * receipt of a session never prints with a blank space where the logo goes.
+ * Gives up after 2 seconds — a slow or missing logo must not hold up the sale.
+ */
+function receiptImagesReady() {
+  const images = [...document.querySelectorAll('[data-testid="printable-receipt"] img')].filter((img) => !img.complete);
+  if (images.length === 0) return Promise.resolve();
+  const loaded = Promise.all(
+    images.map((img) => new Promise((resolve) => {
+      img.addEventListener('load', resolve, { once: true });
+      img.addEventListener('error', resolve, { once: true });
+    }))
+  );
+  return Promise.race([loaded, new Promise((resolve) => setTimeout(resolve, 2000))]);
 }
 
 /**

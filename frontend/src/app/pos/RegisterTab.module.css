@@ -888,6 +888,16 @@
   margin: 0 0 var(--space-1);
 }
 
+/* A fixed height, so the receipt measures the same before and after the image loads. */
+.printLogo {
+  display: block;
+  height: 18mm;
+  max-width: 60mm;
+  margin: 0 auto var(--space-1);
+  object-fit: contain;
+  filter: grayscale(1);
+}
+
 .printTitle {
   font-size: var(--text-h3-size);
   font-weight: 700;
@@ -929,4 +939,20 @@
     display: block;
     page: receipt;
   }
+}
+
+/* "Rename" beside the tab name in the ticket header — a quiet text action. */
+.renameLink {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--pos-register-brass-text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.renameLink:disabled {
+  opacity: 0.5;
+  cursor: default;
 }

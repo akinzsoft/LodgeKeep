@@ -80,11 +80,12 @@ describe('<SalesTab>', () => {
     expect(tenderRows[0]).toHaveTextContent(/23\.00/);
     expect(tenderRows[0]).toHaveTextContent('1');
     expect(screen.getByText('Beer').closest('tr')).toHaveTextContent('3');
-    expect(screen.getByText('Table 1').closest('tr')).toHaveTextContent('Ada Bello');
+    // The tab shows its receipt number with its name.
+    expect(screen.getByText('#9 · Table 1').closest('tr')).toHaveTextContent('Ada Bello');
     // A room charge names the room and guest; a Card check paid another way names the channel.
-    expect(screen.getByText('Table 4').closest('tr')).toHaveTextContent('Charge to room · Room 205 (Sam Okoro) + Card · USSD');
+    expect(screen.getByText('#11 · Table 4').closest('tr')).toHaveTextContent('Charge to room · Room 205 (Sam Okoro) + Card · USSD');
     // A guest QR order has no cashier and no table label.
-    expect(screen.getByText('Tab #10').closest('tr')).toHaveTextContent('Guest order');
+    expect(screen.getByText('#10').closest('tr')).toHaveTextContent('Guest order');
   });
 
   it('says there were no sales rather than a blank table when the range is empty', async () => {
@@ -159,7 +160,7 @@ describe('<SalesTab>', () => {
       render(<SalesTab activeProperty={PROPERTY} />);
       await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
 
-      const row = (await screen.findByText('Table 5')).closest('tr');
+      const row = (await screen.findByText('#12 · Table 5')).closest('tr');
       await userEvent.click(within(row).getByRole('button', { name: 'Refund' }));
       const dialog = await screen.findByRole('alertdialog');
       expect(within(dialog).getByRole('button', { name: 'Refund' })).toBeDisabled();
@@ -176,7 +177,7 @@ describe('<SalesTab>', () => {
       mocks.getSalesReport.mockResolvedValue({ ...REPORT, unsettledCardPayments: [STRAY] });
       render(<SalesTab activeProperty={PROPERTY} isOffline />);
       await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
-      expect(within((await screen.findByText('Table 5')).closest('tr')).getByRole('button', { name: 'Refund' })).toBeDisabled();
+      expect(within((await screen.findByText('#12 · Table 5')).closest('tr')).getByRole('button', { name: 'Refund' })).toBeDisabled();
     });
   });
 });

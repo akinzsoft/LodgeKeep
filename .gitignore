@@ -16,3 +16,5 @@ backend/storage/exports/
 backend/storage/imports/
 # POS menu item photos — uploaded per tenant, local-disk storage per MENU_IMAGE_STORAGE_DIR.
 backend/storage/menu-images/
+# Property logos — uploaded per property, local-disk storage per PROPERTY_LOGO_STORAGE_DIR.
+backend/storage/property-logos/

@@ -25,6 +25,11 @@ function describePayment(payment) {
   return parts.join(' · ');
 }
 
+/** The receipt number with the cashier's name for the tab — "#63 · Pool bar – John" — so tabs sharing a name like "Table 1" stay distinguishable. */
+function tabName(row) {
+  return row.tableLabel ? `#${row.orderId} · ${row.tableLabel}` : `#${row.orderId}`;
+}
+
 function formatTime(iso) {
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
@@ -225,7 +230,7 @@ export function SalesTab({ activeProperty, isOffline = false }) {
         }
         columns={[
           { key: 'settledAt', label: 'Settled', render: (row) => formatTime(row.settledAt) },
-          { key: 'tableLabel', label: 'Tab', render: (row) => row.tableLabel || `Tab #${row.orderId}` },
+          { key: 'tableLabel', label: 'Tab', render: (row) => tabName(row) },
           { key: 'tenders', label: 'Paid by', render: (row) => (row.payments?.length ? row.payments.map(describePayment).join(' + ') : row.tenders.map(tenderLabel).join(' + ')) },
           { key: 'itemCount', label: 'Items', align: 'right' },
           { key: 'cashier', label: 'Cashier', render: (row) => row.cashier ?? (row.source === 'guest' ? 'Guest order' : '—') },
@@ -241,7 +246,7 @@ export function SalesTab({ activeProperty, isOffline = false }) {
           state="success"
           columns={[
             { key: 'capturedAt', label: 'Paid', render: (row) => formatTime(row.capturedAt) },
-            { key: 'tableLabel', label: 'Tab', render: (row) => row.tableLabel || `Tab #${row.orderId}` },
+            { key: 'tableLabel', label: 'Tab', render: (row) => tabName(row) },
             { key: 'tender', label: 'Paid by', render: (row) => tenderLabel(row.tender) },
             { key: 'amount', label: 'Amount', align: 'right', render: (row) => <Money amount={row.amount} currencyCode={row.currency} /> },
             {
@@ -263,7 +268,7 @@ export function SalesTab({ activeProperty, isOffline = false }) {
       {refunding && (
         <ConfirmDialog
           title="Refund card payment"
-          consequence={`This sends a refund to Paystack for ${refunding.tableLabel || `Tab #${refunding.orderId}`}. The guest gets their money back and this cannot be undone.`}
+          consequence={`This sends a refund to Paystack for ${tabName(refunding)}. The guest gets their money back and this cannot be undone.`}
           requireReason
           confirmLabel="Refund"
           onConfirm={confirmRefund}

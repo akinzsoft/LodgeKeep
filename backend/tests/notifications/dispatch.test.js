@@ -218,7 +218,11 @@ describe('Notifications dispatch (PLAN.md Phase 3)', () => {
     });
 
     await dispatchPendingOutboxEventsForTenant({ context: context() });
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({ subject: 'Custom subject for CUSTOM123', html: '<p>Custom body.</p>' }));
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ subject: 'Custom subject for CUSTOM123' }));
+    // The property's own content, inside the same branded shell as every email.
+    const { html } = send.mock.calls[0][0];
+    expect(html).toContain('<p>Custom body.</p>');
+    expect(html).toMatch(/^<!DOCTYPE html>/);
   });
 
   it('marks an event with no guest email as sent — nothing to deliver — without calling the adapter', async () => {

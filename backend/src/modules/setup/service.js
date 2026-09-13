@@ -10,11 +10,17 @@
  */
 
 const { scopedDb } = require('../../db');
+const imageStore = require('../../shared/image-store');
 const { withDuplicateMapping } = require('../../shared/errors');
 const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError } = require('./errors');
 const { encrypt } = require('../../shared/encryption');
 const { resolveEmailAdapter } = require('../notifications/email-adapter');
+const emailLayout = require('../notifications/email-layout');
+
+const { loadEmailBranding } = emailLayout;
 const { hasEntitlement, resolveActivePlanId } = require('../../shared/entitlements');
+
+const LOGO_KIND = 'property-logos';
 const { PlanEntitlementDeniedError } = require('../../auth/errors');
 
 /**
@@ -113,6 +119,51 @@ async function updateProperty({ context, id, changes }) {
   return getProperty({ context, id });
 }
 
+/**
+ * Stores a new logo for a property (shown on POS receipts and in every
+ * email), replacing and deleting any previous uploaded one. The property row
+ * is locked first so two uploads at once never leave an orphaned file — the
+ * same rule `pos/service.js`'s `setMenuItemImage` follows. `logo_url` holds
+ * the public media URL; a logo set some other way (an external URL) is left
+ * on disk untouched because it was never ours to delete.
+ */
+async function setPropertyLogo({ context, id, buffer }) {
+  const db = scopedDb().for(context);
+  let newFile = null;
+  let replacedUrl = null;
+  const found = await (async () => {
+    try {
+      return await db.transaction(async (trx) => {
+        const existing = await trx.table('properties').where({ id }).forUpdate().first();
+        if (!existing) return false;
+        newFile = imageStore.saveImage(LOGO_KIND, buffer);
+        await trx.table('properties').where({ id }).update({ logo_url: imageStore.imageUrl(LOGO_KIND, newFile) });
+        replacedUrl = existing.logo_url;
+        return true;
+      });
+    } catch (error) {
+      imageStore.deleteImage(LOGO_KIND, newFile);
+      throw error;
+    }
+  })();
+  if (!found) return null;
+  imageStore.deleteImage(LOGO_KIND, imageStore.fileNameFromUrl(LOGO_KIND, replacedUrl));
+  return getProperty({ context, id });
+}
+
+async function removePropertyLogo({ context, id }) {
+  const db = scopedDb().for(context);
+  const removed = await db.transaction(async (trx) => {
+    const existing = await trx.table('properties').where({ id }).forUpdate().first();
+    if (!existing) return undefined;
+    await trx.table('properties').where({ id }).update({ logo_url: null });
+    return existing.logo_url ?? null;
+  });
+  if (removed === undefined) return null;
+  imageStore.deleteImage(LOGO_KIND, imageStore.fileNameFromUrl(LOGO_KIND, removed));
+  return getProperty({ context, id });
+}
+
 async function getProperty({ context, id }) {
   const db = scopedDb().for(context);
   return db.table('properties').where({ id }).first();
@@ -194,10 +245,18 @@ async function sendTestEmail({ context, to }) {
   const db = scopedDb().for(context);
   const adapter = await resolveEmailAdapter({ db, propertyId: context.propertyId });
   try {
+    // Sent in the same branded shell as every real email, so the test also
+    // shows how the property's logo and footer will look in an inbox.
+    const branding = await loadEmailBranding({ db, propertyId: context.propertyId });
+    const subject = 'LodgeKeep test email';
+    const contentHtml =
+      emailLayout.heading('Your email settings work') +
+      emailLayout.paragraph('This is a test email from your LodgeKeep email settings. If you received it, guests and staff will receive their emails too.');
     const result = await adapter.send({
       to,
-      subject: 'LodgeKeep test email',
-      html: '<p>This is a test email from your LodgeKeep email settings. If you received this, your configuration works.</p>',
+      subject,
+      html: emailLayout.renderEmailShell({ subject, contentHtml, branding, preheader: 'Your LodgeKeep email settings work.' }),
+      attachments: branding.logoAttachment ? [branding.logoAttachment] : [],
     });
     return { sent: true, provider: adapter.name, providerRef: result.providerRef };
   } catch (error) {
@@ -700,6 +759,8 @@ async function resolveTaxForDate({ context, taxCode, businessDate }) {
 module.exports = {
   createProperty,
   updateProperty,
+  setPropertyLogo,
+  removePropertyLogo,
   getProperty,
   listProperties,
   getEmailSettings,

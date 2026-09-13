@@ -55,7 +55,7 @@ const TABS = [
   { key: 'support-access', label: 'Support access' },
 ];
 
-export function SetupScreen({ activePropertyId, isOffline = false }) {
+export function SetupScreen({ activePropertyId, isOffline = false, onPropertiesChanged }) {
   const [tab, setTab] = useState('wizard');
   const [properties, setProperties] = useState(null);
   const [error, setError] = useState(null);
@@ -126,7 +126,16 @@ export function SetupScreen({ activePropertyId, isOffline = false }) {
           />
         )}
         {tab === 'property' && (
-          <PropertyTab properties={properties} onPropertiesChanged={reloadProperties} />
+          <PropertyTab
+            properties={properties}
+            onPropertiesChanged={async () => {
+              await reloadProperties();
+              // The app shell keeps its own copy of the property records (name,
+              // business date, logo for receipts) — refresh it too, so a new
+              // logo or name shows everywhere without a page reload.
+              onPropertiesChanged?.();
+            }}
+          />
         )}
         {tab === 'room-types' && <RoomTypesTab activeProperty={activeProperty} disabled={!activeProperty} />}
         {tab === 'rooms' && <RoomsTab activeProperty={activeProperty} disabled={!activeProperty} />}

@@ -84,3 +84,24 @@
   right: var(--space-4);
   z-index: 300;
 }
+
+/* PropertyTab's logo card. */
+.hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+}
+
+.logoRow {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h-touch);
+  margin-block: var(--space-3);
+}
+
+.logoPreview {
+  display: block;
+  max-width: 240px;
+  max-height: 80px;
+  object-fit: contain;
+}

@@ -18,6 +18,7 @@
 const { scopedDb } = require('../../db');
 const { workerContext } = require('../tenancy');
 const { resolveEmailAdapter } = require('./email-adapter');
+const { escapeHtml, heading, paragraph, note, details, button, codeBlock, loadEmailBranding, renderEmailShell, preheaderFrom } = require('./email-layout');
 
 const MAX_ATTEMPTS = 5;
 
@@ -76,80 +77,170 @@ const EVENT_TEMPLATE_KEYS = {
  * Built-in fallback content — used when a property has not configured its
  * own `email_templates` row for a key yet, so a send is never silently
  * dropped for want of a template (this table's own migration header).
- * `{{var}}` placeholders, substituted against the event payload.
+ * `{{var}}` placeholders, substituted (HTML-escaped) against the event
+ * payload plus `propertyName`. Written like a hotel's own correspondence and
+ * built from `email-layout.js`'s helpers; every message — default or
+ * property-configured — is then wrapped in the branded shell with the
+ * property's logo (`composeEmail`).
  */
 const DEFAULT_TEMPLATES = {
   reservation_confirmed: {
-    subject: 'Your reservation is confirmed — {{confirmationNumber}}',
-    body_html: '<p>Hi {{guestName}},</p><p>Your reservation ({{confirmationNumber}}) for {{arrivalDate}} to {{departureDate}} is confirmed.</p>',
+    subject: 'Your stay at {{propertyName}} is confirmed — {{confirmationNumber}}',
+    body_html:
+      heading('Your stay is confirmed') +
+      paragraph('Dear {{guestName}},') +
+      paragraph('Thank you for choosing {{propertyName}}. We are delighted to confirm your reservation and look forward to welcoming you.') +
+      details([
+        ['Confirmation number', '{{confirmationNumber}}'],
+        ['Arrival', '{{arrivalDate}}'],
+        ['Departure', '{{departureDate}}'],
+      ]) +
+      note('Need to change your plans? Reply to this email or contact our front desk, quoting your confirmation number.'),
   },
   reservation_cancelled: {
-    subject: 'Your reservation has been cancelled — {{confirmationNumber}}',
-    body_html: '<p>Hi {{guestName}},</p><p>Your reservation ({{confirmationNumber}}) has been cancelled.</p>',
+    subject: 'Your reservation at {{propertyName}} has been cancelled — {{confirmationNumber}}',
+    body_html:
+      heading('Your reservation has been cancelled') +
+      paragraph('Dear {{guestName}},') +
+      paragraph('As requested, your reservation at {{propertyName}} has been cancelled.') +
+      details([
+        ['Confirmation number', '{{confirmationNumber}}'],
+        ['Original arrival', '{{arrivalDate}}'],
+        ['Original departure', '{{departureDate}}'],
+      ]) +
+      note('If you did not ask for this cancellation, please contact us straight away. We hope to welcome you another time.'),
   },
   checked_in: {
-    subject: 'Welcome — you are checked in',
-    body_html: '<p>Hi {{guestName}},</p><p>You are checked into room {{roomNumber}}. Enjoy your stay.</p>',
+    subject: 'Welcome to {{propertyName}}',
+    body_html:
+      heading('Welcome to {{propertyName}}') +
+      paragraph('Dear {{guestName}},') +
+      paragraph('You are checked in and your room is ready. We hope you have a wonderful stay.') +
+      details([
+        ['Room', '{{roomNumber}}'],
+        ['Check-out', '{{departureDate}}'],
+        ['Confirmation number', '{{confirmationNumber}}'],
+      ]) +
+      note('Anything you need during your stay, our front desk is happy to help.'),
   },
   checked_out: {
-    subject: 'Thank you for staying with us',
-    body_html: '<p>Hi {{guestName}},</p><p>You have been checked out. Your final folio balance was {{folioBalance}}.</p>',
+    subject: 'Thank you for staying at {{propertyName}}',
+    body_html:
+      heading('Thank you for staying with us') +
+      paragraph('Dear {{guestName}},') +
+      paragraph('It was a pleasure having you at {{propertyName}}. You have now been checked out — we hope you had a comfortable stay.') +
+      details([
+        ['Confirmation number', '{{confirmationNumber}}'],
+        ['Stay', '{{arrivalDate}} – {{departureDate}}'],
+        ['Final balance', '{{folioBalance}}'],
+      ]) +
+      note('We would love to welcome you back soon.'),
   },
   staff_invitation: {
     subject: "You're invited to join {{propertyName}} on LodgeKeep",
-    body_html: '<p>You have been invited to join {{propertyName}} as {{role}}.</p><p><a href="{{invitationUrl}}">Set up your account</a></p>',
+    body_html:
+      heading('You are invited to join {{propertyName}}') +
+      paragraph('You have been invited to join the {{propertyName}} team on LodgeKeep as {{role}}.') +
+      button('{{invitationUrl}}', 'Set up your account') +
+      note('If you were not expecting this invitation, you can safely ignore this email.'),
   },
   guest_password_reset: {
     subject: 'Reset your password — {{propertyName}}',
     body_html:
-      '<p>We received a request to reset your password for your account at {{propertyName}}.</p>' +
-      '<p><a href="{{resetUrl}}">Reset your password</a></p>' +
-      '<p>This link expires in {{expiresInHours}} hour(s). If you did not request this, you can safely ignore this email.</p>',
+      heading('Reset your password') +
+      paragraph('We received a request to reset the password for your {{propertyName}} guest account.') +
+      button('{{resetUrl}}', 'Reset your password') +
+      note('This link expires in {{expiresInHours}} hour(s). If you did not request a reset, you can safely ignore this email — your password will not change.'),
   },
   staff_mfa_code: {
     subject: 'Your LodgeKeep verification code',
     body_html:
-      '<p>Your verification code is:</p>' +
-      '<p style="font-size: 24px; font-weight: bold; letter-spacing: 4px;">{{code}}</p>' +
-      '<p>This code expires in {{expiresInMinutes}} minute(s). If you did not attempt to sign in, you can safely ignore this email.</p>',
+      heading('Your verification code') +
+      paragraph('Use this code to finish signing in to LodgeKeep:') +
+      codeBlock('{{code}}') +
+      note('This code expires in {{expiresInMinutes}} minute(s). If you did not try to sign in, you can safely ignore this email.'),
   },
   ar_invoice_generated: {
-    subject: 'New invoice {{invoiceNumber}}',
-    body_html: '<p>Hi {{companyName}},</p><p>A new invoice ({{invoiceNumber}}) for {{totalAmount}} {{currency}} has been generated, due {{dueAt}}.</p>',
+    subject: 'Invoice {{invoiceNumber}} from {{propertyName}}',
+    body_html:
+      heading('New invoice {{invoiceNumber}}') +
+      paragraph('Dear {{companyName}},') +
+      paragraph('A new invoice from {{propertyName}} is ready.') +
+      details([
+        ['Invoice number', '{{invoiceNumber}}'],
+        ['Amount due', '{{totalAmount}} {{currency}}'],
+        ['Due date', '{{dueAt}}'],
+      ]) +
+      note('Please arrange payment by the due date, quoting the invoice number.'),
   },
   ar_payment_received: {
     subject: 'Payment received — thank you',
-    body_html: '<p>Hi {{companyName}},</p><p>We have recorded your payment of {{amount}} {{currency}}. Thank you.</p>',
+    body_html:
+      heading('Payment received — thank you') +
+      paragraph('Dear {{companyName}},') +
+      paragraph('We have received and recorded your payment. Thank you for settling your account with {{propertyName}}.') +
+      details([['Amount received', '{{amount}} {{currency}}']]) +
+      note('Please keep this email for your records.'),
   },
   billing_payment_failed: {
     subject: '{{urgencyLabel}}: your {{tenantName}} subscription payment failed',
     body_html:
-      '<p>{{message}}</p>' +
-      '<p>Amount due: {{amount}} {{currency}}. Next automatic retry: {{nextRetryDate}}.</p>' +
-      '<p>Your account remains fully usable while this is being resolved — updating your payment method at any point before the retry schedule ends will restore normal billing immediately.</p>',
+      heading('{{urgencyLabel}}') +
+      paragraph('{{message}}') +
+      details([
+        ['Amount due', '{{amount}} {{currency}}'],
+        ['Next automatic retry', '{{nextRetryDate}}'],
+      ]) +
+      note('Your account remains fully usable while this is being resolved — updating your payment method before the retry schedule ends restores normal billing immediately.'),
   },
   billing_subscription_suspended: {
     subject: 'Your {{tenantName}} subscription has been suspended',
     body_html:
-      '<p>After {{attemptCount}} failed payment attempts over the last two weeks, your account has been suspended for non-payment.</p>' +
-      '<p>Your data is safe and untouched — this only pauses new bookings and other changes; nothing already in your account is lost or hidden.</p>' +
-      '<p>Add a valid payment method to restore full access immediately.</p>',
+      heading('Your subscription has been suspended') +
+      paragraph('After {{attemptCount}} failed payment attempts over the last two weeks, your account has been suspended for non-payment.') +
+      paragraph('Your data is safe and untouched — this only pauses new bookings and other changes; nothing already in your account is lost or hidden.') +
+      note('Add a valid payment method to restore full access immediately.'),
   },
   pos_room_charge_otp: {
-    subject: 'Your room-charge confirmation code',
+    subject: 'Confirm your room charge — {{propertyName}}',
     body_html:
-      '<p>A guest order at {{propertyName}} is requesting to be charged to your room.</p>' +
-      '<p style="font-size: 24px; font-weight: bold; letter-spacing: 4px;">{{code}}</p>' +
-      '<p>This code expires in {{expiresInMinutes}} minute(s). If you did not request this, you can safely ignore this email.</p>',
+      heading('Confirm your room charge') +
+      paragraph('An order at {{propertyName}} is asking to be charged to your room. Enter this code to confirm it:') +
+      codeBlock('{{code}}') +
+      note('This code expires in {{expiresInMinutes}} minute(s). If you did not place this order, you can safely ignore this email.'),
   },
   pos_guest_order_receipt: {
-    subject: 'Your order receipt — {{propertyName}}',
-    body_html: '<p>Thank you for your order. Total charged: {{amount}} {{currency}}.</p>',
+    subject: 'Your receipt from {{propertyName}}',
+    body_html:
+      heading('Thank you for your order') +
+      paragraph('Your order at {{propertyName}} has been paid.') +
+      details([['Total charged', '{{amount}} {{currency}}']]) +
+      note('Please keep this email as your receipt.'),
   },
 };
 
-function substitute(template, variables) {
-  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => (variables[key] !== undefined ? String(variables[key]) : match));
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/;
+
+/** A payload date ("2026-09-13") as guests read it ("Sun, 13 Sep 2026"); anything else unchanged. */
+function formatValue(value) {
+  const match = typeof value === 'string' ? ISO_DATE.exec(value) : null;
+  if (!match) return value;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  return date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
+/**
+ * `{{var}}` substitution. In HTML every value is escaped, so a guest or
+ * company name can never inject markup; subjects are plain text. A
+ * placeholder with no value renders empty rather than as raw `{{braces}}`.
+ */
+function substitute(template, variables, { escape }) {
+  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+    const value = variables[key];
+    if (value === undefined || value === null) return '';
+    const text = String(formatValue(value));
+    return escape ? escapeHtml(text) : text;
+  });
 }
 
 /** Property-configured template if one exists, else the built-in default (never neither). */
@@ -157,7 +248,24 @@ async function renderTemplate({ db, propertyId, templateKey, variables }) {
   const row = await db.table('email_templates').where({ property_id: propertyId, template_key: templateKey, locale: 'en' }).first();
   const base = row ?? DEFAULT_TEMPLATES[templateKey];
   if (!base) throw new Error(`No template (configured or built-in) for key "${templateKey}".`);
-  return { subject: substitute(base.subject, variables), html: substitute(base.body_html, variables) };
+  return { subject: substitute(base.subject, variables, { escape: false }), html: substitute(base.body_html, variables, { escape: true }) };
+}
+
+/**
+ * A ready-to-send email: the template rendered against the payload, wrapped
+ * in the property's branded shell, with its logo as an inline attachment.
+ * Every path that sends a templated email goes through this, so no message
+ * ever leaves unbranded.
+ */
+async function composeEmail({ db, propertyId, templateKey, variables }) {
+  const branding = await loadEmailBranding({ db, propertyId });
+  const withProperty = { ...variables, propertyName: variables.propertyName || branding.name || '' };
+  const { subject, html } = await renderTemplate({ db, propertyId, templateKey, variables: withProperty });
+  return {
+    subject,
+    html: renderEmailShell({ subject, contentHtml: html, branding, preheader: preheaderFrom(html) }),
+    attachments: branding.logoAttachment ? [branding.logoAttachment] : [],
+  };
 }
 
 /**
@@ -191,13 +299,13 @@ async function dispatchOne({ tenantDb, propertyDb, event }) {
   }
 
   try {
-    const { subject, html } = await renderTemplate({ db: propertyDb, propertyId: event.property_id, templateKey, variables: payload });
+    const { subject, html, attachments } = await composeEmail({ db: propertyDb, propertyId: event.property_id, templateKey, variables: payload });
     // Gap closure: "add the mail setup on in SETUP menu" — a property's own
     // email_settings row, when configured, overrides the process-level
     // adapter, the same override-else-default shape `renderTemplate` above
     // already uses for the template content itself.
     const adapter = await resolveEmailAdapter({ db: propertyDb, propertyId: event.property_id });
-    const { providerRef, status } = await adapter.send({ to: recipientEmail, subject, html });
+    const { providerRef, status } = await adapter.send({ to: recipientEmail, subject, html, attachments });
 
     await propertyDb.table('notification_log').insert({
       recipient_email: recipientEmail,
@@ -320,11 +428,11 @@ async function resendNotification({ context, id }) {
     departureDate: reservation?.departure_date ?? '',
   };
 
-  const { subject, html } = await renderTemplate({ db, propertyId: reservation?.property_id, templateKey: failed.template_key, variables });
+  const { subject, html, attachments } = await composeEmail({ db, propertyId: reservation?.property_id ?? context.propertyId, templateKey: failed.template_key, variables });
   // Consistency with `dispatchOne`: a resend honors the same property-level
   // `email_settings` override, not silently the process-level default.
   const adapter = await resolveEmailAdapter({ db, propertyId: context.propertyId });
-  const { providerRef, status } = await adapter.send({ to: failed.recipient_email, subject, html });
+  const { providerRef, status } = await adapter.send({ to: failed.recipient_email, subject, html, attachments });
 
   const [newId] = await db.table('notification_log').insert({
     recipient_email: failed.recipient_email,
@@ -378,6 +486,7 @@ async function isEmailDeliveryReal({ db, propertyId } = {}) {
 }
 
 module.exports = {
+  composeEmail,
   EVENT_TEMPLATE_KEYS,
   dispatchPendingOutboxEventsForTenant,
   isEmailDeliveryReal,

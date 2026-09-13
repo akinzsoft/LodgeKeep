@@ -374,6 +374,29 @@ describe('POS Register — Paystack card/NQR checkout', () => {
     });
   });
 
+  describe('renaming a tab', () => {
+    it('renames an open tab, trimming the name', async () => {
+      const { orderId } = await openTabWithItem();
+      const res = await t.request.post(`/api/v1/pos/orders/${orderId}/rename`).set('Authorization', `Bearer ${token}`).send({ table_label: '  Pool bar – John  ' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.table_label).toBe('Pool bar – John');
+    });
+
+    it('rejects an empty or over-long name', async () => {
+      const { orderId } = await openTabWithItem();
+      const rename = (label) => t.request.post(`/api/v1/pos/orders/${orderId}/rename`).set('Authorization', `Bearer ${token}`).send({ table_label: label });
+      expect((await rename('   ')).status).toBe(400);
+      expect((await rename('x'.repeat(61))).status).toBe(400);
+    });
+
+    it('refuses to rename a tab that is no longer open', async () => {
+      const { orderId } = await openTabWithItem();
+      await t.trx('pos_orders').where({ id: orderId }).update({ status: 'settled' });
+      const res = await t.request.post(`/api/v1/pos/orders/${orderId}/rename`).set('Authorization', `Bearer ${token}`).send({ table_label: 'Late name' });
+      expect(res.status).toBe(409);
+    });
+  });
+
   it("cannot start a checkout against another tenant's tab", async () => {
     const otherToken = tokenFor(ctx.b, ctx.b.users[0].id);
     await t.trx('user_property_access').where({ user_id: ctx.b.users[0].id, property_id: ctx.b.properties[0].id }).update({ role: 'manager' });

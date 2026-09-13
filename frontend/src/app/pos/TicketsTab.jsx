@@ -47,7 +47,7 @@ export function TicketsTab() {
         errorMessage={error}
       >
         {(orders ?? []).map(({ order, detail }) => (
-          <Card key={order.id} title={order.table_label ? `Table ${order.table_label}` : `Order ${order.id}`}>
+          <Card key={order.id} title={order.table_label ? `#${order.id} · ${order.table_label}` : `Order #${order.id}`}>
             <DataTable
               state={detail.items.filter((item) => !item.voided_at).length === 0 ? 'empty' : 'success'}
               emptyMessage="No items on this tab yet."
