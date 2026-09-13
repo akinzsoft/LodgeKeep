@@ -114,6 +114,8 @@ export function AuthProvider({ children }) {
     setUser((previous) => ({
       ...previous,
       userId: result.userId ?? previous?.userId,
+      firstName: result.firstName ?? previous?.firstName,
+      lastName: result.lastName ?? previous?.lastName,
       tenantId: result.tenantId ?? previous?.tenantId,
       activePropertyId: activePropertyIdRef.current,
       role: result.role ?? previous?.role,

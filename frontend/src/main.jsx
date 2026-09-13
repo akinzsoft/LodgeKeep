@@ -286,9 +286,9 @@ function Demo() {
         <ChainOverviewScreen isOffline={!isOnline} />
       ) : (
         <HomeDashboard
-          greetingName={displayName}
+          greetingName={user.firstName}
           businessDate={businessDate}
-          activePropertyId={user.activePropertyId}
+          activeProperty={activePropertyRecord}
           onNavigateToSetup={() => setActiveItemKey('setup')}
         />
       )}

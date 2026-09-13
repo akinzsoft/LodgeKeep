@@ -1,8 +1,20 @@
+/**
+ * Home dashboard — the user-supplied "Lodgekeep warm" reference: a Fraunces
+ * greeting, full-width summary widgets, KPI cards with a brass/teal left
+ * edge, and warm-bordered white cards on the cream canvas. Built entirely on
+ * the app-wide tokens (`--chart-*` for data colours).
+ */
+
 .page {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  max-width: 1440px;
+  margin: 0 auto;
+  color: var(--text-primary);
 }
+
+/* ---- greeting + summary widgets ---- */
 
 .greetingRow {
   display: flex;
@@ -10,44 +22,119 @@
   gap: var(--space-4);
 }
 
+.greetingText {
+  min-width: 0;
+}
+
 .greeting {
   margin: 0;
-  font-size: var(--text-h1-size);
-  line-height: var(--text-h1-line);
-  font-weight: var(--text-h1-weight);
+  font-family: var(--font-display);
+  font-size: 32px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--text-primary);
+}
+
+.subline {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-body-size);
+  color: var(--text-secondary);
 }
 
 .summaryWidgets {
   display: grid;
   grid-template-columns: 1fr;
-  gap: var(--space-4);
-}
-
-.summaryCard {
-  min-height: 5.5rem;
+  gap: var(--space-3);
 }
 
 @media (width >= 640px) {
   .summaryWidgets {
     grid-template-columns: 1fr 1fr;
+    gap: var(--space-4);
   }
 }
 
-@media (width >= 1024px) {
-  .greetingRow {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .summaryWidgets {
-    width: 26rem;
-  }
+.widget,
+.kpiCard,
+.chartCard {
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
 }
 
-/* DESIGN_SYSTEM.md §1: "KPI rows reflow 4 → 2 → 1." Mobile-first: 1 column
-   by default, 2 at the small-tablet breakpoint, 4 at desktop. */
+.widget {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  min-height: 6.25rem;
+}
+
+.widgetTitle {
+  margin: 0;
+  font-size: var(--text-label-size);
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.widgetPeriod {
+  color: var(--text-secondary);
+}
+
+.widgetValue {
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.incomeRow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: var(--space-4);
+}
+
+.emptyMessage,
+.errorMessage {
+  margin: 0;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+}
+
+.emptyMessage {
+  color: var(--text-muted);
+}
+
+.errorMessage {
+  color: var(--state-danger);
+}
+
+/* ---- setup banner (kept from the pre-redesign dashboard) ---- */
+
+.setupBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  border-left: 3px solid var(--accent);
+  background: var(--surface-card);
+}
+
+.setupBannerText {
+  margin: 0;
+  font-size: var(--text-body-size);
+  color: var(--text-secondary);
+}
+
+/* ---- KPI row — DESIGN_SYSTEM.md §1: "KPI rows reflow 4 → 2 → 1." ---- */
+
 .kpiGrid {
   display: grid;
   grid-template-columns: 1fr;
@@ -67,44 +154,111 @@
 }
 
 .kpiCard {
-  /* Card already applies --space-5 padding at >=640px (see Card.module.css)
-     — nothing extra needed here. */
-}
+  --kpi-accent: var(--chart-1);
+  --kpi-accent-tint: var(--chart-1-tint);
 
-/* KpiPlaceholder's own internal row: icon badge + label/value/caption,
-   modelled on KPICard.module.css's own .row shape. Distinct from .kpiGrid
-   above, which is the 4-card grid container — these must never share a
-   class name, since .kpiGrid is `display: grid` and this is `display: flex`. */
-.kpiRow {
   display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-5);
+  border-left: 3px solid var(--kpi-accent);
+  min-height: 10rem;
+}
+
+.accentPrimary {
+  --kpi-accent: var(--chart-1);
+  --kpi-accent-tint: var(--chart-1-tint);
+}
+
+.accentSecondary {
+  --kpi-accent: var(--chart-2);
+  --kpi-accent-tint: var(--chart-2-tint);
+}
+
+.kpiTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.iconBadge {
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
-}
-
-.kpiText {
-  min-width: 0;
-}
-
-.kpiLabel {
-  margin: 0;
-  font-size: var(--text-label-size);
-  font-weight: var(--text-label-weight);
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
   color: var(--text-secondary);
 }
 
-.kpiValue {
-  margin: var(--space-1) 0 0;
-  font-size: var(--text-kpi-size);
-  line-height: var(--text-kpi-line);
-  font-weight: var(--text-kpi-weight);
+.delta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-caption-size);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.delta_up {
+  color: var(--accent-secondary);
+}
+
+.delta_down {
+  color: var(--state-danger);
+}
+
+.delta_flat {
   color: var(--text-muted);
 }
 
-.kpiCaption {
-  margin: var(--space-1) 0 0;
-  font-size: var(--text-caption-size);
+.kpiValue {
+  margin: 0;
+  font-size: var(--text-kpi-size);
+  line-height: var(--text-kpi-line);
+  font-weight: var(--text-kpi-weight);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.kpiLabel,
+.kpiLabelMuted {
+  margin: 0;
+  font-size: var(--text-label-size);
   color: var(--text-muted);
 }
+
+.kpiLabelMuted {
+  margin-top: auto;
+}
+
+.kpiLoading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.progressTrack {
+  margin-top: var(--space-4);
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--border);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--kpi-accent);
+}
+
+/* ---- chart row ---- */
 
 .chartRow {
   display: grid;
@@ -114,22 +268,109 @@
 
 @media (width >= 1024px) {
   .chartRow {
-    grid-template-columns: 2fr 1fr;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   }
+}
+
+.chartCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  min-width: 0;
 }
 
 .chartCardWide,
 .chartCardNarrow {
-  min-height: 16rem;
+  min-height: 18rem;
 }
 
-.alertList {
-  list-style: none;
+.chartHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chartSubtitle {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+}
+
+.chartTitle {
+  margin: 0;
+  font-size: var(--text-h3-size);
+  line-height: var(--text-h3-line);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.legend {
+  display: flex;
+  gap: var(--space-4);
   margin: 0;
   padding: 0;
+  list-style: none;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-caption-size);
+  color: var(--text-secondary);
+}
+
+.legendSwatch {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.donutLegend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.donutLegendItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-caption-size);
+}
+
+.donutLegendLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.donutLegendPercent {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+/* ---- today at a glance (kept from the pre-redesign dashboard) ---- */
+
+.alertList {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .alertRow {
@@ -137,7 +378,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-2) 0;
+  padding: var(--space-3) 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -149,22 +390,4 @@
 .alertLabel {
   font-size: var(--text-body-size);
   color: var(--text-primary);
-}
-
-.setupBanner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-  padding: var(--space-4);
-  border-radius: var(--radius-md);
-  background: var(--state-warning-bg);
-  color: var(--state-warning);
-}
-
-.setupBannerText {
-  margin: 0;
-  font-size: var(--text-body-size);
-  font-weight: var(--text-label-weight);
 }

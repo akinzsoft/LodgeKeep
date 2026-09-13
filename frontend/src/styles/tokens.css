@@ -61,6 +61,16 @@
   --state-neutral: #8A93A6;
   --state-neutral-bg: #F1EFE8;
 
+  /* ---- accents and chart series — Home dashboard ---- */
+  --accent: #8A6D3B; /* brass */
+  --accent-secondary: #2E5850; /* deep teal */
+  --chart-1: #8A6D3B; /* brass */
+  --chart-2: #2E5850; /* teal */
+  --chart-3: #B5482F; /* brick */
+  --chart-4: #CDB791; /* tan */
+  --chart-1-tint: #F3EDE2;
+  --chart-2-tint: #E3ECE9;
+
   /* ---- spacing & sizing — every value a multiple of 4px ---- */
   --space-1: 4px;
   --space-2: 8px;
@@ -73,6 +83,7 @@
   --radius-sm: 6px; /* pills, badges, inputs */
   --radius-md: 10px; /* buttons, small cards */
   --radius-lg: 14px; /* cards, modals */
+  --radius-full: 999px; /* fully rounded pills, avatars, progress bars */
 
   --shadow-card: 0 1px 3px rgba(28, 36, 52, 0.06), 0 1px 2px rgba(28, 36, 52, 0.04);
   --shadow-raised: 0 4px 12px rgba(28, 36, 52, 0.08);
@@ -86,6 +97,7 @@
 
   /* ---- typography ---- */
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Fraunces', 'Georgia', 'Times New Roman', serif; /* Home greeting only */
   --font-mono: 'JetBrains Mono', ui-monospace, monospace; /* folio amounts, confirmation codes, IDs */
 
   /* size/line-height/weight, split into three custom properties per style —
