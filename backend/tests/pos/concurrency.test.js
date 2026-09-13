@@ -20,6 +20,10 @@
  *    no partial write (exactly one settlement row, the order ends up
  *    cleanly `settled`, never corrupted).
  *
+ * 3. A cash settlement racing its terminal's shift close — the sale must
+ *    be stamped onto the shift if and only if that shift's expected cash
+ *    includes it (see the last test's own comment).
+ *
  * 2. Two concurrent void requests for the SAME order item — a real bug
  *    this pass's own quality-review step caught: an earlier draft of
  *    `voidOrderItem` read the item's own `voided_at` BEFORE acquiring the
@@ -111,6 +115,7 @@ describe('POS tab edit race under real concurrent connections', () => {
     await db()('idempotency_keys').where({ tenant_id: tenantId }).delete();
     await db()('outbox_events').where({ tenant_id: tenantId }).delete();
     await db()('pos_order_settlements').where({ tenant_id: tenantId }).delete();
+    await db()('pos_shifts').where({ tenant_id: tenantId }).delete();
     await db()('pos_order_items').where({ tenant_id: tenantId }).delete();
     await db()('pos_orders').where({ tenant_id: tenantId }).delete();
     await db()('pos_menu_items').where({ tenant_id: tenantId }).delete();
@@ -201,5 +206,61 @@ describe('POS tab edit race under real concurrent connections', () => {
 
     await db()('pos_order_items').where({ id: raceItemId }).delete();
     await db()('pos_orders').where({ id: raceOrderId }).delete();
+  });
+
+  it('a cash sale racing a shift close is counted in that shift if and only if it was stamped onto it', async () => {
+    const token = signAccessToken({ aud: 'staff', sub: String(userId), tenant_id: String(tenantId), property_id: String(propertyId) });
+
+    // Several rounds, so both lock orderings get exercised. Either outcome
+    // is correct on its own — the sale lands in the closing shift, or after
+    // it — but the stamp and the expected cash must always agree: a sale
+    // stamped onto a shift whose expected cash was computed without it
+    // would vanish from every cash-up.
+    for (let round = 0; round < 6; round += 1) {
+      const [shiftId] = await db()('pos_shifts').insert({
+        tenant_id: tenantId,
+        property_id: propertyId,
+        terminal_id: terminalId,
+        user_id: userId,
+        opening_float: '100.00',
+        currency: 'NGN',
+      });
+      const [raceOrderId] = await db()('pos_orders').insert({
+        tenant_id: tenantId,
+        property_id: propertyId,
+        outlet_id: outletId,
+        terminal_id: terminalId,
+        opened_by_user_id: userId,
+        table_label: `SHIFT-RACE-${round}`,
+      });
+      await db()('pos_order_items').insert({
+        tenant_id: tenantId,
+        property_id: propertyId,
+        pos_order_id: raceOrderId,
+        menu_item_id: menuItemId,
+        quantity: 1,
+        unit_price: '15.00',
+      });
+
+      const [settle, close] = await Promise.all([
+        req
+          .post(`/api/v1/pos/orders/${raceOrderId}/settle`)
+          .set('Authorization', `Bearer ${token}`)
+          .set('Idempotency-Key', `shift-race-settle-${round}`)
+          .send({ settlements: [{ method: 'cash' }] }),
+        req
+          .post(`/api/v1/pos/shifts/${shiftId}/close`)
+          .set('Authorization', `Bearer ${token}`)
+          .set('Idempotency-Key', `shift-race-close-${round}`)
+          .send({ counted_cash: '100.00' }),
+      ]);
+      expect(settle.status).toBe(200);
+      expect(close.status).toBe(200);
+
+      const settlement = await db()('pos_order_settlements').where({ pos_order_id: raceOrderId }).first();
+      const stampedOntoShift = String(settlement.pos_shift_id) === String(shiftId);
+      expect(settlement.pos_shift_id === null || stampedOntoShift).toBe(true);
+      expect(close.body.data.expected_cash).toBe(stampedOntoShift ? '115.00' : '100.00');
+    }
   });
 });
