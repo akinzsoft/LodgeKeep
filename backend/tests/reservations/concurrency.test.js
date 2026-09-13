@@ -104,6 +104,8 @@ describe('RES-5: the last-room race under real concurrent connections', () => {
     // cleaned up before `properties` below.
     await db()('outbox_events').where({ tenant_id: tenantId }).delete();
     await db()('idempotency_keys').where({ tenant_id: tenantId }).delete();
+    await db()('reservation_rooms').where({ tenant_id: tenantId }).delete();
+    await db()('folios').where({ tenant_id: tenantId }).delete();
     await db()('reservation_daily_rates').where({ tenant_id: tenantId }).delete();
     await db()('room_type_inventory').where({ tenant_id: tenantId }).delete();
     await db()('reservations').where({ tenant_id: tenantId }).delete();
@@ -197,5 +199,99 @@ describe('RES-5: the last-room race under real concurrent connections', () => {
       .where({ tenant_id: tenantId, room_type_id: roomTypeId, stay_date: '2029-02-01' })
       .first();
     expect(inventoryRow.rooms_sold).toBe(2);
+  });
+
+  describe('bug fix: two different reservations racing for the same physical room', () => {
+    let token;
+    let roomIds;
+
+    /** Books and confirms `count` reservations for tonight-ish dates, all for this room type. */
+    async function confirmedReservations(count, dates, keyPrefix) {
+      const ids = [];
+      for (let i = 0; i < count; i += 1) {
+        const res = await post(token, '', `${keyPrefix}-${i}`, {
+          guest_id: String(guestId),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          ...dates,
+        });
+        expect(res.status).toBe(201);
+        ids.push(res.body.data.id);
+      }
+      return ids;
+    }
+
+    beforeAll(async () => {
+      token = signAccessToken({ aud: 'staff', sub: String(userId), tenant_id: String(tenantId), property_id: String(propertyId) });
+      const perms = await db()('permissions').whereIn('permission_key', ['front_desk.view', 'front_desk.manage']).select('id');
+      const role = await db()('roles').where({ tenant_id: tenantId, code: 'manager' }).first('id');
+      await db()('role_permissions').insert(perms.map((p) => ({ tenant_id: tenantId, role_id: role.id, permission_id: p.id })));
+      await db()('properties').where({ id: propertyId }).update({ current_business_date: '2029-03-01' });
+
+      // Plenty of sellable inventory, so only the physical room is contested.
+      const inserted = [];
+      for (const roomNumber of ['R-A', 'R-B', 'R-C', 'R-D', 'R-E']) {
+        const [id] = await db()('rooms').insert({
+          tenant_id: tenantId,
+          property_id: propertyId,
+          room_type_id: roomTypeId,
+          room_number: roomNumber,
+          housekeeping_reported_status: 'clean',
+        });
+        inserted.push(id);
+      }
+      roomIds = inserted;
+    });
+
+    async function openAssignments(roomId) {
+      const row = await db()('reservation_rooms').where({ tenant_id: tenantId, room_id: roomId, effective_to: null }).count({ n: '*' }).first();
+      return Number(row.n);
+    }
+
+    it('two concurrent check-ins into one room — exactly one gets it, the other gets CONFLICT_ROOM_UNAVAILABLE', async () => {
+      const [first, second] = await confirmedReservations(2, { arrival_date: '2029-03-01', departure_date: '2029-03-02' }, 'room-race-checkin');
+      const room = roomIds[0];
+
+      const results = await Promise.all([
+        post(token, `/${first}/check-in`, 'room-race-ci-1', { room_id: String(room) }),
+        post(token, `/${second}/check-in`, 'room-race-ci-2', { room_id: String(room) }),
+      ]);
+
+      expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([200, 409]);
+      expect(results.find((r) => r.status === 409).body.error.code).toBe('CONFLICT_ROOM_UNAVAILABLE');
+      expect(await openAssignments(room)).toBe(1);
+    });
+
+    it('concurrent check-ins into DIFFERENT free rooms both succeed — no deadlock between neighbouring rooms', async () => {
+      const ids = await confirmedReservations(4, { arrival_date: '2029-03-01', departure_date: '2029-03-02' }, 'room-race-neighbours');
+      const neighbourRooms = [];
+      for (const roomNumber of ['N-1', 'N-2', 'N-3', 'N-4']) {
+        const [id] = await db()('rooms').insert({ tenant_id: tenantId, property_id: propertyId, room_type_id: roomTypeId, room_number: roomNumber, housekeeping_reported_status: 'clean' });
+        neighbourRooms.push(id);
+      }
+
+      const results = await Promise.all(ids.map((id, i) => post(token, `/${id}/check-in`, `room-race-nb-${i}`, { room_id: String(neighbourRooms[i]) })));
+
+      expect(results.map((r) => r.status)).toEqual([200, 200, 200, 200]);
+    });
+
+    it('two concurrent room moves into one free room — exactly one gets it, and nobody is left without a room', async () => {
+      const [first, second] = await confirmedReservations(2, { arrival_date: '2029-03-01', departure_date: '2029-03-03' }, 'room-race-move');
+      expect((await post(token, `/${first}/check-in`, 'room-race-mv-ci-1', { room_id: String(roomIds[1]) })).status).toBe(200);
+      expect((await post(token, `/${second}/check-in`, 'room-race-mv-ci-2', { room_id: String(roomIds[2]) })).status).toBe(200);
+      const target = roomIds[3];
+
+      const results = await Promise.all([
+        post(token, `/${first}/room-move`, 'room-race-mv-1', { new_room_id: String(target), reason: 'Race' }),
+        post(token, `/${second}/room-move`, 'room-race-mv-2', { new_room_id: String(target), reason: 'Race' }),
+      ]);
+
+      expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([200, 409]);
+      expect(await openAssignments(target)).toBe(1);
+      for (const reservationId of [first, second]) {
+        const open = await db()('reservation_rooms').where({ reservation_id: reservationId, effective_to: null }).count({ n: '*' }).first();
+        expect(Number(open.n)).toBe(1);
+      }
+    });
   });
 });
