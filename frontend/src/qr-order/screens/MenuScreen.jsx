@@ -74,7 +74,19 @@ export function MenuScreen() {
     return items.filter((item) => (!category || item.category === category) && (!needle || item.name.toLowerCase().includes(needle)));
   }, [items, category, query]);
 
-  // Items no longer on the menu (sold out since they were added) drop out of the cart.
+  // Items no longer on the menu (sold out since they were added) drop out of
+  // the cart itself, not just the view — otherwise a restocked item would
+  // reappear with its old quantity. Only once a real menu has loaded: a failed
+  // load must never wipe the guest's cart.
+  useEffect(() => {
+    if (!menu || error) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reconcile the remembered cart with the freshly loaded menu
+    setCart((prev) => {
+      const next = Object.fromEntries(Object.entries(prev).filter(([id]) => itemsById[id]));
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+  }, [menu, error, itemsById]);
+
   const cartLines = useMemo(
     () =>
       Object.entries(cart)
