@@ -43,6 +43,9 @@ describe('RES-5: the last-room race under real concurrent connections', () => {
   let rateCodeId;
   let userId;
 
+  const post = (token, path, key, body = {}) =>
+    req.post(`/api/v1/reservations${path}`).set('Authorization', `Bearer ${token}`).set('Idempotency-Key', key).send(body);
+
   beforeAll(async () => {
     dbModule.__setConnectionForTesting(db());
     req = request(createApp());
@@ -125,20 +128,15 @@ describe('RES-5: the last-room race under real concurrent connections', () => {
       property_id: String(propertyId),
     });
 
-    const book = (key) =>
-      req
-        .post('/api/v1/reservations')
-        .set('Authorization', `Bearer ${token}`)
-        .set('Idempotency-Key', key)
-        .send({
-          guest_id: String(guestId),
-          room_type_id: String(roomTypeId),
-          rate_code_id: String(rateCodeId),
-          arrival_date: '2029-01-01',
-          departure_date: '2029-01-02',
-        });
+    const booking = {
+      guest_id: String(guestId),
+      room_type_id: String(roomTypeId),
+      rate_code_id: String(rateCodeId),
+      arrival_date: '2029-01-01',
+      departure_date: '2029-01-02',
+    };
 
-    const [first, second] = await Promise.all([book('race-key-1'), book('race-key-2')]);
+    const [first, second] = await Promise.all([post(token, '', 'race-key-1', booking), post(token, '', 'race-key-2', booking)]);
 
     const statuses = [first.status, second.status].sort((a, b) => a - b);
     expect(statuses).toEqual([201, 422]);
@@ -159,5 +157,45 @@ describe('RES-5: the last-room race under real concurrent connections', () => {
       .count({ n: '*' })
       .first();
     expect(Number(reservationCount.n)).toBe(1);
+  });
+
+  it('bug fix: two truly concurrent promotes of the same waitlisted reservation — exactly one wins and inventory is counted once', async () => {
+    const token = signAccessToken({
+      aud: 'staff',
+      sub: String(userId),
+      tenant_id: String(tenantId),
+      property_id: String(propertyId),
+    });
+    const booking = {
+      guest_id: String(guestId),
+      room_type_id: String(roomTypeId),
+      rate_code_id: String(rateCodeId),
+      arrival_date: '2029-02-01',
+      departure_date: '2029-02-02',
+    };
+
+    // The one room is sold, so the second booking lands on the waitlist.
+    expect((await post(token, '', 'promote-race-book-1', booking)).status).toBe(201);
+    const waitlisted = await post(token, '', 'promote-race-book-2', { ...booking, allow_waitlist: true });
+    expect(waitlisted.body.data.status).toBe('waitlisted');
+
+    // Two more rooms open up — enough spare capacity that, without a row
+    // lock, BOTH promotes would pass the inventory check and double-count.
+    await db()('rooms').insert([
+      { tenant_id: tenantId, property_id: propertyId, room_type_id: roomTypeId, room_number: '2' },
+      { tenant_id: tenantId, property_id: propertyId, room_type_id: roomTypeId, room_number: '3' },
+    ]);
+
+    const id = waitlisted.body.data.id;
+    const [first, second] = await Promise.all([post(token, `/${id}/promote-waitlist`, 'promote-race-1'), post(token, `/${id}/promote-waitlist`, 'promote-race-2')]);
+
+    expect([first.status, second.status].sort((a, b) => a - b)).toEqual([200, 422]);
+    const loser = first.status === 200 ? second : first;
+    expect(loser.body.error.code).toBe('BUSINESS_RULE_INVALID_RESERVATION_TRANSITION');
+
+    const inventoryRow = await db()('room_type_inventory')
+      .where({ tenant_id: tenantId, room_type_id: roomTypeId, stay_date: '2029-02-01' })
+      .first();
+    expect(inventoryRow.rooms_sold).toBe(2);
   });
 });

@@ -95,8 +95,21 @@ class FolioBalanceOwingError extends AppError {
   }
 }
 
+/** A waitlisted reservation can't be promoted once its arrival date is behind the property's business date. */
+class WaitlistArrivalPassedError extends AppError {
+  constructor(arrivalDate, businessDate) {
+    super(
+      'BUSINESS_RULE_WAITLIST_ARRIVAL_PASSED',
+      `Cannot promote — this reservation's arrival date (${arrivalDate}) is before the property's business date (${businessDate}). Cancel it instead.`,
+      422,
+      { arrivalDate, businessDate }
+    );
+  }
+}
+
 module.exports = {
   OverbookingThresholdExceededError,
+  WaitlistArrivalPassedError,
   RoomUnavailableError,
   RoomNotCleanError,
   RoomOutOfOrderError,

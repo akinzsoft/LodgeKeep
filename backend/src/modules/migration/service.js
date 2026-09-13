@@ -368,7 +368,13 @@ async function rollbackOneRow({ context, run, mapRow }) {
       }
 
       case 'reservation': {
-        const reservation = await trx.table('reservations').where({ id: mapRow.entity_id }).first();
+        // Locking read, first: the same order every reservation transition
+        // uses (`reservations/service.js`'s `lockReservation` — reservation
+        // row, then room_type_inventory rows). Releasing inventory before
+        // touching this row would be the reverse order and could deadlock
+        // against a concurrent cancel/no-show; it also stops a concurrent
+        // check-in landing between the status check below and the delete.
+        const reservation = await trx.table('reservations').where({ id: mapRow.entity_id }).forUpdate().first();
         if (!reservation) return { ok: true }; // already gone — nothing left to reverse
         if (['checked_in', 'checked_out'].includes(reservation.status)) {
           return { ok: false, reason: `This reservation is already ${reservation.status} and cannot be removed.` };
