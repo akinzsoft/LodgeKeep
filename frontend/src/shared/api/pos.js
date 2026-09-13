@@ -1,4 +1,4 @@
-import { request, requestWithMeta } from './client.js';
+import { request, requestWithMeta, requestBlob } from './client.js';
 
 /**
  * PLAN.md Phase 4's POS core module. Same shape as `cashiering.js`/
@@ -176,6 +176,26 @@ export function voidSettlement(orderId, settlementId, reason) {
     headers: { 'Idempotency-Key': idempotencyKey() },
     body: { reason },
   });
+}
+
+// ---------------------------------------------------------------------
+// Sales report (`pos.manage`)
+// ---------------------------------------------------------------------
+
+function salesReportParams({ dateFrom, dateTo, outletId }, extra = {}) {
+  const params = { date_from: dateFrom, date_to: dateTo, ...extra };
+  if (outletId) params.outlet_id = outletId;
+  return new URLSearchParams(params);
+}
+
+/** Totals per tender, top sellers, settled tabs, and captured card payments no settlement uses, for a business-date range. */
+export function getSalesReport(filters) {
+  return request(`/pos/reports/sales?${salesReportParams(filters)}`);
+}
+
+/** One section of the report as CSV — `section`: 'tabs' | 'items' | 'tenders'. */
+export function getSalesReportCsv(filters, section) {
+  return requestBlob(`/pos/reports/sales?${salesReportParams(filters, { format: 'csv', section })}`);
 }
 
 // ---------------------------------------------------------------------

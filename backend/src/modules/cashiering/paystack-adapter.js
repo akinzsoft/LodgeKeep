@@ -112,6 +112,7 @@ async function verifyTransaction({ reference }) {
     amountSubunit: data.amount,
     currency: data.currency,
     gatewayResponse: data.gateway_response,
+    channel: data.channel ?? null, // 'card' | 'ussd' | 'bank_transfer' | 'qr' | ...,
   };
 }
 

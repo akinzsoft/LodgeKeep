@@ -19,6 +19,8 @@ const { runIdempotentMutation, requireIdempotencyKey } = require('../../shared/m
 const { withIdempotency } = require('../../shared/idempotency');
 const { scopedDb } = require('../../db');
 const service = require('./service');
+const { computeSalesReport } = require('./sales-report');
+const { toCsv } = require('../reporting/service');
 
 function require_(body, field) {
   const value = body?.[field];
@@ -446,6 +448,59 @@ async function verifyPaystackPayment(req, res, next) {
   }
 }
 
+/** e.g. "cash", "card via ussd", "room_charge Room 05 (Ada Bello)" — the CSV's plain-text form of one check's payment. */
+function describeSettlementPayment(payment) {
+  let text = payment.tender;
+  if (payment.channel && payment.channel !== payment.tender) text += ` via ${payment.channel}`;
+  if (payment.roomNumber) text += ` Room ${payment.roomNumber}`;
+  if (payment.guestName) text += ` (${payment.guestName})`;
+  return text;
+}
+
+const SALES_CSV_SECTIONS = {
+  tabs: {
+    columns: ['businessDate', 'settledAt', 'tableLabel', 'source', 'tenders', 'itemCount', 'cashier', 'total'],
+    rows: (report) => report.tabs.map((tab) => ({ ...tab, settledAt: new Date(tab.settledAt).toISOString(), tenders: tab.payments.map(describeSettlementPayment).join(' + ') })),
+  },
+  items: { columns: ['name', 'quantity', 'sales'], rows: (report) => report.topItems },
+  tenders: { columns: ['tender', 'checks', 'total'], rows: (report) => report.byTender },
+};
+
+/**
+ * `GET /pos/reports/sales?date_from&date_to[&outlet_id][&format=csv&section=tabs|items|tenders]`.
+ * Allow-listed query params only. CSV exports one section at a time,
+ * reflecting the same filters as the on-screen report.
+ */
+async function salesReport(req, res, next) {
+  try {
+    const dateFrom = req.query?.date_from;
+    const dateTo = req.query?.date_to;
+    const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+    if (!isoDate.test(dateFrom ?? '') || !isoDate.test(dateTo ?? '')) {
+      throw new ValidationError('INVALID_DATE_RANGE', '"date_from" and "date_to" are required, as YYYY-MM-DD.', [{ field: 'date_from', issue: 'invalid' }]);
+    }
+    if (dateFrom > dateTo) {
+      throw new ValidationError('INVALID_DATE_RANGE', '"date_from" must not be after "date_to".', [{ field: 'date_from', issue: 'after_date_to' }]);
+    }
+    const report = await computeSalesReport({ context: req.context, dateFrom, dateTo, outletId: req.query?.outlet_id || undefined });
+
+    if (req.query?.format === 'csv') {
+      const section = SALES_CSV_SECTIONS[req.query?.section ?? 'tabs'];
+      if (!section) throw new ValidationError('INVALID_SECTION', '"section" must be tabs, items, or tenders.', [{ field: 'section', issue: 'invalid' }]);
+      const name = req.query?.section ?? 'tabs';
+      res
+        .status(200)
+        .set('Content-Type', 'text/csv')
+        .set('Content-Disposition', `attachment; filename="pos-sales-${name}-${dateFrom}-to-${dateTo}.csv"`)
+        .send(toCsv(section.rows(report), section.columns));
+      return;
+    }
+    res.status(200).json(ok(report));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function voidSettlement(req, res, next) {
   try {
     const reason = require_(req.body, 'reason');
@@ -543,6 +598,7 @@ module.exports = {
   startPaystackCheckout,
   verifyPaystackPayment,
   voidSettlement,
+  salesReport,
   listShifts,
   getShift,
   openShift,

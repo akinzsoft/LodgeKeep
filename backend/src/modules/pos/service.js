@@ -526,6 +526,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
       tip_amount: tipAmount,
       service_charge: serviceCharge,
       settled_by_user_id: settledByUserId,
+      business_date: businessDate ?? null,
     };
 
     if (settlement.method === 'room_charge') {
@@ -652,7 +653,11 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
 // Register card/NQR checkout through Paystack — ARCHITECTURE.md §7
 // ---------------------------------------------------------------------
 
-const REGISTER_TENDERS = { card: ['card'], nqr: ['qr'] };
+// Paystack channels per Register button. Card offers every channel the
+// merchant account supports (card, USSD, bank transfer, ...) — the channel
+// the guest actually used is recorded at capture (`provider_channel`).
+// NQR is the QR channel alone, for a guest scanning with a banking app.
+const REGISTER_TENDERS = { card: null, nqr: ['qr'] };
 const OPEN_REGISTER_PAYMENT_STATUSES = ['INITIATED', 'PENDING', 'CAPTURED'];
 
 /** A Register payment still in play for this tab: not failed/cancelled, and not yet linked to a settlement. */
@@ -683,7 +688,7 @@ async function listUnsettledRegisterPayments({ db, orderId }) {
  * cancelled and replaced.
  */
 async function prepareRegisterPayment({ trx, orderId, splitGroup, tender, idempotencyKey }) {
-  if (!REGISTER_TENDERS[tender]) {
+  if (!Object.hasOwn(REGISTER_TENDERS, tender ?? '')) {
     throw new ValidationError('INVALID_TENDER', '"tender" must be "card" or "nqr".', [{ field: 'tender', issue: 'invalid' }]);
   }
   const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
@@ -738,7 +743,7 @@ async function startRegisterPaystackCheckout({ context, payment, customerEmail }
     context,
     paymentId: payment.id,
     guestEmail: customerEmail || staff?.email,
-    channels: REGISTER_TENDERS[payment.tender],
+    channels: REGISTER_TENDERS[payment.tender] ?? undefined,
   });
 }
 
