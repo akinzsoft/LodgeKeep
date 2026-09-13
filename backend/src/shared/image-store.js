@@ -53,6 +53,55 @@ function sniffImageType(buffer) {
   return null;
 }
 
+/**
+ * Pixel width/height from an image's own header — PNG (IHDR), JPEG (the
+ * first start-of-frame marker), WebP (VP8 / VP8L / VP8X) — or null when it
+ * cannot be read. Used to give email logos exact dimensions: email clients
+ * (Outlook especially) ignore max-width/max-height, so a logo without real
+ * width/height attributes gets stretched or overflows.
+ */
+function readImageSize(buffer) {
+  const type = sniffImageType(buffer);
+  try {
+    if (type === 'png' && buffer.length >= 24) {
+      return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+    }
+    if (type === 'jpg') {
+      let offset = 2;
+      while (offset + 9 < buffer.length) {
+        if (buffer[offset] !== 0xff) { offset += 1; continue; }
+        const marker = buffer[offset + 1];
+        const length = buffer.readUInt16BE(offset + 2);
+        // SOF0..SOF15, excluding DHT (C4), JPG (C8), and DAC (CC).
+        if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+          return { width: buffer.readUInt16BE(offset + 7), height: buffer.readUInt16BE(offset + 5) };
+        }
+        offset += 2 + length;
+      }
+      return null;
+    }
+    if (type === 'webp' && buffer.length >= 30) {
+      const chunk = buffer.subarray(12, 16).toString('ascii');
+      if (chunk === 'VP8 ') return { width: buffer.readUInt16LE(26) & 0x3fff, height: buffer.readUInt16LE(28) & 0x3fff };
+      if (chunk === 'VP8L') {
+        const bits = buffer.readUInt32LE(21);
+        return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+      }
+      if (chunk === 'VP8X') return { width: buffer.readUIntLE(24, 3) + 1, height: buffer.readUIntLE(27, 3) + 1 };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** Scales `size` to fit inside a `maxWidth` × `maxHeight` box, never enlarging it, keeping its aspect ratio. */
+function fitInside(size, maxWidth, maxHeight) {
+  if (!size || !size.width || !size.height) return null;
+  const scale = Math.min(maxWidth / size.width, maxHeight / size.height, 1);
+  return { width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) };
+}
+
 /** Validates and writes an uploaded image; returns its new random file name. */
 function saveImage(kind, buffer) {
   const type = sniffImageType(buffer);
@@ -132,6 +181,8 @@ module.exports = {
   MAX_IMAGE_BYTES,
   CONTENT_TYPES,
   sniffImageType,
+  readImageSize,
+  fitInside,
   saveImage,
   deleteImage,
   imageUrl,

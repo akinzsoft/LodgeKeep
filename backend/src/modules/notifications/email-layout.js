@@ -22,9 +22,25 @@
  * inject markup.
  */
 
+const fs = require('fs');
 const imageStore = require('../../shared/image-store');
 
 const LOGO_CID = 'property-logo';
+
+/** The email header's logo area: wide logos fill the width, tall or square ones the height. */
+const LOGO_BOX = { width: 240, height: 72 };
+
+/** The first bytes of a file — enough for any image header readImageSize needs. */
+function readHead(filePath) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(64 * 1024);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 const COLORS = {
   page: '#F4F1EA',
@@ -112,9 +128,12 @@ async function loadEmailBranding({ db, propertyId }) {
   const fileName = imageStore.fileNameFromUrl('property-logos', property?.logo_url);
   const filePath = imageStore.imageFilePath('property-logos', fileName);
   const extension = fileName ? fileName.split('.').pop() : null;
+  // Exact display size inside the header's logo box, from the file's own header bytes.
+  const logoSize = filePath ? imageStore.fitInside(imageStore.readImageSize(readHead(filePath)), LOGO_BOX.width, LOGO_BOX.height) : null;
   return {
     name: property?.name ?? null,
     address: property?.address ?? null,
+    logoSize,
     logoAttachment: filePath
       ? { filename: `logo.${extension}`, path: filePath, cid: LOGO_CID, contentType: imageStore.CONTENT_TYPES[extension], contentDisposition: 'inline' }
       : null,
@@ -129,8 +148,9 @@ async function loadEmailBranding({ db, propertyId }) {
  */
 function renderEmailShell({ subject, contentHtml, branding, preheader }) {
   const name = branding?.name ? escapeHtml(branding.name) : 'LodgeKeep';
+  const size = branding?.logoSize ?? { width: 200, height: 56 };
   const header = branding?.logoAttachment
-    ? `<img src="cid:${LOGO_CID}" alt="${name}" height="56" style="display:block;margin:0 auto;height:56px;max-width:240px;width:auto;border:0;">`
+    ? `<img src="cid:${LOGO_CID}" alt="${name}" width="${size.width}" height="${size.height}" style="display:block;margin:0 auto;width:${size.width}px;height:${size.height}px;border:0;outline:none;text-decoration:none;">`
     : `<span style="font-family:${SERIF};font-size:26px;font-weight:600;letter-spacing:0.5px;color:${COLORS.text};">${name}</span>`;
   const address = branding?.address
     ? `<p style="margin:4px 0 0;font-family:${FONT};font-size:12px;line-height:1.5;color:${COLORS.muted};">${escapeHtml(branding.address)}</p>`

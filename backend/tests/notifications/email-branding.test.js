@@ -17,8 +17,6 @@ const { scopedDb } = require('../../src/db');
 const { composeEmail } = require('../../src/modules/notifications/service');
 const { htmlToText } = require('../../src/modules/notifications/email-adapter');
 
-const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 1)]);
-
 describe('branded emails', () => {
   const t = useTestApp();
   let ctx;
@@ -67,13 +65,15 @@ describe('branded emails', () => {
 
   it('attaches an uploaded logo inline and shows it in the header', async () => {
     const fileName = '0f1e2d3c-4b5a-4968-8776-655443322110.png';
-    fs.writeFileSync(path.join(storage, fileName), PNG);
+    // A real 600×200 PNG — shown at exactly 216×72 (the header's 240×72 box), never stretched.
+    fs.writeFileSync(path.join(storage, fileName), Buffer.from(require('../shared/fixtures/sample-images.json').png, 'base64'));
     await t.trx('properties').where({ id: propertyId }).update({ logo_url: `/api/v1/media/property-logos/${fileName}` });
 
     const email = await composeEmail({ db, propertyId, templateKey: 'checked_out', variables: { ...booking, folioBalance: '0.00' } });
     expect(email.attachments).toEqual([expect.objectContaining({ cid: 'property-logo', filename: 'logo.png', contentType: 'image/png', path: path.join(storage, fileName) })]);
     expect(email.html).toContain('src="cid:property-logo"');
     expect(email.html).toContain('alt="Harbour View Hotel"');
+    expect(email.html).toContain('width="216" height="72"');
 
     await t.trx('properties').where({ id: propertyId }).update({ logo_url: null });
   });
