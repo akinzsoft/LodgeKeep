@@ -9,8 +9,20 @@ import formStyles from './HousekeepingForm.module.css';
  * drop out of sellable inventory" — verified live end to end against
  * `/api/v1/availability` (`src/shared/room-availability.js` on the
  * backend), not just displayed here.
+ *
+ * Bug fix (see `HousekeepingScreen`'s own header): "Close now" sent the
+ * browser's own wall-clock today as the period's new `end_date`, not the
+ * property's real `current_business_date` — a genuine availability-affecting
+ * bug, not a cosmetic one, since that date is exactly what
+ * `out_of_order_periods`' own range check uses to decide when a room
+ * re-enters sellable inventory. Falls back to wall-clock only when the
+ * property genuinely has no business date configured yet.
  */
-export function OutOfOrderTab({ isOffline = false }) {
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function OutOfOrderTab({ activeProperty, isOffline = false }) {
   const [periods, setPeriods] = useState(null);
   const [rooms, setRooms] = useState(null);
   const [error, setError] = useState(null);
@@ -55,7 +67,7 @@ export function OutOfOrderTab({ isOffline = false }) {
 
   async function handleCloseNow(period) {
     try {
-      await housekeepingApi.closeOutOfOrderPeriod(period.id, new Date().toISOString().slice(0, 10));
+      await housekeepingApi.closeOutOfOrderPeriod(period.id, activeProperty?.current_business_date ?? todayIso());
       await reload();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not close this period.');

@@ -14,6 +14,22 @@ import styles from './HousekeepingScreen.module.css';
  * Deliberately NOT built here, per this module's own backend header: room
  * inspections, maintenance requests, lost & found, linen/minibar — real
  * §3.6 scope, not in PLAN.md Phase 3's bullet list.
+ *
+ * Bug fix (user-reported "test Housekeeper," live-tested): `main.jsx`
+ * already resolves `activePropertyRecord` (with its real
+ * `current_business_date`) for `RoomsScreen`'s own identical need — this
+ * screen was mounted right alongside it with no property passed in at all.
+ * `BoardTab`'s default board date and `OutOfOrderTab`'s "Close now" action
+ * both defaulted to the browser's own wall-clock today instead, the same
+ * ARCHITECTURE.md §6 violation already found and fixed on the Booking
+ * screen's own Tape Chart tab — but here with real consequences, not just a
+ * cosmetic default: a new assignment is tagged to whichever date is
+ * showing, and closing an OOO period early writes that date directly as
+ * its new `end_date`, which `out_of_order_periods`' own range check
+ * (`listOutOfOrderPeriods`, `src/shared/room-availability.js`'s live
+ * exclusion) uses to decide when a room re-enters sellable inventory.
+ * `DiscrepanciesTab` needed no change — it only ever displays a business
+ * date column, never computes or submits one.
  */
 const TABS = [
   { key: 'board', label: 'Board' },
@@ -21,7 +37,7 @@ const TABS = [
   { key: 'out-of-order', label: 'Out of Order' },
 ];
 
-export function HousekeepingScreen({ isOffline = false }) {
+export function HousekeepingScreen({ activeProperty, isOffline = false }) {
   const [tab, setTab] = useState('board');
 
   return (
@@ -44,9 +60,9 @@ export function HousekeepingScreen({ isOffline = false }) {
       </div>
 
       <div className={styles.panel}>
-        {tab === 'board' && <BoardTab isOffline={isOffline} />}
+        {tab === 'board' && <BoardTab activeProperty={activeProperty} isOffline={isOffline} />}
         {tab === 'discrepancies' && <DiscrepanciesTab isOffline={isOffline} />}
-        {tab === 'out-of-order' && <OutOfOrderTab isOffline={isOffline} />}
+        {tab === 'out-of-order' && <OutOfOrderTab activeProperty={activeProperty} isOffline={isOffline} />}
       </div>
     </div>
   );

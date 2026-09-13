@@ -27,9 +27,39 @@ const ASSIGNMENT_TONE = { assigned: 'neutral', in_progress: 'info', completed: '
  * own header for why it's a dedicated read rather than reusing `GET
  * /users`), not a raw id typed by hand — and the board's own "Attendant"
  * column now resolves the same list to a real name instead of a bare id.
+ *
+ * Bug fix (see `HousekeepingScreen`'s own header): `businessDate` used to
+ * default to `todayIso()` unconditionally, regardless of the property's own
+ * `current_business_date` — wrong the moment the two drift (a lapsed night
+ * audit, a different timezone), and a real, not cosmetic, wrongness: a
+ * fresh assignment submitted on this default is tagged to whatever date is
+ * showing. Falls back to `todayIso()` only when the property genuinely has
+ * no business date configured yet.
+ *
+ * A second, more serious bug fix (user-reported "test Housekeeper," found by
+ * live-testing the real flow end to end): "Mark complete" only ever called
+ * `updateAssignment` — it never called `housekeepingApi.reportRoomStatus`,
+ * the ONE function that actually writes `rooms.housekeeping_reported_status`
+ * and feeds PRODUCT_REQUIREMENTS.md §3.6's discrepancy-detection mechanism.
+ * Confirmed live against the real dev database: two real assignments the
+ * user had already marked "completed" through this exact screen left both
+ * rooms still reading `housekeeping_reported_status: 'dirty'` — a cleaned
+ * room could never become sellable again through this workflow, and a
+ * discrepancy could never be raised, since nothing ever submitted the
+ * housekeeper's own occupancy observation `reportRoomStatus` compares
+ * against `front_desk_status`. Confirmed with the user (AskUserQuestion)
+ * to fold the report into the same "Mark complete" action rather than a
+ * separate control, since a housekeeper is physically standing in the room
+ * at exactly that moment — completing the assignment now also asks a real
+ * vacant/occupied question and submits both together. `reportRoomStatus` is
+ * called FIRST, `updateAssignment` second: if the assignment-completion
+ * call then fails, the room's real status is still correctly reported and
+ * the assignment can be retried on its own; the reverse order would have
+ * silently reproduced this exact bug on that one failure path (an
+ * assignment reading "completed" with the room's status never reported).
  */
-export function BoardTab({ isOffline = false }) {
-  const [businessDate, setBusinessDate] = useState(todayIso());
+export function BoardTab({ activeProperty, isOffline = false }) {
+  const [businessDate, setBusinessDate] = useState(activeProperty?.current_business_date ?? todayIso());
   const [board, setBoard] = useState(null);
   const [rooms, setRooms] = useState(null);
   const [attendants, setAttendants] = useState(null);
@@ -37,6 +67,7 @@ export function BoardTab({ isOffline = false }) {
   const [form, setForm] = useState({ room_id: '', attendant_user_id: '' });
   const [submitting, setSubmitting] = useState(false);
   const [updatingId, setUpdatingId] = useState(null);
+  const [awaitingOccupancyId, setAwaitingOccupancyId] = useState(null);
 
   async function reload(date = businessDate) {
     try {
@@ -79,15 +110,35 @@ export function BoardTab({ isOffline = false }) {
     }
   }
 
-  async function advanceStatus(assignment) {
-    const next = assignment.status === 'assigned' ? 'in_progress' : 'completed';
+  async function startCleaning(assignment) {
     setUpdatingId(assignment.id);
     setError(null);
     try {
-      await housekeepingApi.updateAssignment(assignment.id, { status: next });
+      await housekeepingApi.updateAssignment(assignment.id, { status: 'in_progress' });
       await reload();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not update this assignment.');
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  /**
+   * Completing an assignment is also the one real moment this codebase can
+   * ask a housekeeper what they actually observed — see this file's own
+   * header for why `reportRoomStatus` is called before `updateAssignment`,
+   * not after.
+   */
+  async function completeWithOccupancy(assignment, occupancyObserved) {
+    setUpdatingId(assignment.id);
+    setError(null);
+    try {
+      await housekeepingApi.reportRoomStatus(assignment.room_id, { cleanliness: 'clean', occupancyObserved });
+      await housekeepingApi.updateAssignment(assignment.id, { status: 'completed' });
+      setAwaitingOccupancyId(null);
+      await reload();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not complete this assignment.');
     } finally {
       setUpdatingId(null);
     }
@@ -134,13 +185,49 @@ export function BoardTab({ isOffline = false }) {
         rows={board ?? []}
         rowKey={(row) => row.id}
         errorMessage={error}
-        actions={(row) =>
-          row.status !== 'completed' && (
-            <Button loading={updatingId === row.id} disabled={isOffline} onClick={() => advanceStatus(row)}>
+        actions={(row) => {
+          if (row.status === 'completed') return null;
+          if (awaitingOccupancyId === row.id) {
+            return (
+              <div className={formStyles.occupancyPrompt}>
+                <span className={formStyles.occupancyQuestion}>Room vacant or occupied now?</span>
+                <Button
+                  size="compact"
+                  loading={updatingId === row.id}
+                  disabled={isOffline}
+                  onClick={() => completeWithOccupancy(row, 'vacant')}
+                >
+                  Vacant
+                </Button>
+                <Button
+                  size="compact"
+                  loading={updatingId === row.id}
+                  disabled={isOffline}
+                  onClick={() => completeWithOccupancy(row, 'occupied')}
+                >
+                  Occupied
+                </Button>
+                <Button
+                  size="compact"
+                  variant="secondary"
+                  disabled={updatingId === row.id}
+                  onClick={() => setAwaitingOccupancyId(null)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            );
+          }
+          return (
+            <Button
+              loading={updatingId === row.id}
+              disabled={isOffline}
+              onClick={() => (row.status === 'assigned' ? startCleaning(row) : setAwaitingOccupancyId(row.id))}
+            >
               {row.status === 'assigned' ? 'Start cleaning' : 'Mark complete'}
             </Button>
-          )
-        }
+          );
+        }}
       />
 
       <Card title="Assign a dirty room">

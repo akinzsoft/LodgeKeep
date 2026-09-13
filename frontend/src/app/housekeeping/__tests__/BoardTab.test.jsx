@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   listAttendants: vi.fn(),
   createAssignment: vi.fn(),
   updateAssignment: vi.fn(),
+  reportRoomStatus: vi.fn(),
   listRooms: vi.fn(),
 }));
 
@@ -20,6 +21,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       listAttendants: mocks.listAttendants,
       createAssignment: mocks.createAssignment,
       updateAssignment: mocks.updateAssignment,
+      reportRoomStatus: mocks.reportRoomStatus,
     },
     setupApi: { listRooms: mocks.listRooms },
   };
@@ -82,5 +84,76 @@ describe('<BoardTab>', () => {
     // picker below — scope to the board's own table cell.
     const cell = await screen.findByText('Ada Bello', { selector: 'td' });
     expect(cell).toBeInTheDocument();
+  });
+
+  it("bug fix: defaults the board to the property's own business date, not the browser's wall-clock today", async () => {
+    render(<BoardTab activeProperty={{ current_business_date: '2026-09-10' }} />);
+
+    expect(await screen.findByLabelText('Business date')).toHaveValue('2026-09-10');
+    expect(mocks.getBoard).toHaveBeenCalledWith('2026-09-10');
+  });
+
+  it('falls back to wall-clock today when the property has no business date configured yet', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    render(<BoardTab activeProperty={{ current_business_date: null }} />);
+
+    expect(await screen.findByLabelText('Business date')).toHaveValue(today);
+  });
+
+  /**
+   * Bug fix: "Mark complete" used to call ONLY `updateAssignment` — it never
+   * reported the room's own real cleanliness/occupancy at all, so a
+   * completed assignment left the room reading `housekeeping_reported_status:
+   * 'dirty'` forever (confirmed live against two real assignments the user
+   * had already completed through this exact screen).
+   */
+  describe('completing an assignment now also reports the room status', () => {
+    beforeEach(() => {
+      mocks.getBoard.mockResolvedValue([
+        { id: '60', room_id: '4', room_number: '104', attendant_user_id: '9', status: 'in_progress', has_discrepancy: false },
+      ]);
+    });
+
+    it('asks a real vacant/occupied question instead of completing immediately', async () => {
+      render(<BoardTab />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }));
+
+      expect(screen.getByText('Room vacant or occupied now?')).toBeInTheDocument();
+      expect(mocks.updateAssignment).not.toHaveBeenCalled();
+      expect(mocks.reportRoomStatus).not.toHaveBeenCalled();
+    });
+
+    it('reports the room clean+vacant, THEN completes the assignment, in that order', async () => {
+      const calls = [];
+      mocks.reportRoomStatus.mockImplementation(async (...args) => calls.push(['reportRoomStatus', ...args]));
+      mocks.updateAssignment.mockImplementation(async (...args) => calls.push(['updateAssignment', ...args]));
+
+      render(<BoardTab />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Vacant' }));
+
+      expect(mocks.reportRoomStatus).toHaveBeenCalledWith('4', { cleanliness: 'clean', occupancyObserved: 'vacant' });
+      expect(mocks.updateAssignment).toHaveBeenCalledWith('60', { status: 'completed' });
+      expect(calls.map((c) => c[0])).toEqual(['reportRoomStatus', 'updateAssignment']);
+    });
+
+    it('reports occupied when that is what the housekeeper actually observed', async () => {
+      render(<BoardTab />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Occupied' }));
+
+      expect(mocks.reportRoomStatus).toHaveBeenCalledWith('4', { cleanliness: 'clean', occupancyObserved: 'occupied' });
+    });
+
+    it('backs out on Cancel without calling either endpoint', async () => {
+      render(<BoardTab />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(screen.queryByText('Room vacant or occupied now?')).not.toBeInTheDocument();
+      expect(mocks.reportRoomStatus).not.toHaveBeenCalled();
+      expect(mocks.updateAssignment).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Mark complete' })).toBeInTheDocument();
+    });
   });
 });

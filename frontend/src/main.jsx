@@ -261,7 +261,7 @@ function Demo() {
       ) : activeItemKey === 'booking' ? (
         <BookingScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} />
       ) : activeItemKey === 'housekeeping' ? (
-        <HousekeepingScreen isOffline={!isOnline} />
+        <HousekeepingScreen activeProperty={activePropertyRecord} isOffline={!isOnline} />
       ) : activeItemKey === 'rooms' ? (
         <RoomsScreen activeProperty={activePropertyRecord} />
       ) : activeItemKey === 'reports' ? (
