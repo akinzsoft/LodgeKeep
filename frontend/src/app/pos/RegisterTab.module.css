@@ -10,12 +10,31 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--space-4);
+  align-items: start;
 }
 
 @media (width >= 900px) {
   .layout {
     grid-template-columns: 2fr 1fr;
   }
+}
+
+/* Outlet/terminal pickers, styled as a slim utility bar rather than a
+   prominent form — this screen's job is taking orders, not station setup,
+   which happens once per shift and should get out of the way visually. */
+.stationBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.stationField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 10rem;
+  max-width: 16rem;
 }
 
 .tabsBar {
@@ -40,6 +59,52 @@
 .tabChipActive {
   border-color: var(--domain-money);
   background: var(--domain-money-tint);
+}
+
+.menuControls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.searchInput {
+  min-height: var(--control-h-pos);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-md);
+  border: 2px solid var(--border-strong);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-h3-size);
+  width: 100%;
+}
+
+.categoryTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  overflow-x: auto;
+}
+
+.categoryChip {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border-radius: 999px;
+  border: 2px solid var(--border-strong);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.categoryChipActive {
+  border-color: var(--domain-money);
+  background: var(--domain-money-tint);
+  color: var(--text-primary);
 }
 
 .menuGrid {
@@ -68,18 +133,75 @@
 }
 
 .menuTile:disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   cursor: not-allowed;
+}
+
+.soldOutBadge {
+  font-size: var(--text-caption-size);
+  font-weight: 600;
+  color: var(--state-danger);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+/* The order/cart panel — sticky on desktop so the running total and
+   Settle button stay visible while the menu grid above scrolls, the same
+   "cart always in view" shape a real POS checkout screen needs. */
+.orderPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+@media (width >= 900px) {
+  .orderPanel {
+    position: sticky;
+    top: var(--space-4);
+  }
+}
+
+.orderLines {
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  overflow-y: auto;
 }
 
 .tabLine {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-2);
   min-height: var(--control-h-pos);
   padding: 0 var(--space-2);
   border-bottom: 1px solid var(--border);
   font-size: var(--text-h3-size);
+}
+
+.tabLineName {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.quantityBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.25rem;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--domain-money-tint);
+  color: var(--text-primary);
+  font-size: var(--text-label-size);
+  font-weight: 700;
+}
+
+.tabLineActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .tabLineVoided {
@@ -94,4 +216,94 @@
   min-height: var(--control-h-pos);
   font-size: var(--text-h1-size);
   font-weight: 700;
+}
+
+.settleButton {
+  width: 100%;
+  min-height: var(--control-h-pos);
+  font-size: var(--text-h3-size);
+}
+
+/* The settlement panel — its own overlay rather than an inline form
+   appended below the order, so completing a sale reads as a distinct,
+   focused step (the same "checkout screen" transition a real POS gives
+   you), matching `ConfirmDialog.module.css`'s own overlay token values. */
+.settlementOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(28, 36, 52, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  z-index: 100;
+  overflow-y: auto;
+}
+
+.settlementPanel {
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised);
+  padding: var(--space-5);
+  max-width: 30rem;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-height: calc(100vh - var(--space-8));
+  overflow-y: auto;
+}
+
+.settlementTitle {
+  margin: 0;
+  font-size: var(--text-h2-size);
+  line-height: var(--text-h2-line);
+  font-weight: var(--text-h2-weight);
+}
+
+.settlementGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.settlementGroup:last-of-type {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.settlementGroupTitle {
+  margin: 0;
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.settlementLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-body-size);
+}
+
+.settlementGrandTotal {
+  font-size: var(--text-h2-size);
+  font-weight: 700;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.paymentMethodRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.paymentMethodRow > * {
+  flex: 1;
+  min-width: 8rem;
 }
