@@ -118,6 +118,17 @@ export function voidOrder(orderId, reason) {
   return request(`/pos/orders/${orderId}/void`, { method: 'POST', body: { reason } });
 }
 
+/**
+ * Read-only preview of the real, tax-inclusive subtotal per split group —
+ * never recompute tax client-side (ARCHITECTURE.md §12); always ask the
+ * backend, which reuses the exact same tax-engine calls `settleOrder`
+ * itself uses. No `Idempotency-Key`: this posts nothing.
+ * Returns `{orderId, currency, groups: [{splitGroup, subtotal, taxAmount}]}`.
+ */
+export function getSettlementPreview(orderId) {
+  return request(`/pos/orders/${orderId}/settlement-preview`);
+}
+
 /** @param {Array<{splitGroup?: number|null, method: 'cash'|'card'|'room_charge', tipAmount?: string, serviceCharge?: string, roomCharge?: {reservationId: string, authMethod: string, authReference: string}}>} settlements */
 export function settleOrder(orderId, settlements) {
   return request(`/pos/orders/${orderId}/settle`, {

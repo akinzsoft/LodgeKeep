@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, ConfirmDialog } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney } from '../../shared/money.js';
@@ -91,6 +91,65 @@ function groupOrderItems(items) {
  *    confirming a payment method — added a real per-group subtotal/tip/
  *    service-charge/grand-total breakdown, and payment-method choice is
  *    now a row of tappable tiles instead of a `<select>`.
+ *
+ * Two real bugs found and fixed by this session's own "test and review
+ * Register" pass, both live-confirmed against the real dev backend:
+ *
+ * 6. **The settlement preview omitted tax entirely.** "Amount to charge"
+ *    used to be `subtotal + tip + serviceCharge`, computed purely from
+ *    already-loaded order items — no tax, ever. A real ₦20.00 item with a
+ *    real 7.5% VAT actually charges ₦21.50 (confirmed live: `settleOrder`
+ *    computes tax via `resolveApplicableTaxVersions`/`computeChargeWithTax`
+ *    identically for `cash`/`card`/`room_charge`), but this screen always
+ *    showed ₦20.00 — a real, material discrepancy a cashier relies on to
+ *    know how much to collect. This screen has no way to read the tax
+ *    catalogue itself (`GET /taxes` is `setup.view`-gated, a permission
+ *    `pos_operator` never holds), and re-implementing the tax engine
+ *    client-side would violate this codebase's own "money is exact,
+ *    server-computed, never duplicated" rule (ARCHITECTURE.md §12). Fixed
+ *    with a new, `pos.operate`-gated, read-only `GET
+ *    /pos/orders/:id/settlement-preview` (`fetchSettlementPreview`) that
+ *    reuses the EXACT SAME tax computation `settleOrder` itself runs.
+ *    `settlementPreview` stays `null` (rendering "Calculating…", never a
+ *    guessed number) until a real result comes back, and "Confirm
+ *    settlement" stays disabled the whole time — a cashier can never
+ *    confirm a settlement while the true tax-inclusive amount is unknown.
+ *    The preview's own `subtotal` is the tax engine's `netAmount`, not the
+ *    raw item total — for an INCLUSIVE tax those two differ, and adding
+ *    `taxAmount` on top of a raw item total would double-count it; live-
+ *    verified against a real inclusive tax that `subtotal + taxAmount`
+ *    still equals the true item total exactly.
+ *
+ *    A `feature-dev:code-reviewer` pass on this fix caught two further
+ *    real, reachable gaps before it shipped, both fixed: (a) a preview
+ *    fetch had no cancellation — closing the panel then reopening it (on
+ *    the same or a different tab) while a slow fetch for the FIRST one
+ *    was still in flight let that stale response land later and be
+ *    displayed as if it were current; fixed with `previewRequestIdRef`,
+ *    the same ref-guarded staleness check this codebase already uses for
+ *    `NewImportTab`'s identical race. (b) "Confirm settlement" was gated
+ *    on `settlementPreview !== null` alone — but `[]` (every item voided
+ *    from a concurrent terminal on the same order, ARCHITECTURE.md §5's
+ *    own named "POS tab edit" race) is a real, non-null response too,
+ *    which would have enabled Confirm while every group still showed
+ *    "Calculating…"; fixed with `previewReady`, which requires every
+ *    currently-displayed group to have an actual matching preview entry.
+ *    Neither gap could ever mischarge anyone — `settleOrder` always
+ *    recomputes the real amount fresh at settle time regardless of what
+ *    the preview showed — but both undermined the display/trust guarantee
+ *    this fix exists to add.
+ * 7. **A room-charge settlement with no guest selected crashed with a raw
+ *    500**, not a friendly error — the guest-search `<select>` had no
+ *    `required` attribute (unlike the auth-reference input right next to
+ *    it), so submitting with `roomChargeGuest` still `null` sent no
+ *    `reservationId` at all; the backend's `where({ id: undefined })`
+ *    threw an uncaught mysql2 exception instead of a real validation
+ *    error. Fixed on both sides: `required` added here as the client-side
+ *    convenience guard, and `settleOrder` (`backend/src/modules/pos/
+ *    service.js`) now throws a real `MISSING_FIELD` `ValidationError`
+ *    before ever querying — the backend check is the one that actually
+ *    matters, per this codebase's own "UI-level check is convenience
+ *    only" rule.
  */
 export function RegisterTab({ activeProperty, isOffline = false }) {
   const [outlets, setOutlets] = useState(null);
@@ -109,7 +168,19 @@ export function RegisterTab({ activeProperty, isOffline = false }) {
   const [error, setError] = useState(null);
   const [settleResult, setSettleResult] = useState(null);
   const [settlementForms, setSettlementForms] = useState(null);
+  const [settlementPreview, setSettlementPreview] = useState(null);
+  const [previewError, setPreviewError] = useState(null);
   const [voidingRow, setVoidingRow] = useState(null);
+  // Bug fix (code-review pass on the settlement-preview fix above): a
+  // preview fetch has no natural cancellation — a cashier can close the
+  // panel (or settle a different tab) while a slow fetch for the FIRST
+  // order is still in flight, and its response used to land regardless,
+  // silently showing one order's amount while a different order's panel
+  // is open. This ref is bumped every time a preview fetch starts or the
+  // panel closes; a response is only ever applied if it's still current
+  // when it arrives — the same "ref-guarded staleness check" pattern this
+  // codebase already uses for `NewImportTab`'s identical race.
+  const previewRequestIdRef = useRef(0);
 
   useEffect(() => {
     posApi
@@ -225,6 +296,39 @@ export function RegisterTab({ activeProperty, isOffline = false }) {
         authReference: '',
       }))
     );
+    fetchSettlementPreview();
+  }
+
+  /**
+   * Bug fix (this session's own "test and review Register" pass, live-
+   * confirmed against the real dev backend): the settlement panel used to
+   * show "Amount to charge" as `subtotal + tip + service charge` with NO
+   * tax at all — a real ₦20.00 item with a real 7.5% VAT actually charges
+   * ₦21.50, but the cashier only ever saw ₦20.00. Tax depends on live,
+   * permission-gated config (`taxes`) this screen's own role (`pos_operator`)
+   * cannot read directly (`GET /taxes` is `setup.view`-gated) — and this
+   * codebase's own "money is exact, always, server-computed" rule
+   * (ARCHITECTURE.md §12) rules out re-implementing the tax engine
+   * client-side even if it could. Fixed with a new, `pos.operate`-gated,
+   * read-only `GET /pos/orders/:id/settlement-preview` that reuses the
+   * EXACT SAME tax computation `settleOrder` itself uses — never a second,
+   * parallel algorithm. `settlementPreview` stays `null` until a real
+   * result (or a real error) comes back; nothing is ever shown, and
+   * "Confirm settlement" stays disabled, while the true amount is unknown.
+   */
+  async function fetchSettlementPreview() {
+    const requestId = ++previewRequestIdRef.current;
+    setSettlementPreview(null);
+    setPreviewError(null);
+    const orderId = activeOrderId;
+    try {
+      const preview = await posApi.getSettlementPreview(orderId);
+      if (previewRequestIdRef.current !== requestId) return; // superseded — the panel was closed, or a later fetch started
+      setSettlementPreview(preview.groups);
+    } catch (caught) {
+      if (previewRequestIdRef.current !== requestId) return;
+      setPreviewError(caught instanceof ApiError ? caught.message : 'Could not compute the real settlement total.');
+    }
   }
 
   async function handleSubmitSettlement(event) {
@@ -245,13 +349,20 @@ export function RegisterTab({ activeProperty, isOffline = false }) {
         }))
       );
       setSettleResult(result);
-      setSettlementForms(null);
+      closeSettlementPanel();
       setOpenOrders(openOrders.filter((o) => o.id !== activeOrderId));
       setActiveOrderId(null);
       setActiveOrder(null);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not settle this tab.');
     }
+  }
+
+  function closeSettlementPanel() {
+    previewRequestIdRef.current += 1; // invalidate any preview fetch still in flight
+    setSettlementForms(null);
+    setSettlementPreview(null);
+    setPreviewError(null);
   }
 
   /** Patches one settlement-form entry by index — the one place this screen mutates that array, used by every field below instead of each repeating its own clone-and-splice. */
@@ -279,10 +390,25 @@ export function RegisterTab({ activeProperty, isOffline = false }) {
   // happens to share one group (e.g. everything moved into group 1).
   const anySplit = unvoidedItems.some((item) => item.split_group != null);
 
-  function groupTotal(splitGroup) {
-    const lines = unvoidedItems.filter((item) => (item.split_group ?? null) === splitGroup);
-    return sumMoney(lines.map((item) => multiplyMoney(item.unit_price, item.quantity)));
+  /** The real, server-computed {subtotal, taxAmount} for one split group — `null` while still loading or after a failed fetch, never a client-side guess (see `fetchSettlementPreview`'s own header for why). */
+  function previewForGroup(splitGroup) {
+    return settlementPreview?.find((g) => g.splitGroup === splitGroup) ?? null;
   }
+
+  /**
+   * Bug fix (code-review pass): gating "Confirm settlement" on merely
+   * `settlementPreview !== null` was wrong on its own — `[]` is a real,
+   * reachable response (every item on the order voided from a concurrent
+   * terminal between opening this panel and the preview call landing,
+   * ARCHITECTURE.md §5's own named "POS tab edit" race) and is still
+   * non-null, which would have enabled Confirm while every group still
+   * showed "Calculating…". Requiring a real match for EVERY currently
+   * displayed group is the correct condition — it also can't be fooled by
+   * a stale response from a different, previously-open order, since that
+   * response is now discarded before it ever reaches `settlementPreview`
+   * (see `fetchSettlementPreview`'s own request-id guard).
+   */
+  const previewReady = settlementForms !== null && settlementForms.every((form) => previewForGroup(form.splitGroup) !== null);
 
   function menuItemName(id) {
     return menuItems.find((m) => m.id === id)?.name ?? `#${id}`;
@@ -494,7 +620,7 @@ export function RegisterTab({ activeProperty, isOffline = false }) {
           )}
 
           {settlementForms && (
-            <div className={styles.settlementOverlay} role="presentation" onClick={() => setSettlementForms(null)}>
+            <div className={styles.settlementOverlay} role="presentation" onClick={closeSettlementPanel}>
               <form
                 className={styles.settlementPanel}
                 onSubmit={handleSubmitSettlement}
@@ -502,17 +628,36 @@ export function RegisterTab({ activeProperty, isOffline = false }) {
               >
                 <h2 className={styles.settlementTitle}>Settle {settlementForms.length > 1 ? 'this split tab' : 'this tab'}</h2>
 
+                {previewError && (
+                  <p role="alert" className={formStyles.errorBanner}>
+                    {previewError}{' '}
+                    <button type="button" className={formStyles.label} onClick={fetchSettlementPreview}>
+                      Retry
+                    </button>
+                  </p>
+                )}
+
                 {settlementForms.map((form, index) => {
-                  const subtotal = groupTotal(form.splitGroup);
-                  const grandTotal = sumMoney([subtotal, form.tipAmount || ZERO, form.serviceCharge || ZERO]);
+                  const preview = previewForGroup(form.splitGroup);
+                  const grandTotal = preview ? sumMoney([preview.subtotal, preview.taxAmount, form.tipAmount || ZERO, form.serviceCharge || ZERO]) : null;
                   return (
                     <div key={form.splitGroup ?? 'all'} className={styles.settlementGroup}>
                       <h3 className={styles.settlementGroupTitle}>{form.splitGroup ? `Group ${form.splitGroup}` : 'Whole tab'}</h3>
 
-                      <div className={styles.settlementLine}>
-                        <span>Subtotal</span>
-                        <Money amount={subtotal} currencyCode={activeProperty.base_currency} />
-                      </div>
+                      {preview ? (
+                        <>
+                          <div className={styles.settlementLine}>
+                            <span>Subtotal</span>
+                            <Money amount={preview.subtotal} currencyCode={activeProperty.base_currency} />
+                          </div>
+                          <div className={styles.settlementLine}>
+                            <span>Tax</span>
+                            <Money amount={preview.taxAmount} currencyCode={activeProperty.base_currency} />
+                          </div>
+                        </>
+                      ) : (
+                        !previewError && <p className={formStyles.disabledNotice}>Calculating subtotal and tax…</p>
+                      )}
 
                       <div className={formStyles.row}>
                         <label className={formStyles.field}>
@@ -541,7 +686,7 @@ export function RegisterTab({ activeProperty, isOffline = false }) {
 
                       <div className={`${styles.settlementLine} ${styles.settlementGrandTotal}`}>
                         <span>Amount to charge</span>
-                        <Money amount={grandTotal} currencyCode={activeProperty.base_currency} />
+                        {grandTotal !== null ? <Money amount={grandTotal} currencyCode={activeProperty.base_currency} /> : <span>Calculating…</span>}
                       </div>
 
                       <div className={styles.paymentMethodRow}>
@@ -572,6 +717,7 @@ export function RegisterTab({ activeProperty, isOffline = false }) {
                               const guest = form.roomChargeResults?.find((g) => String(g.reservationId) === e.target.value);
                               patchSettlementForm(index, { roomChargeGuest: guest });
                             }}
+                            required
                           >
                             <option value="">Select guest</option>
                             {(form.roomChargeResults ?? []).map((guest) => (
@@ -607,10 +753,10 @@ export function RegisterTab({ activeProperty, isOffline = false }) {
                 })}
 
                 <div className={formStyles.actionsRow}>
-                  <Button type="submit" disabled={isOffline}>
+                  <Button type="submit" disabled={isOffline || !previewReady}>
                     Confirm settlement
                   </Button>
-                  <Button type="button" variant="ghost" onClick={() => setSettlementForms(null)}>
+                  <Button type="button" variant="ghost" onClick={closeSettlementPanel}>
                     Cancel
                   </Button>
                 </div>
