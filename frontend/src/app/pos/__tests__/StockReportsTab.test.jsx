@@ -5,6 +5,7 @@ import { StockReportsTab } from '../StockReportsTab.jsx';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
+  listStockItems: vi.fn(),
   getCostOfSales: vi.fn(),
   getStockVariance: vi.fn(),
 }));
@@ -14,7 +15,7 @@ vi.mock('../../../shared/api/index.js', async () => {
   return {
     ...actual,
     posApi: { listOutlets: mocks.listOutlets },
-    stockApi: { getCostOfSales: mocks.getCostOfSales, getStockVariance: mocks.getStockVariance },
+    stockApi: { listStockItems: mocks.listStockItems, getCostOfSales: mocks.getCostOfSales, getStockVariance: mocks.getStockVariance },
   };
 });
 
@@ -22,6 +23,7 @@ describe('<StockReportsTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listOutlets.mockResolvedValue([{ id: '1', name: 'Main Bar' }]);
+    mocks.listStockItems.mockResolvedValue([{ id: '20', name: 'Vodka (bottle)' }]);
   });
 
   it('the date-range/outlet toolbar stays reachable before any report has ever run — never hidden inside a state-gated table', async () => {
@@ -56,10 +58,21 @@ describe('<StockReportsTab>', () => {
     expect(await screen.findByText(/Total cost of sales/)).toBeInTheDocument();
     expect(mocks.getCostOfSales).toHaveBeenCalledWith({ dateFrom: expect.any(String), dateTo: expect.any(String), outletId: undefined });
     const byItemTable = screen.getByRole('heading', { name: 'Cost of sales — by stock item' }).closest('section');
-    expect(within(byItemTable).getByText('20')).toBeInTheDocument();
+    expect(await within(byItemTable).findByText('Vodka (bottle)')).toBeInTheDocument();
     const varianceTable = screen.getByRole('heading', { name: 'Stock variance — every completed stock take in range' }).closest('section');
-    expect(within(varianceTable).getByText('20')).toBeInTheDocument();
+    expect(within(varianceTable).getByText('Vodka (bottle)')).toBeInTheDocument();
     expect(within(varianceTable).getByText('-2.000')).toBeInTheDocument();
+  });
+
+  it('bug fix: a stock item no longer in the catalogue (archived) still renders as a labelled #id, never a raw bare number', async () => {
+    mocks.listStockItems.mockResolvedValue([]); // the reporting id resolves to nothing
+    mocks.getCostOfSales.mockResolvedValue({ totalCost: '100.00', byDay: [], byItem: [{ stockItemId: '99', cost: '100.00' }] });
+    mocks.getStockVariance.mockResolvedValue({ lines: [], summaryByItem: [] });
+    render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+
+    expect(await screen.findByText('#99')).toBeInTheDocument();
   });
 
   it("bug fix: renders the active property's real currency, not a hardcoded NGN", async () => {

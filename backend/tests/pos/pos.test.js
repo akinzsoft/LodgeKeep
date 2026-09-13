@@ -245,6 +245,77 @@ describe('POS (PLAN.md Phase 4)', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.is_available).toBe(0);
     });
+
+    // Editing an outlet/terminal/menu item — this session's own broader POS
+    // review found the SetupTab UI never called any of these, and building
+    // its first real edit forms surfaced a real, previously-uncalled bug:
+    // `updateOutlet`/`updateTerminal`/`updateMenuItem` took `req.body ?? {}`
+    // straight through with no field allowlist. Fixed alongside building
+    // the first live caller — these tests are this fix's own proof.
+    it('pos.manage can edit an outlet, terminal, and menu item; pos.operate cannot', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 0, role: 'manager' });
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const managerToken = tokenFor({ userId: ctx.a.users[0].id });
+      const operatorToken = tokenFor({ userId: ctx.a.users[1].id });
+      const setup = await freshOutletSetup();
+
+      const outletEdit = await t.request
+        .patch(`/api/v1/pos/outlets/${setup.outletId}`)
+        .set('Authorization', `Bearer ${managerToken}`)
+        .send({ name: 'Renamed Outlet', type: 'restaurant' });
+      expect(outletEdit.status).toBe(200);
+      expect(outletEdit.body.data.name).toBe('Renamed Outlet');
+      expect(outletEdit.body.data.type).toBe('restaurant');
+
+      const terminalEdit = await t.request
+        .patch(`/api/v1/pos/terminals/${setup.terminalId}`)
+        .set('Authorization', `Bearer ${managerToken}`)
+        .send({ device_ref: 'RENAMED-DEV', supports_contactless: true });
+      expect(terminalEdit.status).toBe(200);
+      expect(terminalEdit.body.data.device_ref).toBe('RENAMED-DEV');
+      expect(terminalEdit.body.data.supports_contactless).toBe(1);
+
+      const menuItemEdit = await t.request
+        .patch(`/api/v1/pos/menu-items/${setup.menuItemId}`)
+        .set('Authorization', `Bearer ${managerToken}`)
+        .send({ name: 'Renamed Item', category: 'Snacks', price: '25.00' });
+      expect(menuItemEdit.status).toBe(200);
+      expect(menuItemEdit.body.data.name).toBe('Renamed Item');
+      expect(menuItemEdit.body.data.category).toBe('Snacks');
+      expect(menuItemEdit.body.data.price).toBe('25.00');
+
+      const forbidden = await t.request
+        .patch(`/api/v1/pos/outlets/${setup.outletId}`)
+        .set('Authorization', `Bearer ${operatorToken}`)
+        .send({ name: 'Nope' });
+      expect(forbidden.status).toBe(403);
+    });
+
+    it('bug fix: editing an outlet/terminal/menu item ignores tenant_id/property_id/id/status in the request body', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 0, role: 'manager' });
+      const token = tokenFor({ userId: ctx.a.users[0].id });
+      const setup = await freshOutletSetup();
+
+      const outletEdit = await t.request
+        .patch(`/api/v1/pos/outlets/${setup.outletId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Real Name', tenant_id: '999999', property_id: '999999', id: '999999', status: 'archived' });
+      expect(outletEdit.status).toBe(200);
+      expect(outletEdit.body.data.id).toBe(String(setup.outletId));
+      expect(outletEdit.body.data.status).toBe('active');
+      // Re-fetch through the ordinary list to confirm the row itself, not
+      // just the response, was never actually archived.
+      const list = await t.request.get('/api/v1/pos/outlets').set('Authorization', `Bearer ${token}`);
+      expect(list.body.data.some((o) => o.id === String(setup.outletId))).toBe(true);
+
+      const menuItemEdit = await t.request
+        .patch(`/api/v1/pos/menu-items/${setup.menuItemId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Real Item', status: 'archived', is_available: false });
+      expect(menuItemEdit.status).toBe(200);
+      expect(menuItemEdit.body.data.status).toBe('active');
+      expect(menuItemEdit.body.data.is_available).toBe(1);
+    });
   });
 
   // -----------------------------------------------------------------------

@@ -45,6 +45,10 @@ export function createTerminal({ outletId, deviceRef, supportsContactless }) {
   return request('/pos/terminals', { method: 'POST', body: { outlet_id: outletId, device_ref: deviceRef, supports_contactless: supportsContactless } });
 }
 
+export function updateTerminal(id, changes) {
+  return request(`/pos/terminals/${id}`, { method: 'PATCH', body: changes });
+}
+
 export function archiveTerminal(id) {
   return request(`/pos/terminals/${id}/archive`, { method: 'POST', body: {} });
 }
@@ -56,6 +60,10 @@ export function listMenuItems(outletId) {
 
 export function createMenuItem({ outletId, name, category, price, modifiers }) {
   return request('/pos/menu-items', { method: 'POST', body: { outlet_id: outletId, name, category, price, modifiers } });
+}
+
+export function updateMenuItem(id, changes) {
+  return request(`/pos/menu-items/${id}`, { method: 'PATCH', body: changes });
 }
 
 export function setMenuItemAvailability(id, isAvailable) {

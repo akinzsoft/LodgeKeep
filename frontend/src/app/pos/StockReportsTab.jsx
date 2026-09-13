@@ -25,6 +25,17 @@ function todayIso() {
  * hardcode a literal NGN currency code — `stock_items`/cost-of-sales rows
  * carry no currency column of their own, so the real source of truth is
  * the active property's `base_currency`, now threaded in as a prop.
+ *
+ * Bug fix (found in this session's own broader "REVIEW and test POS" pass):
+ * both reports' own `stockItemId` columns rendered the bare numeric id —
+ * `stock/reporting.js`'s own response shape never carries a name (see that
+ * file's header: ids are grouped/summed there, never joined against
+ * `stock_items`), and nothing on this tab ever resolved one either, so a
+ * manager reading a cost/variance report saw "20" instead of the actual
+ * ingredient name. Fixed the same way `GuestOrdersTab.jsx` already resolves
+ * `menu_item_id` client-side: a plain id-to-name lookup built from
+ * `stockApi.listStockItems()` (no outlet filter, since either report can
+ * span every outlet), falling back to `#id` for an item since archived.
  */
 export function StockReportsTab({ activeProperty }) {
   const [outlets, setOutlets] = useState(null);
@@ -35,13 +46,22 @@ export function StockReportsTab({ activeProperty }) {
   const [costOfSales, setCostOfSales] = useState(null);
   const [variance, setVariance] = useState(null);
   const [error, setError] = useState(null);
+  const [stockItemsById, setStockItemsById] = useState({});
 
   useEffect(() => {
     posApi
       .listOutlets()
       .then(setOutlets)
       .catch(() => setOutlets([]));
+    stockApi
+      .listStockItems()
+      .then((items) => setStockItemsById(Object.fromEntries(items.map((item) => [String(item.id), item]))))
+      .catch(() => setStockItemsById({}));
   }, []);
+
+  function stockItemName(stockItemId) {
+    return stockItemsById[String(stockItemId)]?.name ?? `#${stockItemId}`;
+  }
 
   async function runReports(event) {
     event?.preventDefault();
@@ -120,7 +140,7 @@ export function StockReportsTab({ activeProperty }) {
         state={costOfSales === null || costOfSales.byItem.length === 0 ? 'empty' : 'success'}
         emptyMessage="Choose a date range and run the reports."
         columns={[
-          { key: 'stockItemId', label: 'Stock item' },
+          { key: 'stockItemId', label: 'Stock item', render: (row) => stockItemName(row.stockItemId) },
           { key: 'cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.cost} currencyCode={activeProperty.base_currency} /> },
         ]}
         rows={costOfSales?.byItem ?? []}
@@ -132,7 +152,7 @@ export function StockReportsTab({ activeProperty }) {
         state={variance === null || variance.summaryByItem.length === 0 ? 'empty' : 'success'}
         emptyMessage="Choose a date range and run the reports."
         columns={[
-          { key: 'stockItemId', label: 'Stock item' },
+          { key: 'stockItemId', label: 'Stock item', render: (row) => stockItemName(row.stockItemId) },
           { key: 'totalVariance', label: 'Total variance', align: 'right' },
         ]}
         rows={variance?.summaryByItem ?? []}

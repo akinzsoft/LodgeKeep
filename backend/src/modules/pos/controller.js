@@ -26,6 +26,43 @@ function require_(body, field) {
   return value;
 }
 
+/**
+ * Bug fix (found while building this module's first real edit UI —
+ * `updateOutlet`/`updateTerminal`/`updateMenuItem` had all three taken
+ * `req.body ?? {}` straight through to a raw `.update(changes)` since this
+ * module was first built, with no field allowlist — the exact same
+ * latent-until-a-live-caller gap CLAUDE.md's own room-type/property update
+ * passes already found and fixed for their own first real edit UI ("the
+ * next time any of them gets a live caller, it should get the identical
+ * allowlist treatment"). Each mirrors its sibling `create*` function's own
+ * field set exactly — `status`/`stock_auto_unavailable` stay reachable only
+ * through their own dedicated archive/availability endpoints, never a
+ * generic edit form.
+ */
+function pickOutletChanges(body) {
+  const changes = {};
+  if (body?.code !== undefined) changes.code = body.code;
+  if (body?.name !== undefined) changes.name = body.name;
+  if (body?.type !== undefined) changes.type = body.type;
+  return changes;
+}
+
+function pickTerminalChanges(body) {
+  const changes = {};
+  if (body?.device_ref !== undefined) changes.device_ref = body.device_ref;
+  if (body?.supports_contactless !== undefined) changes.supports_contactless = !!body.supports_contactless;
+  return changes;
+}
+
+function pickMenuItemChanges(body) {
+  const changes = {};
+  if (body?.name !== undefined) changes.name = body.name;
+  if (body?.category !== undefined) changes.category = body.category;
+  if (body?.price !== undefined) changes.price = body.price;
+  if (body?.modifiers !== undefined) changes.modifiers = body.modifiers;
+  return changes;
+}
+
 // ---------------------------------------------------------------------
 // Outlets
 // ---------------------------------------------------------------------
@@ -55,7 +92,7 @@ async function updateOutlet(req, res, next) {
   try {
     const before = await service.getOutlet({ context: req.context, id: req.params.id });
     if (!before) return notFound(res);
-    const outlet = await service.updateOutlet({ context: req.context, id: req.params.id, changes: req.body ?? {} });
+    const outlet = await service.updateOutlet({ context: req.context, id: req.params.id, changes: pickOutletChanges(req.body) });
     await req.audit({ entityType: 'pos_outlets', entityId: req.params.id, action: 'update', beforeState: before, afterState: outlet });
     res.status(200).json(ok(outlet));
   } catch (error) {
@@ -103,7 +140,7 @@ async function updateTerminal(req, res, next) {
   try {
     const before = await service.getTerminal({ context: req.context, id: req.params.id });
     if (!before) return notFound(res);
-    const terminal = await service.updateTerminal({ context: req.context, id: req.params.id, changes: req.body ?? {} });
+    const terminal = await service.updateTerminal({ context: req.context, id: req.params.id, changes: pickTerminalChanges(req.body) });
     await req.audit({ entityType: 'pos_terminals', entityId: req.params.id, action: 'update', beforeState: before, afterState: terminal });
     res.status(200).json(ok(terminal));
   } catch (error) {
@@ -153,7 +190,7 @@ async function updateMenuItem(req, res, next) {
   try {
     const before = await service.getMenuItem({ context: req.context, id: req.params.id });
     if (!before) return notFound(res);
-    const menuItem = await service.updateMenuItem({ context: req.context, id: req.params.id, changes: req.body ?? {} });
+    const menuItem = await service.updateMenuItem({ context: req.context, id: req.params.id, changes: pickMenuItemChanges(req.body) });
     await req.audit({ entityType: 'pos_menu_items', entityId: req.params.id, action: 'update', beforeState: before, afterState: menuItem });
     res.status(200).json(ok(menuItem));
   } catch (error) {
