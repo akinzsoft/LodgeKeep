@@ -1662,6 +1662,31 @@ const ENTITIES = [
   },
 
   {
+    table: 'pos_menu_categories',
+    uniqueKeys: [['property_id', 'name']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      name: 'New Fixture Category',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      name: 'Cocktails', // Matches seedTwoTenants' own fixture category.
+    }),
+    crossTenant: [
+      {
+        name: "registers a category against another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          name: 'Cross-Tenant Category',
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'pos_terminals',
     uniqueKeys: [['outlet_id', 'device_ref']],
     newRow: (ctx, t) => ({

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
   listTerminals: vi.fn(),
   listMenuItems: vi.fn(),
+  listMenuCategories: vi.fn(),
   listOrders: vi.fn(),
   listShifts: vi.fn(),
   listGuestOrders: vi.fn(),
@@ -30,6 +31,7 @@ describe('<POSScreen>', () => {
     mocks.listOutlets.mockResolvedValue([]);
     mocks.listTerminals.mockResolvedValue([]);
     mocks.listMenuItems.mockResolvedValue([]);
+    mocks.listMenuCategories.mockResolvedValue([]);
     mocks.listOrders.mockResolvedValue([]);
     mocks.listShifts.mockResolvedValue([]);
     mocks.listGuestOrders.mockResolvedValue([]);

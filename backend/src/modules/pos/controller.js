@@ -176,6 +176,61 @@ async function listMenuItems(req, res, next) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Menu categories
+// ---------------------------------------------------------------------
+
+async function listMenuCategories(req, res, next) {
+  try {
+    const includeArchived = req.query.include_archived === 'true';
+    res.status(200).json(ok(await service.listMenuCategories({ context: req.context, includeArchived })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+function optionalSortOrder(body) {
+  if (body?.sort_order === undefined || body?.sort_order === null || body?.sort_order === '') return undefined;
+  const value = Number(body.sort_order);
+  return Number.isInteger(value) ? value : Number.NaN;
+}
+
+async function createMenuCategory(req, res, next) {
+  try {
+    const category = await service.createMenuCategory({ context: req.context, name: req.body?.name, sortOrder: optionalSortOrder(req.body) });
+    await req.audit({ entityType: 'pos_menu_categories', entityId: category.id, action: 'create', afterState: category });
+    res.status(201).json(ok(category));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateMenuCategory(req, res, next) {
+  try {
+    const before = await service.getMenuCategory({ context: req.context, id: req.params.id });
+    if (!before) return notFound(res);
+    const category = await service.updateMenuCategory({ context: req.context, id: req.params.id, name: req.body?.name, sortOrder: optionalSortOrder(req.body) });
+    if (!category) return notFound(res);
+    await req.audit({ entityType: 'pos_menu_categories', entityId: category.id, action: 'update', beforeState: before, afterState: category });
+    res.status(200).json(ok(category));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function archiveMenuCategory(req, res, next) {
+  try {
+    const before = await service.getMenuCategory({ context: req.context, id: req.params.id });
+    if (!before) return notFound(res);
+    const category = await service.archiveMenuCategory({ context: req.context, id: req.params.id });
+    if (!category) return notFound(res);
+    await req.audit({ entityType: 'pos_menu_categories', entityId: category.id, action: 'archive', beforeState: before, afterState: category });
+    res.status(200).json(ok(category));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function createMenuItem(req, res, next) {
   try {
     const outletId = require_(req.body, 'outlet_id');
@@ -617,6 +672,10 @@ module.exports = {
   createTerminal,
   updateTerminal,
   archiveTerminal,
+  listMenuCategories,
+  createMenuCategory,
+  updateMenuCategory,
+  archiveMenuCategory,
   listMenuItems,
   createMenuItem,
   updateMenuItem,

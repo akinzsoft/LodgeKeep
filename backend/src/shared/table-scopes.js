@@ -221,6 +221,8 @@ const TABLE_SCOPES = Object.freeze({
   pos_outlets: { scope: SCOPES.PROPERTY },
   pos_terminals: { scope: SCOPES.PROPERTY },
   pos_menu_items: { scope: SCOPES.PROPERTY },
+  // Registered menu categories, shared by every outlet (20261005090000).
+  pos_menu_categories: { scope: SCOPES.PROPERTY },
   pos_orders: { scope: SCOPES.PROPERTY },
   pos_order_items: { scope: SCOPES.PROPERTY },
   pos_order_settlements: { scope: SCOPES.PROPERTY },

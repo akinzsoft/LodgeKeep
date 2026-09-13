@@ -17,6 +17,10 @@ const mocks = vi.hoisted(() => ({
   updateMenuItem: vi.fn(),
   setMenuItemAvailability: vi.fn(),
   archiveMenuItem: vi.fn(),
+  listMenuCategories: vi.fn(),
+  createMenuCategory: vi.fn(),
+  updateMenuCategory: vi.fn(),
+  archiveMenuCategory: vi.fn(),
   uploadMenuItemImage: vi.fn(),
   removeMenuItemImage: vi.fn(),
 }));
@@ -34,6 +38,10 @@ describe('<SetupTab>', () => {
     mocks.listOutlets.mockResolvedValue([OUTLET]);
     mocks.listTerminals.mockResolvedValue([]);
     mocks.listMenuItems.mockResolvedValue([]);
+    mocks.listMenuCategories.mockResolvedValue([
+      { id: '1', name: 'Drinks', sort_order: 0, item_count: 1 },
+      { id: '2', name: 'Mains', sort_order: 1, item_count: 0 },
+    ]);
   });
 
   it('lists outlets and creates a new one', async () => {
@@ -97,7 +105,7 @@ describe('<SetupTab>', () => {
     mocks.updateOutlet.mockResolvedValue({ ...OUTLET, name: 'Renamed Bar' });
     render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await userEvent.click(within((await screen.findByText('Main Bar')).closest('tr')).getByRole('button', { name: 'Edit' }));
     const editCard = (await screen.findByRole('heading', { name: 'Edit outlet' })).closest('section');
     const nameInput = within(editCard).getByLabelText('Name');
     expect(nameInput).toHaveValue('Main Bar');
@@ -146,6 +154,86 @@ describe('<SetupTab>', () => {
     expect(mocks.updateMenuItem).toHaveBeenCalledWith('5', { name: 'Cocktail', category: 'Drinks', price: '25.5' });
   });
 
+  describe('menu categories', () => {
+    async function openMenu() {
+      render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+      return (await screen.findByRole('heading', { name: 'Menu — Main Bar' })).closest('section');
+    }
+
+    it('offers only registered categories in a dropdown when adding a menu item', async () => {
+      mocks.createMenuItem.mockResolvedValue({ id: '7', name: 'Steak' });
+      const menuSection = await openMenu();
+      const select = within(menuSection).getByLabelText('Category');
+      expect(select.tagName).toBe('SELECT');
+      expect([...select.options].map((o) => o.textContent)).toEqual(['Choose a category', 'Drinks', 'Mains']);
+
+      await userEvent.type(within(menuSection).getByLabelText('Name'), 'Steak');
+      await userEvent.selectOptions(select, 'Mains');
+      await userEvent.type(within(menuSection).getByLabelText('Price'), '40');
+      await userEvent.click(within(menuSection).getByRole('button', { name: 'Add item' }));
+      expect(mocks.createMenuItem).toHaveBeenCalledWith(expect.objectContaining({ name: 'Steak', category: 'Mains' }));
+    });
+
+    it('keeps an item\'s current category selectable when editing, even if it is no longer registered', async () => {
+      mocks.listMenuItems.mockResolvedValue([{ id: '5', name: 'Old Wine', category: 'Legacy', price: '20.00', is_available: true }]);
+      const menuSection = await openMenu();
+      await userEvent.click(within(menuSection).getByRole('button', { name: 'Edit' }));
+      const editCard = (await screen.findByRole('heading', { name: 'Edit menu item' })).closest('section');
+      const select = within(editCard).getByLabelText('Category');
+      expect(select).toHaveValue('Legacy');
+      expect([...select.options].map((o) => o.textContent)).toEqual(['Drinks', 'Mains', 'Legacy']);
+    });
+
+    it('prompts to add a category first when none are registered', async () => {
+      mocks.listMenuCategories.mockResolvedValue([]);
+      const menuSection = await openMenu();
+      expect(within(menuSection).getByText('Add a category in Menu categories above before adding menu items.')).toBeInTheDocument();
+    });
+
+    it('registers a new category from the Menu categories card and refreshes the dropdown', async () => {
+      mocks.createMenuCategory.mockResolvedValue({ id: '3', name: 'Starters' });
+      render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+      const card = (await screen.findByRole('heading', { name: 'Menu categories' })).closest('section');
+      expect(await within(card).findByText('Drinks')).toBeInTheDocument();
+
+      await userEvent.type(within(card).getByLabelText('Category name'), 'Starters');
+      await userEvent.type(within(card).getByLabelText('Display order'), '2');
+      mocks.listMenuCategories.mockResolvedValue([
+        { id: '1', name: 'Drinks', sort_order: 0, item_count: 1 },
+        { id: '3', name: 'Starters', sort_order: 2, item_count: 0 },
+      ]);
+      await userEvent.click(within(card).getByRole('button', { name: 'Add category' }));
+
+      expect(mocks.createMenuCategory).toHaveBeenCalledWith({ name: 'Starters', sortOrder: 2 });
+      expect(await within(card).findByText('Starters')).toBeInTheDocument();
+    });
+
+    it('renames a category', async () => {
+      mocks.updateMenuCategory.mockResolvedValue({ id: '1', name: 'Beverages' });
+      render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+      const card = (await screen.findByRole('heading', { name: 'Menu categories' })).closest('section');
+      const row = (await within(card).findByText('Drinks')).closest('tr');
+      await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+      const input = within(card).getByLabelText('Rename category');
+      await userEvent.clear(input);
+      await userEvent.type(input, 'Beverages');
+      await userEvent.click(within(card).getByRole('button', { name: 'Save category' }));
+      expect(mocks.updateMenuCategory).toHaveBeenCalledWith('1', { name: 'Beverages', sortOrder: 0 });
+    });
+
+    it('shows why a category in use cannot be archived', async () => {
+      const { ApiError } = await import('../../../shared/api/index.js');
+      mocks.archiveMenuCategory.mockRejectedValue(new ApiError({ code: 'CONFLICT_POS_MENU_CATEGORY_IN_USE', message: '"Drinks" is still used by 1 menu item — move them to another category first.' }));
+      render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+      const card = (await screen.findByRole('heading', { name: 'Menu categories' })).closest('section');
+      const row = (await within(card).findByText('Drinks')).closest('tr');
+      await userEvent.click(within(row).getByRole('button', { name: 'Archive' }));
+      await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Archive' }));
+      expect(await within(card).findByRole('alert')).toHaveTextContent('"Drinks" is still used by 1 menu item');
+    });
+  });
+
   describe('menu item photos', () => {
     const photo = () => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'chapman.png', { type: 'image/png' });
 
@@ -161,7 +249,7 @@ describe('<SetupTab>', () => {
       const menuSection = await openMenu();
 
       await userEvent.type(within(menuSection).getByLabelText('Name'), 'Chapman');
-      await userEvent.type(within(menuSection).getByLabelText('Category'), 'Drinks');
+      await userEvent.selectOptions(within(menuSection).getByLabelText('Category'), 'Drinks');
       await userEvent.type(within(menuSection).getByLabelText('Price'), '15');
       const file = photo();
       await userEvent.upload(within(menuSection).getByLabelText('Photo (optional)'), file);
@@ -174,7 +262,7 @@ describe('<SetupTab>', () => {
     it('refuses an oversized photo before saving anything', async () => {
       const menuSection = await openMenu();
       await userEvent.type(within(menuSection).getByLabelText('Name'), 'Chapman');
-      await userEvent.type(within(menuSection).getByLabelText('Category'), 'Drinks');
+      await userEvent.selectOptions(within(menuSection).getByLabelText('Category'), 'Drinks');
       await userEvent.type(within(menuSection).getByLabelText('Price'), '15');
       const big = new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'huge.png', { type: 'image/png' });
       await userEvent.upload(within(menuSection).getByLabelText('Photo (optional)'), big);
@@ -190,7 +278,7 @@ describe('<SetupTab>', () => {
       mocks.uploadMenuItemImage.mockRejectedValue(new ApiError({ code: 'VALIDATION_INVALID_IMAGE', message: 'The photo must be a JPG, PNG, or WebP image.' }));
       const menuSection = await openMenu();
       await userEvent.type(within(menuSection).getByLabelText('Name'), 'Chapman');
-      await userEvent.type(within(menuSection).getByLabelText('Category'), 'Drinks');
+      await userEvent.selectOptions(within(menuSection).getByLabelText('Category'), 'Drinks');
       await userEvent.type(within(menuSection).getByLabelText('Price'), '15');
       await userEvent.upload(within(menuSection).getByLabelText('Photo (optional)'), photo());
       await userEvent.click(within(menuSection).getByRole('button', { name: 'Add item' }));
@@ -246,7 +334,7 @@ describe('<SetupTab>', () => {
     mocks.updateOutlet.mockRejectedValue(new Error('You do not have this permission.'));
     render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await userEvent.click(within((await screen.findByText('Main Bar')).closest('tr')).getByRole('button', { name: 'Edit' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     expect(await screen.findByText('Could not update this outlet.')).toBeInTheDocument();
@@ -255,7 +343,7 @@ describe('<SetupTab>', () => {
   it('Cancel discards an outlet edit without submitting', async () => {
     render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await userEvent.click(within((await screen.findByText('Main Bar')).closest('tr')).getByRole('button', { name: 'Edit' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
 
     expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument();

@@ -36,6 +36,11 @@ function posRouter() {
   router.patch('/pos/terminals/:id', requirePermission('pos.manage'), controller.updateTerminal);
   router.post('/pos/terminals/:id/archive', requirePermission('pos.manage'), controller.archiveTerminal);
 
+  router.get('/pos/menu-categories', requirePermission('pos.operate'), controller.listMenuCategories);
+  router.post('/pos/menu-categories', requirePermission('pos.manage'), controller.createMenuCategory);
+  router.patch('/pos/menu-categories/:id', requirePermission('pos.manage'), controller.updateMenuCategory);
+  router.post('/pos/menu-categories/:id/archive', requirePermission('pos.manage'), controller.archiveMenuCategory);
+
   router.get('/pos/menu-items', requirePermission('pos.operate'), controller.listMenuItems);
   router.post('/pos/menu-items', requirePermission('pos.manage'), controller.createMenuItem);
   router.patch('/pos/menu-items/:id', requirePermission('pos.manage'), controller.updateMenuItem);

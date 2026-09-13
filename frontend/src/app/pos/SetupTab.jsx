@@ -3,6 +3,7 @@ import { Card, DataTable, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { posApi, ApiError } from '../../shared/api/index.js';
 import formStyles from './POSForm.module.css';
+import { MenuCategoriesCard } from './MenuCategoriesCard.jsx';
 
 /**
  * SetupTab — PLAN.md Phase 4's POS core: outlets, terminals, menu items.
@@ -80,6 +81,8 @@ export function SetupTab({ activeProperty }) {
   const [menuEditPhoto, setMenuEditPhoto] = useState(null);
   const [menuEditImageUrl, setMenuEditImageUrl] = useState(null);
   const [photoInputKey, setPhotoInputKey] = useState(0);
+  // Registered menu categories (shared by every outlet) feeding the category dropdowns.
+  const [categories, setCategories] = useState(null);
 
   async function reload() {
     try {
@@ -90,9 +93,38 @@ export function SetupTab({ activeProperty }) {
     }
   }
 
+  async function reloadCategories() {
+    try {
+      setCategories(await posApi.listMenuCategories());
+    } catch {
+      setCategories([]);
+    }
+  }
+
+  /** A category renamed or archived changes the menu items shown, so refresh both. */
+  async function handleCategoriesChanged() {
+    await reloadCategories();
+    if (selectedOutletId) await reloadOutletDetail(selectedOutletId);
+  }
+
+  /**
+   * Options for a category dropdown. A menu item already in a category that
+   * is no longer active keeps that value selectable, so opening its edit form
+   * never silently changes it.
+   */
+  function categoryOptions(current) {
+    const names = (categories ?? []).map((category) => category.name);
+    if (current && !names.includes(current)) names.push(current);
+    return names;
+  }
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     reload();
+    posApi
+      .listMenuCategories()
+      .then(setCategories)
+      .catch(() => setCategories([]));
   }, []);
 
   async function reloadOutletDetail(outletId) {
@@ -388,6 +420,8 @@ export function SetupTab({ activeProperty }) {
         </Card>
       )}
 
+      <MenuCategoriesCard categories={categories} onChanged={handleCategoriesChanged} />
+
       {selectedOutlet && (
         <>
           <Card title={`Terminals — ${selectedOutlet.name}`}>
@@ -488,6 +522,9 @@ export function SetupTab({ activeProperty }) {
                 {menuError}
               </p>
             )}
+            {categories !== null && categories.length === 0 && (
+              <p className={formStyles.hint}>Add a category in Menu categories above before adding menu items.</p>
+            )}
             <form className={formStyles.row} onSubmit={handleCreateMenuItem}>
               <label className={formStyles.field}>
                 <span className={formStyles.label}>Name</span>
@@ -495,7 +532,14 @@ export function SetupTab({ activeProperty }) {
               </label>
               <label className={formStyles.field}>
                 <span className={formStyles.label}>Category</span>
-                <input className={formStyles.input} value={menuForm.category} onChange={(e) => setMenuForm({ ...menuForm, category: e.target.value })} required />
+                <select className={formStyles.select} value={menuForm.category} onChange={(e) => setMenuForm({ ...menuForm, category: e.target.value })} required>
+                  <option value="">Choose a category</option>
+                  {categoryOptions('').map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className={formStyles.field}>
                 <span className={formStyles.label}>Price</span>
@@ -569,7 +613,13 @@ export function SetupTab({ activeProperty }) {
                 </label>
                 <label className={formStyles.field}>
                   <span className={formStyles.label}>Category</span>
-                  <input className={formStyles.input} value={menuEditForm.category} onChange={(e) => setMenuEditForm({ ...menuEditForm, category: e.target.value })} required />
+                  <select className={formStyles.select} value={menuEditForm.category} onChange={(e) => setMenuEditForm({ ...menuEditForm, category: e.target.value })} required>
+                    {categoryOptions(menuEditForm.category).map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className={formStyles.field}>
                   <span className={formStyles.label}>Price</span>

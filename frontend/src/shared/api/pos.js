@@ -53,6 +53,24 @@ export function archiveTerminal(id) {
   return request(`/pos/terminals/${id}/archive`, { method: 'POST', body: {} });
 }
 
+// Menu categories — a registered list shared by every outlet.
+
+export function listMenuCategories() {
+  return request('/pos/menu-categories');
+}
+
+export function createMenuCategory({ name, sortOrder }) {
+  return request('/pos/menu-categories', { method: 'POST', body: { name, sort_order: sortOrder } });
+}
+
+export function updateMenuCategory(id, { name, sortOrder }) {
+  return request(`/pos/menu-categories/${id}`, { method: 'PATCH', body: { name, sort_order: sortOrder } });
+}
+
+export function archiveMenuCategory(id) {
+  return request(`/pos/menu-categories/${id}/archive`, { method: 'POST' });
+}
+
 export function listMenuItems(outletId) {
   const params = outletId ? `?${new URLSearchParams({ outlet_id: outletId })}` : '';
   return request(`/pos/menu-items${params}`);
