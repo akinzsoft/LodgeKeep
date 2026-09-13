@@ -41,6 +41,7 @@ function renderScreen({ cart = CART, paymentMethod = 'card' } = {}) {
 describe('<CheckoutScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
+    window.sessionStorage.clear();
   });
 
   it('shows an honest empty-cart message when no cart was carried across', async () => {
@@ -95,6 +96,22 @@ describe('<CheckoutScreen>', () => {
 
     expect(await screen.findByText('room-charge screen')).toBeInTheDocument();
     expect(mocks.openPaystackPopup).not.toHaveBeenCalled();
+  });
+
+  it('clears the remembered cart once the order is placed, but keeps it if placing fails', async () => {
+    const key = `lodgekeep.qr-cart.${TOKEN}`;
+    window.sessionStorage.setItem(key, JSON.stringify({ 10: 2 }));
+    mocks.createOrder.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ id: '80' });
+    renderScreen({ paymentMethod: 'room_charge' });
+
+    await userEvent.type(await screen.findByLabelText(/Email/), 'guest@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not place this order.');
+    expect(window.sessionStorage.getItem(key)).not.toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(await screen.findByText('room-charge screen')).toBeInTheDocument();
+    expect(window.sessionStorage.getItem(key)).toBeNull();
   });
 
   it('surfaces a real backend error when order creation itself fails', async () => {
