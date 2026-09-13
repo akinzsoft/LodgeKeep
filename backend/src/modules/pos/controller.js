@@ -333,6 +333,25 @@ async function listOrders(req, res, next) {
   }
 }
 
+async function listKitchenTickets(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listKitchenTickets({ context: req.context, outletId: req.query.outlet_id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function markTicketDone(req, res, next) {
+  try {
+    const order = await service.markTicketDone({ context: req.context, orderId: req.params.id, userId: req.context.userId });
+    if (!order) return notFound(res);
+    await req.audit({ entityType: 'pos_orders', entityId: order.id, action: 'ticket_done', afterState: { ticket_done_at: order.ticket_done_at } });
+    res.status(200).json(ok(order));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getOrder(req, res, next) {
   try {
     const order = await service.getOrder({ context: req.context, id: req.params.id });
@@ -685,6 +704,8 @@ module.exports = {
   archiveMenuItem,
   findInHouseForCharge,
   listOrders,
+  listKitchenTickets,
+  markTicketDone,
   getOrder,
   openOrder,
   addItem,

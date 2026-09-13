@@ -382,6 +382,111 @@ async function listOrders({ context, outletId, status }) {
   return query.orderBy('opened_at', 'desc');
 }
 
+/**
+ * The kitchen/bar ticket queue (POS → Tickets): every tab with something to
+ * make that the kitchen has not yet marked done, oldest first, with its
+ * unvoided items and their menu names — one query for the tabs and one for
+ * all their items.
+ *
+ * Not "open tabs": a tab paid at the point of order (a guest QR card order,
+ * the Register's "Send to Bar & Checkout") is settled within seconds, long
+ * before anything is made. So a ticket is any non-void tab whose
+ * `ticket_done_at` is still empty, paid or not.
+ *
+ * Guest QR orders appear once paid (`received`, still awaiting acceptance
+ * on the Guest orders tab — flagged so) or accepted (`preparing`). An order
+ * still awaiting card payment never reaches the kitchen; one already
+ * `on_the_way` has left it. Tabs with no items are left out.
+ */
+const TICKET_GUEST_STATUSES = ['received', 'preparing'];
+
+async function listKitchenTickets({ context, outletId }) {
+  const db = scopedDb().for(context);
+  let query = db
+    .table('pos_orders')
+    .joinScoped('pos_outlets', (join) => join.on('pos_outlets.id', '=', 'pos_orders.outlet_id'))
+    .joinScoped('pos_guest_orders', (join) => join.on('pos_guest_orders.pos_order_id', '=', 'pos_orders.id'), { type: 'left' })
+    .whereIn('pos_orders.status', ['open', 'settled'])
+    .whereNull('pos_orders.ticket_done_at');
+  if (outletId) query = query.where('pos_orders.outlet_id', outletId);
+  const orders = await query
+    .select(
+      'pos_orders.id',
+      'pos_orders.outlet_id',
+      'pos_outlets.name as outlet_name',
+      'pos_orders.table_label',
+      'pos_orders.source',
+      'pos_orders.status',
+      'pos_orders.opened_at',
+      'pos_guest_orders.status as guest_status',
+      'pos_guest_orders.guest_name'
+    )
+    .orderBy('pos_orders.opened_at', 'asc')
+    .orderBy('pos_orders.id', 'asc');
+
+  const visible = orders.filter((order) => order.source !== 'guest' || TICKET_GUEST_STATUSES.includes(order.guest_status));
+  if (visible.length === 0) return [];
+
+  const items = await db
+    .table('pos_order_items')
+    .joinScoped('pos_menu_items', (join) => join.on('pos_menu_items.id', '=', 'pos_order_items.menu_item_id'))
+    .whereIn(
+      'pos_order_items.pos_order_id',
+      visible.map((order) => order.id)
+    )
+    .whereNull('pos_order_items.voided_at')
+    .select(
+      'pos_order_items.id',
+      'pos_order_items.pos_order_id',
+      'pos_order_items.quantity',
+      'pos_order_items.modifiers',
+      'pos_order_items.created_at',
+      'pos_menu_items.name',
+      'pos_menu_items.category'
+    )
+    .orderBy('pos_order_items.id', 'asc');
+
+  const itemsByOrder = new Map();
+  for (const item of items) {
+    const key = String(item.pos_order_id);
+    if (!itemsByOrder.has(key)) itemsByOrder.set(key, []);
+    itemsByOrder.get(key).push({
+      id: item.id,
+      quantity: item.quantity,
+      name: item.name,
+      category: item.category,
+      modifiers: item.modifiers ?? null,
+      added_at: item.created_at,
+    });
+  }
+
+  return visible
+    .map((order) => ({ ...order, guest_status: order.source === 'guest' ? order.guest_status : null, items: itemsByOrder.get(String(order.id)) ?? [] }))
+    .filter((order) => order.items.length > 0);
+}
+
+/**
+ * Marks a tab's ticket done — it leaves the kitchen queue. Conditional
+ * UPDATE, so two screens bumping the same ticket record one "done by".
+ * Marking an already-done ticket is a harmless no-op. A guest order not yet
+ * accepted cannot be marked done: it may still be auto-rejected and
+ * refunded, so nothing should be made for it yet.
+ */
+async function markTicketDone({ context, orderId, userId }) {
+  const db = scopedDb().for(context);
+  const order = await db.table('pos_orders').where({ id: orderId }).first();
+  if (!order) return null;
+  if (order.status === 'void') throw new OrderNotOpenError(orderId, order.status);
+  if (order.source === 'guest') {
+    const guestOrder = await db.table('pos_guest_orders').where({ pos_order_id: orderId }).first('status');
+    if (guestOrder && !['preparing', 'on_the_way'].includes(guestOrder.status)) {
+      throw new ValidationError('POS_TICKET_GUEST_ORDER_NOT_ACCEPTED', 'Accept this guest order on the Guest orders tab before marking it done.');
+    }
+  }
+  await db.table('pos_orders').where({ id: orderId }).whereNull('ticket_done_at').update({ ticket_done_at: new Date(), ticket_done_by_user_id: userId });
+  return db.table('pos_orders').where({ id: orderId }).first();
+}
+
 async function getOrder({ context, id }) {
   const db = scopedDb().for(context);
   return db.table('pos_orders').where({ id }).first();
@@ -454,6 +559,8 @@ async function addItem({ context, orderId, menuItemId, quantity, modifiers }) {
       unit_price: menuItem.price,
       modifiers: modifiers ?? null,
     });
+    // A new item sends the tab back to the kitchen queue.
+    if (order.ticket_done_at) await trx.table('pos_orders').where({ id: orderId }).update({ ticket_done_at: null, ticket_done_by_user_id: null });
     return { order, items: await trx.table('pos_order_items').where({ pos_order_id: orderId }).orderBy('id') };
   });
 }
@@ -1090,6 +1197,8 @@ module.exports = {
   removeMenuItemImage,
   findInHouseForCharge,
   listOrders,
+  listKitchenTickets,
+  markTicketDone,
   getOrder,
   listOrderItems,
   listOrderSettlements,
