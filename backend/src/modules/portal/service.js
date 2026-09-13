@@ -65,7 +65,9 @@ async function getPropertyBranding({ context }) {
   const db = scopedDb().for(context);
   const property = await db.table('properties').where({ id: context.propertyId }).first('name', 'logo_url', 'theme', 'base_currency');
   if (!property) return null;
-  return { name: property.name, logoUrl: property.logo_url, theme: property.theme ?? null, baseCurrency: property.base_currency };
+  // The hotel group's own name, shown above the property name on guest pages.
+  const tenant = await db.table('tenants').first('name');
+  return { name: property.name, tenantName: tenant?.name ?? null, logoUrl: property.logo_url, theme: property.theme ?? null, baseCurrency: property.base_currency };
 }
 
 /**

@@ -6,6 +6,7 @@ import { MenuScreen } from './screens/MenuScreen.jsx';
 import { CheckoutScreen } from './screens/CheckoutScreen.jsx';
 import { RoomChargeConfirmScreen } from './screens/RoomChargeConfirmScreen.jsx';
 import { OrderStatusScreen } from './screens/OrderStatusScreen.jsx';
+import { QrBrandHeader } from './components/QrBrandHeader.jsx';
 
 /**
  * QrOrderApp — PLAN.md Phase 6's QR self-ordering gap closure
@@ -55,6 +56,7 @@ function TokenScope() {
   const fetchBranding = useCallback(() => qrOrderingApi.getBranding(token), [token]);
   return (
     <BrandingProvider fetchBranding={fetchBranding} rootId="qr-order-root">
+      <QrBrandHeader />
       <Outlet context={{ token }} />
     </BrandingProvider>
   );

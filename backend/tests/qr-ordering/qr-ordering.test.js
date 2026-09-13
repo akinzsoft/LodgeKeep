@@ -346,6 +346,8 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.name).toBeTruthy();
       expect(res.body.data.baseCurrency).toBeTruthy();
+      const tenant = await t.trx('tenants').where({ id: ctx.a.id }).first('name');
+      expect(res.body.data.tenantName).toBe(tenant.name);
       expect(res.body.data).toHaveProperty('logoUrl');
       expect(res.body.data).toHaveProperty('theme');
     });

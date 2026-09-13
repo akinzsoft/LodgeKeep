@@ -232,6 +232,7 @@
 }
 
 body {
+  margin: 0; /* the browser's default 8px margin left edge-to-edge bands (the guest QR header) short of the screen edge */
   background: var(--surface-page);
   color: var(--text-primary);
   font-family: var(--font-sans);
