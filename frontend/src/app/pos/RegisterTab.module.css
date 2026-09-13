@@ -11,39 +11,51 @@
  * fixed-dark exception rather than a themed surface. The outlet/terminal
  * picker and the multi-tab strip stay in the light shell, above the panel
  * — they're station setup, not the order-taking surface itself.
+ *
+ * Layout pass (user-reported): the picker and the tab strip used to be two
+ * separate full-width rows (`.stationBar` with a stacked label+select per
+ * field, then `.tabsBar` below it), each pushing the panel further down.
+ * `.compactHeader` replaces both with one slim, wrapping row of compact
+ * controls instead — still real, functioning selects (see `RegisterTab.jsx`
+ * for why `aria-label` replaces the visible label text this used to show
+ * above each select).
  */
 
-.stationBar {
+.compactHeader {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-3);
-}
-
-.stationField {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  flex: 1;
-  min-width: 10rem;
-  max-width: 16rem;
-}
-
-.tabsBar {
-  display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-2);
-  margin-top: var(--space-3);
 }
 
-.tabChip {
-  min-height: var(--control-h-touch);
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-md);
-  border: 2px solid var(--border-strong);
+.compactSelect {
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
   background: var(--surface-card);
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: var(--text-label-size);
+  max-width: 11rem;
+}
+
+.compactTabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tabChip {
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-caption-size);
   font-weight: 600;
   cursor: pointer;
 }
@@ -60,7 +72,7 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 0;
-  margin-top: var(--space-4);
+  margin-top: var(--space-2);
   border-radius: var(--radius-lg);
   border: 1px solid var(--pos-register-card-border);
   background: var(--pos-register-panel-bg);
@@ -99,13 +111,13 @@
   justify-content: center;
   gap: var(--space-1);
   flex-shrink: 0;
-  width: 72px;
+  width: 68px;
   min-height: var(--control-h-touch);
   padding: var(--space-2);
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--pos-register-text-secondary);
+  color: var(--pos-register-rail-text);
   font-family: var(--font-sans);
   font-size: var(--text-caption-size);
   font-weight: 600;
@@ -527,6 +539,13 @@
   gap: var(--space-2);
 }
 
+/* Color-correction pass (user-reported): all 3 tender buttons share this
+   exact look, always — no active/selected state changes it (see
+   `RegisterTab.jsx`'s own comment at this button's render site for why).
+   `--pos-register-payment-border`/`-payment-text` are dedicated tokens,
+   distinct from the card border/secondary-text tokens used elsewhere on
+   this panel, matching the user's own precisely specified values for this
+   one element. */
 .paymentButton {
   display: flex;
   flex-direction: column;
@@ -536,9 +555,9 @@
   min-height: var(--control-h-touch);
   padding: var(--space-2);
   border-radius: var(--radius-sm);
-  border: 1px solid var(--pos-register-card-border);
+  border: 1px solid var(--pos-register-payment-border);
   background: var(--pos-register-card-bg);
-  color: var(--pos-register-text-secondary);
+  color: var(--pos-register-payment-text);
   font-family: var(--font-sans);
   font-size: var(--text-caption-size);
   font-weight: 600;
@@ -548,12 +567,6 @@
 .paymentButton:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.paymentButtonActive {
-  border-color: var(--pos-register-brass);
-  background: var(--pos-register-brass-tint);
-  color: var(--pos-register-brass-text);
 }
 
 .roomChargeLink {

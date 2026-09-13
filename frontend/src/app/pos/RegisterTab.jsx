@@ -35,6 +35,16 @@ const PAYMENT_METHODS = [
 
 const ZERO = '0.00';
 
+// Layout pass (user-reported): the ticket's own "Service %" input is gone —
+// service is now a fixed, non-editable rate, computed against the real
+// server-verified subtotal exactly like the cashier-typed version used to
+// be (`percentOfMoney`, same exact-decimal arithmetic). No tip concept
+// remains either (the Tip input is gone too) — `handleSubmitSettlement`
+// simply never sends a `tipAmount`, and the backend's own `settleOrder`
+// already defaults a missing one to "0.00" (confirmed by reading
+// `pos/service.js` directly), so this is not a breaking payload change.
+const SERVICE_CHARGE_PERCENT = '7.5';
+
 /** Groups unvoided order items by (menu item, split group) so repeated taps on the same tile show one line reading "×3", not three separate "×1" rows underneath. Each group remembers its own rows in insertion order, since "remove one" targets the most recently added row, not an arbitrary one. */
 function groupOrderItems(items) {
   const order = [];
@@ -54,15 +64,15 @@ function defaultSettlementForm(splitGroup) {
   return {
     splitGroup,
     method: 'cash',
-    // `tenderLabel` tracks which of the 4 visual tender buttons is
-    // highlighted, separately from `method` — "Card" and "NQR" both
-    // submit `method: 'card'` (see `PAYMENT_METHODS`' own header), so
-    // highlighting purely by `method` would light up both at once the
-    // moment either was picked. `method` alone is still what actually
-    // submits; `tenderLabel` is presentation-only.
+    // `tenderLabel` tracks which tender the cashier picked, separately from
+    // `method` — "Card" and "NQR" both submit `method: 'card'` (see
+    // `PAYMENT_METHODS`' own header). Layout pass: the three tender buttons
+    // no longer show a visual highlight for whichever is picked (user-
+    // reported: "no highlighted/primary state on any one of them"), but
+    // `tenderLabel` is still tracked — `aria-pressed` on each button still
+    // conveys the real selection to assistive tech, and it's still needed
+    // to distinguish "Card" from "NQR" even though both submit identically.
     tenderLabel: 'Cash',
-    tipAmount: ZERO,
-    servicePercent: ZERO,
     roomChargeQuery: '',
     roomChargeGuest: null,
     roomChargeResults: [],
@@ -97,13 +107,22 @@ function defaultSettlementForm(splitGroup) {
  *    ticket panel itself with no modal at all.
  * 3. **"Service %"** — this codebase's `serviceCharge` has always been a
  *    flat amount the cashier types; there was no percentage concept
- *    anywhere. The cashier now types a percent, computed against the
- *    real, server-verified subtotal via `percentOfMoney` (exact BigInt-
- *    cents arithmetic, `shared/money.js`) — the computed flat amount is
- *    what actually submits, so the backend contract is unchanged.
+ *    anywhere. This originally became a cashier-typed percent, computed
+ *    against the real, server-verified subtotal via `percentOfMoney`
+ *    (exact BigInt-cents arithmetic, `shared/money.js`); a later layout
+ *    pass (user-reported, no Tip input and no editable Service % field —
+ *    "Subtotal, Service (7.5%, fixed), Total" only) fixed the rate to
+ *    `SERVICE_CHARGE_PERCENT` and dropped Tip entirely — the computed flat
+ *    amount is still what actually submits, so the backend contract is
+ *    unchanged either way.
  * 4. **The Tax line** — the mockup's own totals list doesn't name it, but
  *    dropping it would silently reintroduce the exact bug this file's own
- *    settlement-preview fix (below) exists to close. Kept.
+ *    settlement-preview fix (below) exists to close. Kept, conditionally
+ *    shown only when genuinely nonzero (unchanged by the later layout
+ *    pass above) — this dev tenant has no tax configured, so in practice
+ *    the ticket shows exactly Subtotal/Service/Total as that pass asked,
+ *    but a real VAT-configured property still sees its real tax line
+ *    rather than having it silently hidden.
  *
  * The always-visible ticket needed the settlement-preview fetch (below) to
  * become REACTIVE — it used to run only once, when a separate "Settle"
@@ -375,8 +394,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
         settlementForms.map((form) => ({
           splitGroup: form.splitGroup,
           method: form.method,
-          tipAmount: form.tipAmount || ZERO,
-          serviceCharge: serviceAmountForGroup(form.splitGroup, form.servicePercent) ?? ZERO,
+          serviceCharge: serviceAmountForGroup(form.splitGroup) ?? ZERO,
           roomCharge:
             form.method === 'room_charge'
               ? { reservationId: form.roomChargeGuest?.reservationId, authMethod: form.authMethod, authReference: form.authReference }
@@ -517,17 +535,17 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     return forms !== null && forms.length > 0 && forms.every((form) => previewForGroup(form.splitGroup) !== null);
   }
 
-  /** The real service-charge amount for one group — `form.servicePercent` computed against that group's own real, server-verified subtotal. Factored out (code-review fix) since this exact computation was being repeated at three separate call sites. */
-  function serviceAmountForGroup(splitGroup, servicePercent) {
+  /** The real, fixed 7.5% service-charge amount for one group, computed against that group's own real, server-verified subtotal. Factored out (code-review fix) since this exact computation was being repeated at three separate call sites. */
+  function serviceAmountForGroup(splitGroup) {
     const preview = previewForGroup(splitGroup);
-    return preview ? percentOfMoney(preview.subtotal, servicePercent) : null;
+    return preview ? percentOfMoney(preview.subtotal, SERVICE_CHARGE_PERCENT) : null;
   }
 
   function grandTotalFor(form) {
     const preview = previewForGroup(form.splitGroup);
-    const serviceAmount = serviceAmountForGroup(form.splitGroup, form.servicePercent);
+    const serviceAmount = serviceAmountForGroup(form.splitGroup);
     if (!preview || serviceAmount === null) return null;
-    return sumMoney([preview.subtotal, preview.taxAmount, form.tipAmount || ZERO, serviceAmount]);
+    return sumMoney([preview.subtotal, preview.taxAmount, serviceAmount]);
   }
 
   function menuItemName(id) {
@@ -565,48 +583,54 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
 
       {!settleResult && (
         <>
-          <div className={styles.stationBar}>
-            <label className={styles.stationField}>
-              <span className={formStyles.label}>Outlet</span>
-              <select className={formStyles.select} value={outletId} onChange={(e) => handleSelectOutlet(e.target.value)}>
-                <option value="">Select an outlet</option>
-                {(outlets ?? []).map((outlet) => (
-                  <option key={outlet.id} value={outlet.id}>
-                    {outlet.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.stationField}>
-              <span className={formStyles.label}>Terminal</span>
-              <select className={formStyles.select} value={terminalId} onChange={(e) => setTerminalId(e.target.value)} disabled={!outletId}>
-                <option value="">Select a terminal</option>
-                {terminals.map((terminal) => (
-                  <option key={terminal.id} value={terminal.id}>
-                    {terminal.device_ref}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          {outletId && (
-            <div className={styles.tabsBar}>
-              {openOrders.map((order) => (
-                <button
-                  key={order.id}
-                  type="button"
-                  className={`${styles.tabChip} ${activeOrderId === order.id ? styles.tabChipActive : ''}`.trim()}
-                  onClick={() => switchToTab(order)}
-                >
-                  {order.table_label || `Tab #${order.id}`}
-                </button>
+          {/*
+            Layout pass (user-reported): the outlet/terminal picker and the
+            tab strip used to be two separate full-width rows above the
+            panel, each pushing it further down. Folded into one slim,
+            wrapping row instead — still real, functioning controls (a
+            cashier still must pick a terminal before opening a tab), just
+            compact rather than a full labeled-field layout. `aria-label`
+            (not a wrapping `<label>` with visible text above the select)
+            keeps the same accessible name a screen reader or `getByLabelText`
+            test relies on, without the extra vertical space a visible label
+            row would cost.
+          */}
+          <div className={styles.compactHeader}>
+            <select className={styles.compactSelect} aria-label="Outlet" value={outletId} onChange={(e) => handleSelectOutlet(e.target.value)}>
+              <option value="">Select an outlet</option>
+              {(outlets ?? []).map((outlet) => (
+                <option key={outlet.id} value={outlet.id}>
+                  {outlet.name}
+                </option>
               ))}
-              <button type="button" className={styles.tabChip} onClick={handleNewTab} disabled={isOffline || openingTab}>
-                + New tab
-              </button>
-            </div>
-          )}
+            </select>
+            <select className={styles.compactSelect} aria-label="Terminal" value={terminalId} onChange={(e) => setTerminalId(e.target.value)} disabled={!outletId}>
+              <option value="">Select a terminal</option>
+              {terminals.map((terminal) => (
+                <option key={terminal.id} value={terminal.id}>
+                  {terminal.device_ref}
+                </option>
+              ))}
+            </select>
+
+            {outletId && (
+              <div className={styles.compactTabs}>
+                {openOrders.map((order) => (
+                  <button
+                    key={order.id}
+                    type="button"
+                    className={`${styles.tabChip} ${activeOrderId === order.id ? styles.tabChipActive : ''}`.trim()}
+                    onClick={() => switchToTab(order)}
+                  >
+                    {order.table_label || `Tab #${order.id}`}
+                  </button>
+                ))}
+                <button type="button" className={styles.tabChip} onClick={handleNewTab} disabled={isOffline || openingTab}>
+                  + New tab
+                </button>
+              </div>
+            )}
+          </div>
 
           {activeOrder && (
             <div className={styles.panel}>
@@ -758,7 +782,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                           <SettlementFields
                             form={singleSettlementForm}
                             preview={previewForGroup(singleSettlementForm.splitGroup)}
-                            serviceAmount={serviceAmountForGroup(singleSettlementForm.splitGroup, singleSettlementForm.servicePercent)}
+                            serviceAmount={serviceAmountForGroup(singleSettlementForm.splitGroup)}
                             grandTotal={grandTotalFor(singleSettlementForm)}
                             currencyCode={activeProperty.base_currency}
                             isOffline={isOffline}
@@ -817,7 +841,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                     <SettlementFields
                       form={form}
                       preview={previewForGroup(form.splitGroup)}
-                      serviceAmount={serviceAmountForGroup(form.splitGroup, form.servicePercent)}
+                      serviceAmount={serviceAmountForGroup(form.splitGroup)}
                       grandTotal={grandTotalFor(form)}
                       currencyCode={activeProperty.base_currency}
                       isOffline={isOffline}
@@ -873,13 +897,19 @@ function PreviewErrorBanner({ message, onRetry }) {
 }
 
 /**
- * One settlement group's editable fields (subtotal/tax preview, tip,
- * service %, grand total, payment method, room-charge sub-form) — shared
- * verbatim between the single-group inline checkout and the multi-group
- * split modal, so the two paths can never drift apart. `serviceAmount` is
- * computed once by the caller (`serviceAmountForGroup`) rather than here —
- * code-review fix: this component, `grandTotalFor`, and `handleSubmitSettlement`
- * were each independently calling `percentOfMoney` on the same inputs.
+ * One settlement group's fields (subtotal/tax/service preview, grand total,
+ * payment method, room-charge sub-form) — shared verbatim between the
+ * single-group inline checkout and the multi-group split modal, so the two
+ * paths can never drift apart. `serviceAmount` is computed once by the
+ * caller (`serviceAmountForGroup`) rather than here — code-review fix: this
+ * component, `grandTotalFor`, and `handleSubmitSettlement` were each
+ * independently calling `percentOfMoney` on the same inputs.
+ *
+ * Layout pass (user-reported): no Tip input, no editable Service % input —
+ * just Subtotal, (Tax when nonzero,) Service at the fixed
+ * `SERVICE_CHARGE_PERCENT`, Total. See `defaultSettlementForm`'s own header
+ * for why `form` still carries no `tipAmount` field at all rather than a
+ * dead one nothing ever sets.
  */
 function SettlementFields({ form, preview, serviceAmount, grandTotal, currencyCode, isOffline, onPatch, onGuestSearch }) {
   return (
@@ -890,38 +920,22 @@ function SettlementFields({ form, preview, serviceAmount, grandTotal, currencyCo
             <span>Subtotal</span>
             <Money amount={preview.subtotal} currencyCode={currencyCode} />
           </div>
-          {/* Tax/Tip are real, always-computed values — never silently
-              omitted the moment either is genuinely nonzero (the exact bug
-              this file's own settlement-preview fix exists to close) — but
-              hidden when they're exactly "0.00", matching the reference
-              design's own clean look for the common no-tax/no-tip case
-              (this dev tenant has no tax configured at all). Service stays
-              always visible since it's the one line the cashier is
-              actively editing via the input just below. */}
+          {/* Tax is a real, always-computed value — never silently omitted
+              the moment it's genuinely nonzero (the exact bug this file's
+              own settlement-preview fix exists to close) — but hidden when
+              it's exactly "0.00", matching the reference design's own clean
+              look for the common no-tax case (this dev tenant has no tax
+              configured at all). Service stays always visible — its
+              percentage is fixed, not cashier-entered, so there's no
+              "haven't typed it yet" state to hide behind. */}
           {preview.taxAmount !== ZERO && (
             <div className={styles.settlementLine}>
               <span>Tax</span>
               <Money amount={preview.taxAmount} currencyCode={currencyCode} />
             </div>
           )}
-          {/* Bug fix (code-review pass): `form.tipAmount` is raw, un-
-              normalized text a cashier typed, unlike `preview.taxAmount`
-              (always a server-formatted "X.XX" string) — a plain
-              `!== ZERO` string comparison would spuriously show this line
-              for "0", "0.0", or "00.00" (a cashier clearing the field back
-              to zero rather than blanking it), even though the real value
-              is zero. `Number(...)` is safe here specifically because
-              this is a display-only zero CHECK, never an arithmetic
-              operation on the value itself — the actual submitted/summed
-              amount is always the exact original string. */}
-          {Number(form.tipAmount || 0) !== 0 && (
-            <div className={styles.settlementLine}>
-              <span>Tip</span>
-              <Money amount={form.tipAmount} currencyCode={currencyCode} />
-            </div>
-          )}
           <div className={styles.settlementLine}>
-            <span>Service ({form.servicePercent || '0'}%)</span>
+            <span>Service ({SERVICE_CHARGE_PERCENT}%)</span>
             <Money amount={serviceAmount} currencyCode={currencyCode} />
           </div>
         </>
@@ -929,43 +943,27 @@ function SettlementFields({ form, preview, serviceAmount, grandTotal, currencyCo
         <p className={formStyles.disabledNotice}>Calculating subtotal and tax…</p>
       )}
 
-      <div className={formStyles.row}>
-        <label className={formStyles.field}>
-          <span className={styles.fieldLabel}>Tip</span>
-          <input
-            className={styles.darkInput}
-            type="number"
-            step="0.01"
-            min="0"
-            value={form.tipAmount}
-            onChange={(e) => onPatch({ tipAmount: e.target.value })}
-          />
-        </label>
-        <label className={formStyles.field}>
-          <span className={styles.fieldLabel}>Service %</span>
-          <input
-            className={styles.darkInput}
-            type="number"
-            step="0.1"
-            min="0"
-            max="100"
-            value={form.servicePercent}
-            onChange={(e) => onPatch({ servicePercent: e.target.value })}
-          />
-        </label>
-      </div>
-
       <div className={`${styles.settlementLine} ${styles.settlementGrandTotal}`}>
         <span>Total</span>
         {grandTotal !== null ? <Money amount={grandTotal} currencyCode={currencyCode} /> : <span>Calculating…</span>}
       </div>
 
+      {/*
+        Color-correction pass (user-reported): the 3 tender buttons carry
+        "equal visual weight, no highlighted/primary state on any one of
+        them" — the checkout button below is the screen's one and only
+        emphasized control. The selection is still real (`onPatch` still
+        fires, `form.tenderLabel` still drives what actually submits) —
+        `aria-pressed` conveys it to assistive tech without a visual cue
+        sighted users would otherwise see as a false "primary" affordance.
+      */}
       <div className={styles.paymentMethodRow}>
         {PAYMENT_METHODS.map((method) => (
           <button
             key={method.label}
             type="button"
-            className={`${styles.paymentButton} ${form.tenderLabel === method.label ? styles.paymentButtonActive : ''}`.trim()}
+            className={styles.paymentButton}
+            aria-pressed={form.tenderLabel === method.label}
             onClick={() => onPatch({ method: method.value, tenderLabel: method.label })}
             disabled={isOffline}
           >

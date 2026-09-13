@@ -87,7 +87,9 @@ describe('<RegisterTab>', () => {
     expect(checkoutButton).toBeEnabled();
 
     await userEvent.click(checkoutButton);
-    expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'cash', serviceCharge: '0.00' })]);
+    // Service is a fixed 7.5% of the real 20.00 subtotal = 1.50, computed
+    // automatically — no cashier input exists to type it.
+    expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'cash', serviceCharge: '1.50' })]);
   });
 
   it('reference-design fix: a second new tab is auto-labelled "Table 2", not left blank', async () => {
@@ -235,29 +237,28 @@ describe('<RegisterTab>', () => {
     expect(screen.queryByText('Rare Steak')).not.toBeInTheDocument();
   });
 
-  it('the checkout panel shows a real subtotal/tax/tip/service, accepts a service %, and submits the computed amount', async () => {
+  it('layout pass: the checkout panel shows a real subtotal/tax/service (fixed 7.5%, no tip or editable %) and submits the computed amount', async () => {
     const order = await openNewTab([orderItem()]);
     mocks.settleOrder.mockResolvedValue({ order: { ...order, status: 'settled' }, settlements: [] });
 
     expect(await screen.findByText('Subtotal')).toBeInTheDocument();
     expect(screen.getByText('Tax')).toBeInTheDocument();
+    expect(screen.getByText('Service (7.5%)')).toBeInTheDocument();
     expect(screen.getAllByText(/20\.00/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/1\.50/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/1\.50/).length).toBeGreaterThan(0); // tax AND service both land on 1.50 here — same 7.5% rate, same 20.00 subtotal
 
-    await userEvent.clear(screen.getByLabelText('Tip'));
-    await userEvent.type(screen.getByLabelText('Tip'), '5');
-    await userEvent.clear(screen.getByLabelText('Service %'));
-    await userEvent.type(screen.getByLabelText('Service %'), '10');
+    // No Tip input, no editable Service % input — the fixed rate applies
+    // automatically with no cashier interaction at all.
+    expect(screen.queryByLabelText('Tip')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Service %')).not.toBeInTheDocument();
 
-    // Service = 10% of the real 20.00 subtotal = 2.00, not 10% of some
-    // client-guessed number. Total = 20.00 + 1.50 tax + 5 tip + 2.00
-    // service = 28.50.
-    expect(await screen.findByText(/28\.50/)).toBeInTheDocument();
+    // Total = 20.00 subtotal + 1.50 tax + 1.50 service (7.5% of 20.00) = 23.00.
+    expect(await screen.findByText(/23\.00/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
     expect(mocks.settleOrder).toHaveBeenCalledWith(
       '9',
-      expect.arrayContaining([expect.objectContaining({ method: 'cash', tipAmount: '5', serviceCharge: '2.00' })])
+      expect.arrayContaining([expect.objectContaining({ method: 'cash', serviceCharge: '1.50' })])
     );
   });
 
