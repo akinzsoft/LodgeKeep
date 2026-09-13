@@ -14,3 +14,5 @@ backend/storage/exports/
 # PLAN.md Phase 5 data migration — uploaded customer CSV files, never
 # committed (real customer data, local-disk storage per IMPORT_STORAGE_DIR).
 backend/storage/imports/
+# POS menu item photos — uploaded per tenant, local-disk storage per MENU_IMAGE_STORAGE_DIR.
+backend/storage/menu-images/

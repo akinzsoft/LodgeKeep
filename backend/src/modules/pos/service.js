@@ -67,6 +67,7 @@ const reservationsService = require('../reservations/service');
 // establishes: this module calls INTO `stock/service.js`, which never
 // requires this file back (see that module's own header).
 const stockService = require('../stock/service');
+const menuImages = require('./menu-images');
 const {
   OrderNotOpenError,
   OrderItemAlreadyVoidedError,
@@ -158,12 +159,13 @@ async function archiveTerminal({ context, id }) {
 async function listMenuItems({ context, outletId }) {
   const db = scopedDb().for(context);
   const query = db.table('pos_menu_items').where({ status: 'active' });
-  return (outletId ? query.where({ outlet_id: outletId }) : query).orderBy('category').orderBy('name');
+  const rows = await (outletId ? query.where({ outlet_id: outletId }) : query).orderBy('category').orderBy('name');
+  return rows.map(menuImages.withImageUrl);
 }
 
 async function getMenuItem({ context, id }) {
   const db = scopedDb().for(context);
-  return db.table('pos_menu_items').where({ id }).first();
+  return menuImages.withImageUrl(await db.table('pos_menu_items').where({ id }).first());
 }
 
 async function createMenuItem({ context, outletId, name, category, price, modifiers, isAvailable }) {
@@ -184,6 +186,46 @@ async function createMenuItem({ context, outletId, name, category, price, modifi
 async function updateMenuItem({ context, id, changes }) {
   const db = scopedDb().for(context);
   await db.table('pos_menu_items').where({ id }).update(changes);
+  return getMenuItem({ context, id });
+}
+
+/**
+ * Stores a new photo for a menu item, replacing (and deleting) any previous
+ * one. The item row is locked first (ARCHITECTURE.md §5), so two uploads
+ * for the same item run one after the other and each deletes the file the
+ * other actually replaced — no file is ever left on disk unreferenced. If
+ * the item does not exist, or the update fails, the just-written file is
+ * removed again.
+ */
+async function setMenuItemImage({ context, id, buffer }) {
+  const db = scopedDb().for(context);
+  let newFile = null;
+  let replacedFile = null;
+  try {
+    await db.transaction(async (trx) => {
+      const existing = await trx.table('pos_menu_items').where({ id }).forUpdate().first();
+      if (!existing) throw new MenuItemNotFoundError();
+      newFile = menuImages.saveImage(buffer);
+      await trx.table('pos_menu_items').where({ id }).update({ image_path: newFile });
+      replacedFile = existing.image_path;
+    });
+  } catch (error) {
+    menuImages.deleteImage(newFile);
+    throw error;
+  }
+  menuImages.deleteImage(replacedFile);
+  return getMenuItem({ context, id });
+}
+
+async function removeMenuItemImage({ context, id }) {
+  const db = scopedDb().for(context);
+  const removedFile = await db.transaction(async (trx) => {
+    const existing = await trx.table('pos_menu_items').where({ id }).forUpdate().first();
+    if (!existing) throw new MenuItemNotFoundError();
+    await trx.table('pos_menu_items').where({ id }).update({ image_path: null });
+    return existing.image_path;
+  });
+  menuImages.deleteImage(removedFile);
   return getMenuItem({ context, id });
 }
 
@@ -909,6 +951,8 @@ module.exports = {
   updateMenuItem,
   setMenuItemAvailability,
   archiveMenuItem,
+  setMenuItemImage,
+  removeMenuItemImage,
   findInHouseForCharge,
   listOrders,
   getOrder,

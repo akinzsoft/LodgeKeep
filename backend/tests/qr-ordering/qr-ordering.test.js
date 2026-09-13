@@ -270,6 +270,8 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       const names = res.body.data.items.map((i) => i.name);
       expect(names).toContain('QR Test Item');
       expect(names).not.toContain('Sold Out Item');
+      // Every item carries its photo URL (null when none is set) for the guest menu.
+      expect(res.body.data.items.every((item) => 'image_url' in item)).toBe(true);
     });
 
     it('a completely nonexistent token 404s, same as a real-but-inactive one', async () => {

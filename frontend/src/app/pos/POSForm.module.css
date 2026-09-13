@@ -97,3 +97,27 @@
   width: 200px;
   height: 200px;
 }
+
+/* Menu item photos (SetupTab): a small thumbnail in the item table and a larger preview in the edit form. */
+.thumb {
+  display: block;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--surface-page);
+}
+
+.photoPreview {
+  display: block;
+  width: 96px;
+  height: 96px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
+.fileInput {
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}

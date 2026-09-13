@@ -52,6 +52,7 @@
  * of them actually perform the reversal.
  */
 
+const { withImageUrl } = require('../pos/menu-images');
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { sumMoney, compareMoney } = require('../../shared/money');
@@ -116,7 +117,7 @@ async function getMenuForToken({ context, token }) {
     .where({ outlet_id: token.outlet_id, status: 'active', is_available: true })
     .orderBy('category')
     .orderBy('name');
-  return { outlet: { id: outlet.id, name: outlet.name, type: outlet.type }, items };
+  return { outlet: { id: outlet.id, name: outlet.name, type: outlet.type }, items: items.map(withImageUrl) };
 }
 
 /**

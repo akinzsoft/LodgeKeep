@@ -43,8 +43,18 @@
 
 .itemInfo {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: var(--space-1);
+}
+
+/* Decorative item photo on the guest menu; the name beside it identifies the item. */
+.itemImage {
+  flex-shrink: 0;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
 }
 
 .itemName {

@@ -71,6 +71,7 @@ describe('<RegisterTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     paystackMocks.openPaystackPopup.mockReset();
+    window.print = vi.fn();
     mocks.listOutlets.mockResolvedValue([OUTLET]);
     mocks.listTerminals.mockResolvedValue([TERMINAL]);
     mocks.listMenuItems.mockResolvedValue([MENU_ITEM]);
@@ -262,6 +263,73 @@ describe('<RegisterTab>', () => {
       expect(within(screen.getByRole('region', { name: 'Order ticket' })).getByText('House Cocktail')).toBeInTheDocument();
       expect(screen.queryByRole('region', { name: 'Sale receipt' })).not.toBeInTheDocument();
     });
+  });
+
+  describe('printed receipt', () => {
+    async function settleCash() {
+      const order = { id: '9', table_label: 'Table 3', status: 'open' };
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN', name: 'Alpha Hotels', address: '1 Marina Road, Lagos' }} currentUserLabel="Ada Bello" />);
+      await selectStation();
+      mocks.openOrder.mockResolvedValue(order);
+      mocks.getOrder.mockResolvedValueOnce({ order, items: [orderItem({ quantity: 2 })], settlements: [] });
+      mocks.settleOrder.mockResolvedValue({
+        order: { ...order, status: 'settled' },
+        settlements: [settlementRow({ subtotal: '40.00', tax_amount: '3.00', service_charge: '3.00' })],
+      });
+      await userEvent.click(screen.getByRole('button', { name: '+ New tab' }));
+      await screen.findByText('Subtotal');
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+      await screen.findByRole('region', { name: 'Sale receipt' });
+    }
+
+    it('prints automatically once the sale is confirmed, and reprints on demand', async () => {
+      await settleCash();
+      expect(window.print).toHaveBeenCalledTimes(1);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Print receipt' }));
+      expect(window.print).toHaveBeenCalledTimes(2);
+    });
+
+    it('prints the property, receipt number, cashier, items, totals, and how it was paid', async () => {
+      await settleCash();
+      const paper = screen.getByTestId('printable-receipt');
+      expect(paper).toHaveTextContent('Alpha Hotels');
+      expect(paper).toHaveTextContent('1 Marina Road, Lagos');
+      expect(paper).toHaveTextContent('Receipt #9');
+      expect(paper).toHaveTextContent('Table 3');
+      expect(paper).toHaveTextContent('Served by Ada Bello');
+      expect(paper).toHaveTextContent('2 × House Cocktail');
+      expect(within(paper).getByText('Subtotal').parentElement).toHaveTextContent(/40\.00/);
+      expect(within(paper).getByText('Tax').parentElement).toHaveTextContent(/3\.00/);
+      expect(within(paper).getByText('TOTAL').parentElement).toHaveTextContent(/46\.00/);
+      expect(paper).toHaveTextContent('Cash');
+    });
+
+    it('sizes the printed page to an 80mm roll exactly as long as the receipt', async () => {
+      // jsdom has no layout; pretend the receipt renders just under 100mm (377.9px) tall.
+      const rect = vi.spyOn(window.Element.prototype, 'getBoundingClientRect').mockReturnValue({ height: 377.9, width: 280, top: 0, left: 0, right: 280, bottom: 377.9, x: 0, y: 0 });
+      try {
+        await settleCash();
+        expect(document.getElementById('pos-receipt-page-size').textContent).toBe('@page receipt { size: 80mm 106mm; margin: 3mm; }');
+      } finally {
+        rect.mockRestore();
+      }
+    });
+
+    it('keeps the sale on screen if the browser cannot print', async () => {
+      window.print = vi.fn(() => {
+        throw new Error('Printing blocked');
+      });
+      await settleCash();
+      expect(screen.getByRole('region', { name: 'Sale receipt' })).toBeInTheDocument();
+    });
+  });
+
+  it('shows the item photo on its menu card', async () => {
+    mocks.listMenuItems.mockResolvedValue([{ ...MENU_ITEM, image_url: '/api/v1/media/menu-items/cocktail.png' }]);
+    await openNewTab([]);
+    const card = screen.getByRole('button', { name: 'Add House Cocktail' }).closest('div').parentElement;
+    expect(card.querySelector('img')).toHaveAttribute('src', '/api/v1/media/menu-items/cocktail.png');
   });
 
   describe('card and NQR through Paystack', () => {
