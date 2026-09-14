@@ -22,11 +22,17 @@ export function getConfig() {
   return request('/door-access/config');
 }
 
-/** @param {{adapter?: string, postCheckoutGraceMinutes?: number}} changes */
-export function updateConfig({ adapter, postCheckoutGraceMinutes }) {
+/**
+ * `retentionDays` distinguishes `undefined` ("don't touch this field") from
+ * `null` ("clear it — go back to no automatic purge") the same way the
+ * backend does; JSON.stringify drops an `undefined`-valued key entirely
+ * but keeps an explicit `null`, so no extra handling is needed here.
+ * @param {{adapter?: string, postCheckoutGraceMinutes?: number, retentionDays?: number|null}} changes
+ */
+export function updateConfig({ adapter, postCheckoutGraceMinutes, retentionDays }) {
   return request('/door-access/config', {
     method: 'PUT',
-    body: { adapter, post_checkout_grace_minutes: postCheckoutGraceMinutes },
+    body: { adapter, post_checkout_grace_minutes: postCheckoutGraceMinutes, retention_days: retentionDays },
   });
 }
 

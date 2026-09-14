@@ -28,6 +28,7 @@ const CONFIG = {
   adapter: 'hiread_prousb',
   ingestionMode: 'manual_import',
   postCheckoutGraceMinutes: 15,
+  retentionDays: null,
   importMapping: null,
   lastImportAt: '2026-09-10T08:30:00.000Z',
   supportsRealtime: false,

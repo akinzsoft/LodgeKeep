@@ -19,6 +19,7 @@ const { startSubscriptionBillingWorker, scheduleSubscriptionBillingSweep } = req
 const { startTenantDataExportWorker } = require('./jobs/tenant-data-export');
 const { startDataImportWorker } = require('./jobs/data-import');
 const { startNotificationsSweepWorker, scheduleNotificationsSweep } = require('./jobs/notifications-sweep');
+const { startDoorAccessRetentionWorker, scheduleDoorAccessRetentionSweep } = require('./jobs/door-access-retention');
 
 const port = Number(process.env.PORT || 3000);
 
@@ -70,4 +71,13 @@ startDataImportWorker();
 startNotificationsSweepWorker();
 scheduleNotificationsSweep().catch((error) => {
   console.error('Failed to schedule the notifications sweep:', error);
+});
+
+// PLAN.md Phase 7 gap closure (door access data retention) —
+// `src/jobs/door-access-retention.js`'s own header. A once-daily sweep
+// purging unreferenced door_access_events past a property's configured
+// retention window; a property with no window set is never touched.
+startDoorAccessRetentionWorker();
+scheduleDoorAccessRetentionSweep().catch((error) => {
+  console.error('Failed to schedule the door access retention sweep:', error);
 });

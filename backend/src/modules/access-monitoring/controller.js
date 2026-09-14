@@ -40,6 +40,7 @@ async function updateConfig(req, res, next) {
       context: req.context,
       adapter: req.body?.adapter,
       postCheckoutGraceMinutes: req.body?.post_checkout_grace_minutes,
+      retentionDays: req.body?.retention_days,
     });
     await req.audit({ entityType: 'lock_system_config', entityId: after.id, action: before ? 'update' : 'create', beforeState: before, afterState: after });
     res.status(200).json(ok(after));

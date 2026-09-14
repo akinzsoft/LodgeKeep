@@ -59,6 +59,7 @@ function presentConfig(row, property) {
     adapter: row?.adapter ?? 'none',
     ingestionMode: row?.ingestion_mode ?? null,
     postCheckoutGraceMinutes: row?.post_checkout_grace_minutes ?? 15,
+    retentionDays: row?.retention_days ?? null,
     importMapping: row?.import_mapping ?? null,
     lastImportAt: row?.last_import_at ?? null,
     // Every adapter built so far is manual_import. Stated explicitly so the
@@ -78,12 +79,19 @@ async function getConfig({ context }) {
   return presentConfig(row, await loadProperty(db, context));
 }
 
-async function updateConfig({ context, adapter, postCheckoutGraceMinutes }) {
+async function updateConfig({ context, adapter, postCheckoutGraceMinutes, retentionDays }) {
   const issues = [];
   if (adapter !== undefined && !ADAPTERS.includes(adapter)) issues.push({ field: 'adapter', issue: 'unsupported', allowed: ADAPTERS });
   const grace = postCheckoutGraceMinutes === undefined ? undefined : Number(postCheckoutGraceMinutes);
   if (grace !== undefined && (!Number.isInteger(grace) || grace < 0 || grace > 720)) {
     issues.push({ field: 'post_checkout_grace_minutes', issue: 'must_be_whole_minutes_between_0_and_720' });
+  }
+  // `null` is a real, distinct choice here (confirmed with the user) —
+  // "clear the retention window, go back to no automatic purge" — never
+  // confused with `undefined` ("this field wasn't sent, leave it alone").
+  const retention = retentionDays === undefined ? undefined : retentionDays === null ? null : Number(retentionDays);
+  if (retention !== undefined && retention !== null && (!Number.isInteger(retention) || retention < 1 || retention > 3650)) {
+    issues.push({ field: 'retention_days', issue: 'must_be_whole_days_between_1_and_3650_or_null' });
   }
   if (issues.length) throw new ValidationError('DOOR_ACCESS_CONFIG_INVALID', 'The door access settings are invalid.', issues);
 
@@ -110,12 +118,79 @@ async function updateConfig({ context, adapter, postCheckoutGraceMinutes }) {
       changes.ingestion_mode = adapter === 'none' ? null : 'manual_import';
     }
     if (grace !== undefined) changes.post_checkout_grace_minutes = grace;
+    if (retention !== undefined) changes.retention_days = retention;
     if (Object.keys(changes).length) await trx.table('lock_system_config').where({ id: existing.id }).update(changes);
 
     const row = await trx.table('lock_system_config').first();
     const property = await loadProperty(trx, context);
     return { before: created ? null : presentConfig(existing, property), after: presentConfig(row, property) };
   });
+}
+
+const RETENTION_DELETE_CHUNK = 500;
+
+/**
+ * Deletes this property's `door_access_events` rows older than its
+ * configured `retention_days`, EXCEPT any event still referenced as
+ * evidence for an alert (`access_alert_events`) or a stay confirmation
+ * (`door_access_stay_confirmations`) — confirmed decision: a fraud
+ * incident's evidence trail and a stay confirmation's own source event are
+ * kept indefinitely, never aged out by this sweep. `access_alerts`
+ * themselves are never touched here at all (their own `evidence` column
+ * is already a JSON snapshot taken at detection time, independent of the
+ * live event row — see that table's migration header), and neither is
+ * `door_access_stay_confirmations` itself, only the raw event a purge
+ * would otherwise delete out from under it.
+ *
+ * Both reference tables have a RESTRICT foreign key back to
+ * `door_access_events`, so a referenced row could not be deleted even by
+ * accident — this function's own unreferenced-only filter exists to do
+ * the right thing proactively, not merely to avoid a constraint error.
+ *
+ * Age is `opened_at` (the occurrence instant), never `ingested_at` — this
+ * module's own "rules key off occurrence time" rule, applied here too. No
+ * property-timezone conversion is needed, unlike import parsing: "N days
+ * old" is a plain UTC duration, not a business-date concept.
+ *
+ * A `retention_days` of `null` (the default until an admin sets one)
+ * purges nothing — `{ deleted: 0 }`, not an error.
+ *
+ * Every read here runs sequentially, never `Promise.all` — this module's
+ * own earlier, hard-won lesson (a parallel read against a nested knex
+ * transaction hung the whole process). Not itself wrapped in a
+ * transaction: no NEW reference to an old, already-unreferenced event can
+ * appear between this function's read and its delete, because the only
+ * place that writes `access_alert_events`/`door_access_stay_confirmations`
+ * is `commitImport`'s rules evaluation, and it only ever evaluates
+ * NEWLY-inserted events (`evaluateEvents`), never re-examines an event
+ * already sitting in the store.
+ */
+async function purgeExpiredEvents({ context, now = new Date() }) {
+  const db = scopedDb().for(context);
+  const config = await db.table('lock_system_config').first();
+  if (!config?.retention_days) return { deleted: 0, retentionDays: config?.retention_days ?? null, configId: config?.id ?? null };
+
+  const cutoff = new Date(now.getTime() - config.retention_days * 24 * 60 * 60 * 1000);
+  const candidates = await db.table('door_access_events').where('opened_at', '<', cutoff).select('id');
+  if (!candidates.length) return { deleted: 0, retentionDays: config.retention_days, configId: config.id, cutoff };
+
+  const ids = candidates.map((row) => row.id);
+  const alertRefs = await db.table('access_alert_events').whereIn('door_access_event_id', ids).select('door_access_event_id');
+  const confirmationRefs = await db
+    .table('door_access_stay_confirmations')
+    .whereIn('door_access_event_id', ids)
+    .select('door_access_event_id');
+  const referenced = new Set(
+    [...alertRefs, ...confirmationRefs].map((row) => String(row.door_access_event_id))
+  );
+  const toDelete = ids.filter((id) => !referenced.has(String(id)));
+
+  let deleted = 0;
+  for (let i = 0; i < toDelete.length; i += RETENTION_DELETE_CHUNK) {
+    const chunk = toDelete.slice(i, i + RETENTION_DELETE_CHUNK);
+    deleted += await db.table('door_access_events').whereIn('id', chunk).delete();
+  }
+  return { deleted, retentionDays: config.retention_days, configId: config.id, cutoff, candidateCount: ids.length };
 }
 
 // ---------------------------------------------------------------------
@@ -602,6 +677,7 @@ async function listStayConfirmations({ context, from, to }) {
 module.exports = {
   getConfig,
   updateConfig,
+  purgeExpiredEvents,
   readHeaders,
   previewImport,
   commitImport,

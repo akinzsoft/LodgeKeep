@@ -22,6 +22,8 @@ const XLSX = require('xlsx');
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { purgeExpiredEvents } = require('../../src/modules/access-monitoring/service');
+const { workerContext } = require('../../src/modules/tenancy');
 
 const BASE_MAPPING = { roomColumn: 'Door', cardColumn: 'Card', timestampColumn: 'Time', timestampFormat: 'YYYY-MM-DD HH:mm:ss' };
 
@@ -416,6 +418,95 @@ describe('Door access monitoring (PLAN.md Phase 7)', () => {
     it('another tenant sees 404, never 403', async () => {
       const res = await t.request.get(`/api/v1/door-access/alerts/${alertId}`).set('Authorization', `Bearer ${tokenFor({ tenant: ctx.b })}`);
       expect(res.status).toBe(404);
+    });
+  });
+
+  // ====================================================================
+  describe('retention (gap closure, PRODUCT_REQUIREMENTS.md §3.23 legal/privacy note)', () => {
+    it('validates retention_days and round-trips a real number alongside null (no automatic purge, the default)', async () => {
+      const zero = await t.request.put('/api/v1/door-access/config').set('Authorization', `Bearer ${manager()}`).send({ retention_days: 0 });
+      expect(zero.status).toBe(400);
+      const tooLarge = await t.request.put('/api/v1/door-access/config').set('Authorization', `Bearer ${manager()}`).send({ retention_days: 3651 });
+      expect(tooLarge.status).toBe(400);
+      const fractional = await t.request.put('/api/v1/door-access/config').set('Authorization', `Bearer ${manager()}`).send({ retention_days: 2.5 });
+      expect(fractional.status).toBe(400);
+
+      const set = await t.request.put('/api/v1/door-access/config').set('Authorization', `Bearer ${manager()}`).send({ retention_days: 90 });
+      expect(set.status).toBe(200);
+      expect(set.body.data.retentionDays).toBe(90);
+      const read = await t.request.get('/api/v1/door-access/config').set('Authorization', `Bearer ${manager()}`);
+      expect(read.body.data.retentionDays).toBe(90);
+
+      const cleared = await t.request.put('/api/v1/door-access/config').set('Authorization', `Bearer ${manager()}`).send({ retention_days: null });
+      expect(cleared.status).toBe(200);
+      expect(cleared.body.data.retentionDays).toBeNull();
+    });
+
+    it('purgeExpiredEvents deletes an old, unreferenced (master-card, never-evaluated) event but keeps one that confirmed a stay, regardless of age', async () => {
+      await t.request.put('/api/v1/door-access/config').set('Authorization', `Bearer ${manager()}`).send({ retention_days: 30 });
+
+      // Unreferenced: a master card is stored but never evaluated by any
+      // rule, so it never becomes evidence for anything (LOCK-7).
+      const masterRoomId = await createRoom('RET1');
+      await commit(
+        csv([['RET1', 'MASTER-RET', 'Master', '2020-01-01 10:00:00']], 'Door,Card,Type,Time'),
+        { ...BASE_MAPPING, cardTypeColumn: 'Type', guestCardTypeValues: ['Guest'] }
+      );
+
+      // Referenced: a guest card opening a covered, checked-in stay
+      // becomes a stay confirmation — kept regardless of age.
+      const stayRoomId = await createRoom('RET2');
+      const { reservationId } = await seedStay({ roomId: stayRoomId, from: lagos('2020-01-02 09:00:00'), status: 'checked_in' });
+      await commit(csv([['RET2', 'CARD-RET', '2020-01-02 10:00:00']]));
+      expect(await t.trx('door_access_stay_confirmations').where({ reservation_id: reservationId })).toHaveLength(1);
+
+      // Not asserting an exact deleted count: this shared-transaction harness
+      // accumulates events from every earlier describe block in this file,
+      // most of them dated 2026-03-xx — genuinely older than 30 real days
+      // before whatever the actual system clock reads when this suite runs,
+      // so they are legitimately swept up alongside the two rows this test
+      // itself created. The two room-scoped checks below are what this test
+      // is actually about, and are correct regardless of that backlog.
+      const result = await purgeExpiredEvents({ context: workerContext({ tenantId: ctx.a.id, propertyId: ctx.a.properties[0].id }) });
+      expect(result.deleted).toBeGreaterThanOrEqual(1);
+
+      expect(await t.trx('door_access_events').where({ room_id: masterRoomId })).toHaveLength(0);
+      expect(await t.trx('door_access_events').where({ room_id: stayRoomId })).toHaveLength(1);
+      expect(await t.trx('door_access_stay_confirmations').where({ reservation_id: reservationId })).toHaveLength(1);
+    });
+
+    it('a null retention_days (not yet configured) purges nothing', async () => {
+      await t.request.put('/api/v1/door-access/config').set('Authorization', `Bearer ${manager()}`).send({ retention_days: null });
+
+      const roomId = await createRoom('RET3');
+      await commit(
+        csv([['RET3', 'MASTER-RET2', 'Master', '2020-01-01 10:00:00']], 'Door,Card,Type,Time'),
+        { ...BASE_MAPPING, cardTypeColumn: 'Type', guestCardTypeValues: ['Guest'] }
+      );
+
+      const result = await purgeExpiredEvents({ context: workerContext({ tenantId: ctx.a.id, propertyId: ctx.a.properties[0].id }) });
+      expect(result.deleted).toBe(0);
+      expect(await t.trx('door_access_events').where({ room_id: roomId })).toHaveLength(1);
+    });
+
+    it('an event newer than the retention window is left alone', async () => {
+      await t.request.put('/api/v1/door-access/config').set('Authorization', `Bearer ${manager()}`).send({ retention_days: 30 });
+
+      const roomId = await createRoom('RET4');
+      const recent = new Date();
+      recent.setUTCDate(recent.getUTCDate() - 1);
+      const stamp = recent.toISOString().slice(0, 19).replace('T', ' ');
+      await commit(
+        csv([['RET4', 'MASTER-RET3', 'Master', stamp]], 'Door,Card,Type,Time'),
+        { ...BASE_MAPPING, cardTypeColumn: 'Type', guestCardTypeValues: ['Guest'] }
+      );
+
+      // Only the recent room's own row is asserted here — a prior test's
+      // leftover old event (RET3, left un-purged while retention_days was
+      // null at the time) is also legitimately swept up by this call, and
+      // is not this test's concern (see the previous test's own comment).
+      await purgeExpiredEvents({ context: workerContext({ tenantId: ctx.a.id, propertyId: ctx.a.properties[0].id }) });
+      expect(await t.trx('door_access_events').where({ room_id: roomId })).toHaveLength(1);
     });
   });
 });
