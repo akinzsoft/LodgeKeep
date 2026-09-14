@@ -191,7 +191,7 @@ Genuinely optional until customers ask. Building these early is the most likely 
 
 ---
 
-## Phase 7 — Door access monitoring
+## Phase 7 — Door access monitoring — ✅ shipped (first slice)
 
 **Hardware confirmed: HiRead ProUSB, standalone offline, `manual_import` only** — no live connectivity of any kind. Detection is therefore retrospective: it runs when staff upload a lock audit trail pulled with the handheld reader, and every screen says so.
 
