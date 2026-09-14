@@ -33,7 +33,7 @@ const { runDepartingBalanceSweep, departingBalanceDedupKey } = require('../../sr
 
 describe('effectiveRoles (pure)', () => {
   it('starts from the catalogue defaults', () => {
-    expect([...effectiveRoles('room.became_dirty', [])].sort()).toEqual(['housekeeping', 'manager']);
+    expect([...effectiveRoles('room.became_dirty', [])].sort()).toEqual(['admin', 'housekeeping', 'manager', 'super_admin']);
   });
 
   it('adds enabled overrides and removes disabled ones, ignoring other event types', () => {
@@ -42,11 +42,11 @@ describe('effectiveRoles (pure)', () => {
       { event_type: 'room.became_dirty', role: 'front_desk', enabled: true },
       { event_type: 'guest.checked_in', role: 'cashier', enabled: true },
     ]);
-    expect([...roles].sort()).toEqual(['front_desk', 'housekeeping']);
+    expect([...roles].sort()).toEqual(['admin', 'front_desk', 'housekeeping', 'super_admin']);
   });
 
-  it('gives new guest QR orders to POS operator, manager, and super admin by default', () => {
-    expect([...effectiveRoles('qr_ordering.guest_order_placed', [])].sort()).toEqual(['manager', 'pos_operator', 'super_admin']);
+  it('gives new guest QR orders to POS operator, manager, admin, and super admin by default', () => {
+    expect([...effectiveRoles('qr_ordering.guest_order_placed', [])].sort()).toEqual(['admin', 'manager', 'pos_operator', 'super_admin']);
   });
 
   it('has a unique, labelled catalogue entry per type', () => {

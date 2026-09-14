@@ -29,6 +29,17 @@
  *
  * The acting user is NOT excluded from their own notification — kept simple;
  * trivially addable later if it proves noisy.
+ *
+ * `admin`/`super_admin` are DEFAULT recipients on every event type in the
+ * catalogue below (user-requested, applies to every tenant — not a
+ * per-property override): both already sit above every operational role in
+ * SECURITY.md §5's own matrix, and `super_admin` in particular already
+ * holds `notifications.manage`, so it can freely narrow this back down per
+ * property via the Setup grid if a specific tenant finds it noisy — this
+ * default is a starting point, not a floor. `housekeeping.discrepancy_raised`
+ * needed no change (it already defaulted to every role); `door_access.
+ * critical_alert_raised` needed no change either (already admin/super_admin
+ * only, per §3.23's own "not front desk/housekeeping" rule).
  */
 
 const { SYSTEM_ROLES } = require('../tenancy');
@@ -45,84 +56,84 @@ const NOTIFICATION_EVENTS = Object.freeze([
     group: 'POS & QR orders',
     label: 'New guest QR order',
     description: 'A guest QR order is paid (card or room charge) and ready to prepare. Also shows an on-screen card.',
-    defaultRoles: ['pos_operator', 'manager', 'super_admin'],
+    defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'qr_ordering.guest_order_rejected',
     group: 'POS & QR orders',
     label: 'Guest QR order rejected',
     description: 'Staff rejected a guest QR order.',
-    defaultRoles: ['pos_operator', 'manager'],
+    defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'pos.order_settled',
     group: 'POS & QR orders',
     label: 'POS order settled',
     description: 'A POS tab was paid.',
-    defaultRoles: ['pos_operator', 'manager'],
+    defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'pos.settlement_voided',
     group: 'POS & QR orders',
     label: 'POS settlement voided',
     description: 'A POS settlement was voided after payment.',
-    defaultRoles: ['pos_operator', 'manager'],
+    defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'stock.reorder_level_reached',
     group: 'Inventory',
     label: 'Stock at reorder level',
     description: 'A stock item dropped to or below its reorder level.',
-    defaultRoles: ['pos_operator', 'manager'],
+    defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'stock.out_of_stock',
     group: 'Inventory',
     label: 'Stock out of stock',
     description: 'A stock item ran out. Menu items that use it become unavailable.',
-    defaultRoles: ['pos_operator', 'manager', 'admin'],
+    defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'reservation.created',
     group: 'Bookings & front desk',
     label: 'New booking',
     description: 'A reservation was created (waitlist entries excluded).',
-    defaultRoles: ['front_desk', 'manager'],
+    defaultRoles: ['front_desk', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'reservation.cancelled',
     group: 'Bookings & front desk',
     label: 'Booking cancelled',
     description: 'A reservation was cancelled.',
-    defaultRoles: ['front_desk', 'manager'],
+    defaultRoles: ['front_desk', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'guest.checked_in',
     group: 'Bookings & front desk',
     label: 'Guest checked in',
     description: 'A guest checked in.',
-    defaultRoles: ['front_desk', 'manager'],
+    defaultRoles: ['front_desk', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'guest.checked_out',
     group: 'Bookings & front desk',
     label: 'Guest checked out',
     description: 'A guest checked out.',
-    defaultRoles: ['front_desk', 'manager'],
+    defaultRoles: ['front_desk', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'front_desk.departing_balance_outstanding',
     group: 'Bookings & front desk',
     label: 'Departing today with a balance',
     description: 'An in-house guest due to check out today still owes a balance. Sent once per guest per business date.',
-    defaultRoles: ['front_desk', 'cashier', 'manager'],
+    defaultRoles: ['front_desk', 'cashier', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'room.became_dirty',
     group: 'Housekeeping',
     label: 'Room needs cleaning',
     description: 'A room was vacated by a check-out or room move and is now dirty.',
-    defaultRoles: ['housekeeping', 'manager'],
+    defaultRoles: ['housekeeping', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'housekeeping.discrepancy_raised',
