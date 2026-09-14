@@ -358,6 +358,17 @@ const TABLE_SCOPES = Object.freeze({
   stock_movements: { scope: SCOPES.PROPERTY },
   stock_takes: { scope: SCOPES.PROPERTY },
   stock_take_lines: { scope: SCOPES.PROPERTY },
+
+  // Door access monitoring — PLAN.md Phase 7,
+  // 20261020090000_create_lock_system_config.js through
+  // 20261020094000_create_door_access_stay_confirmations.js. All
+  // PROPERTY_SCOPED, following `rooms`: a lock system, its door events and
+  // the alerts raised from them belong to one physical hotel.
+  lock_system_config: { scope: SCOPES.PROPERTY },
+  door_access_events: { scope: SCOPES.PROPERTY },
+  access_alerts: { scope: SCOPES.PROPERTY },
+  access_alert_events: { scope: SCOPES.PROPERTY },
+  door_access_stay_confirmations: { scope: SCOPES.PROPERTY },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

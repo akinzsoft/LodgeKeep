@@ -2834,6 +2834,231 @@ const ENTITIES = [
       created: true,
     }),
   },
+
+  // Door access monitoring — PLAN.md Phase 7.
+  {
+    table: 'lock_system_config',
+    uniqueKeys: [['tenant_id', 'property_id']],
+    newRow: (ctx, t) => ({ tenant_id: t.id, property_id: t.properties[1].id, adapter: 'generic_csv' }),
+    duplicateRow: (ctx, t) => ({ tenant_id: t.id, property_id: t.properties[0].id, adapter: 'generic_csv' }),
+    crossTenant: [
+      {
+        name: "configures a lock system for another tenant's property",
+        row: (ctx, own, other) => ({ tenant_id: own.id, property_id: other.properties[0].id, adapter: 'generic_csv' }),
+      },
+    ],
+  },
+
+  {
+    table: 'door_access_events',
+    uniqueKeys: [['tenant_id', 'property_id', 'room_id', 'card_id', 'opened_at']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      room_id: t.rooms[0].id,
+      lock_system: 'hiread_prousb',
+      card_id: 'NEW-CARD',
+      is_guest_card: true,
+      opened_at: '2025-02-01 03:00:00',
+      import_ref: 'new-import',
+      imported_by_user_id: t.users[0].id,
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      room_id: t.rooms[0].id,
+      lock_system: 'hiread_prousb',
+      card_id: 'FIXTURE-CARD-A', // matches the fixture event's natural key
+      is_guest_card: true,
+      opened_at: '2025-01-01 02:00:00',
+      import_ref: 'dup-import',
+      imported_by_user_id: t.users[0].id,
+    }),
+    crossTenant: [
+      {
+        name: "records a door event against another tenant's room",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          room_id: other.rooms[0].id,
+          lock_system: 'hiread_prousb',
+          card_id: 'CROSS-CARD',
+          is_guest_card: true,
+          opened_at: '2025-02-01 03:00:00',
+          import_ref: 'cross-import',
+          imported_by_user_id: own.users[0].id,
+        }),
+      },
+      {
+        name: 'attributes a door event import to another tenant\'s user',
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          room_id: own.rooms[0].id,
+          lock_system: 'hiread_prousb',
+          card_id: 'CROSS-CARD-USER',
+          is_guest_card: true,
+          opened_at: '2025-02-01 03:00:00',
+          import_ref: 'cross-import',
+          imported_by_user_id: other.users[0].id,
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'access_alerts',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      room_id: t.rooms[0].id,
+      card_id: 'NEW-CARD',
+      rule: 'post_checkout_access',
+      severity: 'critical',
+      evidence: JSON.stringify({}),
+      business_date: '2025-02-01',
+      first_event_at: '2025-02-01 03:00:00',
+      last_event_at: '2025-02-01 03:00:00',
+    }),
+    crossTenant: [
+      {
+        name: "raises an alert against another tenant's room",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          room_id: other.rooms[0].id,
+          card_id: 'CROSS',
+          rule: 'unsold_occupancy',
+          severity: 'critical',
+          evidence: JSON.stringify({}),
+          business_date: '2025-02-01',
+          first_event_at: '2025-02-01 03:00:00',
+          last_event_at: '2025-02-01 03:00:00',
+        }),
+      },
+      {
+        name: "attributes an alert to another tenant's reservation",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          room_id: own.rooms[0].id,
+          card_id: 'CROSS',
+          rule: 'post_checkout_access',
+          severity: 'critical',
+          reservation_id: other.reservations[0].id,
+          evidence: JSON.stringify({}),
+          business_date: '2025-02-01',
+          first_event_at: '2025-02-01 03:00:00',
+          last_event_at: '2025-02-01 03:00:00',
+        }),
+      },
+      {
+        name: "resolves an alert as another tenant's user",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          room_id: own.rooms[0].id,
+          card_id: 'CROSS',
+          rule: 'unsold_occupancy',
+          severity: 'critical',
+          status: 'resolved',
+          resolved_by_user_id: other.users[0].id,
+          resolution_reason: 'cross',
+          evidence: JSON.stringify({}),
+          business_date: '2025-02-01',
+          first_event_at: '2025-02-01 03:00:00',
+          last_event_at: '2025-02-01 03:00:00',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'access_alert_events',
+    uniqueKeys: [['tenant_id', 'property_id', 'door_access_event_id']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      access_alert_id: t.accessAlerts[0].id,
+      door_access_event_id: t.doorAccessEvents[1].id, // the fixture's deliberately unlinked event
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      access_alert_id: t.accessAlerts[0].id,
+      door_access_event_id: t.doorAccessEvents[0].id, // already linked by the fixture
+    }),
+    crossTenant: [
+      {
+        name: "links another tenant's door event as evidence",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          access_alert_id: own.accessAlerts[0].id,
+          door_access_event_id: other.doorAccessEvents[1].id,
+        }),
+      },
+      {
+        name: "links evidence to another tenant's alert",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          access_alert_id: other.accessAlerts[0].id,
+          door_access_event_id: own.doorAccessEvents[1].id,
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'door_access_stay_confirmations',
+    uniqueKeys: [['tenant_id', 'property_id', 'reservation_id']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      reservation_id: t.reservations[0].id,
+      room_id: t.rooms[0].id,
+      door_access_event_id: t.doorAccessEvents[0].id,
+      card_id: 'FIXTURE-CARD-A',
+      opened_at: '2025-01-01 02:00:00',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      reservation_id: t.doorAccessStayReservations[0].id, // matches the fixture confirmation
+      room_id: t.rooms[0].id,
+      door_access_event_id: t.doorAccessEvents[0].id,
+      card_id: 'FIXTURE-CARD-A',
+      opened_at: '2025-01-01 02:00:00',
+    }),
+    crossTenant: [
+      {
+        name: "confirms a stay on another tenant's reservation",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          reservation_id: other.reservations[0].id,
+          room_id: own.rooms[0].id,
+          door_access_event_id: own.doorAccessEvents[0].id,
+          card_id: 'X',
+          opened_at: '2025-01-01 02:00:00',
+        }),
+      },
+      {
+        name: "confirms a stay using another tenant's door event",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          reservation_id: own.reservations[0].id,
+          room_id: own.rooms[0].id,
+          door_access_event_id: other.doorAccessEvents[0].id,
+          card_id: 'X',
+          opened_at: '2025-01-01 02:00:00',
+        }),
+      },
+    ],
+  },
 ];
 
 const byTable = (table) => ENTITIES.find((e) => e.table === table);

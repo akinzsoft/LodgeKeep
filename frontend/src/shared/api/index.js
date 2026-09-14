@@ -20,3 +20,4 @@ export * as platformApi from './platform.js';
 export * as billingApi from './billing.js';
 export * as offboardingApi from './offboarding.js';
 export * as migrationApi from './migration.js';
+export * as doorAccessApi from './door-access.js';

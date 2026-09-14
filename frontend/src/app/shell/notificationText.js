@@ -97,6 +97,13 @@ export function describeNotification(notification) {
         title: `Room ${p.roomNumber ?? p.roomId ?? ''} status discrepancy`.replace(/\s+/g, ' '),
         detail: 'Housekeeping and the front desk disagree on occupancy.',
       };
+    case 'door_access.critical_alert_raised': {
+      const rule = p.rule === 'post_checkout_access' ? 'post-checkout access' : 'unsold occupancy';
+      return {
+        title: `Door access alert — Room ${p.roomNumber ?? '?'}`,
+        detail: `${rule}, found in an uploaded lock log (retrospective).`,
+      };
+    }
     default:
       return { title: notification.type, detail: '' };
   }
@@ -107,6 +114,7 @@ export function notificationTarget(type) {
   if (type.startsWith('qr_ordering.') || type.startsWith('pos.') || type.startsWith('stock.')) return 'pos';
   if (type.startsWith('reservation.') || type.startsWith('guest.') || type.startsWith('front_desk.')) return 'booking';
   if (type.startsWith('room.') || type.startsWith('housekeeping.')) return 'housekeeping';
+  if (type.startsWith('door_access.')) return 'door_access';
   return null;
 }
 

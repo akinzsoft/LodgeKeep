@@ -33,6 +33,7 @@ import { ARScreen } from './app/ar/ARScreen.jsx';
 import { GroupBlocksScreen } from './app/group-blocks/GroupBlocksScreen.jsx';
 import { BillingScreen } from './app/billing/BillingScreen.jsx';
 import { DataMigrationScreen } from './app/migration/DataMigrationScreen.jsx';
+import { DoorAccessScreen } from './app/door-access/DoorAccessScreen.jsx';
 import { ChainOverviewScreen } from './app/chain-overview/ChainOverviewScreen.jsx';
 import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
@@ -303,6 +304,8 @@ function Demo() {
         <BillingScreen isOffline={!isOnline} />
       ) : screenKey === 'migration' ? (
         <DataMigrationScreen isOffline={!isOnline} />
+      ) : screenKey === 'door_access' ? (
+        <DoorAccessScreen isOffline={!isOnline} />
       ) : screenKey === 'chain_overview' ? (
         <ChainOverviewScreen isOffline={!isOnline} />
       ) : (

@@ -171,6 +171,12 @@ async function seedTwoTenants(trx) {
     stockMovements: [],
     stockTakes: [],
     stockTakeLines: [],
+    lockSystemConfigs: [],
+    doorAccessEvents: [],
+    accessAlerts: [],
+    accessAlertEvents: [],
+    doorAccessStayReservations: [],
+    doorAccessStayConfirmations: [],
   });
 
   // Two symmetric example hotels, not one reference customer
@@ -1162,6 +1168,110 @@ async function seedTwoTenants(trx) {
   }
 
   // ------------------------------------------------------------------
+  // Door access monitoring (PLAN.md Phase 7). One lock config on
+  // properties[0] (properties[1] stays unconfigured so an entity newRow
+  // can target it without colliding on UNIQUE(tenant_id, property_id)),
+  // two door events (event[1] is deliberately unlinked so
+  // access_alert_events' newRow has a free event), one alert linked to
+  // event[0], and one stay confirmation against a dedicated, cancelled,
+  // far-past reservation — `reservations[0]` stays free for
+  // door_access_stay_confirmations' own newRow (UNIQUE per reservation),
+  // and the cancelled status/dates keep it out of every arrivals/in-house
+  // board other suites assert against.
+  // ------------------------------------------------------------------
+  for (const t of both) {
+    const property = t.properties[0];
+    const room = t.rooms[0];
+    const user = t.users[0];
+
+    t.lockSystemConfigs.push({
+      id: await insertReturningId(trx, 'lock_system_config', {
+        tenant_id: t.id,
+        property_id: property.id,
+        adapter: 'hiread_prousb',
+        ingestion_mode: 'manual_import',
+      }),
+      property_id: property.id,
+    });
+
+    for (const [index, card] of ['FIXTURE-CARD-A', 'FIXTURE-CARD-B'].entries()) {
+      t.doorAccessEvents.push({
+        id: await insertReturningId(trx, 'door_access_events', {
+          tenant_id: t.id,
+          property_id: property.id,
+          room_id: room.id,
+          lock_system: 'hiread_prousb',
+          card_id: card,
+          is_guest_card: true,
+          result: 'granted',
+          opened_at: `2025-01-0${index + 1} 02:00:00`,
+          import_ref: `fixture-import-${index}`,
+          imported_by_user_id: user.id,
+        }),
+        property_id: property.id,
+        room_id: room.id,
+        card_id: card,
+      });
+    }
+
+    const alertId = await insertReturningId(trx, 'access_alerts', {
+      tenant_id: t.id,
+      property_id: property.id,
+      room_id: room.id,
+      card_id: 'FIXTURE-CARD-A',
+      rule: 'unsold_occupancy',
+      severity: 'critical',
+      status: 'open',
+      evidence: JSON.stringify({ fixture: true }),
+      business_date: '2025-01-01',
+      first_event_at: '2025-01-01 02:00:00',
+      last_event_at: '2025-01-01 02:00:00',
+      event_count: 1,
+    });
+    t.accessAlerts.push({ id: alertId, property_id: property.id, room_id: room.id });
+
+    t.accessAlertEvents.push({
+      id: await insertReturningId(trx, 'access_alert_events', {
+        tenant_id: t.id,
+        property_id: property.id,
+        access_alert_id: alertId,
+        door_access_event_id: t.doorAccessEvents[0].id,
+      }),
+      property_id: property.id,
+      access_alert_id: alertId,
+    });
+
+    const stayReservationId = await insertReturningId(trx, 'reservations', {
+      tenant_id: t.id,
+      property_id: property.id,
+      guest_id: t.guests[0].id,
+      room_type_id: t.roomTypes[0].id,
+      rate_code_id: t.rateCodes[0].id,
+      arrival_date: '2025-01-01',
+      departure_date: '2025-01-02',
+      adults: 1,
+      children: 0,
+      status: 'cancelled',
+      confirmation_number: `FIXTUREDOOR-${t.slug}`.toUpperCase().slice(0, 26),
+    });
+    t.doorAccessStayReservations.push({ id: stayReservationId, property_id: property.id });
+
+    t.doorAccessStayConfirmations.push({
+      id: await insertReturningId(trx, 'door_access_stay_confirmations', {
+        tenant_id: t.id,
+        property_id: property.id,
+        reservation_id: stayReservationId,
+        room_id: room.id,
+        door_access_event_id: t.doorAccessEvents[1].id,
+        card_id: 'FIXTURE-CARD-B',
+        opened_at: '2025-01-02 02:00:00',
+      }),
+      property_id: property.id,
+      reservation_id: stayReservationId,
+    });
+  }
+
+  // ------------------------------------------------------------------
   // QR self-ordering (PLAN.md Phase 6 gap closure) — needs a real
   // reservation to reference for the room-charge OTP, so it seeds here,
   // after Reservations/POS core, same reasoning as Notifications below.
@@ -1600,6 +1710,8 @@ async function seedTwoTenants(trx) {
     ['reports.view_chain', 'reports'],
     ['pos.stock_view', 'pos'],
     ['pos.stock_manage', 'pos'],
+    ['door_access.view', 'door_access'],
+    ['door_access.manage', 'door_access'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -1783,6 +1895,20 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.stock_view'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.stock_manage'] },
     ]);
+  }
+
+  // Door access monitoring (PLAN.md Phase 7) — both keys, manager/admin/
+  // super_admin only. Front desk and housekeeping deliberately get neither
+  // (PRODUCT_REQUIREMENTS.md §3.23: the people with the most opportunity to
+  // commit occupancy fraud must not be the ones told it was detected).
+  for (const t of both) {
+    const rows = [];
+    for (const role of ['manager', 'admin', 'super_admin']) {
+      for (const key of ['door_access.view', 'door_access.manage']) {
+        rows.push({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions[key] });
+      }
+    }
+    await trx('role_permissions').insert(rows);
   }
 
   // Accounts Receivable (PLAN.md Phase 4) — SECURITY.md §5's matrix has a

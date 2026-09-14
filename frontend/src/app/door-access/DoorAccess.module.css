@@ -1,0 +1,217 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line);
+  font-weight: var(--text-h1-weight);
+  color: var(--text-primary);
+}
+
+/* Retrospective-detection banner: persistent, never dismissible. */
+.banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--state-warning);
+  background: var(--state-warning-bg);
+  color: var(--state-warning);
+  font-size: var(--text-label-size);
+}
+
+.bannerHeading {
+  margin: 0;
+  font-weight: var(--text-label-weight);
+}
+
+.bannerText {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+}
+
+.tabActive {
+  color: var(--domain-rooms);
+  border-bottom-color: var(--domain-rooms);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.row .field {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.label {
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  color: var(--text-primary);
+}
+
+.help {
+  margin: 0;
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
+.input,
+.select {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-size);
+  width: 100%;
+}
+
+.checkboxGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-touch);
+  font-size: var(--text-body-size);
+  color: var(--text-primary);
+}
+
+.actionsRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.errorBanner,
+.warningBanner,
+.notice {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-label-size);
+}
+
+.errorBanner {
+  background: var(--state-danger-bg);
+  color: var(--state-danger);
+  font-weight: var(--text-label-weight);
+}
+
+.warningBanner {
+  background: var(--state-warning-bg);
+  color: var(--state-warning);
+  font-weight: var(--text-label-weight);
+}
+
+.notice {
+  background: var(--state-neutral-bg);
+  color: var(--text-primary);
+}
+
+.summaryRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.statTile {
+  flex: 1;
+  min-width: 9rem;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.statLabel {
+  display: block;
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
+.statValue {
+  display: block;
+  font-size: var(--text-h2-size);
+  font-weight: var(--text-h1-weight);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.definitionList {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  font-size: var(--text-body-size);
+}
+
+.definitionList dt {
+  color: var(--text-secondary);
+}
+
+.definitionList dd {
+  margin: 0;
+  color: var(--text-primary);
+}

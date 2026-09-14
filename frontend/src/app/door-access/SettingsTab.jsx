@@ -1,0 +1,94 @@
+import { useState } from 'react';
+import { Button, Card } from '../../shared/components/index.js';
+import { doorAccessApi, ApiError } from '../../shared/api/index.js';
+import { ADAPTER_LABELS } from './format.js';
+import styles from './DoorAccess.module.css';
+
+/**
+ * PRODUCT_REQUIREMENTS.md §3.19's lock-system setting: an adapter picker
+ * defaulting to None that "must state plainly what the chosen option
+ * delivers". Only the offline, manual-import adapters are offered — no
+ * networked adapter has been integrated, so none is listed as if it were.
+ */
+const WHAT_IT_DELIVERS = {
+  none: 'No door events are imported and no occupancy checks run.',
+  hiread_prousb:
+    'Retrospective detection — staff must pull the audit trail from each lock with the handheld reader and upload the exported file. No live alerts.',
+  generic_csv:
+    'Retrospective detection from any lock software that can export a spreadsheet. Staff map its columns on first import. No live alerts.',
+};
+
+export function SettingsTab({ config, isOffline = false, onSaved }) {
+  const [adapter, setAdapter] = useState(config.adapter);
+  const [grace, setGrace] = useState(String(config.postCheckoutGraceMinutes));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [saved, setSaved] = useState(false);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const next = await doorAccessApi.updateConfig({ adapter, postCheckoutGraceMinutes: Number(grace) });
+      onSaved(next);
+      setSaved(true);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not save door access settings.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card title="Lock system">
+      <form className={styles.form} onSubmit={handleSubmit}>
+        {error && (
+          <p className={styles.errorBanner} role="alert">
+            {error}
+          </p>
+        )}
+        {saved && <p className={styles.notice}>Settings saved.</p>}
+        {isOffline && <p className={styles.notice}>You are offline. Saving settings is disabled until connectivity returns.</p>}
+
+        <div className={styles.row}>
+          <label className={styles.field}>
+            <span className={styles.label}>Lock system</span>
+            <select className={styles.select} value={adapter} onChange={(e) => setAdapter(e.target.value)}>
+              {Object.entries(ADAPTER_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <p className={styles.help}>{WHAT_IT_DELIVERS[adapter]}</p>
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.label}>Grace period after checkout (minutes)</span>
+            <input
+              className={styles.input}
+              type="number"
+              min="0"
+              max="720"
+              step="1"
+              value={grace}
+              onChange={(e) => setGrace(e.target.value)}
+            />
+            <p className={styles.help}>
+              A guest card opening the room this soon after a recorded checkout (for example to fetch a forgotten bag) is not
+              flagged.
+            </p>
+          </label>
+        </div>
+
+        <div className={styles.actionsRow}>
+          <Button type="submit" disabled={isOffline || saving || grace === ''}>
+            {saving ? 'Saving…' : 'Save settings'}
+          </Button>
+        </div>
+      </form>
+    </Card>
+  );
+}

@@ -191,11 +191,12 @@ Genuinely optional until customers ask. Building these early is the most likely 
 
 ---
 
-## Phase 7 — Door access monitoring (conditional)
+## Phase 7 — Door access monitoring
 
-**Do not schedule this until lock hardware is confirmed** (3.23). It is gated on a vendor integration whose cost and effort cannot be estimated until a specific make and model is known, and for many properties the honest answer will be `manual_import` only.
+**Hardware confirmed: HiRead ProUSB, standalone offline, `manual_import` only** — no live connectivity of any kind. Detection is therefore retrospective: it runs when staff upload a lock audit trail pulled with the handheld reader, and every screen says so.
 
-Sequence if it proceeds: config table → ingestion adapter → rules engine → alerts UI → night audit reconciliation sweep.
+- ✅ **Shipped (first slice)**: per-property lock config (`none`/`hiread_prousb`/`generic_csv`); a generic column-mapping import of the lock software's .xls/.xlsx/.csv export (staff map the file's real headers — ProUSB's literal columns could not be confirmed); append-only, deduplicated door events; three retrospective rules — `unsold_occupancy` (critical), `post_checkout_access` (critical, with a property grace window) and a once-per-stay first-use-after-check-in confirmation (info, no lifecycle); incident alerts (open → acknowledged → resolved with reason, audited); a bell row and one digest email per import to manager/admin/super_admin; plan-gated behind `door_access_monitoring`.
+- 🔲 **Deliberately not built — confirm before adding**: `vacant_room_accessed`, `card_active_no_folio`, `ooo_room_accessed`, `staff_card_anomaly` and payment-mismatch rules; webhook/polling adapters (TTHotel etc.); the night-audit occupancy reconciliation sweep (the rules engine's `evaluateEvents` is its reusable entry point); key-card encoding at check-in; retention/purge and field-level encryption of door events; a standalone room access-log screen and dashboard alert-strip row.
 
 ---
 
@@ -213,5 +214,4 @@ Sequence if it proceeds: config table → ingestion adapter → rules engine →
 
 - Which payment processor for **subscription** billing (distinct from guest payments)
 - Whether the first real customer is a paying SaaS tenant or a guided onboarding
-- Lock vendor, if door access is ever scoped
-- Retention windows for guest PII and door data, per applicable jurisdiction
+- Retention windows for guest PII and door data, per applicable jurisdiction (door events are currently kept indefinitely — no purge built)

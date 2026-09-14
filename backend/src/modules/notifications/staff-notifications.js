@@ -133,6 +133,14 @@ const NOTIFICATION_EVENTS = Object.freeze([
     // role grid, so nothing changes for an unconfigured property.
     defaultRoles: [...SYSTEM_ROLES],
   },
+  {
+    eventType: 'door_access.critical_alert_raised',
+    group: 'Door access monitoring',
+    label: 'Door access alert (critical)',
+    description:
+      'An uploaded door-lock log flagged unsold occupancy or post-checkout access. Front desk and housekeeping are deliberately excluded by default (PRODUCT_REQUIREMENTS.md section 3.23).',
+    defaultRoles: ['manager', 'admin', 'super_admin'],
+  },
 ]);
 
 const NOTIFICATION_EVENTS_BY_TYPE = new Map(NOTIFICATION_EVENTS.map((event) => [event.eventType, event]));
