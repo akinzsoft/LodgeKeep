@@ -258,4 +258,66 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId }) {
   };
 }
 
-module.exports = { computeSalesReport, TENDERS };
+/**
+ * Real per-menu-item quantity and revenue for every standing (non-voided)
+ * item on a standing (non-voided) settlement in range — gap closure, for
+ * `stock/reporting.js`'s cost-of-sales margin report (a cross-module
+ * caller: `stock` already depends on `pos` the other way, via
+ * `pos/service.js`'s own `stockService` import for recipe deduction, so
+ * this direction is safe — no cycle results).
+ *
+ * Deliberately NOT a refactor of `computeSalesReport`'s own `topItems`
+ * block above, even though the two compute the same underlying fact
+ * ("what actually sold, excluding voided checks/items"): that block also
+ * tracks each tab's own `itemCount` as a side effect of the same loop, and
+ * disentangling the two safely was judged not worth risking a regression
+ * in that already-shipped, tested report for. This function reuses
+ * `listStandingSettlements` (avoiding that half of the duplication) and
+ * returns EVERY item, never sliced to `TOP_ITEMS_LIMIT` — that slicing is
+ * `computeSalesReport`'s own presentation choice, not a fact about what
+ * sold.
+ */
+async function computeMenuItemSalesTotals({ db, dateFrom, dateTo, outletId }) {
+  const settlements = await listStandingSettlements({ db, dateFrom, dateTo, outletId });
+  const standingGroupsByOrder = new Map();
+  const orderIds = [];
+  for (const row of settlements) {
+    const key = String(row.pos_order_id);
+    if (!standingGroupsByOrder.has(key)) {
+      standingGroupsByOrder.set(key, new Set());
+      orderIds.push(row.pos_order_id);
+    }
+    standingGroupsByOrder.get(key).add(groupKey(row.split_group));
+  }
+  if (orderIds.length === 0) return [];
+
+  const items = await db
+    .table('pos_order_items')
+    .joinScoped('pos_menu_items', (join) => join.on('pos_menu_items.id', '=', 'pos_order_items.menu_item_id'), { type: 'left' })
+    .whereIn('pos_order_items.pos_order_id', orderIds)
+    .whereNull('pos_order_items.voided_at')
+    .select(
+      'pos_order_items.pos_order_id as pos_order_id',
+      'pos_order_items.menu_item_id as menu_item_id',
+      'pos_order_items.split_group as split_group',
+      'pos_order_items.quantity as quantity',
+      'pos_order_items.unit_price as unit_price',
+      'pos_order_items.modifiers as modifiers',
+      'pos_menu_items.name as name'
+    );
+
+  const itemTotals = new Map();
+  for (const item of items) {
+    const groups = standingGroupsByOrder.get(String(item.pos_order_id));
+    if (!groups.has(groupKey(item.split_group))) continue; // that check's own split group was voided
+    const key = String(item.menu_item_id);
+    if (!itemTotals.has(key)) itemTotals.set(key, { menuItemId: item.menu_item_id, name: item.name ?? `#${item.menu_item_id}`, quantity: 0, amounts: [] });
+    const entry = itemTotals.get(key);
+    entry.quantity += item.quantity;
+    entry.amounts.push(computeItemLineTotal(item));
+  }
+
+  return [...itemTotals.values()].map(({ menuItemId, name, quantity, amounts }) => ({ menuItemId, name, quantity, revenue: sumMoney(amounts) }));
+}
+
+module.exports = { computeSalesReport, computeMenuItemSalesTotals, TENDERS };

@@ -20,6 +20,11 @@ const { requirePermission } = require('../../auth');
 function stockRouter() {
   const router = Router();
 
+  router.get('/pos/stock/categories', requirePermission('pos.stock_view'), controller.listStockItemCategories);
+  router.post('/pos/stock/categories', requirePermission('pos.stock_manage'), controller.createStockItemCategory);
+  router.patch('/pos/stock/categories/:id', requirePermission('pos.stock_manage'), controller.updateStockItemCategory);
+  router.post('/pos/stock/categories/:id/archive', requirePermission('pos.stock_manage'), controller.archiveStockItemCategory);
+
   router.get('/pos/stock/items', requirePermission('pos.stock_view'), controller.listStockItems);
   router.post('/pos/stock/items', requirePermission('pos.stock_manage'), controller.createStockItem);
   router.patch('/pos/stock/items/:id', requirePermission('pos.stock_manage'), controller.updateStockItem);
@@ -40,6 +45,7 @@ function stockRouter() {
 
   router.get('/pos/stock/reports/cost-of-sales', requirePermission('pos.stock_manage'), controller.costOfSales);
   router.get('/pos/stock/reports/variance', requirePermission('pos.stock_manage'), controller.stockVariance);
+  router.get('/pos/stock/reports/margin', requirePermission('pos.stock_manage'), controller.costOfSalesMargin);
 
   return router;
 }

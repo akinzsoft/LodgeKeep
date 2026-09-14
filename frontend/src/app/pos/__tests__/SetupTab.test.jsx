@@ -144,14 +144,14 @@ describe('<SetupTab>', () => {
     const menuSection = (await screen.findByRole('heading', { name: 'Menu — Main Bar' })).closest('section');
     await userEvent.click(within(menuSection).getByRole('button', { name: 'Edit' }));
     const editCard = (await screen.findByRole('heading', { name: 'Edit menu item' })).closest('section');
-    const priceInput = within(editCard).getByLabelText('Price');
+    const priceInput = within(editCard).getByLabelText('Selling price');
     expect(priceInput).toHaveValue(20);
 
     await userEvent.clear(priceInput);
     await userEvent.type(priceInput, '25.5');
     await userEvent.click(within(editCard).getByRole('button', { name: 'Save changes' }));
 
-    expect(mocks.updateMenuItem).toHaveBeenCalledWith('5', { name: 'Cocktail', category: 'Drinks', price: '25.5' });
+    expect(mocks.updateMenuItem).toHaveBeenCalledWith('5', { name: 'Cocktail', category: 'Drinks', price: '25.5', cost_price: '' });
   });
 
   describe('menu categories', () => {
@@ -170,9 +170,35 @@ describe('<SetupTab>', () => {
 
       await userEvent.type(within(menuSection).getByLabelText('Name'), 'Steak');
       await userEvent.selectOptions(select, 'Mains');
-      await userEvent.type(within(menuSection).getByLabelText('Price'), '40');
+      await userEvent.type(within(menuSection).getByLabelText('Selling price'), '40');
       await userEvent.click(within(menuSection).getByRole('button', { name: 'Add item' }));
       expect(mocks.createMenuItem).toHaveBeenCalledWith(expect.objectContaining({ name: 'Steak', category: 'Mains' }));
+    });
+
+    it('gap closure: creates a menu item with an optional cost price, and shows it in the table', async () => {
+      mocks.createMenuItem.mockResolvedValue({ id: '8', name: 'Bottle of Wine' });
+      const menuSection = await openMenu();
+
+      await userEvent.type(within(menuSection).getByLabelText('Name'), 'Bottle of Wine');
+      await userEvent.selectOptions(within(menuSection).getByLabelText('Category'), 'Drinks');
+      await userEvent.type(within(menuSection).getByLabelText('Selling price'), '6');
+      await userEvent.type(within(menuSection).getByLabelText('Cost price (optional)'), '4');
+      await userEvent.click(within(menuSection).getByRole('button', { name: 'Add item' }));
+
+      expect(mocks.createMenuItem).toHaveBeenCalledWith(expect.objectContaining({ name: 'Bottle of Wine', costPrice: '4' }));
+
+      mocks.listMenuItems.mockResolvedValue([{ id: '8', name: 'Bottle of Wine', category: 'Drinks', price: '6.00', cost_price: '4.00', is_available: true }]);
+      await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+      const reloaded = (await screen.findByRole('heading', { name: 'Menu — Main Bar' })).closest('section');
+      const row = (await within(reloaded).findByText('Bottle of Wine')).closest('tr');
+      expect(within(row).getByText(/4\.00/)).toBeInTheDocument();
+    });
+
+    it('a menu item with no cost price configured shows a dash in the Cost column, never a false zero', async () => {
+      mocks.listMenuItems.mockResolvedValue([{ id: '5', name: 'Cocktail', category: 'Drinks', price: '20.00', cost_price: null, is_available: true }]);
+      const menuSection = await openMenu();
+      const row = (await within(menuSection).findByText('Cocktail')).closest('tr');
+      expect(row.querySelector('[data-label="Cost"]')).toHaveTextContent('—');
     });
 
     it('keeps an item\'s current category selectable when editing, even if it is no longer registered', async () => {
@@ -250,7 +276,7 @@ describe('<SetupTab>', () => {
 
       await userEvent.type(within(menuSection).getByLabelText('Name'), 'Chapman');
       await userEvent.selectOptions(within(menuSection).getByLabelText('Category'), 'Drinks');
-      await userEvent.type(within(menuSection).getByLabelText('Price'), '15');
+      await userEvent.type(within(menuSection).getByLabelText('Selling price'), '15');
       const file = photo();
       await userEvent.upload(within(menuSection).getByLabelText('Photo (optional)'), file);
       await userEvent.click(within(menuSection).getByRole('button', { name: 'Add item' }));
@@ -263,7 +289,7 @@ describe('<SetupTab>', () => {
       const menuSection = await openMenu();
       await userEvent.type(within(menuSection).getByLabelText('Name'), 'Chapman');
       await userEvent.selectOptions(within(menuSection).getByLabelText('Category'), 'Drinks');
-      await userEvent.type(within(menuSection).getByLabelText('Price'), '15');
+      await userEvent.type(within(menuSection).getByLabelText('Selling price'), '15');
       const big = new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'huge.png', { type: 'image/png' });
       await userEvent.upload(within(menuSection).getByLabelText('Photo (optional)'), big);
       await userEvent.click(within(menuSection).getByRole('button', { name: 'Add item' }));
@@ -279,7 +305,7 @@ describe('<SetupTab>', () => {
       const menuSection = await openMenu();
       await userEvent.type(within(menuSection).getByLabelText('Name'), 'Chapman');
       await userEvent.selectOptions(within(menuSection).getByLabelText('Category'), 'Drinks');
-      await userEvent.type(within(menuSection).getByLabelText('Price'), '15');
+      await userEvent.type(within(menuSection).getByLabelText('Selling price'), '15');
       await userEvent.upload(within(menuSection).getByLabelText('Photo (optional)'), photo());
       await userEvent.click(within(menuSection).getByRole('button', { name: 'Add item' }));
 

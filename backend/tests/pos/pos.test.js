@@ -324,6 +324,52 @@ describe('POS (PLAN.md Phase 4)', () => {
       expect(menuItemEdit.body.data.status).toBe('active');
       expect(menuItemEdit.body.data.is_available).toBe(1);
     });
+
+    // Gap closure: pos_menu_items.cost_price — a fallback cost for margin
+    // reporting, used only when the item has no recipe/BOM.
+    describe('cost_price (gap closure)', () => {
+      it('is optional on create, round-trips on update, and clears back to null with an explicit null', async () => {
+        await grantRoleToUser({ tenant: ctx.a, userIndex: 0, role: 'manager' });
+        const token = tokenFor({ userId: ctx.a.users[0].id });
+        const setup = await freshOutletSetup();
+
+        const noCost = await t.request
+          .post('/api/v1/pos/menu-items')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ outlet_id: setup.outletId, name: 'Plain Item', category: 'Mains', price: '10.00' });
+        expect(noCost.status).toBe(201);
+        expect(noCost.body.data.cost_price).toBeNull();
+
+        const withCost = await t.request
+          .post('/api/v1/pos/menu-items')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ outlet_id: setup.outletId, name: 'Bottle of Wine', category: 'Mains', price: '6.00', cost_price: '4.00' });
+        expect(withCost.status).toBe(201);
+        expect(withCost.body.data.cost_price).toBe('4.00');
+
+        const updated = await t.request.patch(`/api/v1/pos/menu-items/${withCost.body.data.id}`).set('Authorization', `Bearer ${token}`).send({ cost_price: '4.50' });
+        expect(updated.status).toBe(200);
+        expect(updated.body.data.cost_price).toBe('4.50');
+
+        const cleared = await t.request.patch(`/api/v1/pos/menu-items/${withCost.body.data.id}`).set('Authorization', `Bearer ${token}`).send({ cost_price: null });
+        expect(cleared.status).toBe(200);
+        expect(cleared.body.data.cost_price).toBeNull();
+      });
+
+      it('rejects a negative, malformed, or more-than-2-decimal cost_price', async () => {
+        await grantRoleToUser({ tenant: ctx.a, userIndex: 0, role: 'manager' });
+        const token = tokenFor({ userId: ctx.a.users[0].id });
+        const setup = await freshOutletSetup();
+        for (const bad of ['-1.00', 'abc', '1.999']) {
+          const res = await t.request
+            .post('/api/v1/pos/menu-items')
+            .set('Authorization', `Bearer ${token}`)
+            .send({ outlet_id: setup.outletId, name: `Bad ${bad}`, category: 'Mains', price: '10.00', cost_price: bad });
+          expect(res.status).toBe(400);
+          expect(res.body.error.code).toBe('VALIDATION_INVALID_AMOUNT');
+        }
+      });
+    });
   });
 
   // -----------------------------------------------------------------------

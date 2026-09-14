@@ -36,6 +36,13 @@ function todayIso() {
  * `menu_item_id` client-side: a plain id-to-name lookup built from
  * `stockApi.listStockItems()` (no outlet filter, since either report can
  * span every outlet), falling back to `#id` for an item since archived.
+ *
+ * Gap closure: a third report, cost-of-sales MARGIN — revenue, cost, and
+ * margin per menu item (and rolled up by the menu item's own category),
+ * unlike the two reports above which only ever show the cost side. A row
+ * with no recipe and no `cost_price` configured shows "Unknown" rather
+ * than a false "0.00" — `stock/reporting.js`'s own header on why a
+ * genuinely unknown cost is never treated as free.
  */
 export function StockReportsTab({ activeProperty }) {
   const [outlets, setOutlets] = useState(null);
@@ -45,6 +52,7 @@ export function StockReportsTab({ activeProperty }) {
 
   const [costOfSales, setCostOfSales] = useState(null);
   const [variance, setVariance] = useState(null);
+  const [margin, setMargin] = useState(null);
   const [error, setError] = useState(null);
   const [stockItemsById, setStockItemsById] = useState({});
 
@@ -67,17 +75,25 @@ export function StockReportsTab({ activeProperty }) {
     event?.preventDefault();
     setError(null);
     try {
-      const [cos, varianceResult] = await Promise.all([
+      const [cos, varianceResult, marginResult] = await Promise.all([
         stockApi.getCostOfSales({ dateFrom, dateTo, outletId: outletId || undefined }),
         stockApi.getStockVariance({ dateFrom, dateTo, outletId: outletId || undefined }),
+        stockApi.getCostOfSalesMargin({ dateFrom, dateTo, outletId: outletId || undefined }),
       ]);
       setCostOfSales(cos);
       setVariance(varianceResult);
+      setMargin(marginResult);
     } catch (caught) {
       setCostOfSales(null);
       setVariance(null);
+      setMargin(null);
       setError(caught instanceof ApiError ? caught.message : 'Could not load these reports.');
     }
+  }
+
+  /** `null` means genuinely unknown cost (no recipe, no cost_price) — never rendered as a false "0.00". */
+  function moneyOrUnknown(amount, currencyCode) {
+    return amount === null ? 'Unknown' : <Money amount={amount} currencyCode={currencyCode} />;
   }
 
   return (
@@ -157,6 +173,46 @@ export function StockReportsTab({ activeProperty }) {
         ]}
         rows={variance?.summaryByItem ?? []}
         rowKey={(row) => row.stockItemId}
+      />
+
+      {margin && (
+        <p className={formStyles.hint}>
+          Total revenue: {moneyOrUnknown(margin.totals.revenue, activeProperty.base_currency)} — total cost:{' '}
+          {moneyOrUnknown(margin.totals.cost, activeProperty.base_currency)} — total margin: {moneyOrUnknown(margin.totals.margin, activeProperty.base_currency)}
+          {margin.totals.itemsWithUnknownCost > 0 &&
+            ` (${margin.totals.itemsWithUnknownCost} item${margin.totals.itemsWithUnknownCost === 1 ? '' : 's'} with no recipe or cost price configured, excluded from the cost/margin totals)`}
+        </p>
+      )}
+
+      <DataTable
+        title="Cost-of-sales margin — by menu item"
+        state={margin === null || margin.byMenuItem.length === 0 ? 'empty' : 'success'}
+        emptyMessage="Choose a date range and run the reports."
+        columns={[
+          { key: 'name', label: 'Menu item' },
+          { key: 'category', label: 'Category', render: (row) => row.category ?? '—' },
+          { key: 'quantity', label: 'Qty sold', align: 'right' },
+          { key: 'revenue', label: 'Revenue', align: 'right', render: (row) => <Money amount={row.revenue} currencyCode={activeProperty.base_currency} /> },
+          { key: 'cost', label: 'Cost', align: 'right', render: (row) => moneyOrUnknown(row.cost, activeProperty.base_currency) },
+          { key: 'margin', label: 'Margin', align: 'right', render: (row) => moneyOrUnknown(row.margin, activeProperty.base_currency) },
+          { key: 'marginPct', label: 'Margin %', align: 'right', render: (row) => (row.marginPct === null ? '—' : `${row.marginPct.toFixed(1)}%`) },
+        ]}
+        rows={margin?.byMenuItem ?? []}
+        rowKey={(row) => row.menuItemId}
+      />
+
+      <DataTable
+        title="Cost-of-sales margin — by category"
+        state={margin === null || margin.byCategory.length === 0 ? 'empty' : 'success'}
+        emptyMessage="Choose a date range and run the reports."
+        columns={[
+          { key: 'category', label: 'Category', render: (row) => row.category ?? 'No category' },
+          { key: 'revenue', label: 'Revenue', align: 'right', render: (row) => <Money amount={row.revenue} currencyCode={activeProperty.base_currency} /> },
+          { key: 'cost', label: 'Cost', align: 'right', render: (row) => moneyOrUnknown(row.cost, activeProperty.base_currency) },
+          { key: 'margin', label: 'Margin', align: 'right', render: (row) => moneyOrUnknown(row.margin, activeProperty.base_currency) },
+        ]}
+        rows={margin?.byCategory ?? []}
+        rowKey={(row) => row.category ?? '__none__'}
       />
     </div>
   );

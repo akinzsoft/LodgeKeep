@@ -69,11 +69,11 @@ export function SetupTab({ activeProperty }) {
   const [terminalEditSubmitting, setTerminalEditSubmitting] = useState(false);
   const [terminalEditError, setTerminalEditError] = useState(null);
 
-  const [menuForm, setMenuForm] = useState({ name: '', category: '', price: '' });
+  const [menuForm, setMenuForm] = useState({ name: '', category: '', price: '', costPrice: '' });
   const [menuSubmitting, setMenuSubmitting] = useState(false);
   const [menuError, setMenuError] = useState(null);
   const [editingMenuItemId, setEditingMenuItemId] = useState(null);
-  const [menuEditForm, setMenuEditForm] = useState({ name: '', category: '', price: '' });
+  const [menuEditForm, setMenuEditForm] = useState({ name: '', category: '', price: '', cost_price: '' });
   const [menuEditSubmitting, setMenuEditSubmitting] = useState(false);
   const [menuEditError, setMenuEditError] = useState(null);
   // Photo files chosen in the add / edit forms, uploaded after the item saves.
@@ -247,7 +247,7 @@ export function SetupTab({ activeProperty }) {
       created = await posApi.createMenuItem({ outletId: selectedOutletId, ...menuForm });
       // The item exists now — clear the form straight away, so a retry after
       // a failed photo upload can never add the same item a second time.
-      setMenuForm({ name: '', category: '', price: '' });
+      setMenuForm({ name: '', category: '', price: '', costPrice: '' });
       setMenuPhoto(null);
       setPhotoInputKey((key) => key + 1);
       if (menuPhoto) await posApi.uploadMenuItemImage(created.id, menuPhoto);
@@ -265,7 +265,7 @@ export function SetupTab({ activeProperty }) {
   function startEditMenuItem(item) {
     setEditingMenuItemId(item.id);
     setMenuEditError(null);
-    setMenuEditForm({ name: item.name, category: item.category, price: item.price });
+    setMenuEditForm({ name: item.name, category: item.category, price: item.price, cost_price: item.cost_price ?? '' });
     setMenuEditPhoto(null);
     setMenuEditImageUrl(item.image_url ?? null);
   }
@@ -542,7 +542,7 @@ export function SetupTab({ activeProperty }) {
                 </select>
               </label>
               <label className={formStyles.field}>
-                <span className={formStyles.label}>Price</span>
+                <span className={formStyles.label}>Selling price</span>
                 <input
                   className={formStyles.input}
                   type="number"
@@ -553,6 +553,31 @@ export function SetupTab({ activeProperty }) {
                   required
                 />
               </label>
+              <div className={formStyles.field}>
+                {/* Explicit id/htmlFor, help text OUTSIDE the label — a
+                    wrapping <label> computes its accessible name from ALL
+                    its text content, so a help paragraph nested inside one
+                    (as this field originally had it) silently became part
+                    of the field's own spoken name and broke an exact-match
+                    getByLabelText query the same way (the door-access
+                    SettingsTab gap-closure pass found and fixed the
+                    identical bug once already). */}
+                <label className={formStyles.label} htmlFor="menu-item-cost-price">
+                  Cost price (optional)
+                </label>
+                <input
+                  id="menu-item-cost-price"
+                  className={formStyles.input}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={menuForm.costPrice}
+                  onChange={(e) => setMenuForm({ ...menuForm, costPrice: e.target.value })}
+                />
+                <p className={formStyles.hint}>
+                  Only used for margin reporting when this item has no recipe/BOM (see Stock). A recipe&apos;s own cost always wins.
+                </p>
+              </div>
               <label className={formStyles.field}>
                 <span className={formStyles.label}>Photo (optional)</span>
                 <input
@@ -581,6 +606,12 @@ export function SetupTab({ activeProperty }) {
                 { key: 'name', label: 'Name' },
                 { key: 'category', label: 'Category' },
                 { key: 'price', label: 'Price', align: 'right', render: (row) => <Money amount={row.price} currencyCode={activeProperty.base_currency} /> },
+                {
+                  key: 'cost_price',
+                  label: 'Cost',
+                  align: 'right',
+                  render: (row) => (row.cost_price != null ? <Money amount={row.cost_price} currencyCode={activeProperty.base_currency} /> : '—'),
+                },
                 { key: 'is_available', label: 'Available', render: (row) => (row.is_available ? 'Yes' : 'Stocked out') },
               ]}
               rows={menuItems ?? []}
@@ -622,7 +653,7 @@ export function SetupTab({ activeProperty }) {
                   </select>
                 </label>
                 <label className={formStyles.field}>
-                  <span className={formStyles.label}>Price</span>
+                  <span className={formStyles.label}>Selling price</span>
                   <input
                     className={formStyles.input}
                     type="number"
@@ -633,6 +664,23 @@ export function SetupTab({ activeProperty }) {
                     required
                   />
                 </label>
+                <div className={formStyles.field}>
+                  <label className={formStyles.label} htmlFor="menu-item-edit-cost-price">
+                    Cost price (optional)
+                  </label>
+                  <input
+                    id="menu-item-edit-cost-price"
+                    className={formStyles.input}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={menuEditForm.cost_price}
+                    onChange={(e) => setMenuEditForm({ ...menuEditForm, cost_price: e.target.value })}
+                  />
+                  <p className={formStyles.hint}>
+                    Only used for margin reporting when this item has no recipe/BOM (see Stock). A recipe&apos;s own cost always wins.
+                  </p>
+                </div>
                 <div className={formStyles.field}>
                   <span className={formStyles.label}>Photo</span>
                   {menuEditImageUrl ? (

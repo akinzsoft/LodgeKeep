@@ -30,6 +30,62 @@ function require_(body, field) {
 }
 
 // ---------------------------------------------------------------------
+// Stock item categories — gap closure, mirrors pos/controller.js's menu
+// category handlers exactly.
+// ---------------------------------------------------------------------
+
+function optionalSortOrder(body) {
+  if (body?.sort_order === undefined || body?.sort_order === null || body?.sort_order === '') return undefined;
+  const value = Number(body.sort_order);
+  return Number.isInteger(value) ? value : Number.NaN;
+}
+
+async function listStockItemCategories(req, res, next) {
+  try {
+    const includeArchived = req.query.include_archived === 'true';
+    res.status(200).json(ok(await service.listStockItemCategories({ context: req.context, includeArchived })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createStockItemCategory(req, res, next) {
+  try {
+    const category = await service.createStockItemCategory({ context: req.context, name: req.body?.name, sortOrder: optionalSortOrder(req.body) });
+    await req.audit({ entityType: 'stock_item_categories', entityId: category.id, action: 'create', afterState: category });
+    res.status(201).json(ok(category));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateStockItemCategory(req, res, next) {
+  try {
+    const before = await service.getStockItemCategory({ context: req.context, id: req.params.id });
+    if (!before) return notFound(res);
+    const category = await service.updateStockItemCategory({ context: req.context, id: req.params.id, name: req.body?.name, sortOrder: optionalSortOrder(req.body) });
+    if (!category) return notFound(res);
+    await req.audit({ entityType: 'stock_item_categories', entityId: category.id, action: 'update', beforeState: before, afterState: category });
+    res.status(200).json(ok(category));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function archiveStockItemCategory(req, res, next) {
+  try {
+    const before = await service.getStockItemCategory({ context: req.context, id: req.params.id });
+    if (!before) return notFound(res);
+    const category = await service.archiveStockItemCategory({ context: req.context, id: req.params.id });
+    if (!category) return notFound(res);
+    await req.audit({ entityType: 'stock_item_categories', entityId: category.id, action: 'archive', beforeState: before, afterState: category });
+    res.status(200).json(ok(category));
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ---------------------------------------------------------------------
 // Stock items
 // ---------------------------------------------------------------------
 
@@ -52,6 +108,7 @@ async function createStockItem(req, res, next) {
       outletId,
       name,
       unit,
+      category: req.body?.category,
       purchaseCost: req.body?.purchase_cost,
       supplier: req.body?.supplier,
       reorderLevel: req.body?.reorder_level,
@@ -80,6 +137,7 @@ function pickStockItemChanges(body) {
   const changes = {};
   if (body?.name !== undefined) changes.name = body.name;
   if (body?.unit !== undefined) changes.unit = body.unit;
+  if (body?.category !== undefined) changes.category = body.category;
   if (body?.supplier !== undefined) changes.supplier = body.supplier;
   if (body?.reorder_level !== undefined) changes.reorder_level = body.reorder_level;
   return changes;
@@ -305,7 +363,21 @@ async function stockVariance(req, res, next) {
   }
 }
 
+async function costOfSalesMargin(req, res, next) {
+  try {
+    const dateFrom = require_(req.query, 'date_from');
+    const dateTo = require_(req.query, 'date_to');
+    res.status(200).json(ok(await reporting.computeCostOfSalesMargin({ context: req.context, dateFrom, dateTo, outletId: req.query.outlet_id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
+  listStockItemCategories,
+  createStockItemCategory,
+  updateStockItemCategory,
+  archiveStockItemCategory,
   listStockItems,
   createStockItem,
   updateStockItem,
@@ -322,4 +394,5 @@ module.exports = {
   cancelStockTake,
   costOfSales,
   stockVariance,
+  costOfSalesMargin,
 };

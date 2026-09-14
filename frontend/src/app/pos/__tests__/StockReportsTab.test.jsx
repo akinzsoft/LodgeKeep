@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listStockItems: vi.fn(),
   getCostOfSales: vi.fn(),
   getStockVariance: vi.fn(),
+  getCostOfSalesMargin: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -16,15 +17,23 @@ vi.mock('../../../shared/api/index.js', async () => {
   return {
     ...actual,
     posApi: { listOutlets: mocks.listOutlets },
-    stockApi: { listStockItems: mocks.listStockItems, getCostOfSales: mocks.getCostOfSales, getStockVariance: mocks.getStockVariance },
+    stockApi: {
+      listStockItems: mocks.listStockItems,
+      getCostOfSales: mocks.getCostOfSales,
+      getStockVariance: mocks.getStockVariance,
+      getCostOfSalesMargin: mocks.getCostOfSalesMargin,
+    },
   };
 });
+
+const EMPTY_MARGIN = { byMenuItem: [], byCategory: [], totals: { revenue: '0.00', cost: '0.00', margin: '0.00', itemsWithUnknownCost: 0 } };
 
 describe('<StockReportsTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listOutlets.mockResolvedValue([{ id: '1', name: 'Main Bar' }]);
     mocks.listStockItems.mockResolvedValue([{ id: '20', name: 'Vodka (bottle)' }]);
+    mocks.getCostOfSalesMargin.mockResolvedValue(EMPTY_MARGIN);
   });
 
   it('the date-range/outlet toolbar stays reachable before any report has ever run — never hidden inside a state-gated table', async () => {
@@ -111,5 +120,56 @@ describe('<StockReportsTab>', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
     expect(await screen.findByText('Could not load these reports.')).toBeInTheDocument();
+  });
+
+  // Gap closure: cost-of-sales MARGIN — revenue, cost, and margin per menu
+  // item, rolled up by category.
+  describe('margin report (gap closure)', () => {
+    beforeEach(() => {
+      mocks.getCostOfSales.mockResolvedValue({ totalCost: '0.00', byDay: [], byItem: [] });
+      mocks.getStockVariance.mockResolvedValue({ lines: [], summaryByItem: [] });
+    });
+
+    it('shows revenue, cost, and margin per menu item, and rolled up by category', async () => {
+      mocks.getCostOfSalesMargin.mockResolvedValue({
+        byMenuItem: [
+          { menuItemId: '1', name: 'Bottle of Wine', category: 'Drinks', quantity: 2, revenue: '12.00', cost: '8.00', costSource: 'recipe', margin: '4.00', marginPct: 33.33 },
+        ],
+        byCategory: [{ category: 'Drinks', revenue: '12.00', cost: '8.00', margin: '4.00' }],
+        totals: { revenue: '12.00', cost: '8.00', margin: '4.00', itemsWithUnknownCost: 0 },
+      });
+      render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+
+      expect(await screen.findByText(/Total revenue/)).toBeInTheDocument();
+      const byItem = screen.getByRole('heading', { name: 'Cost-of-sales margin — by menu item' }).closest('section');
+      expect(within(byItem).getByText('Bottle of Wine')).toBeInTheDocument();
+      expect(within(byItem).getByText('33.3%')).toBeInTheDocument();
+      const byCategory = screen.getByRole('heading', { name: 'Cost-of-sales margin — by category' }).closest('section');
+      expect(within(byCategory).getByText('Drinks')).toBeInTheDocument();
+    });
+
+    it('renders a genuinely unknown cost as "Unknown", never a false zero, and notes how many items are excluded', async () => {
+      mocks.getCostOfSalesMargin.mockResolvedValue({
+        byMenuItem: [{ menuItemId: '2', name: 'Mystery Item', category: 'Drinks', quantity: 1, revenue: '15.00', cost: null, costSource: 'unknown', margin: null, marginPct: null }],
+        byCategory: [{ category: 'Drinks', revenue: '15.00', cost: null, margin: null }],
+        totals: { revenue: '15.00', cost: '0.00', margin: '0.00', itemsWithUnknownCost: 1 },
+      });
+      render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+
+      const byItem = await screen.findByRole('heading', { name: 'Cost-of-sales margin — by menu item' });
+      const section = byItem.closest('section');
+      expect(within(section).getAllByText('Unknown').length).toBeGreaterThan(0);
+      expect(await screen.findByText(/1 item with no recipe or cost price configured/)).toBeInTheDocument();
+    });
+
+    it('an empty range shows the empty state, not an error', async () => {
+      render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+      expect(await screen.findAllByText('Choose a date range and run the reports.')).not.toHaveLength(0);
+    });
   });
 });

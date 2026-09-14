@@ -76,8 +76,9 @@ export function listMenuItems(outletId) {
   return request(`/pos/menu-items${params}`);
 }
 
-export function createMenuItem({ outletId, name, category, price, modifiers }) {
-  return request('/pos/menu-items', { method: 'POST', body: { outlet_id: outletId, name, category, price, modifiers } });
+/** `costPrice` (gap closure) is a fallback cost for margin reporting, used only when this item has no recipe/BOM — omit/`null` to leave it unconfigured. */
+export function createMenuItem({ outletId, name, category, price, costPrice, modifiers }) {
+  return request('/pos/menu-items', { method: 'POST', body: { outlet_id: outletId, name, category, price, cost_price: costPrice, modifiers } });
 }
 
 /** Photo for a menu item (JPG/PNG/WebP, ≤ 2 MB) — replaces any existing one. Returns the updated item, with `image_url`. */

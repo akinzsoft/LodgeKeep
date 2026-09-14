@@ -166,6 +166,7 @@ async function seedTwoTenants(trx) {
     subscriptionInvoices: [],
     subscriptionPayments: [],
     importRuns: [],
+    stockItemCategories: [],
     stockItems: [],
     posMenuItemComponents: [],
     stockMovements: [],
@@ -835,6 +836,20 @@ async function seedTwoTenants(trx) {
   // stock_take_lines all reference a real staff user, so they seed
   // further down, matching reservation_notes/housekeeping/POS-orders' own
   // documented positioning.
+  // Registered stock-item category (gap closure) the fixture stock item
+  // below uses — mirrors the pos_menu_categories block above exactly.
+  for (const t of both) {
+    const property = t.properties[0];
+    t.stockItemCategories.push({
+      id: await insertReturningId(trx, 'stock_item_categories', {
+        tenant_id: t.id,
+        property_id: property.id,
+        name: 'Beverages',
+      }),
+      property_id: property.id,
+    });
+  }
+
   for (const t of both) {
     const property = t.properties[0];
     const outlet = t.posOutlets[0];
@@ -847,6 +862,7 @@ async function seedTwoTenants(trx) {
         outlet_id: outlet.id,
         name: 'Fixture Vodka',
         unit: 'ml',
+        category: 'Beverages',
         purchase_cost: '5.00',
         reorder_level: '500.000',
         current_quantity: '1000.000',
