@@ -25,12 +25,19 @@ function RoomChargeStub() {
   return <p>room-charge screen</p>;
 }
 
+function MenuStub() {
+  return <p>menu screen</p>;
+}
+
 function renderScreen() {
   return renderQrOrderScreen({
     element: <OrderStatusScreen />,
     routePath: 'orders/:id/status',
     initialPath: `/qr-order/${TOKEN}/orders/9/status`,
-    otherRoutes: [{ path: 'orders/:id/room-charge', element: <RoomChargeStub /> }],
+    otherRoutes: [
+      { path: 'orders/:id/room-charge', element: <RoomChargeStub /> },
+      { path: 'menu', element: <MenuStub /> },
+    ],
   });
 }
 
@@ -91,13 +98,59 @@ describe('<OrderStatusScreen>', () => {
   });
 
   it('"I\'ve already paid" re-verifies against the real gateway and updates the shown status', async () => {
-    mocks.getOrderStatus.mockResolvedValue(baseOrder());
+    mocks.getOrderStatus.mockResolvedValueOnce(baseOrder()).mockResolvedValue(baseOrder({ payment_status: 'paid', status: 'received' }));
     mocks.confirmCardPayment.mockResolvedValue({ guestOrder: baseOrder({ payment_status: 'paid', status: 'received' }) });
     renderScreen();
 
     await userEvent.click(await screen.findByRole('button', { name: "I’ve already paid" }));
     expect(mocks.confirmCardPayment).toHaveBeenCalledWith({ token: TOKEN, id: '9' });
     expect(await screen.findByText('Paid')).toBeInTheDocument();
+  });
+
+  it('lists what was ordered with subtotal, tax, and total once paid, and links back to the menu to order again', async () => {
+    mocks.getOrderStatus.mockResolvedValue(
+      baseOrder({
+        payment_status: 'paid',
+        status: 'received',
+        items: [
+          { id: '1', name: 'Chapman', quantity: 2, unit_price: '10.00', modifiers: null, line_total: '20.00' },
+          { id: '2', name: 'Suya', quantity: 1, unit_price: '15.00', modifiers: [{ name: 'Spice', option: 'Hot', priceDelta: '0.00' }], line_total: '15.00' },
+        ],
+        subtotal: '35.00',
+        tax_amount: '2.63',
+        total: '37.63',
+        currency: 'NGN',
+      })
+    );
+    renderScreen();
+
+    expect(await screen.findByText('What you ordered')).toBeInTheDocument();
+    expect(screen.getByText(/2 × Chapman/)).toBeInTheDocument();
+    expect(screen.getByText(/1 × Suya/)).toBeInTheDocument();
+    expect(screen.getByText('(Hot)')).toBeInTheDocument();
+    expect(screen.getByText('Subtotal')).toBeInTheDocument();
+    expect(screen.getByText('Tax')).toBeInTheDocument();
+    expect(screen.getByText(/37\.63/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Order something else' }));
+    expect(await screen.findByText('menu screen')).toBeInTheDocument();
+  });
+
+  it('shows the items but no "Order something else" while a card order still needs payment, and no tax line before settlement', async () => {
+    mocks.getOrderStatus.mockResolvedValue(
+      baseOrder({
+        items: [{ id: '1', name: 'Chapman', quantity: 1, unit_price: '10.00', modifiers: null, line_total: '10.00' }],
+        subtotal: '10.00',
+        tax_amount: null,
+        total: '10.75',
+        currency: 'NGN',
+      })
+    );
+    renderScreen();
+
+    expect(await screen.findByText(/1 × Chapman/)).toBeInTheDocument();
+    expect(screen.queryByText('Tax')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Order something else' })).not.toBeInTheDocument();
   });
 
   it('offers no "Complete payment" section once a card order is genuinely paid', async () => {

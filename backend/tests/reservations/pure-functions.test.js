@@ -87,6 +87,8 @@ describe('isValidTransition (ARCHITECTURE.md §11, plus waitlisted)', () => {
     ['no_show', 'confirmed'],
     ['confirmed', 'waitlisted'],
     ['checked_in', 'confirmed'],
+    ['waitlisted', 'checked_in'],
+    ['waitlisted', 'no_show'],
   ])('rejects %s -> %s', (from, to) => {
     expect(isValidTransition(from, to)).toBe(false);
   });

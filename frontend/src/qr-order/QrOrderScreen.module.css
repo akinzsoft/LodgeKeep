@@ -138,3 +138,13 @@
   flex-direction: column;
   gap: var(--space-3);
 }
+
+/* Subtotal/tax/total block under the ordered items on the order status page. */
+.orderTotals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}

@@ -334,6 +334,170 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       expect(promoted.status).toBe(200);
       expect(promoted.body.data.status).toBe('confirmed');
     });
+
+    function book({ roomTypeId, rateCodeId, arrival, departure, allowWaitlist = false, guestIndex = 0 }) {
+      return t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[guestIndex].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: arrival,
+          departure_date: departure,
+          ...(allowWaitlist ? { allow_waitlist: true } : {}),
+        });
+    }
+
+    async function roomsSold(roomTypeId, stayDate) {
+      const row = await t.trx('room_type_inventory').where({ tenant_id: ctx.a.id, room_type_id: roomTypeId, stay_date: stayDate }).first();
+      return row ? row.rooms_sold : 0;
+    }
+
+    it('bug fix: a multi-night booking that falls back to the waitlist leaves the free nights unsold, never a phantom rooms_sold', async () => {
+      const roomTypeId = await createRoomType(ctx.a, { code: 'WLMULTI' });
+      await createRoom(ctx.a, { roomTypeId, roomNumber: 'WLM1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'WLMRATE' });
+
+      // The only room is already sold for the SECOND night of the stay.
+      const blocker = await book({ roomTypeId, rateCodeId, arrival: '2027-12-02', departure: '2027-12-03' });
+      expect(blocker.status).toBe(201);
+
+      const waitlisted = await book({ roomTypeId, rateCodeId, arrival: '2027-12-01', departure: '2027-12-03', allowWaitlist: true });
+      expect(waitlisted.status).toBe(201);
+      expect(waitlisted.body.data.status).toBe('waitlisted');
+
+      expect(await roomsSold(roomTypeId, '2027-12-01')).toBe(0);
+      expect(await roomsSold(roomTypeId, '2027-12-02')).toBe(1);
+    });
+
+    it('a failed multi-night promote leaves every night unchanged and the reservation still waitlisted', async () => {
+      const roomTypeId = await createRoomType(ctx.a, { code: 'WLPROMOFAIL' });
+      await createRoom(ctx.a, { roomTypeId, roomNumber: 'WLPF1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'WLPFRATE' });
+
+      await book({ roomTypeId, rateCodeId, arrival: '2027-12-12', departure: '2027-12-13' });
+      const waitlisted = await book({ roomTypeId, rateCodeId, arrival: '2027-12-11', departure: '2027-12-13', allowWaitlist: true });
+      expect(waitlisted.body.data.status).toBe('waitlisted');
+
+      const promoted = await t.request
+        .post(`/api/v1/reservations/${waitlisted.body.data.id}/promote-waitlist`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({});
+      expect(promoted.status).toBe(422);
+      expect(promoted.body.error.code).toBe('BUSINESS_RULE_OVERBOOKING_THRESHOLD_EXCEEDED');
+      expect(await roomsSold(roomTypeId, '2027-12-11')).toBe(0);
+      expect(await roomsSold(roomTypeId, '2027-12-12')).toBe(1);
+      const row = await t.trx('reservations').where({ id: waitlisted.body.data.id }).first();
+      expect(row.status).toBe('waitlisted');
+    });
+
+    it('GET /reservations/waitlist lists only waitlisted rows, oldest first, with guest, phone, room type and arrival_passed', async () => {
+      const roomTypeId = await createRoomType(ctx.a, { code: 'WLLIST' });
+      await createRoom(ctx.a, { roomTypeId, roomNumber: 'WLL1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'WLLRATE' });
+
+      const confirmed = await book({ roomTypeId, rateCodeId, arrival: '2027-10-01', departure: '2027-10-02' });
+      const w1 = await book({ roomTypeId, rateCodeId, arrival: '2027-10-01', departure: '2027-10-02', allowWaitlist: true });
+      const w2 = await book({ roomTypeId, rateCodeId, arrival: '2027-10-01', departure: '2027-10-02', allowWaitlist: true });
+      // created_at is second-granular; pin distinct values so the order is deterministic.
+      await t.trx('reservations').where({ id: w1.body.data.id }).update({ created_at: '2026-01-01 10:00:00' });
+      await t.trx('reservations').where({ id: w2.body.data.id }).update({ created_at: '2026-01-01 11:00:00' });
+
+      const res = await t.request.get('/api/v1/reservations/waitlist').set('Authorization', `Bearer ${tokenFor()}`);
+      expect(res.status).toBe(200);
+      const ids = res.body.data.map((row) => String(row.id));
+      expect(ids).not.toContain(String(confirmed.body.data.id));
+      const mine = res.body.data.filter((row) => String(row.room_type_id) === String(roomTypeId));
+      expect(mine.map((row) => String(row.id))).toEqual([String(w1.body.data.id), String(w2.body.data.id)]);
+
+      const guest = await t.trx('guests').where({ id: ctx.a.guests[0].id }).first();
+      expect(mine[0]).toEqual(
+        expect.objectContaining({
+          guest_first_name: guest.first_name,
+          guest_last_name: guest.last_name,
+          guest_phone: guest.phone,
+          room_type_code: 'WLLIST',
+          room_type_name: 'WLLIST',
+          arrival_passed: false,
+        })
+      );
+
+      const cross = await t.request.get('/api/v1/reservations/waitlist').set('Authorization', `Bearer ${tokenFor({ tenant: ctx.b })}`);
+      expect(cross.body.data.map((row) => String(row.id))).not.toContain(String(w1.body.data.id));
+    });
+
+    it('a waitlist entry whose arrival is before the business date is flagged and cannot be promoted', async () => {
+      const property = await t.trx('properties').where({ id: ctx.a.properties[0].id }).first('current_business_date');
+      const roomTypeId = await createRoomType(ctx.a, { code: 'WLPAST' });
+      await createRoom(ctx.a, { roomTypeId, roomNumber: 'WLP1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'WLPRATE' });
+
+      const first = await book({ roomTypeId, rateCodeId, arrival: '2027-09-01', departure: '2027-09-02' });
+      const waitlisted = await book({ roomTypeId, rateCodeId, arrival: '2027-09-01', departure: '2027-09-02', allowWaitlist: true });
+      await t.request
+        .post(`/api/v1/reservations/${first.body.data.id}/cancel`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ reason: 'Free the room.' });
+
+      try {
+        await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: '2027-09-05' });
+
+        const list = await t.request.get('/api/v1/reservations/waitlist').set('Authorization', `Bearer ${tokenFor()}`);
+        const row = list.body.data.find((r) => String(r.id) === String(waitlisted.body.data.id));
+        expect(row.arrival_passed).toBe(true);
+
+        const promoted = await t.request
+          .post(`/api/v1/reservations/${waitlisted.body.data.id}/promote-waitlist`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({});
+        expect(promoted.status).toBe(422);
+        expect(promoted.body.error.code).toBe('BUSINESS_RULE_WAITLIST_ARRIVAL_PASSED');
+        expect(await roomsSold(roomTypeId, '2027-09-01')).toBe(0);
+      } finally {
+        await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: property.current_business_date });
+      }
+    });
+
+    it('cancelling a waitlisted reservation releases nothing — it never held inventory', async () => {
+      const roomTypeId = await createRoomType(ctx.a, { code: 'WLCANCEL' });
+      await createRoom(ctx.a, { roomTypeId, roomNumber: 'WLC1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'WLCRATE' });
+
+      await book({ roomTypeId, rateCodeId, arrival: '2027-08-01', departure: '2027-08-02' });
+      const waitlisted = await book({ roomTypeId, rateCodeId, arrival: '2027-08-01', departure: '2027-08-02', allowWaitlist: true });
+      expect(await roomsSold(roomTypeId, '2027-08-01')).toBe(1);
+
+      const cancelled = await t.request
+        .post(`/api/v1/reservations/${waitlisted.body.data.id}/cancel`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ reason: 'Guest no longer needs a room.' });
+      expect(cancelled.status).toBe(200);
+      expect(cancelled.body.data.status).toBe('cancelled');
+      expect(await roomsSold(roomTypeId, '2027-08-01')).toBe(1);
+    });
+
+    it('promote-waitlist requires reservations.manage and the waitlist read requires reservations.view — housekeeping gets 403 on both', async () => {
+      const housekeepingToken = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+      const list = await t.request.get('/api/v1/reservations/waitlist').set('Authorization', `Bearer ${housekeepingToken}`);
+      expect(list.status).toBe(403);
+      const promote = await t.request
+        .post(`/api/v1/reservations/${ctx.a.reservations[0].id}/promote-waitlist`)
+        .set('Authorization', `Bearer ${housekeepingToken}`)
+        .set('Idempotency-Key', idemKey())
+        .send({});
+      expect(promote.status).toBe(403);
+    });
   });
 
   // ====================================================================

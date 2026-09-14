@@ -89,7 +89,7 @@ export function BookingScreen({ activePropertyId, isOffline = false }) {
             {tab === 'availability' && <AvailabilityTab activeProperty={activeProperty} isOffline={isOffline} />}
             {tab === 'tape-chart' && <TapeChartTab activeProperty={activeProperty} />}
             {tab === 'reservations' && <ReservationsListTab activeProperty={activeProperty} isOffline={isOffline} />}
-            {tab === 'waitlist' && <WaitlistTab activeProperty={activeProperty} />}
+            {tab === 'waitlist' && <WaitlistTab isOffline={isOffline} />}
             {tab === 'front-desk' && <FrontDeskTab activeProperty={activeProperty} isOffline={isOffline} />}
           </div>
         </>

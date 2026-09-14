@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { Card, Button, StatusPill } from '../../shared/components/index.js';
+import { Money } from '../../shared/format/money.jsx';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { qrOrderingApi, ApiError } from '../../shared/api/index.js';
 import { guestOrderStatusTone, guestOrderStatusLabel, guestOrderPaymentTone, guestOrderPaymentLabel, isGuestOrderStillMoving } from '../status.js';
@@ -26,6 +27,11 @@ const POLL_INTERVAL_MS = 4000;
  * uses; "I've already paid" re-verifies against the real gateway directly,
  * covering the case a webhook already landed but this screen hasn't polled
  * since.
+ *
+ * "Your order" lists what was ordered and the totals (`GET .../orders/:id`
+ * returns them alongside the status). Once nothing is left for the guest to
+ * do about payment, "Order something else" takes them back to the menu for
+ * the same QR code.
  */
 export function OrderStatusScreen() {
   const { token } = useOutletContext();
@@ -85,7 +91,10 @@ export function OrderStatusScreen() {
     setRetryError(null);
     try {
       const result = await qrOrderingApi.confirmCardPayment({ token, id });
-      setOrder(result.guestOrder);
+      // confirm-payment returns only the status row; keep the item details
+      // on screen, then reload for the settled totals.
+      setOrder((previous) => ({ ...previous, ...result.guestOrder }));
+      load();
     } catch (caught) {
       setRetryError(caught instanceof ApiError ? caught.message : 'Could not confirm payment.');
     } finally {
@@ -117,6 +126,10 @@ export function OrderStatusScreen() {
   }
 
   const needsPayment = order.payment_method === 'card' && order.payment_status === 'unpaid';
+  const needsRoomVerification = order.payment_method === 'room_charge' && order.payment_status === 'unpaid';
+  const canOrderAgain = order.payment_status !== 'unpaid' || order.status === 'rejected' || order.status === 'auto_rejected';
+  const currencyCode = order.currency || 'NGN';
+  const items = order.items ?? [];
 
   return (
     <div className={styles.page}>
@@ -153,6 +166,48 @@ export function OrderStatusScreen() {
         )}
       </Card>
 
+      {items.length > 0 && (
+        <Card title="What you ordered">
+          <div className={styles.summaryList}>
+            {items.map((item) => (
+              <div key={item.id} className={styles.summaryRow}>
+                <span>
+                  {item.quantity} × {item.name}
+                  {item.modifiers?.length > 0 && (
+                    <span className={formStyles.hint}> ({item.modifiers.map((m) => m.option ?? m.name).join(', ')})</span>
+                  )}
+                </span>
+                <Money amount={item.line_total} currencyCode={currencyCode} />
+              </div>
+            ))}
+          </div>
+          <div className={styles.orderTotals}>
+            {order.tax_amount != null && (
+              <>
+                <div className={styles.summaryRow}>
+                  <span>Subtotal</span>
+                  <Money amount={order.subtotal} currencyCode={currencyCode} />
+                </div>
+                <div className={styles.summaryRow}>
+                  <span>Tax</span>
+                  <Money amount={order.tax_amount} currencyCode={currencyCode} />
+                </div>
+              </>
+            )}
+            <div className={styles.summaryRow}>
+              <strong>Total</strong>
+              <strong>
+                <Money amount={order.total} currencyCode={currencyCode} />
+              </strong>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {canOrderAgain && (
+        <Button onClick={() => navigate('../../../menu', { relative: 'path' })}>Order something else</Button>
+      )}
+
       {needsPayment && (
         <Card title="Complete payment">
           {retryError && (
@@ -172,7 +227,7 @@ export function OrderStatusScreen() {
         </Card>
       )}
 
-      {order.payment_method === 'room_charge' && order.payment_status === 'unpaid' && (
+      {needsRoomVerification && (
         <Card>
           <p className={formStyles.hint}>This order still needs to be verified against your room.</p>
           <Button onClick={() => navigate('../room-charge', { relative: 'path' })}>Verify and charge to my room</Button>
