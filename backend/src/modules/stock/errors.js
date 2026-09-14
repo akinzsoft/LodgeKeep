@@ -64,6 +64,13 @@ class StockTakeAlreadyCancelledError extends AppError {
   }
 }
 
+/** Gap closure — mirrors `pos/errors.js`'s `MenuCategoryInUseError` exactly. */
+class StockCategoryInUseError extends AppError {
+  constructor(name, itemCount) {
+    super('CONFLICT_STOCK_CATEGORY_IN_USE', `"${name}" is still used by ${itemCount} stock item${itemCount === 1 ? '' : 's'} — move them to another category first.`, 409, { name, itemCount });
+  }
+}
+
 module.exports = {
   StockItemNotFoundError,
   OutletNotFoundError,
@@ -74,4 +81,5 @@ module.exports = {
   StockTakeNotOpenError,
   StockTakeAlreadyCompletedError,
   StockTakeAlreadyCancelledError,
+  StockCategoryInUseError,
 };

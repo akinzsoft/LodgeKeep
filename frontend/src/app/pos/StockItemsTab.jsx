@@ -3,9 +3,10 @@ import { Card, DataTable, Button, ConfirmDialog } from '../../shared/components/
 import { Money } from '../../shared/format/money.jsx';
 import { formatQuantity } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
+import { StockCategoriesCard } from './StockCategoriesCard.jsx';
 import formStyles from './POSForm.module.css';
 
-const EMPTY_FORM = { outlet_id: '', name: '', unit: '', purchase_cost: '', supplier: '', reorder_level: '' };
+const EMPTY_FORM = { outlet_id: '', name: '', unit: '', category: '', purchase_cost: '', supplier: '', reorder_level: '' };
 
 /**
  * StockItemsTab — PLAN.md Phase 6's "POS inventory & stock control"
@@ -31,6 +32,14 @@ const EMPTY_FORM = { outlet_id: '', name: '', unit: '', purchase_cost: '', suppl
  * a literal NGN currency code — `stock_items` carries no currency column of
  * its own, so the real source of truth is the active property's
  * `base_currency`, now threaded in as a prop.
+ *
+ * Gap closure: `category` is a registered, dropdown-fed value (mirroring
+ * `SetupTab.jsx`'s own menu-category mechanism exactly, via the new
+ * `StockCategoriesCard`), never free text — the same "never split one
+ * category into 'Wine'/'wine'/'Wines'" reasoning that table's own
+ * migration header gives. Optional, unlike menu items' own mandatory
+ * category: a stock item created before this pass has none, and forcing a
+ * choice retroactively would need an invented default nobody chose.
  */
 export function StockItemsTab({ activeProperty, isOffline = false }) {
   const [outlets, setOutlets] = useState(null);
@@ -38,23 +47,53 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   const [outletFilter, setOutletFilter] = useState('');
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [error, setError] = useState(null);
+  // Registered stock categories (shared by every outlet) feeding the category dropdowns.
+  const [categories, setCategories] = useState(null);
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ name: '', unit: '', supplier: '', reorder_level: '' });
+  const [editForm, setEditForm] = useState({ name: '', unit: '', category: '', supplier: '', reorder_level: '' });
   const [editError, setEditError] = useState(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   const [archiving, setArchiving] = useState(null);
+
+  async function reloadCategories() {
+    try {
+      setCategories(await stockApi.listStockItemCategories());
+    } catch {
+      setCategories([]);
+    }
+  }
+
+  /** A category renamed or archived changes which stock items show it, so refresh both. */
+  async function handleCategoriesChanged() {
+    await reloadCategories();
+    await reloadItems();
+  }
+
+  /**
+   * Options for a category dropdown. A stock item already in a category
+   * that is no longer active keeps that value selectable, so opening its
+   * edit form never silently changes it. Category is optional (migration
+   * header), so an empty "No category" option always leads the list.
+   */
+  function categoryOptions(current) {
+    const names = (categories ?? []).map((category) => category.name);
+    if (current && !names.includes(current)) names.push(current);
+    return names;
+  }
 
   useEffect(() => {
     posApi
       .listOutlets()
       .then(setOutlets)
       .catch(() => setOutlets([]));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
+    reloadCategories();
   }, []);
 
   async function reloadItems() {
@@ -68,7 +107,6 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   }
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount/filter-change; no data-fetching library exists yet to own this
     reloadItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- outletFilter/lowStockOnly drive this refetch directly
   }, [outletFilter, lowStockOnly]);
@@ -82,6 +120,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
         outletId: form.outlet_id,
         name: form.name,
         unit: form.unit,
+        category: form.category || undefined,
         purchaseCost: form.purchase_cost || undefined,
         supplier: form.supplier || undefined,
         reorderLevel: form.reorder_level || undefined,
@@ -98,7 +137,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   function startEdit(item) {
     setEditingId(item.id);
     setEditError(null);
-    setEditForm({ name: item.name, unit: item.unit, supplier: item.supplier ?? '', reorder_level: item.reorder_level });
+    setEditForm({ name: item.name, unit: item.unit, category: item.category ?? '', supplier: item.supplier ?? '', reorder_level: item.reorder_level });
   }
 
   async function handleEditSubmit(event) {
@@ -109,6 +148,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
       await stockApi.updateStockItem(editingId, {
         name: editForm.name,
         unit: editForm.unit,
+        category: editForm.category || null,
         supplier: editForm.supplier || null,
         reorderLevel: editForm.reorder_level,
       });
@@ -185,6 +225,17 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
             <input className={formStyles.input} placeholder="ml, bottle, kg…" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} required disabled={isOffline} />
           </label>
           <label className={formStyles.field}>
+            <span className={formStyles.label}>Category (optional)</span>
+            <select className={formStyles.select} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} disabled={isOffline}>
+              <option value="">No category</option>
+              {categoryOptions(form.category).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={formStyles.field}>
             <span className={formStyles.label}>Initial cost (optional)</span>
             <input
               className={formStyles.input}
@@ -226,6 +277,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
         emptyMessage="No stock items match this filter."
         columns={[
           { key: 'name', label: 'Name' },
+          { key: 'category', label: 'Category', render: (row) => row.category ?? '—' },
           { key: 'unit', label: 'Unit' },
           { key: 'current_quantity', label: 'On hand', align: 'right', render: (row) => formatQuantity(row.current_quantity, row.unit) },
           { key: 'reorder_level', label: 'Reorder level', align: 'right', render: (row) => formatQuantity(row.reorder_level, row.unit) },
@@ -264,6 +316,17 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
             <label className={formStyles.field}>
               <span className={formStyles.label}>Unit</span>
               <input className={formStyles.input} value={editForm.unit} onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })} required disabled={isOffline} />
+            </label>
+            <label className={formStyles.field}>
+              <span className={formStyles.label}>Category</span>
+              <select className={formStyles.select} value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })} disabled={isOffline}>
+                <option value="">No category</option>
+                {categoryOptions(editForm.category).map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className={formStyles.field}>
               <span className={formStyles.label}>Supplier</span>
@@ -310,6 +373,8 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
           onCancel={() => setArchiving(null)}
         />
       )}
+
+      <StockCategoriesCard categories={categories} onChanged={handleCategoriesChanged} />
     </div>
   );
 }

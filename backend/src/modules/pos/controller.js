@@ -47,6 +47,24 @@ function requireCashAmount(body, field) {
 }
 
 /**
+ * Gap closure (`pos_menu_items.cost_price`): distinguishes `undefined`
+ * ("field not sent, don't touch it") from `null` ("clear it, go back to no
+ * fallback cost") the same way `access-monitoring`'s `retentionDays` does —
+ * a genuinely optional money field, unlike `requireCashAmount`'s always-
+ * required one.
+ */
+function optionalCashAmount(body, field) {
+  const raw = body?.[field];
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === '') return null;
+  const value = String(raw).trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(value)) {
+    throw new ValidationError('INVALID_AMOUNT', `"${field}" must be a non-negative amount with at most 2 decimal places, or null.`, [{ field, issue: 'invalid' }]);
+  }
+  return value;
+}
+
+/**
  * Bug fix (found while building this module's first real edit UI —
  * `updateOutlet`/`updateTerminal`/`updateMenuItem` had all three taken
  * `req.body ?? {}` straight through to a raw `.update(changes)` since this
@@ -80,6 +98,7 @@ function pickMenuItemChanges(body) {
   if (body?.category !== undefined) changes.category = body.category;
   if (body?.price !== undefined) changes.price = body.price;
   if (body?.modifiers !== undefined) changes.modifiers = body.modifiers;
+  if (body?.cost_price !== undefined) changes.cost_price = optionalCashAmount(body, 'cost_price');
   return changes;
 }
 
@@ -253,7 +272,8 @@ async function createMenuItem(req, res, next) {
     const name = require_(req.body, 'name');
     const category = require_(req.body, 'category');
     const price = require_(req.body, 'price');
-    const menuItem = await service.createMenuItem({ context: req.context, outletId, name, category, price, modifiers: req.body?.modifiers });
+    const costPrice = optionalCashAmount(req.body, 'cost_price');
+    const menuItem = await service.createMenuItem({ context: req.context, outletId, name, category, price, costPrice, modifiers: req.body?.modifiers });
     await req.audit({ entityType: 'pos_menu_items', entityId: menuItem.id, action: 'create', afterState: menuItem });
     res.status(201).json(ok(menuItem));
   } catch (error) {

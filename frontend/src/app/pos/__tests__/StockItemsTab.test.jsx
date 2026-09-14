@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
   createStockItem: vi.fn(),
   updateStockItem: vi.fn(),
   archiveStockItem: vi.fn(),
+  listStockItemCategories: vi.fn(),
+  createStockItemCategory: vi.fn(),
+  updateStockItemCategory: vi.fn(),
+  archiveStockItemCategory: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -23,6 +27,10 @@ vi.mock('../../../shared/api/index.js', async () => {
       createStockItem: mocks.createStockItem,
       updateStockItem: mocks.updateStockItem,
       archiveStockItem: mocks.archiveStockItem,
+      listStockItemCategories: mocks.listStockItemCategories,
+      createStockItemCategory: mocks.createStockItemCategory,
+      updateStockItemCategory: mocks.updateStockItemCategory,
+      archiveStockItemCategory: mocks.archiveStockItemCategory,
     },
   };
 });
@@ -48,6 +56,7 @@ describe('<StockItemsTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listOutlets.mockResolvedValue([outlet()]);
+    mocks.listStockItemCategories.mockResolvedValue([{ id: '1', name: 'Beverages', sort_order: 0, item_count: 0 }]);
   });
 
   it('lists real stock items with quantity+unit and cost, never running quantity through the money formatter', async () => {
@@ -117,9 +126,11 @@ describe('<StockItemsTab>', () => {
     mocks.listStockItems.mockResolvedValue([item()]);
     mocks.updateStockItem.mockResolvedValue(item({ name: 'Premium Vodka' }));
     render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
-    await screen.findByText('Vodka');
+    const row = (await screen.findByText('Vodka')).closest('tr');
 
-    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    // Scoped to the item's own row — the Stock categories card below
+    // renders its own "Edit"/"Archive" buttons per category row too.
+    await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
     const editCard = screen.getByRole('heading', { name: 'Edit — Vodka' }).closest('section');
 
     // The read-only cost note is present, but there is no input to edit it.
@@ -143,9 +154,10 @@ describe('<StockItemsTab>', () => {
     mocks.listStockItems.mockResolvedValue([item()]);
     mocks.archiveStockItem.mockResolvedValue(item({ status: 'archived' }));
     render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
-    await screen.findByText('Vodka');
+    const row = (await screen.findByText('Vodka')).closest('tr');
 
-    await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    // Scoped to the item's own row — see the previous test's own comment.
+    await userEvent.click(within(row).getByRole('button', { name: 'Archive' }));
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog).toHaveTextContent('Vodka');
     expect(mocks.archiveStockItem).not.toHaveBeenCalled();
@@ -157,12 +169,13 @@ describe('<StockItemsTab>', () => {
   it('disables every mutating control while offline', async () => {
     mocks.listStockItems.mockResolvedValue([item()]);
     render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} isOffline />);
-    await screen.findByText('Vodka');
+    const row = (await screen.findByText('Vodka')).closest('tr');
 
     expect(screen.getByText(/You are offline/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add stock item' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Edit' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Archive' })).toBeDisabled();
+    // Scoped to the item's own row — see the earlier tests' own comment.
+    expect(within(row).getByRole('button', { name: 'Edit' })).toBeDisabled();
+    expect(within(row).getByRole('button', { name: 'Archive' })).toBeDisabled();
   });
 
   it('a create attempt without pos.stock_manage surfaces the real backend 403 — no client-side check ever hides the button itself', async () => {
@@ -183,5 +196,69 @@ describe('<StockItemsTab>', () => {
     await userEvent.click(addButton);
 
     expect(await screen.findByText('You do not have permission to perform this action.')).toBeInTheDocument();
+  });
+
+  // Gap closure: registered stock categories (StockCategoriesCard, mirroring
+  // SetupTab.jsx's own Menu categories mechanism).
+  describe('categories (gap closure)', () => {
+    it('offers the registered categories on the create form, including "No category"', async () => {
+      mocks.listStockItems.mockResolvedValue([]);
+      mocks.listStockItemCategories.mockResolvedValue([
+        { id: '1', name: 'Beverages', sort_order: 0, item_count: 1 },
+        { id: '2', name: 'Cleaning supplies', sort_order: 1, item_count: 0 },
+      ]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await screen.findByText('New stock item');
+
+      const select = await screen.findByLabelText('Category (optional)');
+      expect([...select.options].map((o) => o.textContent)).toEqual(['No category', 'Beverages', 'Cleaning supplies']);
+    });
+
+    it('creates a stock item with the selected category', async () => {
+      mocks.listStockItems.mockResolvedValue([]);
+      mocks.createStockItem.mockResolvedValue(item());
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await screen.findByText('New stock item');
+
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.type(screen.getByLabelText('Name'), 'Vodka');
+      await userEvent.type(screen.getByLabelText('Unit'), 'ml');
+      await selectWhenLoaded('Category (optional)', 'Beverages');
+      await userEvent.click(screen.getByRole('button', { name: 'Add stock item' }));
+
+      expect(mocks.createStockItem).toHaveBeenCalledWith(expect.objectContaining({ category: 'Beverages' }));
+    });
+
+    it('registers a new category from the Stock categories card and refreshes the dropdown', async () => {
+      mocks.listStockItems.mockResolvedValue([]);
+      mocks.createStockItemCategory.mockResolvedValue({ id: '3', name: 'Wine' });
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      const card = (await screen.findByRole('heading', { name: 'Stock categories' })).closest('section');
+
+      await userEvent.type(within(card).getByLabelText('Category name'), 'Wine');
+      mocks.listStockItemCategories.mockResolvedValue([
+        { id: '1', name: 'Beverages', sort_order: 0, item_count: 0 },
+        { id: '3', name: 'Wine', sort_order: 0, item_count: 0 },
+      ]);
+      await userEvent.click(within(card).getByRole('button', { name: 'Add category' }));
+
+      expect(mocks.createStockItemCategory).toHaveBeenCalledWith({ name: 'Wine', sortOrder: undefined });
+      expect(await within(card).findByText('Wine')).toBeInTheDocument();
+    });
+
+    it('shows why a category still in use cannot be archived', async () => {
+      mocks.listStockItems.mockResolvedValue([]);
+      mocks.archiveStockItemCategory.mockRejectedValue(
+        new ApiError({ code: 'CONFLICT_STOCK_CATEGORY_IN_USE', message: '"Beverages" is still used by 1 stock item — move them to another category first.' })
+      );
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      const card = (await screen.findByRole('heading', { name: 'Stock categories' })).closest('section');
+
+      await userEvent.click(within(card).getByRole('button', { name: 'Archive' }));
+      const dialog = await screen.findByRole('alertdialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+
+      expect(await within(card).findByText(/still used by 1 stock item/)).toBeInTheDocument();
+    });
   });
 });

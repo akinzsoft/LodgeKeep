@@ -21,6 +21,33 @@ function idempotencyKey() {
 }
 
 // ---------------------------------------------------------------------
+// Stock item categories — gap closure, mirrors pos.js's menu-category
+// wrappers exactly.
+// ---------------------------------------------------------------------
+
+export function listStockItemCategories({ includeArchived } = {}) {
+  const params = new URLSearchParams();
+  if (includeArchived) params.set('include_archived', 'true');
+  const query = params.toString();
+  return request(`/pos/stock/categories${query ? `?${query}` : ''}`);
+}
+
+export function createStockItemCategory({ name, sortOrder }) {
+  return request('/pos/stock/categories', { method: 'POST', body: { name, sort_order: sortOrder } });
+}
+
+export function updateStockItemCategory(id, { name, sortOrder } = {}) {
+  const body = {};
+  if (name !== undefined) body.name = name;
+  if (sortOrder !== undefined) body.sort_order = sortOrder;
+  return request(`/pos/stock/categories/${id}`, { method: 'PATCH', body });
+}
+
+export function archiveStockItemCategory(id) {
+  return request(`/pos/stock/categories/${id}/archive`, { method: 'POST', body: {} });
+}
+
+// ---------------------------------------------------------------------
 // Stock items
 // ---------------------------------------------------------------------
 
@@ -32,17 +59,18 @@ export function listStockItems({ outletId, lowStockOnly } = {}) {
   return request(`/pos/stock/items${query ? `?${query}` : ''}`);
 }
 
-export function createStockItem({ outletId, name, unit, purchaseCost, supplier, reorderLevel }) {
+export function createStockItem({ outletId, name, unit, category, purchaseCost, supplier, reorderLevel }) {
   return request('/pos/stock/items', {
     method: 'POST',
-    body: { outlet_id: outletId, name, unit, purchase_cost: purchaseCost, supplier, reorder_level: reorderLevel },
+    body: { outlet_id: outletId, name, unit, category, purchase_cost: purchaseCost, supplier, reorder_level: reorderLevel },
   });
 }
 
-export function updateStockItem(id, { name, unit, supplier, reorderLevel } = {}) {
+export function updateStockItem(id, { name, unit, category, supplier, reorderLevel } = {}) {
   const body = {};
   if (name !== undefined) body.name = name;
   if (unit !== undefined) body.unit = unit;
+  if (category !== undefined) body.category = category;
   if (supplier !== undefined) body.supplier = supplier;
   if (reorderLevel !== undefined) body.reorder_level = reorderLevel;
   return request(`/pos/stock/items/${id}`, { method: 'PATCH', body });
@@ -143,4 +171,11 @@ export function getStockVariance({ dateFrom, dateTo, outletId }) {
   const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
   if (outletId) params.set('outlet_id', outletId);
   return request(`/pos/stock/reports/variance?${params}`);
+}
+
+/** Gap closure: revenue, cost, and margin per menu item (and rolled up by category), grouped over the same date/outlet range. */
+export function getCostOfSalesMargin({ dateFrom, dateTo, outletId }) {
+  const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+  if (outletId) params.set('outlet_id', outletId);
+  return request(`/pos/stock/reports/margin?${params}`);
 }

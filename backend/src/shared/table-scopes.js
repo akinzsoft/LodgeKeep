@@ -358,6 +358,9 @@ const TABLE_SCOPES = Object.freeze({
   stock_movements: { scope: SCOPES.PROPERTY },
   stock_takes: { scope: SCOPES.PROPERTY },
   stock_take_lines: { scope: SCOPES.PROPERTY },
+  // Gap closure: registered stock-item categories, mirroring
+  // `pos_menu_categories` exactly (same table, same reasoning).
+  stock_item_categories: { scope: SCOPES.PROPERTY },
 
   // Door access monitoring — PLAN.md Phase 7,
   // 20261020090000_create_lock_system_config.js through

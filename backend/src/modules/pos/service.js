@@ -274,7 +274,7 @@ async function getMenuItem({ context, id }) {
   return menuImages.withImageUrl(await db.table('pos_menu_items').where({ id }).first());
 }
 
-async function createMenuItem({ context, outletId, name, category, price, modifiers, isAvailable }) {
+async function createMenuItem({ context, outletId, name, category, price, costPrice, modifiers, isAvailable }) {
   const db = scopedDb().for(context);
   const outlet = await getOutlet({ context, id: outletId });
   if (!outlet) throw new OutletNotFoundError();
@@ -284,6 +284,10 @@ async function createMenuItem({ context, outletId, name, category, price, modifi
     name,
     category: categoryName,
     price,
+    // Gap closure: a fallback cost for margin reporting, used only when
+    // this item has no recipe/BOM (stock/reporting.js's own header). Never
+    // read anywhere else in POS core.
+    cost_price: costPrice ?? null,
     modifiers: modifiers ?? null,
     is_available: isAvailable ?? true,
   });
