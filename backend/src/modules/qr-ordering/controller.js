@@ -142,7 +142,8 @@ async function getOrderStatus(req, res, next) {
   try {
     const guestOrder = await service.getGuestOrderForToken({ context: req.context, token: req.qrToken, id: req.params.id });
     if (!guestOrder) return notFound(res);
-    res.status(200).json(ok(guestOrder));
+    const details = await service.getGuestOrderDetails({ context: req.context, guestOrder });
+    res.status(200).json(ok({ ...guestOrder, ...details }));
   } catch (error) {
     next(error);
   }

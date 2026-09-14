@@ -123,6 +123,17 @@ export function listOrders({ outletId, status } = {}) {
   return request(`/pos/orders${query ? `?${query}` : ''}`);
 }
 
+/** The kitchen/bar ticket queue: open tabs with something to make, oldest first, items included. */
+export function listKitchenTickets({ outletId } = {}) {
+  const query = outletId ? `?${new URLSearchParams({ outlet_id: outletId })}` : '';
+  return request(`/pos/tickets${query}`);
+}
+
+/** Marks a ticket done: it leaves the kitchen queue until an item is added to the tab. */
+export function markTicketDone(orderId) {
+  return request(`/pos/tickets/${orderId}/done`, { method: 'POST' });
+}
+
 export function getOrder(id) {
   return request(`/pos/orders/${id}`);
 }
@@ -245,11 +256,14 @@ export function openShift({ terminalId, openingFloat }) {
   return request('/pos/shifts', { method: 'POST', body: { terminal_id: terminalId, opening_float: openingFloat } });
 }
 
-/** `countedCash` is the operator's own blind count — the response carries the computed `expected_cash`/`variance`, never exposed before this call. */
-export function closeShift(shiftId, countedCash) {
+/**
+ * `countedCash` is the operator's own blind count — the response carries the computed `expected_cash`/`variance`, never exposed before this call.
+ * `key` lets the caller hold one Idempotency-Key per close attempt, so retrying the same count after a lost response replays the stored result instead of hitting "already closed".
+ */
+export function closeShift(shiftId, countedCash, key = idempotencyKey()) {
   return request(`/pos/shifts/${shiftId}/close`, {
     method: 'POST',
-    headers: { 'Idempotency-Key': idempotencyKey() },
+    headers: { 'Idempotency-Key': key },
     body: { counted_cash: countedCash },
   });
 }

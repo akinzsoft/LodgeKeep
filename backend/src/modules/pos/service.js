@@ -85,6 +85,7 @@ const {
   MenuItemNotFoundError,
   OrderNotFoundError,
   ShiftAlreadyClosedError,
+  ShiftNotFoundError,
   SettlementAlreadyVoidedError,
   RegisterPaymentInvalidError,
   OrderHasCapturedPaymentError,
@@ -388,6 +389,111 @@ async function listOrders({ context, outletId, status }) {
   return query.orderBy('opened_at', 'desc');
 }
 
+/**
+ * The kitchen/bar ticket queue (POS → Tickets): every tab with something to
+ * make that the kitchen has not yet marked done, oldest first, with its
+ * unvoided items and their menu names — one query for the tabs and one for
+ * all their items.
+ *
+ * Not "open tabs": a tab paid at the point of order (a guest QR card order,
+ * the Register's "Send to Bar & Checkout") is settled within seconds, long
+ * before anything is made. So a ticket is any non-void tab whose
+ * `ticket_done_at` is still empty, paid or not.
+ *
+ * Guest QR orders appear once paid (`received`, still awaiting acceptance
+ * on the Guest orders tab — flagged so) or accepted (`preparing`). An order
+ * still awaiting card payment never reaches the kitchen; one already
+ * `on_the_way` has left it. Tabs with no items are left out.
+ */
+const TICKET_GUEST_STATUSES = ['received', 'preparing'];
+
+async function listKitchenTickets({ context, outletId }) {
+  const db = scopedDb().for(context);
+  let query = db
+    .table('pos_orders')
+    .joinScoped('pos_outlets', (join) => join.on('pos_outlets.id', '=', 'pos_orders.outlet_id'))
+    .joinScoped('pos_guest_orders', (join) => join.on('pos_guest_orders.pos_order_id', '=', 'pos_orders.id'), { type: 'left' })
+    .whereIn('pos_orders.status', ['open', 'settled'])
+    .whereNull('pos_orders.ticket_done_at');
+  if (outletId) query = query.where('pos_orders.outlet_id', outletId);
+  const orders = await query
+    .select(
+      'pos_orders.id',
+      'pos_orders.outlet_id',
+      'pos_outlets.name as outlet_name',
+      'pos_orders.table_label',
+      'pos_orders.source',
+      'pos_orders.status',
+      'pos_orders.opened_at',
+      'pos_guest_orders.status as guest_status',
+      'pos_guest_orders.guest_name'
+    )
+    .orderBy('pos_orders.opened_at', 'asc')
+    .orderBy('pos_orders.id', 'asc');
+
+  const visible = orders.filter((order) => order.source !== 'guest' || TICKET_GUEST_STATUSES.includes(order.guest_status));
+  if (visible.length === 0) return [];
+
+  const items = await db
+    .table('pos_order_items')
+    .joinScoped('pos_menu_items', (join) => join.on('pos_menu_items.id', '=', 'pos_order_items.menu_item_id'))
+    .whereIn(
+      'pos_order_items.pos_order_id',
+      visible.map((order) => order.id)
+    )
+    .whereNull('pos_order_items.voided_at')
+    .select(
+      'pos_order_items.id',
+      'pos_order_items.pos_order_id',
+      'pos_order_items.quantity',
+      'pos_order_items.modifiers',
+      'pos_order_items.created_at',
+      'pos_menu_items.name',
+      'pos_menu_items.category'
+    )
+    .orderBy('pos_order_items.id', 'asc');
+
+  const itemsByOrder = new Map();
+  for (const item of items) {
+    const key = String(item.pos_order_id);
+    if (!itemsByOrder.has(key)) itemsByOrder.set(key, []);
+    itemsByOrder.get(key).push({
+      id: item.id,
+      quantity: item.quantity,
+      name: item.name,
+      category: item.category,
+      modifiers: item.modifiers ?? null,
+      added_at: item.created_at,
+    });
+  }
+
+  return visible
+    .map((order) => ({ ...order, guest_status: order.source === 'guest' ? order.guest_status : null, items: itemsByOrder.get(String(order.id)) ?? [] }))
+    .filter((order) => order.items.length > 0);
+}
+
+/**
+ * Marks a tab's ticket done — it leaves the kitchen queue. Conditional
+ * UPDATE, so two screens bumping the same ticket record one "done by".
+ * Marking an already-done ticket is a harmless no-op. A guest order not yet
+ * accepted cannot be marked done: it may still be auto-rejected and
+ * refunded, so nothing should be made for it yet.
+ */
+async function markTicketDone({ context, orderId, userId }) {
+  const db = scopedDb().for(context);
+  const order = await db.table('pos_orders').where({ id: orderId }).first();
+  if (!order) return null;
+  if (order.status === 'void') throw new OrderNotOpenError(orderId, order.status);
+  if (order.source === 'guest') {
+    const guestOrder = await db.table('pos_guest_orders').where({ pos_order_id: orderId }).first('status');
+    if (guestOrder && !['preparing', 'on_the_way'].includes(guestOrder.status)) {
+      throw new ValidationError('POS_TICKET_GUEST_ORDER_NOT_ACCEPTED', 'Accept this guest order on the Guest orders tab before marking it done.');
+    }
+  }
+  await db.table('pos_orders').where({ id: orderId }).whereNull('ticket_done_at').update({ ticket_done_at: new Date(), ticket_done_by_user_id: userId });
+  return db.table('pos_orders').where({ id: orderId }).first();
+}
+
 async function getOrder({ context, id }) {
   const db = scopedDb().for(context);
   return db.table('pos_orders').where({ id }).first();
@@ -460,6 +566,8 @@ async function addItem({ context, orderId, menuItemId, quantity, modifiers }) {
       unit_price: menuItem.price,
       modifiers: modifiers ?? null,
     });
+    // A new item sends the tab back to the kitchen queue.
+    if (order.ticket_done_at) await trx.table('pos_orders').where({ id: orderId }).update({ ticket_done_at: null, ticket_done_by_user_id: null });
     return { order, items: await trx.table('pos_order_items').where({ pos_order_id: orderId }).orderBy('id') };
   });
 }
@@ -686,6 +794,19 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
   const businessDate = property?.current_business_date;
   const allTaxRows = await trx.table('taxes');
 
+  // Cash-up attribution: record which shift was open on this terminal when
+  // the sale settled, so `closeShift` counts exactly these rows rather than
+  // guessing by timestamp. See `lockTerminalForShifts` for the lock order —
+  // a shared terminal lock lets sales on one terminal run side by side while
+  // still waiting out an in-flight open/close, and the shift read itself is
+  // a locking read so it sees that open/close's committed result rather
+  // than this transaction's older snapshot.
+  let openShift = null;
+  if (order.terminal_id) {
+    await lockTerminalForShifts(trx, order.terminal_id, 'share');
+    openShift = await trx.table('pos_shifts').where({ terminal_id: order.terminal_id }).whereNull('closed_at').forShare().first('id');
+  }
+
   const results = [];
   for (const settlement of settlements) {
     if (settlement.method !== 'room_charge' && settlement.method !== 'cash' && settlement.method !== 'card') {
@@ -705,6 +826,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
       service_charge: serviceCharge,
       settled_by_user_id: settledByUserId,
       business_date: businessDate ?? null,
+      pos_shift_id: openShift?.id ?? null,
     };
 
     if (settlement.method === 'room_charge') {
@@ -1032,10 +1154,15 @@ async function voidSettlement({ trx, settlementId, reason, userId }) {
 // Shifts — blind cash-up
 // ---------------------------------------------------------------------
 
+/** Carries the terminal's device_ref and the opener's name so the history table can be reviewed without a second lookup (a pos_operator holds no grant to read the staff directory). */
 async function listShifts({ context, terminalId }) {
   const db = scopedDb().for(context);
-  const query = db.table('pos_shifts');
-  return (terminalId ? query.where({ terminal_id: terminalId }) : query).orderBy('opened_at', 'desc');
+  const query = db
+    .table('pos_shifts')
+    .joinScoped('pos_terminals', (join) => join.on('pos_terminals.id', '=', 'pos_shifts.terminal_id'))
+    .joinScoped('users', (join) => join.on('users.id', '=', 'pos_shifts.user_id'))
+    .select('pos_shifts.*', 'pos_terminals.device_ref as terminal_device_ref', 'users.first_name as opened_by_first_name', 'users.last_name as opened_by_last_name');
+  return (terminalId ? query.where({ 'pos_shifts.terminal_id': terminalId }) : query).orderBy('pos_shifts.opened_at', 'desc').orderBy('pos_shifts.id', 'desc');
 }
 
 async function getShift({ context, id }) {
@@ -1043,10 +1170,33 @@ async function getShift({ context, id }) {
   return db.table('pos_shifts').where({ id }).first();
 }
 
+/**
+ * Every operation that decides which shift a sale belongs to takes the
+ * terminal's row lock FIRST, by primary key: `openShift`/`closeShift`
+ * exclusively, `settleOrder` shared. One lock, one order.
+ *
+ * Bug fix (the "test and review Shifts" pass, reproduced under CPU load):
+ * locking the shift row directly deadlocked — `settleOrder` locked it via
+ * the (terminal_id, closed_at) index then the primary key, while
+ * `closeShift` locked the primary key and then needed that same index
+ * entry to write `closed_at`. Serializing on the terminal row first means
+ * neither ever holds one of those locks while waiting for the other.
+ */
+async function lockTerminalForShifts(trx, terminalId, mode) {
+  const query = trx.table('pos_terminals').where({ id: terminalId });
+  return (mode === 'share' ? query.forShare() : query.forUpdate()).first('id', 'status');
+}
+
 /** No idempotency key required — retrying a rejected open is naturally safe (the gap-lock guard below either accepts a genuinely-new shift or rejects a duplicate), and opening carries no money yet. */
 async function openShift({ context, terminalId, userId, openingFloat }) {
   const db = scopedDb().for(context);
   return db.transaction(async (trx) => {
+    // A shift can only be opened on a real, active terminal at this
+    // property — without this check a bad or foreign id reached the insert
+    // and surfaced as a raw FK-violation 500.
+    const terminal = await lockTerminalForShifts(trx, terminalId, 'update');
+    if (!terminal || terminal.status !== 'active') throw new TerminalNotFoundError();
+
     // Gap lock: MySQL's unique-index semantics treat every NULL as distinct,
     // so no DB constraint alone can enforce "at most one open shift per
     // terminal" — see the migration's own header for the full reasoning.
@@ -1069,18 +1219,31 @@ async function openShift({ context, terminalId, userId, openingFloat }) {
  * convention — see migration header).
  */
 async function closeShift({ trx, shiftId, countedCash }) {
+  // terminal_id never changes, so a plain read is enough to find which
+  // terminal to lock; the state that matters is re-read under that lock.
+  const located = await trx.table('pos_shifts').where({ id: shiftId }).first('terminal_id');
+  if (!located) throw new ShiftNotFoundError();
+  await lockTerminalForShifts(trx, located.terminal_id, 'update');
+
   const shift = await trx.table('pos_shifts').where({ id: shiftId }).forUpdate().first();
-  if (!shift) throw new ValidationError('SHIFT_NOT_FOUND', 'The specified shift does not exist.');
   if (shift.closed_at) throw new ShiftAlreadyClosedError(shiftId);
 
+  // By the shift id `settleOrder` stamped, never by time: a same-second
+  // hand-over used to count the previous shift's sales again (see the
+  // pos_shift_id migration's header).
+  //
+  // A locking read, not a plain SELECT: this transaction's REPEATABLE READ
+  // snapshot was fixed by its first read (the idempotency-key lookup),
+  // before the terminal lock above was granted. A sale that stamped this
+  // shift and committed while we waited for that lock is invisible to a
+  // plain read, and its cash would drop out of the cash-up — the race
+  // tests/pos/concurrency.test.js reproduced under load.
   const cashSettlements = await trx
     .table('pos_order_settlements')
-    .joinScoped('pos_orders', (join) => join.on('pos_orders.id', '=', 'pos_order_settlements.pos_order_id'))
-    .where('pos_orders.terminal_id', shift.terminal_id)
-    .where('pos_order_settlements.method', 'cash')
-    .whereNull('pos_order_settlements.voided_at')
-    .where('pos_order_settlements.settled_at', '>=', shift.opened_at)
-    .select('pos_order_settlements.subtotal', 'pos_order_settlements.tax_amount', 'pos_order_settlements.tip_amount', 'pos_order_settlements.service_charge');
+    .where({ pos_shift_id: shift.id, method: 'cash' })
+    .whereNull('voided_at')
+    .forShare()
+    .select('subtotal', 'tax_amount', 'tip_amount', 'service_charge');
 
   const cashTaken = sumMoney(
     cashSettlements.map((s) => sumMoney([s.subtotal, s.tax_amount, s.tip_amount, s.service_charge]))
@@ -1123,6 +1286,8 @@ module.exports = {
   removeMenuItemImage,
   findInHouseForCharge,
   listOrders,
+  listKitchenTickets,
+  markTicketDone,
   getOrder,
   listOrderItems,
   listOrderSettlements,

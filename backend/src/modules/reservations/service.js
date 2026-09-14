@@ -41,6 +41,7 @@ const {
   InvalidReservationTransitionError,
   ArrivalAfterDepartureError,
   FolioBalanceOwingError,
+  WaitlistArrivalPassedError,
 } = require('./errors');
 
 // ---------------------------------------------------------------------
@@ -312,6 +313,15 @@ async function ensureInventoryRow({ trx, roomTypeId, stayDate }) {
  * extend-stay) never passes this and is completely unaffected.
  */
 async function reserveInventoryForDates({ trx, roomTypeId, stayDates, bypassThreshold = false }) {
+  // Bug fix: check EVERY night before incrementing ANY of them. The old
+  // single pass incremented each night as it went, so when a later night
+  // was full, the earlier nights stayed incremented — harmless when the
+  // error aborted the whole transaction, but `createReservation`'s waitlist
+  // fallback catches it and commits, leaving phantom `rooms_sold` on the
+  // free nights for a reservation that holds nothing. Locks are held to
+  // commit either way (InnoDB never releases a row lock mid-transaction),
+  // taken in the same ascending stay_date order as before.
+  const lockedRows = [];
   for (const stayDate of stayDates) {
     await ensureInventoryRow({ trx, roomTypeId, stayDate });
 
@@ -322,7 +332,10 @@ async function reserveInventoryForDates({ trx, roomTypeId, stayDates, bypassThre
     if (!bypassThreshold && row.rooms_sold + 1 > threshold) {
       throw new OverbookingThresholdExceededError(roomTypeId, stayDate);
     }
+    lockedRows.push(row);
+  }
 
+  for (const row of lockedRows) {
     await trx.table('room_type_inventory').where({ id: row.id }).update({ rooms_sold: row.rooms_sold + 1 });
   }
 }
@@ -581,9 +594,67 @@ async function openBookingFolio({ trx, id }) {
   return postRoomChargesForStay({ trx, reservationId: id, folioId: folio.id });
 }
 
+/**
+ * The first read of `reservations` in every status transition: a locking
+ * read (`FOR UPDATE`), so two concurrent transitions on the same
+ * reservation (two staff clicking Promote, or Promote racing Cancel, under
+ * different Idempotency-Keys) serialize on this row instead of both seeing
+ * a still-valid status and both writing. A locking read also bypasses the
+ * REPEATABLE READ snapshot an earlier plain read in the same transaction
+ * (e.g. `withIdempotency`'s) would otherwise pin. Lock order for this
+ * module: the reservation row first; then room_type_inventory rows
+ * (ascending stay_date) or physical room rows (ascending id, `lockRooms`)
+ * before any `reservation_rooms` write. Cross-module locks (folios, AR
+ * account) only ever cover this reservation's own rows.
+ */
+async function lockReservation({ trx, id }) {
+  return trx.table('reservations').where({ id }).forUpdate().first();
+}
+
+/**
+ * Locks physical room rows (`FOR UPDATE`, ascending id) before anything
+ * reads or changes who occupies them. Each transition already holds its
+ * own reservation's lock, but two DIFFERENT reservations checking into (or
+ * moving into) the same room don't share that lock — without this, both
+ * read the room as free and both get assigned. Taken after the reservation
+ * lock and before any `reservation_rooms` write, always in ascending id
+ * order so a move (two rooms) can't deadlock against another move or a
+ * check-out. Returns the locked rows keyed by id.
+ */
+async function lockRooms({ trx, roomIds }) {
+  const ids = [...new Set(roomIds.map(String))].sort((a, b) => Number(a) - Number(b));
+  const rooms = new Map();
+  for (const roomId of ids) {
+    const room = await trx.table('rooms').where({ id: roomId }).forUpdate().first();
+    if (room) rooms.set(roomId, room);
+  }
+  return rooms;
+}
+
+/**
+ * Whether a room is taken, given its row as returned by `lockRooms`.
+ *
+ * `front_desk_status` is the race-proof signal: check-in and room move set
+ * it `occupied`, check-out and move-out set it `vacant`, always while holding
+ * this same room lock — so a second check-in that waited on the lock reads
+ * the first one's committed `occupied`. Deliberately NOT a locking read of
+ * `reservation_rooms`: on an empty index range that takes gap locks, and two
+ * check-ins into neighbouring free rooms would deadlock on each other's
+ * inserts. The plain open-assignment read below covers rooms assigned
+ * without the flag ever being set (a data-migration import). Known gap: the
+ * import job takes no room lock and its read here uses this transaction's
+ * earlier snapshot, so an import committing into a never-checked-in room
+ * DURING a live check-in into that same room is not caught.
+ */
+async function isRoomOccupied({ trx, room }) {
+  if (room.front_desk_status === 'occupied') return true;
+  const openAssignment = await trx.table('reservation_rooms').where({ room_id: room.id, effective_to: null }).first();
+  return Boolean(openAssignment);
+}
+
 /** `tentative` -> `confirmed`. No inventory change: a tentative hold already counts against sellable inventory (§11). */
 async function confirmReservation({ trx, id }) {
-  const reservation = await trx.table('reservations').where({ id }).first();
+  const reservation = await lockReservation({ trx, id });
   if (!reservation) return null;
   if (!isValidTransition(reservation.status, 'confirmed')) {
     throw new InvalidReservationTransitionError(reservation.status, 'confirmed');
@@ -596,10 +667,17 @@ async function confirmReservation({ trx, id }) {
 
 /** `waitlisted` -> `confirmed`, acquiring the inventory a waitlisted reservation never held. Throws `OverbookingThresholdExceededError` again if still nothing free — the reservation stays waitlisted. */
 async function promoteWaitlist({ trx, id }) {
-  const reservation = await trx.table('reservations').where({ id }).first();
+  const reservation = await lockReservation({ trx, id });
   if (!reservation) return null;
   if (!isValidTransition(reservation.status, 'confirmed')) {
     throw new InvalidReservationTransitionError(reservation.status, 'confirmed');
+  }
+  // A waitlist entry whose arrival is already behind the property's business
+  // date can't be honoured — promoting it would sell rooms for nights that
+  // have gone. Staff cancel it instead (`listWaitlist` flags these rows).
+  const property = await trx.table('properties').where({ id: reservation.property_id }).first('current_business_date');
+  if (property?.current_business_date && reservation.arrival_date < property.current_business_date) {
+    throw new WaitlistArrivalPassedError(reservation.arrival_date, property.current_business_date);
   }
   const stayDates = expandStayDates(reservation.arrival_date, reservation.departure_date);
   await reserveInventoryForDates({ trx, roomTypeId: reservation.room_type_id, stayDates });
@@ -611,7 +689,7 @@ async function promoteWaitlist({ trx, id }) {
 
 /** TESTING.md RES-10. Releases inventory unless the reservation was `waitlisted` (which never held any). */
 async function cancelReservation({ trx, id, reason }) {
-  const reservation = await trx.table('reservations').where({ id }).first();
+  const reservation = await lockReservation({ trx, id });
   if (!reservation) return null;
   if (!isValidTransition(reservation.status, 'cancelled')) {
     throw new InvalidReservationTransitionError(reservation.status, 'cancelled');
@@ -638,7 +716,7 @@ async function cancelReservation({ trx, id, reason }) {
  * the two documented options, flagged rather than silently assumed.
  */
 async function markNoShow({ trx, id }) {
-  const reservation = await trx.table('reservations').where({ id }).first();
+  const reservation = await lockReservation({ trx, id });
   if (!reservation) return null;
   if (!isValidTransition(reservation.status, 'no_show')) {
     throw new InvalidReservationTransitionError(reservation.status, 'no_show');
@@ -669,13 +747,13 @@ async function markNoShow({ trx, id }) {
  * through, so an override is visible, not silent.
  */
 async function checkIn({ trx, id, roomId, overrideDirty }) {
-  const reservation = await trx.table('reservations').where({ id }).first();
+  const reservation = await lockReservation({ trx, id });
   if (!reservation) return null;
   if (!isValidTransition(reservation.status, 'checked_in')) {
     throw new InvalidReservationTransitionError(reservation.status, 'checked_in');
   }
 
-  const room = await trx.table('rooms').where({ id: roomId }).first();
+  const room = (await lockRooms({ trx, roomIds: [roomId] })).get(String(roomId));
   if (!room) {
     throw new ValidationError('ROOM_NOT_FOUND', 'The specified room does not exist at this property.');
   }
@@ -705,8 +783,7 @@ async function checkIn({ trx, id, roomId, overrideDirty }) {
     }
   }
 
-  const occupied = await trx.table('reservation_rooms').where({ room_id: roomId, effective_to: null }).first();
-  if (occupied) {
+  if (await isRoomOccupied({ trx, room })) {
     throw new RoomUnavailableError(roomId);
   }
 
@@ -758,7 +835,7 @@ async function checkIn({ trx, id, roomId, overrideDirty }) {
  * always the caller's own report of when checkout actually happened.
  */
 async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, earlyCutoffTime, earlyDepartureFee, lateCheckoutFee, userId }) {
-  const reservation = await trx.table('reservations').where({ id }).first();
+  const reservation = await lockReservation({ trx, id });
   if (!reservation) return null;
   if (!isValidTransition(reservation.status, 'checked_out')) {
     throw new InvalidReservationTransitionError(reservation.status, 'checked_out');
@@ -845,6 +922,10 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
   const finalBalance = sumMoney(closedFolios.map((closedFolio) => closedFolio.balance));
 
   const assignment = await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).first();
+  // Lock the room before releasing it, the same order check-in and room move
+  // use (room row, then reservation_rooms), so a check-in racing into this
+  // room waits for the release instead of deadlocking against it.
+  if (assignment) await lockRooms({ trx, roomIds: [assignment.room_id] });
   await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).update({ effective_to: now });
 
   // PLAN.md Phase 3: check-out now actually maintains `rooms.front_desk_status`
@@ -883,13 +964,16 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
  * sold again, `dirty` — the same state check-out itself leaves a room in.
  */
 async function roomMove({ trx, id, newRoomId, reason }) {
-  const reservation = await trx.table('reservations').where({ id }).first();
+  const reservation = await lockReservation({ trx, id });
   if (!reservation) return null;
   if (reservation.status !== 'checked_in') {
     throw new ValidationError('NOT_CHECKED_IN', 'A room move requires the reservation to be checked in.');
   }
 
-  const newRoom = await trx.table('rooms').where({ id: newRoomId }).first();
+  const currentAssignment = await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).first();
+  const lockedRooms = await lockRooms({ trx, roomIds: currentAssignment ? [currentAssignment.room_id, newRoomId] : [newRoomId] });
+
+  const newRoom = lockedRooms.get(String(newRoomId));
   if (!newRoom) {
     throw new ValidationError('ROOM_NOT_FOUND', 'The specified room does not exist at this property.');
   }
@@ -897,12 +981,9 @@ async function roomMove({ trx, id, newRoomId, reason }) {
     throw new RoomOutOfOrderError(newRoomId);
   }
 
-  const occupied = await trx.table('reservation_rooms').where({ room_id: newRoomId, effective_to: null }).first();
-  if (occupied) {
+  if (await isRoomOccupied({ trx, room: newRoom })) {
     throw new RoomUnavailableError(newRoomId);
   }
-
-  const currentAssignment = await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).first();
 
   const now = new Date();
   await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).update({ effective_to: now });
@@ -953,7 +1034,7 @@ async function roomMove({ trx, id, newRoomId, reason }) {
  * function itself posts no charge.
  */
 async function extendStay({ trx, id, newDepartureDate }) {
-  const reservation = await trx.table('reservations').where({ id }).first();
+  const reservation = await lockReservation({ trx, id });
   if (!reservation) return null;
   if (reservation.status !== 'checked_in') {
     throw new ValidationError('NOT_CHECKED_IN', 'Only a checked-in reservation can have its stay extended.');
@@ -1008,9 +1089,22 @@ async function listReservations({ context, status, arrivalDateFrom, arrivalDateT
   return query.orderBy('arrival_date');
 }
 
+/**
+ * The waitlist queue, oldest request first, with who is waiting (guest name
+ * and phone), for which room type, and `arrival_passed` — true once the
+ * arrival date is before the property's business date, the point at which
+ * `promoteWaitlist` refuses it.
+ */
 async function listWaitlist({ context }) {
   const db = scopedDb().for(context);
-  return db.table('reservations').where({ status: 'waitlisted' }).orderBy('created_at');
+  const businessDate = await propertyBusinessDate({ context });
+  const rows = await selectReservationWithGuest(db.table('reservations'))
+    .joinScoped('room_types', (join) => join.on('room_types.id', '=', 'reservations.room_type_id'))
+    .select('room_types.code as room_type_code', 'room_types.name as room_type_name')
+    .where({ 'reservations.status': 'waitlisted' })
+    .orderBy('reservations.created_at')
+    .orderBy('reservations.id');
+  return rows.map((row) => ({ ...row, arrival_passed: businessDate != null && row.arrival_date < businessDate }));
 }
 
 async function addNote({ context, reservationId, userId, note }) {
