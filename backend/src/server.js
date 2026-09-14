@@ -18,6 +18,7 @@ const { startTrialExpiryWorker, scheduleTrialExpirySweep } = require('./jobs/tri
 const { startSubscriptionBillingWorker, scheduleSubscriptionBillingSweep } = require('./jobs/subscription-billing');
 const { startTenantDataExportWorker } = require('./jobs/tenant-data-export');
 const { startDataImportWorker } = require('./jobs/data-import');
+const { startNotificationsSweepWorker, scheduleNotificationsSweep } = require('./jobs/notifications-sweep');
 
 const port = Number(process.env.PORT || 3000);
 
@@ -62,3 +63,11 @@ startTenantDataExportWorker();
 // header. A one-off, reactive-only job, the identical shape the export
 // worker above already established — no periodic scheduler call here.
 startDataImportWorker();
+
+// Gap closure (staff notifications) — `src/jobs/notifications-sweep.js`'s
+// own header. A periodic sweep raising the "departing today with an
+// outstanding balance" bell alert, once per guest per business date.
+startNotificationsSweepWorker();
+scheduleNotificationsSweep().catch((error) => {
+  console.error('Failed to schedule the notifications sweep:', error);
+});

@@ -37,6 +37,7 @@ const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { writeOutboxEvent } = require('../../shared/outbox');
 const { enqueueOutboxDispatch } = require('../../jobs/outbox-dispatcher');
+const { notifyStaff } = require('../notifications/staff-notifications');
 const { calendarDateInZone } = require('../../shared/timezone');
 const { readSpreadsheet, distinctValuesByHeader } = require('./spreadsheet');
 const { TIMESTAMP_FORMATS, normalizeMapping, buildRoomIndex, extractEvents, eventKey } = require('./mapping');
@@ -415,7 +416,14 @@ async function recordIncident(trx, event, result, options) {
 // ---------------------------------------------------------------------
 // Notifications — manager/admin/super_admin only, never front desk or
 // housekeeping (§3.23: the people with the most opportunity to commit this
-// fraud must not be the ones told it was detected).
+// fraud must not be the ones told it was detected). The bell rows go
+// through the shared `notifyStaff` writer (gap closure: staff
+// notifications) so this event type is subject to the same
+// `notification_role_rules` Setup-grid overrides every other staff alert
+// is — a property may choose to widen or narrow who sees it. The digest
+// EMAIL (below) is a separate, batched-per-import mechanism that doesn't
+// fit `notifyStaff`'s one-row-per-event shape, so it keeps its own direct
+// `NOTIFIED_ROLES` query rather than trying to share one.
 // ---------------------------------------------------------------------
 
 async function notifyCriticalAlerts(trx, context, { config, property, alerts, stored }) {
@@ -433,22 +441,24 @@ async function notifyCriticalAlerts(trx, context, { config, property, alerts, st
   const ruleLabel = { unsold_occupancy: 'unsold occupancy', post_checkout_access: 'post-checkout access' };
 
   // One bell row per recipient per new critical incident (not on extension —
-  // re-uploading an overlapping pull must not re-ping anyone).
-  await trx.table('in_app_notifications').insert(
-    recipients.flatMap((recipient) =>
-      alerts.map((alert) => ({
-        user_id: recipient.id,
-        type: 'door_access.critical_alert_raised',
-        payload: JSON.stringify({
-          alertId: String(alert.id),
-          rule: alert.rule,
-          roomNumber: roomNumberById.get(String(alert.room_id)) ?? null,
-          firstEventAt: alert.first_event_at,
-          retrospective: true,
-        }),
-      }))
-    )
-  );
+  // re-uploading an overlapping pull must not re-ping anyone). `dedupKey`
+  // is a second, belt-and-braces guard on top of that — this function is
+  // only ever called with genuinely-new alerts, but a duplicate key here
+  // is silently skipped rather than double-notifying anyone.
+  for (const alert of alerts) {
+    await notifyStaff({
+      trx,
+      eventType: 'door_access.critical_alert_raised',
+      payload: {
+        alertId: String(alert.id),
+        rule: alert.rule,
+        roomNumber: roomNumberById.get(String(alert.room_id)) ?? null,
+        firstEventAt: alert.first_event_at,
+        retrospective: true,
+      },
+      dedupKey: `door-access-alert-${alert.id}`,
+    });
+  }
 
   const occurred = stored.map((e) => new Date(e.opened_at)).sort((a, b) => a - b);
   const alertSummary = alerts

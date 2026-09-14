@@ -87,12 +87,15 @@ async function resendNotification(req, res, next) {
 
 async function listInAppNotifications(req, res, next) {
   try {
-    const notifications = await service.listInAppNotifications({
-      context: req.context,
-      userId: req.context.userId,
-      unreadOnly: req.query?.unread === 'true',
-    });
-    res.status(200).json(ok(notifications));
+    const [notifications, unreadCount] = await Promise.all([
+      service.listInAppNotifications({
+        context: req.context,
+        userId: req.context.userId,
+        unreadOnly: req.query?.unread === 'true',
+      }),
+      service.countUnreadNotifications({ context: req.context, userId: req.context.userId }),
+    ]);
+    res.status(200).json(ok(notifications, { unreadCount }));
   } catch (error) {
     next(error);
   }
@@ -109,7 +112,57 @@ async function markNotificationRead(req, res, next) {
   }
 }
 
+async function markAllNotificationsRead(req, res, next) {
+  try {
+    const updated = await service.markAllNotificationsRead({ context: req.context, userId: req.context.userId });
+    res.status(200).json(ok({ updated }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Staff notification recipients (Setup > Notifications)
+// ---------------------------------------------------------------------
+
+async function listNotificationCatalogue(req, res, next) {
+  try {
+    res.status(200).json(ok(service.listNotificationCatalogue()));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function listNotificationRoleRules(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listNotificationRoleRules({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function saveNotificationRoleRules(req, res, next) {
+  try {
+    const before = await service.listNotificationRoleRules({ context: req.context });
+    const after = await service.saveNotificationRoleRules({ context: req.context, rules: req.body?.rules });
+    await req.audit({
+      entityType: 'notification_role_rules',
+      entityId: req.context.propertyId,
+      action: 'update',
+      beforeState: { rules: before },
+      afterState: { rules: after },
+    });
+    res.status(200).json(ok(after));
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
+  markAllNotificationsRead,
+  listNotificationCatalogue,
+  listNotificationRoleRules,
+  saveNotificationRoleRules,
   listTemplates,
   upsertTemplate,
   listNotificationLog,

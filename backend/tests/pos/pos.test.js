@@ -926,5 +926,152 @@ describe('POS (PLAN.md Phase 4)', () => {
         .send({ counted_cash: '119.50' });
       expect(closeAgain.status).toBe(409);
     });
+
+    // Bug fixes from the "test and review Shifts" pass — each reproduced
+    // against the old code before it was fixed.
+
+    async function openShiftFor(token, terminalId, openingFloat = '100.00') {
+      const res = await t.request.post('/api/v1/pos/shifts').set('Authorization', `Bearer ${token}`).send({ terminal_id: terminalId, opening_float: openingFloat });
+      expect(res.status).toBe(201);
+      return res.body.data;
+    }
+
+    function closeShiftReq(token, shiftId, countedCash) {
+      return t.request.post(`/api/v1/pos/shifts/${shiftId}/close`).set('Authorization', `Bearer ${token}`).set('Idempotency-Key', idemKey()).send({ counted_cash: countedCash });
+    }
+
+    async function cashSale(token, setup) {
+      const order = await openOrder(token, setup);
+      await addItem(token, order.id, { menuItemId: setup.menuItemId, quantity: 1 });
+      const res = await t.request
+        .post(`/api/v1/pos/orders/${order.id}/settle`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ settlements: [{ method: 'cash' }] });
+      expect(res.status).toBe(200);
+      return res.body.data.settlements[0];
+    }
+
+    it('a same-second hand-over does not count the previous shift\'s sales again', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+      const setup = await freshOutletSetup();
+
+      const shiftA = await openShiftFor(token, setup.terminalId);
+      const sale = await cashSale(token, setup);
+      expect(String(sale.pos_shift_id)).toBe(String(shiftA.id));
+      expect((await closeShiftReq(token, shiftA.id, '121.50')).body.data.variance).toBe('0.00');
+
+      // The next cashier opens in the very same second the last sale settled —
+      // pinned explicitly, so this never depends on how fast the test runs.
+      const shiftB = await openShiftFor(token, setup.terminalId);
+      await t.trx('pos_shifts').where({ id: shiftB.id }).update({ opened_at: new Date(sale.settled_at) });
+
+      const closeB = await closeShiftReq(token, shiftB.id, '100.00');
+      expect(closeB.status).toBe(200);
+      expect(closeB.body.data.expected_cash).toBe('100.00');
+      expect(closeB.body.data.variance).toBe('0.00');
+    });
+
+    it('a sale settled while no shift is open belongs to no shift, and a voided cash sale is not expected in the drawer', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+      const managerToken = tokenFor({ userId: ctx.a.users[0].id });
+      const setup = await freshOutletSetup();
+
+      const orphanSale = await cashSale(token, setup);
+      expect(orphanSale.pos_shift_id).toBeNull();
+
+      const shift = await openShiftFor(token, setup.terminalId);
+      // Backdated past the orphan sale: the old time-window rule counted it.
+      await t.trx('pos_shifts').where({ id: shift.id }).update({ opened_at: new Date(new Date(orphanSale.settled_at).getTime() - 60_000) });
+
+      const voided = await cashSale(token, setup);
+      const voidRes = await t.request
+        .post(`/api/v1/pos/orders/${voided.pos_order_id}/settlements/${voided.id}/void`)
+        .set('Authorization', `Bearer ${managerToken}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ reason: 'Rung up in error' });
+      expect(voidRes.status).toBe(200);
+
+      const close = await closeShiftReq(token, shift.id, '100.00');
+      expect(close.body.data.expected_cash).toBe('100.00');
+    });
+
+    it('rejects a malformed, negative, or over-precise opening float and counted cash with a 400, writing nothing', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+      const setup = await freshOutletSetup();
+
+      for (const bad of ['abc', '-50', '10.999', '1e3']) {
+        const res = await t.request.post('/api/v1/pos/shifts').set('Authorization', `Bearer ${token}`).send({ terminal_id: setup.terminalId, opening_float: bad });
+        expect(res.status).toBe(400);
+        expect(res.body.error.code).toBe('VALIDATION_INVALID_AMOUNT');
+      }
+      expect(await t.trx('pos_shifts').where({ terminal_id: setup.terminalId }).first()).toBeUndefined();
+
+      const shift = await openShiftFor(token, setup.terminalId, ' 50 ');
+      expect(shift.opening_float).toBe('50.00');
+      for (const bad of ['abc', '-10', '100.999']) {
+        const res = await closeShiftReq(token, shift.id, bad);
+        expect(res.status).toBe(400);
+        expect(res.body.error.code).toBe('VALIDATION_INVALID_AMOUNT');
+      }
+      const stillOpen = await t.trx('pos_shifts').where({ id: shift.id }).first();
+      expect(stillOpen.closed_at).toBeNull();
+    });
+
+    it('refuses to open a shift on a nonexistent, archived, or other-tenant terminal', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+      const archived = await freshOutletSetup();
+      await t.trx('pos_terminals').where({ id: archived.terminalId }).update({ status: 'archived' });
+      const foreign = await freshOutletSetup(ctx.b);
+
+      for (const terminalId of [99999999, archived.terminalId, foreign.terminalId]) {
+        const res = await t.request.post('/api/v1/pos/shifts').set('Authorization', `Bearer ${token}`).send({ terminal_id: terminalId, opening_float: '10.00' });
+        expect(res.status).toBe(400);
+        expect(res.body.error.code).toBe('VALIDATION_TERMINAL_NOT_FOUND');
+      }
+    });
+
+    it('closing a nonexistent or other-tenant shift is a 404', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+      const foreign = await freshOutletSetup(ctx.b);
+      const [foreignShiftId] = await t.trx('pos_shifts').insert({
+        tenant_id: ctx.b.id,
+        property_id: foreign.propertyId,
+        terminal_id: foreign.terminalId,
+        user_id: ctx.b.users[0].id,
+        opening_float: '1.00',
+        currency: 'NGN',
+      });
+
+      for (const shiftId of [99999999, foreignShiftId]) {
+        const res = await closeShiftReq(token, shiftId, '1.00');
+        expect(res.status).toBe(404);
+      }
+      expect((await t.trx('pos_shifts').where({ id: foreignShiftId }).first()).closed_at).toBeNull();
+    });
+
+    it('lists shifts with their terminal and the operator who opened them', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
+      const token = tokenFor({ userId: ctx.a.users[1].id });
+      const setup = await freshOutletSetup();
+      const shift = await openShiftFor(token, setup.terminalId);
+
+      const res = await t.request.get(`/api/v1/pos/shifts?terminal_id=${setup.terminalId}`).set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+      const terminal = await t.trx('pos_terminals').where({ id: setup.terminalId }).first();
+      const user = await t.trx('users').where({ id: ctx.a.users[1].id }).first();
+      expect(res.body.data[0]).toMatchObject({
+        id: shift.id,
+        terminal_device_ref: terminal.device_ref,
+        opened_by_first_name: user.first_name,
+        opened_by_last_name: user.last_name,
+      });
+    });
   });
 });

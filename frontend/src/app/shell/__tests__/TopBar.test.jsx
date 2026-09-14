@@ -84,4 +84,70 @@ describe('<TopBar>', () => {
     expect(screen.queryByRole('menuitem', { name: 'Log out' })).not.toBeInTheDocument();
     expect(onLogout).not.toHaveBeenCalled();
   });
+  describe('notification bell', () => {
+    const notifications = [
+      {
+        id: '1',
+        type: 'guest.checked_in',
+        payload: { guestName: 'Ada Obi', roomNumber: '204' },
+        read_at: null,
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: '2',
+        type: 'room.became_dirty',
+        payload: JSON.stringify({ roomNumber: '07', reason: 'check_out' }),
+        read_at: '2026-09-13T10:00:00Z',
+        created_at: new Date().toISOString(),
+      },
+    ];
+
+    it('lists readable notifications with an unread marker', async () => {
+      render(<TopBar {...baseProps} notificationCount={1} notifications={notifications} />);
+      await userEvent.click(screen.getByLabelText('Notifications, 1 unread'));
+      expect(screen.getByText('Checked in — Ada Obi')).toBeInTheDocument();
+      expect(screen.getByText('Room 204')).toBeInTheDocument();
+      expect(screen.getByText('Room 07 needs cleaning')).toBeInTheDocument();
+    });
+
+    it('marks all read, and hides that action when nothing is unread', async () => {
+      const onMarkAllNotificationsRead = vi.fn();
+      const { rerender } = render(
+        <TopBar {...baseProps} notificationCount={1} notifications={notifications} onMarkAllNotificationsRead={onMarkAllNotificationsRead} />
+      );
+      await userEvent.click(screen.getByLabelText('Notifications, 1 unread'));
+      await userEvent.click(screen.getByRole('button', { name: 'Mark all read' }));
+      expect(onMarkAllNotificationsRead).toHaveBeenCalled();
+
+      rerender(<TopBar {...baseProps} notificationCount={0} notifications={notifications} onMarkAllNotificationsRead={onMarkAllNotificationsRead} />);
+      expect(screen.queryByRole('button', { name: 'Mark all read' })).not.toBeInTheDocument();
+    });
+
+    it('opens a notification and closes the panel', async () => {
+      const onOpenNotification = vi.fn();
+      render(<TopBar {...baseProps} notificationCount={1} notifications={notifications} onOpenNotification={onOpenNotification} />);
+      await userEvent.click(screen.getByLabelText('Notifications, 1 unread'));
+      await userEvent.click(screen.getByRole('menuitem', { name: /Checked in — Ada Obi/ }));
+      expect(onOpenNotification).toHaveBeenCalledWith(expect.objectContaining({ id: '1' }));
+      expect(screen.queryByText('Checked in — Ada Obi')).not.toBeInTheDocument();
+    });
+
+    it('marks one notification read without opening it', async () => {
+      const onMarkNotificationRead = vi.fn();
+      const onOpenNotification = vi.fn();
+      render(
+        <TopBar
+          {...baseProps}
+          notificationCount={1}
+          notifications={notifications}
+          onMarkNotificationRead={onMarkNotificationRead}
+          onOpenNotification={onOpenNotification}
+        />
+      );
+      await userEvent.click(screen.getByLabelText('Notifications, 1 unread'));
+      await userEvent.click(screen.getByRole('button', { name: 'Mark read' }));
+      expect(onMarkNotificationRead).toHaveBeenCalledWith('1');
+      expect(onOpenNotification).not.toHaveBeenCalled();
+    });
+  });
 });

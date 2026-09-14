@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listMenuItems: vi.fn(),
   listMenuCategories: vi.fn(),
   listOrders: vi.fn(),
+  listKitchenTickets: vi.fn(),
   listShifts: vi.fn(),
   listGuestOrders: vi.fn(),
   listQrTokens: vi.fn(),
@@ -33,6 +34,7 @@ describe('<POSScreen>', () => {
     mocks.listMenuItems.mockResolvedValue([]);
     mocks.listMenuCategories.mockResolvedValue([]);
     mocks.listOrders.mockResolvedValue([]);
+    mocks.listKitchenTickets.mockResolvedValue([]);
     mocks.listShifts.mockResolvedValue([]);
     mocks.listGuestOrders.mockResolvedValue([]);
     mocks.listQrTokens.mockResolvedValue([]);
@@ -45,7 +47,7 @@ describe('<POSScreen>', () => {
     expect(screen.getByRole('tab', { name: 'Register', selected: true })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Tickets' }));
-    expect(await screen.findByText('No open tabs right now.')).toBeInTheDocument();
+    expect(await screen.findByText('No tickets to make right now.')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Guest orders' }));
     expect(await screen.findByText('About this queue')).toBeInTheDocument();

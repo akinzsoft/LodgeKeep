@@ -69,6 +69,8 @@ const reservationsService = require('../reservations/service');
 
 const { generateRawToken, hashToken, encryptToken, decryptToken, renderTokenQrImage } = require('./tokens');
 const { generateOtpCode, hashOtpCode, OTP_TTL_MINUTES, OTP_MAX_ATTEMPTS } = require('./otp');
+const { notifyGuestOrderReceived } = require('./staff-alert');
+const { notifyStaff } = require('../notifications/staff-notifications');
 const {
   GuestOrderingDisabledError,
   UnpaidValueCapExceededError,
@@ -482,6 +484,12 @@ async function verifyRoomChargeOtpAndSettle({ context, guestOrder, code }) {
   );
 
   await db.table('pos_guest_orders').where({ id: guestOrder.id }).update({ payment_status: 'charged_to_room', status: 'received' });
+  await notifyGuestOrderReceived({
+    db,
+    guestOrderId: guestOrder.id,
+    total: sumMoney(settled.settlements.map((row) => sumMoney([row.subtotal, row.tax_amount, row.tip_amount, row.service_charge]))),
+    currency: settled.settlements[0]?.currency ?? null,
+  });
 
   return { order: settled.order, settlements: settled.settlements, guestOrder: await db.table('pos_guest_orders').where({ id: guestOrder.id }).first() };
 }
@@ -802,6 +810,12 @@ async function rejectGuestOrder({ context, id, reason, userId }) {
   if (claimed === 0) throw new GuestOrderStateConflictError(row.status, 'received or preparing');
 
   await reverseGuestOrderPayment({ context, guestOrder: row, reason, userId });
+  const order = await db.table('pos_orders').where({ id: row.pos_order_id }).first();
+  await notifyStaff({
+    trx: db,
+    eventType: 'qr_ordering.guest_order_rejected',
+    payload: { guestOrderId: row.id, orderId: row.pos_order_id, tableLabel: order?.table_label ?? null, guestName: row.guest_name ?? null, reason },
+  });
   return db.table('pos_guest_orders').where({ id }).first();
 }
 

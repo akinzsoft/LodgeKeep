@@ -61,6 +61,13 @@ class ShiftAlreadyClosedError extends AppError {
   }
 }
 
+/** 404, never 400: closing a shift id that is unknown or belongs to another tenant must not read as a validation problem with the request (SECURITY.md — cross-tenant access is 404). Code kept as it was. */
+class ShiftNotFoundError extends AppError {
+  constructor() {
+    super('VALIDATION_SHIFT_NOT_FOUND', 'The specified shift does not exist.', 404);
+  }
+}
+
 /** ARCHITECTURE.md §8: void, never delete — voiding a settlement that is already void is a conflict, not a silent no-op. */
 class SettlementAlreadyVoidedError extends AppError {
   constructor(settlementId) {
@@ -142,6 +149,7 @@ module.exports = {
   SettlementGroupsMismatchError,
   ShiftAlreadyOpenError,
   ShiftAlreadyClosedError,
+  ShiftNotFoundError,
   SettlementAlreadyVoidedError,
   RegisterPaymentInvalidError,
   OrderHasCapturedPaymentError,

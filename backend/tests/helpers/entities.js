@@ -1384,6 +1384,37 @@ const ENTITIES = [
   },
 
   {
+    table: 'notification_role_rules',
+    uniqueKeys: [['tenant_id', 'property_id', 'event_type', 'role']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      event_type: 'guest.checked_in',
+      role: 'cashier',
+      enabled: true,
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      event_type: 'pos.order_settled',
+      role: 'admin',
+      enabled: true,
+    }),
+    crossTenant: [
+      {
+        name: "configures notification recipients for another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          event_type: 'guest.checked_in',
+          role: 'cashier',
+          enabled: true,
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'notification_log',
     uniqueKeys: [],
     newRow: (ctx, t) => ({

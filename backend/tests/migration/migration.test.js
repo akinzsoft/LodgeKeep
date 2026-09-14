@@ -424,6 +424,106 @@ describe('Data migration (PLAN.md Phase 5)', () => {
       }
     });
 
+    describe('room numbers', () => {
+      const header = ['guest_email', 'guest_phone', 'room_type_code', 'rate_code', 'arrival_date', 'departure_date', 'adults', 'children', 'status', 'room_number'];
+      let property;
+      let guest;
+      let roomType;
+      const roomIds = {};
+
+      beforeAll(async () => {
+        property = ctx.a.properties[0];
+        guest = await reservationsGuest();
+        roomType = ctx.a.roomTypes[0]; // DLX
+        for (const number of ['IMP-1', 'IMP-2', 'IMP-3', 'IMP-4', 'IMP-5']) {
+          const [id] = await t.trx('rooms').insert({ tenant_id: ctx.a.id, property_id: property.id, room_type_id: roomType.id, room_number: number });
+          roomIds[number] = id;
+        }
+        const [otherTypeId] = await t.trx('room_types').insert({ tenant_id: ctx.a.id, property_id: property.id, code: 'IMPSTD', name: 'Import Standard', default_occupancy: 2, base_rate: '90.00' });
+        const [otherRoomId] = await t.trx('rooms').insert({ tenant_id: ctx.a.id, property_id: property.id, room_type_id: otherTypeId, room_number: 'IMP-STD' });
+        roomIds['IMP-STD'] = otherRoomId;
+      });
+
+      async function openAssignments(roomId) {
+        const row = await t.trx('reservation_rooms').where({ room_id: roomId, effective_to: null }).count({ n: '*' }).first();
+        return Number(row.n);
+      }
+
+      it('dry run blocks an in-house guest into an occupied room or a room an earlier row already claimed; a free room imports as occupied', async () => {
+        await t.trx('rooms').where({ id: roomIds['IMP-1'] }).update({ front_desk_status: 'occupied' });
+
+        const fileContent = csv(header, [
+          [guest.email, '', 'DLX', 'BAR', '2027-12-01', '2027-12-05', '2', '0', 'checked_in', 'IMP-1'], // occupied by a live guest
+          [guest.email, '', 'DLX', 'BAR', '2027-12-01', '2027-12-05', '2', '0', 'checked_in', 'IMP-2'], // free
+          [guest.email, '', 'DLX', 'BAR', '2027-12-01', '2027-12-05', '2', '0', 'checked_in', 'imp-2'], // same room as row 2
+        ]);
+        const { importRunId, dryRunRes } = await uploadAndDryRun({ entityType: 'reservations', propertyId: property.id, fileContent, filename: 'inhouse.csv' });
+
+        const roomErrors = dryRunRes.body.data.errors.filter((e) => e.column_name === 'room_number');
+        expect(roomErrors.map((e) => e.row_number)).toEqual([1, 3]);
+        expect(roomErrors[0].message).toMatch(/already occupied/);
+        expect(roomErrors[1].message).toMatch(/row 2/);
+
+        const { run } = await commitAndRunJob({ importRunId });
+        expect(run.rows_created).toBe(1);
+        expect(run.rows_skipped).toBe(2);
+        expect(await openAssignments(roomIds['IMP-1'])).toBe(0);
+        expect(await openAssignments(roomIds['IMP-2'])).toBe(1);
+        const room2 = await t.trx('rooms').where({ id: roomIds['IMP-2'] }).first();
+        expect(room2.front_desk_status).toBe('occupied');
+      });
+
+      it('an in-house room that becomes occupied between dry run and commit skips that row only, without touching inventory', async () => {
+        const fileContent = csv(header, [
+          [guest.email, '', 'DLX', 'BAR', '2027-12-10', '2027-12-12', '2', '0', 'checked_in', 'IMP-3'],
+          [guest.email, '', 'DLX', 'BAR', '2027-12-10', '2027-12-12', '2', '0', 'checked_in', 'IMP-4'],
+        ]);
+        const { importRunId, dryRunRes } = await uploadAndDryRun({ entityType: 'reservations', propertyId: property.id, fileContent, filename: 'inhouse-race.csv' });
+        expect(dryRunRes.body.data.errors.filter((e) => e.severity === 'error')).toEqual([]);
+
+        // A live check-in lands in IMP-3 after the dry run.
+        await t.trx('rooms').where({ id: roomIds['IMP-3'] }).update({ front_desk_status: 'occupied' });
+        const soldBefore = await t.trx('room_type_inventory').where({ room_type_id: roomType.id, stay_date: '2027-12-10' }).first();
+
+        const { run } = await commitAndRunJob({ importRunId });
+        expect(run.status).toBe('completed');
+        expect(run.rows_created).toBe(1);
+        expect(run.rows_skipped).toBe(1);
+
+        const commitErrors = await t.trx('import_row_errors').where({ import_run_id: importRunId, row_number: 1 });
+        expect(commitErrors.map((e) => e.message).join(' ')).toMatch(/Room IMP-3 is already occupied/);
+        expect(await openAssignments(roomIds['IMP-3'])).toBe(0);
+        expect(await openAssignments(roomIds['IMP-4'])).toBe(1);
+
+        const soldAfter = await t.trx('room_type_inventory').where({ room_type_id: roomType.id, stay_date: '2027-12-10' }).first();
+        expect(soldAfter.rooms_sold).toBe((soldBefore?.rooms_sold ?? 0) + 1); // only the imported row, not the skipped one
+      });
+
+      it('a booking not yet checked in keeps its room number as a preferred room, never an assignment; cancelled or wrong-type rooms are dropped', async () => {
+        const fileContent = csv(header, [
+          [guest.email, '', 'DLX', 'BAR', '2028-01-01', '2028-01-02', '2', '0', 'confirmed', 'IMP-5'],
+          [guest.email, '', 'DLX', 'BAR', '2028-01-03', '2028-01-04', '2', '0', 'waitlisted', 'IMP-5'],
+          [guest.email, '', 'DLX', 'BAR', '2028-01-05', '2028-01-06', '2', '0', 'cancelled', 'IMP-5'],
+          [guest.email, '', 'DLX', 'BAR', '2028-01-07', '2028-01-08', '2', '0', 'confirmed', 'IMP-STD'],
+        ]);
+        const { importRunId } = await uploadAndDryRun({ entityType: 'reservations', propertyId: property.id, fileContent, filename: 'preferred.csv' });
+        const { run } = await commitAndRunJob({ importRunId });
+        expect(run.rows_created).toBe(4);
+
+        const mapRows = await t.trx('imported_record_map').where({ import_run_id: importRunId }).orderBy('row_number');
+        const reservations = await Promise.all(mapRows.map((m) => t.trx('reservations').where({ id: m.entity_id }).first()));
+        expect(reservations.map((r) => (r.preferred_room_id == null ? null : String(r.preferred_room_id)))).toEqual([
+          String(roomIds['IMP-5']),
+          String(roomIds['IMP-5']),
+          null,
+          null,
+        ]);
+        expect(await openAssignments(roomIds['IMP-5'])).toBe(0);
+        const room5 = await t.trx('rooms').where({ id: roomIds['IMP-5'] }).first();
+        expect(room5.front_desk_status).not.toBe('occupied');
+      });
+    });
+
     it('requires property_id for a reservations import', async () => {
       const res = await uploadRequest()
         .field('entity_type', 'reservations')

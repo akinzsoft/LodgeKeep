@@ -137,6 +137,7 @@ async function seedTwoTenants(trx) {
     emailSettings: [],
     notificationLog: [],
     inAppNotifications: [],
+    notificationRoleRules: [],
     folioLineItems: [],
     payments: [],
     nightAuditRuns: [],
@@ -1413,6 +1414,20 @@ async function seedTwoTenants(trx) {
         payload: JSON.stringify({ roomId: t.rooms[0].id }),
       }),
       user_id: t.users[0].id,
+    });
+
+    // A no-op override (admin is not a default recipient of this type), so
+    // it exists for the generic isolation suite without changing who any
+    // other test's notifications reach.
+    t.notificationRoleRules.push({
+      id: await insertReturningId(trx, 'notification_role_rules', {
+        tenant_id: t.id,
+        property_id: property.id,
+        event_type: 'pos.order_settled',
+        role: 'admin',
+        enabled: false,
+      }),
+      property_id: property.id,
     });
   }
 

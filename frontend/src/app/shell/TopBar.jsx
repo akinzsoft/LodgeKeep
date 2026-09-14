@@ -2,32 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { initialsFor } from './initials.js';
 import { PropertySwitcher } from './PropertySwitcher.jsx';
 import { BusinessDateIndicator } from './BusinessDateIndicator.jsx';
+import { describeNotification, timeAgo } from './notificationText.js';
 import styles from './TopBar.module.css';
-
-/**
- * Plain-language text for one bell notification — PLAN.md Phase 3 wires
- * exactly one type (`housekeeping.discrepancy_raised`, PRODUCT_REQUIREMENTS.md
- * §3.21's own named bell event); anything else falls back to its raw type
- * string rather than crashing on an unrecognised shape, since new event
- * types "arrive one at a time" the same way permission keys do (`src/auth/rbac.js`'s
- * own header) and this bell should not need a deploy just to render one.
- */
-function describeNotification(notification) {
-  // MySQL JSON columns can come back already-parsed or as a raw string
-  // depending on driver config — the same ambiguity
-  // `src/shared/idempotency.js`'s `parseStoredBody` documents on the
-  // backend; handled here too rather than assumed.
-  const payload = typeof notification.payload === 'string' ? JSON.parse(notification.payload) : notification.payload ?? {};
-  if (notification.type === 'housekeeping.discrepancy_raised') {
-    const roomNumber = payload.roomNumber ?? payload.roomId ?? 'a room';
-    return `Housekeeping discrepancy raised for room ${roomNumber}.`;
-  }
-  if (notification.type === 'door_access.critical_alert_raised') {
-    const rule = payload.rule === 'post_checkout_access' ? 'post-checkout access' : 'unsold occupancy';
-    return `Door access alert (found in an uploaded lock log): ${rule}, room ${payload.roomNumber ?? '?'}.`;
-  }
-  return notification.type;
-}
 
 /**
  * TopBar — PRODUCT_REQUIREMENTS.md's App shell, Top bar: "Hamburger (sidebar
@@ -45,6 +21,8 @@ function describeNotification(notification) {
  * @param {number} [notificationCount]
  * @param {Array<{id: string, type: string, payload: object, read_at: string|null, created_at: string}>} [notifications]   PLAN.md Phase 3's in-app bell — omit to keep the badge non-interactive (a screen with no bell data wired up yet).
  * @param {(id: string) => void} [onMarkNotificationRead]
+ * @param {() => void} [onMarkAllNotificationsRead]
+ * @param {(notification: object) => void} [onOpenNotification]   Clicking a row calls this (e.g. mark read and open the related screen).
  * @param {{name: string, avatarUrl?: string}} user
  * @param {{id: string, name: string}} activeProperty
  * @param {Array<{id: string, name: string}>} properties
@@ -58,6 +36,8 @@ export function TopBar({
   notificationCount = 0,
   notifications,
   onMarkNotificationRead,
+  onMarkAllNotificationsRead,
+  onOpenNotification,
   user,
   activeProperty,
   properties,
@@ -156,22 +136,55 @@ export function TopBar({
         </button>
         {notifOpen && (
           <div className={styles.notifPanel} role="menu" aria-label="Notifications">
+            <div className={styles.notifHeader}>
+              <span className={styles.notifHeading}>Notifications</span>
+              {notificationCount > 0 && onMarkAllNotificationsRead && (
+                <button type="button" className={styles.notifMarkRead} onClick={onMarkAllNotificationsRead}>
+                  Mark all read
+                </button>
+              )}
+            </div>
             {!notifications || notifications.length === 0 ? (
               <p className={styles.notifEmpty}>No notifications yet.</p>
             ) : (
-              notifications.map((notification) => (
-                <div
-                  key={notification.id}
-                  className={`${styles.notifItem} ${!notification.read_at ? styles.notifItemUnread : ''}`.trim()}
-                >
-                  <p className={styles.notifText}>{describeNotification(notification)}</p>
-                  {!notification.read_at && onMarkNotificationRead && (
-                    <button type="button" className={styles.notifMarkRead} onClick={() => onMarkNotificationRead(notification.id)}>
-                      Mark read
-                    </button>
-                  )}
-                </div>
-              ))
+              notifications.map((notification) => {
+                const { title, detail } = describeNotification(notification);
+                const unread = !notification.read_at;
+                const body = (
+                  <>
+                    <span className={styles.notifDot} data-unread={unread} aria-hidden="true" />
+                    <span className={styles.notifBody}>
+                      <span className={styles.notifTitle}>{title}</span>
+                      {detail && <span className={styles.notifDetail}>{detail}</span>}
+                      <span className={styles.notifTime}>{timeAgo(notification.created_at)}</span>
+                    </span>
+                  </>
+                );
+                return (
+                  <div key={notification.id} className={`${styles.notifItem} ${unread ? styles.notifItemUnread : ''}`.trim()}>
+                    {onOpenNotification ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={styles.notifOpen}
+                        onClick={() => {
+                          setNotifOpen(false);
+                          onOpenNotification(notification);
+                        }}
+                      >
+                        {body}
+                      </button>
+                    ) : (
+                      <div className={styles.notifOpen}>{body}</div>
+                    )}
+                    {unread && onMarkNotificationRead && (
+                      <button type="button" className={styles.notifMarkRead} onClick={() => onMarkNotificationRead(notification.id)}>
+                        Mark read
+                      </button>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
         )}

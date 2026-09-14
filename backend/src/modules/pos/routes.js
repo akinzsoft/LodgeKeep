@@ -52,6 +52,8 @@ function posRouter() {
   router.get('/pos/guests/in-house', requirePermission('pos.operate'), controller.findInHouseForCharge);
 
   router.get('/pos/orders', requirePermission('pos.operate'), controller.listOrders);
+  router.get('/pos/tickets', requirePermission('pos.operate'), controller.listKitchenTickets);
+  router.post('/pos/tickets/:id/done', requirePermission('pos.operate'), controller.markTicketDone);
   router.get('/pos/orders/:id', requirePermission('pos.operate'), controller.getOrder);
   router.post('/pos/orders', requirePermission('pos.operate'), controller.openOrder);
   router.post('/pos/orders/:id/items', requirePermission('pos.operate'), controller.addItem);

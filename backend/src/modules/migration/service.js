@@ -195,12 +195,32 @@ async function runDryRun({ context, importRunId }) {
     const roomTypes = codeMap(await db.table('room_types').where({ status: 'active' }), 'code');
     const rateCodes = codeMap(await db.table('rate_codes').where({ status: 'active' }), 'code');
     const existingGuests = await outerDb.table('guests').select('id', 'first_name', 'last_name', 'email', 'phone');
+    const rooms = codeMap(await db.table('rooms'), 'room_number');
+    const openAssignmentRoomIds = new Set((await db.table('reservation_rooms').where({ effective_to: null }).select('room_id')).map((r) => String(r.room_id)));
+    const inHouseRoomsInFile = new Map(); // room number -> first row number claiming it
 
     for (const row of rows) {
       const guestMatch = matchExistingGuestByContact({ email: row.guest_email, phone: row.guest_phone }, existingGuests);
       const roomType = roomTypes.get(normalizedCode(row.room_type_code));
       const rateCode = rateCodes.get(normalizedCode(row.rate_code));
       const errors = validateReservationRow(row, { guestMatch, roomTypeExists: Boolean(roomType), rateCodeExists: Boolean(rateCode) });
+
+      // An in-house (checked_in) guest's room must be free — not occupied by
+      // a live guest, and not claimed by an earlier checked_in row in this
+      // file. Commit re-checks under the room lock (`jobs/data-import.js`).
+      const roomNumber = normalizedCode(row.room_number);
+      const listedRoom = roomNumber ? rooms.get(roomNumber) : null;
+      if (listedRoom && trimmed(row.status) === 'checked_in') {
+        const claimedBy = inHouseRoomsInFile.get(roomNumber);
+        if (listedRoom.front_desk_status === 'occupied' || openAssignmentRoomIds.has(String(listedRoom.id))) {
+          errors.push({ columnName: 'room_number', message: `Room ${trimmed(row.room_number)} is already occupied — an in-house guest can't be imported into it.` });
+        } else if (claimedBy !== undefined) {
+          errors.push({ columnName: 'room_number', message: `Room ${trimmed(row.room_number)} is already given to the in-house guest on row ${claimedBy} of this file.` });
+        } else if (errors.length === 0) {
+          // Only a row that will actually commit claims the room.
+          inHouseRoomsInFile.set(roomNumber, row.__rowNumber);
+        }
+      }
       if (addErrors(row.__rowNumber, errors)) continue;
 
       const arrivalDate = trimmed(row.arrival_date);
