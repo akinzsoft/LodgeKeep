@@ -603,11 +603,10 @@ async function lockRooms({ trx, roomIds }) {
  * the first one's committed `occupied`. Deliberately NOT a locking read of
  * `reservation_rooms`: on an empty index range that takes gap locks, and two
  * check-ins into neighbouring free rooms would deadlock on each other's
- * inserts. The plain open-assignment read below covers rooms assigned
- * without the flag ever being set (a data-migration import). Known gap: the
- * import job takes no room lock and its read here uses this transaction's
- * earlier snapshot, so an import committing into a never-checked-in room
- * DURING a live check-in into that same room is not caught.
+ * inserts. The plain open-assignment read below is a backstop for any
+ * assignment written without the flag. Data-migration import
+ * (`jobs/data-import.js`) assigns an imported in-house guest's room under
+ * this same lock and sets the flag, so it serializes with live check-ins.
  */
 async function isRoomOccupied({ trx, room }) {
   if (room.front_desk_status === 'occupied') return true;
@@ -1413,6 +1412,8 @@ module.exports = {
   checkAvailability,
   reserveInventoryForDates,
   releaseInventoryForDates,
+  lockRooms,
+  isRoomOccupied,
   configureOverbookingThreshold,
   createReservation,
   openBookingFolio,
