@@ -35,6 +35,16 @@
  * operator confirms commit) — a slow row-by-row import committing
  * thousands of historical reservations must never delay any other queue's
  * work, and vice versa.
+ *
+ * `door-access-retention` (PLAN.md Phase 7 gap closure, PRODUCT_REQUIREMENTS.md
+ * §3.23's legal/privacy note) is its own queue for the same recurring
+ * reason every periodic sweep above already gets one — a slow purge pass
+ * at one property must never delay the outbox, trial-expiry, or any other
+ * sweep's own work. Runs once daily (`src/jobs/door-access-retention.js`),
+ * far coarser than every other periodic sweep here — an age-based PII
+ * purge has no user waiting on it the way a billing charge or a bell
+ * notification does; daily is standard practice for this class of job and
+ * there is no correctness reason to run it more often.
  */
 
 const { Queue } = require('bullmq');
@@ -46,6 +56,7 @@ const SUBSCRIPTION_BILLING_QUEUE = 'subscription-billing';
 const TENANT_DATA_EXPORT_QUEUE = 'tenant-data-export';
 const DATA_IMPORT_QUEUE = 'imports';
 const NOTIFICATIONS_SWEEP_QUEUE = 'notifications-sweep';
+const DOOR_ACCESS_RETENTION_QUEUE = 'door-access-retention';
 
 let queue = null;
 let trialExpiryQueueInstance = null;
@@ -53,6 +64,7 @@ let subscriptionBillingQueueInstance = null;
 let tenantDataExportQueueInstance = null;
 let dataImportQueueInstance = null;
 let notificationsSweepQueueInstance = null;
+let doorAccessRetentionQueueInstance = null;
 
 function outboxDispatchQueue() {
   if (!queue) {
@@ -96,6 +108,13 @@ function notificationsSweepQueue() {
   return notificationsSweepQueueInstance;
 }
 
+function doorAccessRetentionQueue() {
+  if (!doorAccessRetentionQueueInstance) {
+    doorAccessRetentionQueueInstance = new Queue(DOOR_ACCESS_RETENTION_QUEUE, { connection: redisConnection() });
+  }
+  return doorAccessRetentionQueueInstance;
+}
+
 /** Test-only teardown — BullMQ's `Queue` holds its own connection handles beyond the shared `redisConnection()` instance, and both must close for the process to exit without `--forceExit`. */
 async function __closeQueuesForTesting() {
   if (queue) {
@@ -122,6 +141,10 @@ async function __closeQueuesForTesting() {
     await notificationsSweepQueueInstance.close();
     notificationsSweepQueueInstance = null;
   }
+  if (doorAccessRetentionQueueInstance) {
+    await doorAccessRetentionQueueInstance.close();
+    doorAccessRetentionQueueInstance = null;
+  }
 }
 
 module.exports = {
@@ -137,5 +160,7 @@ module.exports = {
   dataImportQueue,
   NOTIFICATIONS_SWEEP_QUEUE,
   notificationsSweepQueue,
+  DOOR_ACCESS_RETENTION_QUEUE,
+  doorAccessRetentionQueue,
   __closeQueuesForTesting,
 };

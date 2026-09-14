@@ -291,7 +291,7 @@ Runs against **every** module. Generated from a table of endpoints rather than h
 
 ### 12A. Door access — PHASE 2 (PRODUCT_REQUIREMENTS.md §3.23)
 
-Built in PLAN.md Phase 7 for `manual_import` only (HiRead ProUSB). Covered by `backend/tests/access-monitoring/` — LOCK-3, 4, 5, 8/10 (natural-key dedup), 9, 12 and 14 are real tests. **Not built, so not testable yet**: LOCK-1 and LOCK-6 (no card encoding), LOCK-7 (`staff_card_anomaly`), LOCK-11 (no real-time adapter), LOCK-13 (no retention window). LOCK-2's denied events are stored but not evaluated. Additional Phase 7 cases: post-checkout grace window, a room vacated by a room move is not a checkout, once-per-stay first-use confirmation, incident extend vs. fresh alert after resolution, overlapping concurrent imports and concurrent resolves under real connections.
+Built in PLAN.md Phase 7 for `manual_import` only (HiRead ProUSB). Covered by `backend/tests/access-monitoring/` — LOCK-3, 4, 5, 8/10 (natural-key dedup), 9, 12, 13 and 14 are real tests. **Not built, so not testable yet**: LOCK-1 and LOCK-6 (no card encoding), LOCK-7 (`staff_card_anomaly`), LOCK-11 (no real-time adapter). LOCK-2's denied events are stored but not evaluated. Additional Phase 7 cases: post-checkout grace window, a room vacated by a room move is not a checkout, once-per-stay first-use confirmation, incident extend vs. fresh alert after resolution, overlapping concurrent imports and concurrent resolves under real connections. LOCK-13's own gap-closure pass added: `backend/tests/access-monitoring/door-access.test.js`'s "retention" block (an old, unreferenced event is purged; an alert- or stay-confirmation-referenced one and a recent one are not; a null retention window purges nothing; config validation) and `backend/tests/jobs/door-access-retention-sweep.test.js` (real MySQL — which properties the sweep touches, a real audit row, idempotency, and two genuinely concurrent sweeps over the same overdue events).
 
 | # | Test | Expect |
 |---|---|---|
@@ -307,7 +307,7 @@ Built in PLAN.md Phase 7 for `manual_import` only (HiRead ProUSB). Covered by `b
 | LOCK-10 | The same CSV file imported twice (a real operator habit) | No duplicate events — same dedupe key as LOCK-8 applies regardless of ingestion mode |
 | LOCK-11 | Real-time webhook event (networked/TTHotel-tier adapter) | Processed immediately; `is_retrospective: false`; detection rules evaluate on ingest, not deferred to the next night-audit sweep |
 | LOCK-12 | Door event for a room belonging to another tenant's property | Rejected at ingest — tenant isolation (SECURITY.md §2) applies to hardware-sourced data exactly as it does to anything else |
-| LOCK-13 | Door event older than the configured retention window | Handled per the property's retention policy (PRODUCT_REQUIREMENTS.md §3.23's legal/privacy note) — not kept indefinitely by default |
+| LOCK-13 | Door event older than the configured retention window | Deleted by the daily retention sweep once past the property's own `retention_days`, unless still referenced by an alert or a stay confirmation (PRODUCT_REQUIREMENTS.md §3.23's legal/privacy note) — a property with no retention window configured (the default) is never swept |
 | LOCK-14 | A `critical` alert is raised | Manager/admin notified via the top-bar bell and, per the property's config, email — front desk and housekeeping do **not** receive it (PRODUCT_REQUIREMENTS.md §3.23) |
 
 ---

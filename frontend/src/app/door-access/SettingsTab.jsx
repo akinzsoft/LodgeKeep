@@ -21,9 +21,16 @@ const WHAT_IT_DELIVERS = {
 export function SettingsTab({ config, isOffline = false, onSaved }) {
   const [adapter, setAdapter] = useState(config.adapter);
   const [grace, setGrace] = useState(String(config.postCheckoutGraceMinutes));
+  // Empty string means "no retention window configured" (null or, from an
+  // older cached/mocked config shape, simply absent) — a real, distinct
+  // choice from a number, never treated as an error until the property
+  // actually wants automatic purging.
+  const [retention, setRetention] = useState(config.retentionDays == null ? '' : String(config.retentionDays));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(false);
+
+  const retentionInvalid = retention !== '' && (!Number.isInteger(Number(retention)) || Number(retention) < 1 || Number(retention) > 3650);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -31,7 +38,11 @@ export function SettingsTab({ config, isOffline = false, onSaved }) {
     setError(null);
     setSaved(false);
     try {
-      const next = await doorAccessApi.updateConfig({ adapter, postCheckoutGraceMinutes: Number(grace) });
+      const next = await doorAccessApi.updateConfig({
+        adapter,
+        postCheckoutGraceMinutes: Number(grace),
+        retentionDays: retention === '' ? null : Number(retention),
+      });
       onSaved(next);
       setSaved(true);
     } catch (caught) {
@@ -53,9 +64,19 @@ export function SettingsTab({ config, isOffline = false, onSaved }) {
         {isOffline && <p className={styles.notice}>You are offline. Saving settings is disabled until connectivity returns.</p>}
 
         <div className={styles.row}>
-          <label className={styles.field}>
-            <span className={styles.label}>Lock system</span>
-            <select className={styles.select} value={adapter} onChange={(e) => setAdapter(e.target.value)}>
+          {/* Each field's help paragraph is a sibling of, not nested inside,
+              its <label> — a wrapping <label> computes its accessible name
+              from ALL of its text content, so a help paragraph nested
+              inside one (as every field here originally had it) silently
+              became part of the field's own spoken name for assistive
+              tech, and broke an exact-match `getByLabelText` query the
+              same way. Explicit htmlFor/id keeps the name to just the
+              short label text. */}
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor="door-access-adapter">
+              Lock system
+            </label>
+            <select id="door-access-adapter" className={styles.select} value={adapter} onChange={(e) => setAdapter(e.target.value)}>
               {Object.entries(ADAPTER_LABELS).map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}
@@ -63,11 +84,14 @@ export function SettingsTab({ config, isOffline = false, onSaved }) {
               ))}
             </select>
             <p className={styles.help}>{WHAT_IT_DELIVERS[adapter]}</p>
-          </label>
+          </div>
 
-          <label className={styles.field}>
-            <span className={styles.label}>Grace period after checkout (minutes)</span>
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor="door-access-grace">
+              Grace period after checkout (minutes)
+            </label>
             <input
+              id="door-access-grace"
               className={styles.input}
               type="number"
               min="0"
@@ -80,11 +104,34 @@ export function SettingsTab({ config, isOffline = false, onSaved }) {
               A guest card opening the room this soon after a recorded checkout (for example to fetch a forgotten bag) is not
               flagged.
             </p>
-          </label>
+          </div>
+
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor="door-access-retention">
+              Door event retention (days)
+            </label>
+            <input
+              id="door-access-retention"
+              className={styles.input}
+              type="number"
+              min="1"
+              max="3650"
+              step="1"
+              placeholder="Not set — kept indefinitely"
+              value={retention}
+              onChange={(e) => setRetention(e.target.value)}
+            />
+            <p className={styles.help}>
+              {retention === ''
+                ? 'No automatic purge is configured — door events are kept indefinitely until you set a number of days.'
+                : `Door events older than ${retention} day${retention === '1' ? '' : 's'} are deleted automatically, once a day. An event still linked to an alert or a stay confirmation is never deleted, regardless of age.`}
+              {' '}Clear this field to turn automatic purging back off.
+            </p>
+          </div>
         </div>
 
         <div className={styles.actionsRow}>
-          <Button type="submit" disabled={isOffline || saving || grace === ''}>
+          <Button type="submit" disabled={isOffline || saving || grace === '' || retentionInvalid}>
             {saving ? 'Saving…' : 'Save settings'}
           </Button>
         </div>
