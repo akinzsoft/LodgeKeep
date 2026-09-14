@@ -9,6 +9,7 @@ import { TaxesTab } from './TaxesTab.jsx';
 import { ReferenceDataTab } from './ReferenceDataTab.jsx';
 import { UsersTab } from './UsersTab.jsx';
 import { EmailSettingsTab } from './EmailSettingsTab.jsx';
+import { NotificationsTab } from './NotificationsTab.jsx';
 import { ImpersonationHistory } from './ImpersonationHistory.jsx';
 import { SetupWizard } from './SetupWizard.jsx';
 import styles from './SetupScreen.module.css';
@@ -54,6 +55,7 @@ const TABS = [
   { key: 'reference-data', label: 'Reference Data' },
   { key: 'users', label: 'Users' },
   { key: 'email', label: 'Email' },
+  { key: 'notifications', label: 'Notifications' },
   { key: 'support-access', label: 'Support access' },
 ];
 
@@ -156,6 +158,7 @@ export function SetupScreen({ activePropertyId, isOffline = false, onPropertiesC
         {tab === 'reference-data' && <ReferenceDataTab disabled={!activeProperty} />}
         {tab === 'users' && <UsersTab disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'email' && <EmailSettingsTab disabled={!activeProperty} isOffline={isOffline} />}
+        {tab === 'notifications' && <NotificationsTab disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'support-access' && <ImpersonationHistory />}
       </div>
     </div>

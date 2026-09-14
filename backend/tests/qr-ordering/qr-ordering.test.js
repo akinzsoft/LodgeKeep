@@ -31,6 +31,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => ({
 }));
 
 const { useTestApp } = require('../helpers/app');
+const { sumMoney } = require('../../src/shared/money');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystack = require('../../src/modules/cashiering/paystack-adapter');
@@ -60,6 +61,27 @@ async function flushIpRateLimitKeys() {
 describe('QR self-ordering (PLAN.md Phase 6)', () => {
   const t = useTestApp();
   let ctx;
+
+  /** Bell rows raised for a guest order's "paid and received" staff alert. */
+  async function staffAlertsFor(guestOrderId) {
+    const rows = await t.trx('in_app_notifications').where({ type: 'qr_ordering.guest_order_placed' });
+    return rows
+      .map((row) => ({ ...row, payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload }))
+      .filter((row) => String(row.payload.guestOrderId) === String(guestOrderId));
+  }
+
+  async function settledAlertsFor(posOrderId) {
+    const rows = await t.trx('in_app_notifications').where({ type: 'pos.order_settled' });
+    return rows.filter((row) => {
+      const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+      return String(payload.orderId) === String(posOrderId);
+    });
+  }
+
+  function settlementTotalOf(settlement) {
+    return sumMoney([settlement.subtotal, settlement.tax_amount, settlement.tip_amount, settlement.service_charge]);
+  }
+
   let outletId;
   let menuItemId;
   let unavailableMenuItemId;
@@ -493,6 +515,16 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       const settlement = await t.trx('pos_order_settlements').where({ pos_order_id: order.id }).first();
       expect(settlement.method).toBe('card');
       expect(settlement.subtotal).toBe('20.00');
+
+      // Staff alert: the paid order pops up for the default roles (manager
+      // here), with the real charged total, and never as a second
+      // "POS order settled" alert.
+      const alerts = await staffAlertsFor(created.body.data.id);
+      expect(alerts.map((row) => String(row.user_id))).toContain(String(ctx.a.users[0].id));
+      expect(alerts.every((row) => Boolean(row.popup))).toBe(true);
+      expect(alerts[0].payload.total).toBe(settlementTotalOf(settlement));
+      expect(alerts[0].payload.paymentMethod).toBe('card');
+      expect(await settledAlertsFor(order.id)).toHaveLength(0);
       expect(settlement.tax_amount).toBe('1.50');
     });
 
@@ -654,6 +686,13 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       expect(right.status).toBe(200);
       expect(right.body.data.guestOrder.payment_status).toBe('charged_to_room');
       expect(right.body.data.guestOrder.status).toBe('received');
+
+      // Settled from the guest's own (guest-audience) session, the staff
+      // alert still reaches staff, once, with no duplicate settle alert.
+      const alerts = await staffAlertsFor(order.id);
+      expect(alerts.map((row) => String(row.user_id))).toContain(String(ctx.a.users[0].id));
+      expect(alerts[0].payload.paymentMethod).toBe('room_charge');
+      expect(await settledAlertsFor(order.pos_order_id)).toHaveLength(0);
     });
 
     it('the correct code genuinely settles the order as a real room_charge, posting a real folio charge', async () => {

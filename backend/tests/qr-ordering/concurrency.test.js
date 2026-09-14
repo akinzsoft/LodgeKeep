@@ -141,6 +141,8 @@ describe('QR self-ordering races under real concurrent connections (PLAN.md Phas
     await db()('outbox_events').where({ tenant_id: tenantId }).delete();
     await db()('user_property_access').where({ tenant_id: tenantId }).delete();
     await db()('role_permissions').where({ tenant_id: tenantId }).delete();
+    // Bell rows the flow under test raised (staff notifications) reference these users.
+    await db()('in_app_notifications').where({ tenant_id: tenantId }).delete();
     await db()('users').where({ tenant_id: tenantId }).delete();
     await db()('roles').where({ tenant_id: tenantId }).delete();
     await db()('properties').where({ tenant_id: tenantId }).delete();

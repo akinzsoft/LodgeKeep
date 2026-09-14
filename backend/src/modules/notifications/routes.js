@@ -27,7 +27,15 @@ function notificationsRouter() {
   router.post('/notifications/log/:id/resend', requirePermission('notifications.manage'), controller.resendNotification);
 
   router.get('/notifications/bell', controller.listInAppNotifications);
+  router.post('/notifications/bell/read-all', controller.markAllNotificationsRead);
   router.post('/notifications/bell/:id/read', controller.markNotificationRead);
+
+  // Setup > Notifications: which roles receive each staff notification type.
+  // Reads for managers (notifications.view), changes for admin/super_admin
+  // (notifications.manage) — the same split the templates/log already use.
+  router.get('/notifications/catalogue', requirePermission('notifications.view'), controller.listNotificationCatalogue);
+  router.get('/notifications/role-rules', requirePermission('notifications.view'), controller.listNotificationRoleRules);
+  router.put('/notifications/role-rules', requirePermission('notifications.manage'), controller.saveNotificationRoleRules);
 
   return router;
 }

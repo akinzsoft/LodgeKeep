@@ -30,6 +30,7 @@ const {
   outOfOrderRoomIds,
 } = require('../../shared/room-availability');
 const { generateUlid } = require('../../shared/ulid');
+const { notifyStaff } = require('../notifications/staff-notifications');
 const { resolveRate } = require('../setup/service');
 const { postAdjustment: postFolioAdjustment, ensurePrimaryFolio, postRoomChargesForStay } = require('../cashiering/service');
 const {
@@ -146,6 +147,39 @@ async function emitReservationEvent({ trx, eventType, reservation, extra }) {
       departureDate: reservation.departure_date,
       ...extra,
     },
+  });
+}
+
+/**
+ * Staff bell notification for a reservation lifecycle event (gap closure:
+ * staff notifications) — written in the same transaction, to whichever roles
+ * the property's notification settings name. Separate from
+ * `emitReservationEvent`, which is the guest-facing email.
+ */
+async function notifyReservationStaff({ trx, eventType, reservation, extra }) {
+  const guest = await trx.table('guests').where({ id: reservation.guest_id }).first();
+  await notifyStaff({
+    trx,
+    eventType,
+    payload: {
+      reservationId: reservation.id,
+      guestName: guest ? `${guest.first_name} ${guest.last_name}` : null,
+      confirmationNumber: reservation.confirmation_number,
+      arrivalDate: reservation.arrival_date,
+      departureDate: reservation.departure_date,
+      status: reservation.status,
+      ...extra,
+    },
+  });
+}
+
+/** A vacated room is now dirty — tell whoever cleans rooms. */
+async function notifyRoomBecameDirty({ trx, roomId, reason }) {
+  const room = await trx.table('rooms').where({ id: roomId }).first();
+  await notifyStaff({
+    trx,
+    eventType: 'room.became_dirty',
+    payload: { roomId, roomNumber: room?.room_number ?? null, reason },
   });
 }
 
@@ -507,6 +541,9 @@ async function createReservation({
   if (created.status === 'confirmed') {
     await emitReservationEvent({ trx, eventType: 'reservation.confirmed', reservation: created });
   }
+  if (created.status !== 'waitlisted') {
+    await notifyReservationStaff({ trx, eventType: 'reservation.created', reservation: created });
+  }
   return created;
 }
 
@@ -590,6 +627,7 @@ async function cancelReservation({ trx, id, reason }) {
   });
   const updated = await trx.table('reservations').where({ id }).first();
   await emitReservationEvent({ trx, eventType: 'reservation.cancelled', reservation: updated });
+  await notifyReservationStaff({ trx, eventType: 'reservation.cancelled', reservation: updated });
   return updated;
 }
 
@@ -691,6 +729,7 @@ async function checkIn({ trx, id, roomId, overrideDirty }) {
   await trx.table('reservations').where({ id }).update({ status: 'checked_in', checked_in_at: now });
   const updated = await trx.table('reservations').where({ id }).first();
   await emitReservationEvent({ trx, eventType: 'guest.checked_in', reservation: updated, extra: { roomNumber: room.room_number } });
+  await notifyReservationStaff({ trx, eventType: 'guest.checked_in', reservation: updated, extra: { roomNumber: room.room_number } });
   return updated;
 }
 
@@ -821,11 +860,13 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
       housekeeping_reported_status: 'dirty',
       housekeeping_occupancy_observed: null,
     });
+    await notifyRoomBecameDirty({ trx, roomId: assignment.room_id, reason: 'check_out' });
   }
 
   await trx.table('reservations').where({ id }).update({ status: 'checked_out', checked_out_at: now });
   const updated = await trx.table('reservations').where({ id }).first();
   await emitReservationEvent({ trx, eventType: 'guest.checked_out', reservation: updated, extra: { folioBalance: finalBalance } });
+  await notifyReservationStaff({ trx, eventType: 'guest.checked_out', reservation: updated, extra: { folioBalance: finalBalance } });
 
   return { reservation: updated, fee, arAccountOverLimit };
 }
@@ -873,6 +914,7 @@ async function roomMove({ trx, id, newRoomId, reason }) {
       housekeeping_reported_status: 'dirty',
       housekeeping_occupancy_observed: null,
     });
+    await notifyRoomBecameDirty({ trx, roomId: currentAssignment.room_id, reason: 'room_move' });
   }
   await trx.table('rooms').where({ id: newRoomId }).update({ front_desk_status: 'occupied' });
 
@@ -1135,6 +1177,24 @@ async function listInHouse({ context }) {
  * introduced by it; a real fix (aggregating multiple open folios per
  * reservation into one row) is a genuine follow-on, not built here.
  */
+/**
+ * Gap closure (staff notifications): in-house guests due to check out on the
+ * property's current business date who still owe a balance —
+ * `listDepartures` intersected with `listOutstandingBalances`. Read by the
+ * periodic notifications sweep (`src/jobs/notifications-sweep.js`).
+ */
+async function listDepartingWithOutstandingBalance({ context }) {
+  const db = scopedDb().for(context);
+  const businessDate = await propertyBusinessDate({ context });
+  if (!businessDate) return { businessDate: null, rows: [] };
+  const rows = await selectReservationWithGuestAndRoom(
+    db.table('reservations').where({ 'reservations.departure_date': businessDate, 'reservations.status': 'checked_in' })
+  )
+    .where('folios.balance', '<>', '0.00')
+    .orderBy('reservations.id');
+  return { businessDate, rows };
+}
+
 async function listOutstandingBalances({ context }) {
   const db = scopedDb().for(context);
   return selectReservationWithGuestAndRoom(db.table('reservations').where({ 'reservations.status': 'checked_in' }))
@@ -1339,6 +1399,7 @@ module.exports = {
   listDepartures,
   listInHouse,
   listOutstandingBalances,
+  listDepartingWithOutstandingBalance,
   listFreeRoomsNow,
   listEligiblePreferredRooms,
   findInHouseForCharge,

@@ -68,6 +68,12 @@ const reservationsService = require('../reservations/service');
 // requires this file back (see that module's own header).
 const stockService = require('../stock/service');
 const menuImages = require('./menu-images');
+const { notifyStaff } = require('../notifications/staff-notifications');
+
+/** One settlement row's full charged amount — subtotal, tax, tip, service charge. */
+function settlementTotal(settlement) {
+  return sumMoney([settlement.subtotal, settlement.tax_amount, settlement.tip_amount, settlement.service_charge]);
+}
 const {
   OrderNotOpenError,
   OrderItemAlreadyVoidedError,
@@ -818,7 +824,21 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
   }
 
   await trx.table('pos_orders').where({ id: orderId }).update({ status: 'settled', closed_at: new Date() });
-  return { order: await trx.table('pos_orders').where({ id: orderId }).first(), settlements: results };
+  const settledOrder = await trx.table('pos_orders').where({ id: orderId }).first();
+  // A guest QR order settling (room charge) raises its own, richer
+  // `qr_ordering.guest_order_placed` alert instead — never both.
+  if (settledOrder.source !== 'guest') await notifyStaff({
+    trx,
+    eventType: 'pos.order_settled',
+    payload: {
+      orderId,
+      tableLabel: settledOrder.table_label ?? null,
+      total: sumMoney(results.map(settlementTotal)),
+      currency: results[0]?.currency ?? null,
+      methods: [...new Set(results.map((row) => row.method))],
+    },
+  });
+  return { order: settledOrder, settlements: results };
 }
 
 // ---------------------------------------------------------------------
@@ -991,6 +1011,19 @@ async function voidSettlement({ trx, settlementId, reason, userId }) {
     voided_at: new Date(),
     void_reason: reason,
     voided_by_user_id: userId,
+  });
+  const voidedOrder = await trx.table('pos_orders').where({ id: settlement.pos_order_id }).first();
+  await notifyStaff({
+    trx,
+    eventType: 'pos.settlement_voided',
+    payload: {
+      orderId: settlement.pos_order_id,
+      settlementId,
+      tableLabel: voidedOrder?.table_label ?? null,
+      total: settlementTotal(settlement),
+      currency: settlement.currency,
+      reason,
+    },
   });
   return trx.table('pos_order_settlements').where({ id: settlementId }).first();
 }
