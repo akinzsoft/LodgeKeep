@@ -123,6 +123,17 @@ export function listOrders({ outletId, status } = {}) {
   return request(`/pos/orders${query ? `?${query}` : ''}`);
 }
 
+/** The kitchen/bar ticket queue: open tabs with something to make, oldest first, items included. */
+export function listKitchenTickets({ outletId } = {}) {
+  const query = outletId ? `?${new URLSearchParams({ outlet_id: outletId })}` : '';
+  return request(`/pos/tickets${query}`);
+}
+
+/** Marks a ticket done: it leaves the kitchen queue until an item is added to the tab. */
+export function markTicketDone(orderId) {
+  return request(`/pos/tickets/${orderId}/done`, { method: 'POST' });
+}
+
 export function getOrder(id) {
   return request(`/pos/orders/${id}`);
 }
