@@ -31,6 +31,22 @@ function require_(body, field) {
 }
 
 /**
+ * A required, non-negative cash amount with at most 2 decimal places,
+ * returned as a trimmed string. Bug fix (the "test and review Shifts"
+ * pass): the shift float and count were passed straight through, so
+ * "abc" reached MySQL as a 500, "-50" was stored, and "100.999" was
+ * stored rounded (101.00) while the variance used the truncated 100.99 —
+ * a saved row whose own numbers didn't add up.
+ */
+function requireCashAmount(body, field) {
+  const value = String(require_(body, field)).trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(value)) {
+    throw new ValidationError('INVALID_AMOUNT', `"${field}" must be a non-negative amount with at most 2 decimal places.`, [{ field, issue: 'invalid' }]);
+  }
+  return value;
+}
+
+/**
  * Bug fix (found while building this module's first real edit UI —
  * `updateOutlet`/`updateTerminal`/`updateMenuItem` had all three taken
  * `req.body ?? {}` straight through to a raw `.update(changes)` since this
@@ -655,7 +671,7 @@ async function getShift(req, res, next) {
 async function openShift(req, res, next) {
   try {
     const terminalId = require_(req.body, 'terminal_id');
-    const openingFloat = require_(req.body, 'opening_float');
+    const openingFloat = requireCashAmount(req.body, 'opening_float');
     const shift = await service.openShift({ context: req.context, terminalId, userId: req.context.userId, openingFloat });
     await req.audit({ entityType: 'pos_shifts', entityId: shift.id, action: 'open', afterState: shift });
     res.status(201).json(ok(shift));
@@ -666,7 +682,7 @@ async function openShift(req, res, next) {
 
 async function closeShift(req, res, next) {
   try {
-    const countedCash = require_(req.body, 'counted_cash');
+    const countedCash = requireCashAmount(req.body, 'counted_cash');
     await runIdempotentMutation(req, res, {
       operationType: 'pos.close_shift',
       entityType: 'pos_shifts',

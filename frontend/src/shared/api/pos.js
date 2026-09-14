@@ -256,11 +256,14 @@ export function openShift({ terminalId, openingFloat }) {
   return request('/pos/shifts', { method: 'POST', body: { terminal_id: terminalId, opening_float: openingFloat } });
 }
 
-/** `countedCash` is the operator's own blind count — the response carries the computed `expected_cash`/`variance`, never exposed before this call. */
-export function closeShift(shiftId, countedCash) {
+/**
+ * `countedCash` is the operator's own blind count — the response carries the computed `expected_cash`/`variance`, never exposed before this call.
+ * `key` lets the caller hold one Idempotency-Key per close attempt, so retrying the same count after a lost response replays the stored result instead of hitting "already closed".
+ */
+export function closeShift(shiftId, countedCash, key = idempotencyKey()) {
   return request(`/pos/shifts/${shiftId}/close`, {
     method: 'POST',
-    headers: { 'Idempotency-Key': idempotencyKey() },
+    headers: { 'Idempotency-Key': key },
     body: { counted_cash: countedCash },
   });
 }

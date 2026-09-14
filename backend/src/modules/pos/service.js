@@ -79,6 +79,7 @@ const {
   MenuItemNotFoundError,
   OrderNotFoundError,
   ShiftAlreadyClosedError,
+  ShiftNotFoundError,
   SettlementAlreadyVoidedError,
   RegisterPaymentInvalidError,
   OrderHasCapturedPaymentError,
@@ -787,6 +788,19 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
   const businessDate = property?.current_business_date;
   const allTaxRows = await trx.table('taxes');
 
+  // Cash-up attribution: record which shift was open on this terminal when
+  // the sale settled, so `closeShift` counts exactly these rows rather than
+  // guessing by timestamp. See `lockTerminalForShifts` for the lock order —
+  // a shared terminal lock lets sales on one terminal run side by side while
+  // still waiting out an in-flight open/close, and the shift read itself is
+  // a locking read so it sees that open/close's committed result rather
+  // than this transaction's older snapshot.
+  let openShift = null;
+  if (order.terminal_id) {
+    await lockTerminalForShifts(trx, order.terminal_id, 'share');
+    openShift = await trx.table('pos_shifts').where({ terminal_id: order.terminal_id }).whereNull('closed_at').forShare().first('id');
+  }
+
   const results = [];
   for (const settlement of settlements) {
     if (settlement.method !== 'room_charge' && settlement.method !== 'cash' && settlement.method !== 'card') {
@@ -806,6 +820,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
       service_charge: serviceCharge,
       settled_by_user_id: settledByUserId,
       business_date: businessDate ?? null,
+      pos_shift_id: openShift?.id ?? null,
     };
 
     if (settlement.method === 'room_charge') {
@@ -1106,10 +1121,15 @@ async function voidSettlement({ trx, settlementId, reason, userId }) {
 // Shifts — blind cash-up
 // ---------------------------------------------------------------------
 
+/** Carries the terminal's device_ref and the opener's name so the history table can be reviewed without a second lookup (a pos_operator holds no grant to read the staff directory). */
 async function listShifts({ context, terminalId }) {
   const db = scopedDb().for(context);
-  const query = db.table('pos_shifts');
-  return (terminalId ? query.where({ terminal_id: terminalId }) : query).orderBy('opened_at', 'desc');
+  const query = db
+    .table('pos_shifts')
+    .joinScoped('pos_terminals', (join) => join.on('pos_terminals.id', '=', 'pos_shifts.terminal_id'))
+    .joinScoped('users', (join) => join.on('users.id', '=', 'pos_shifts.user_id'))
+    .select('pos_shifts.*', 'pos_terminals.device_ref as terminal_device_ref', 'users.first_name as opened_by_first_name', 'users.last_name as opened_by_last_name');
+  return (terminalId ? query.where({ 'pos_shifts.terminal_id': terminalId }) : query).orderBy('pos_shifts.opened_at', 'desc').orderBy('pos_shifts.id', 'desc');
 }
 
 async function getShift({ context, id }) {
@@ -1117,10 +1137,33 @@ async function getShift({ context, id }) {
   return db.table('pos_shifts').where({ id }).first();
 }
 
+/**
+ * Every operation that decides which shift a sale belongs to takes the
+ * terminal's row lock FIRST, by primary key: `openShift`/`closeShift`
+ * exclusively, `settleOrder` shared. One lock, one order.
+ *
+ * Bug fix (the "test and review Shifts" pass, reproduced under CPU load):
+ * locking the shift row directly deadlocked — `settleOrder` locked it via
+ * the (terminal_id, closed_at) index then the primary key, while
+ * `closeShift` locked the primary key and then needed that same index
+ * entry to write `closed_at`. Serializing on the terminal row first means
+ * neither ever holds one of those locks while waiting for the other.
+ */
+async function lockTerminalForShifts(trx, terminalId, mode) {
+  const query = trx.table('pos_terminals').where({ id: terminalId });
+  return (mode === 'share' ? query.forShare() : query.forUpdate()).first('id', 'status');
+}
+
 /** No idempotency key required — retrying a rejected open is naturally safe (the gap-lock guard below either accepts a genuinely-new shift or rejects a duplicate), and opening carries no money yet. */
 async function openShift({ context, terminalId, userId, openingFloat }) {
   const db = scopedDb().for(context);
   return db.transaction(async (trx) => {
+    // A shift can only be opened on a real, active terminal at this
+    // property — without this check a bad or foreign id reached the insert
+    // and surfaced as a raw FK-violation 500.
+    const terminal = await lockTerminalForShifts(trx, terminalId, 'update');
+    if (!terminal || terminal.status !== 'active') throw new TerminalNotFoundError();
+
     // Gap lock: MySQL's unique-index semantics treat every NULL as distinct,
     // so no DB constraint alone can enforce "at most one open shift per
     // terminal" — see the migration's own header for the full reasoning.
@@ -1143,18 +1186,31 @@ async function openShift({ context, terminalId, userId, openingFloat }) {
  * convention — see migration header).
  */
 async function closeShift({ trx, shiftId, countedCash }) {
+  // terminal_id never changes, so a plain read is enough to find which
+  // terminal to lock; the state that matters is re-read under that lock.
+  const located = await trx.table('pos_shifts').where({ id: shiftId }).first('terminal_id');
+  if (!located) throw new ShiftNotFoundError();
+  await lockTerminalForShifts(trx, located.terminal_id, 'update');
+
   const shift = await trx.table('pos_shifts').where({ id: shiftId }).forUpdate().first();
-  if (!shift) throw new ValidationError('SHIFT_NOT_FOUND', 'The specified shift does not exist.');
   if (shift.closed_at) throw new ShiftAlreadyClosedError(shiftId);
 
+  // By the shift id `settleOrder` stamped, never by time: a same-second
+  // hand-over used to count the previous shift's sales again (see the
+  // pos_shift_id migration's header).
+  //
+  // A locking read, not a plain SELECT: this transaction's REPEATABLE READ
+  // snapshot was fixed by its first read (the idempotency-key lookup),
+  // before the terminal lock above was granted. A sale that stamped this
+  // shift and committed while we waited for that lock is invisible to a
+  // plain read, and its cash would drop out of the cash-up — the race
+  // tests/pos/concurrency.test.js reproduced under load.
   const cashSettlements = await trx
     .table('pos_order_settlements')
-    .joinScoped('pos_orders', (join) => join.on('pos_orders.id', '=', 'pos_order_settlements.pos_order_id'))
-    .where('pos_orders.terminal_id', shift.terminal_id)
-    .where('pos_order_settlements.method', 'cash')
-    .whereNull('pos_order_settlements.voided_at')
-    .where('pos_order_settlements.settled_at', '>=', shift.opened_at)
-    .select('pos_order_settlements.subtotal', 'pos_order_settlements.tax_amount', 'pos_order_settlements.tip_amount', 'pos_order_settlements.service_charge');
+    .where({ pos_shift_id: shift.id, method: 'cash' })
+    .whereNull('voided_at')
+    .forShare()
+    .select('subtotal', 'tax_amount', 'tip_amount', 'service_charge');
 
   const cashTaken = sumMoney(
     cashSettlements.map((s) => sumMoney([s.subtotal, s.tax_amount, s.tip_amount, s.service_charge]))
