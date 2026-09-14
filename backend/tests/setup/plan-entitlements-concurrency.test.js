@@ -83,6 +83,8 @@ describe('Entitlement gating: the multi_property race under real concurrent conn
   async function cleanupTenant(tenantId) {
     await db()('audit_log').where({ tenant_id: tenantId }).delete();
     await db()('properties').where({ tenant_id: tenantId }).delete();
+    // Bell rows the flow under test raised (staff notifications) reference these users.
+    await db()('in_app_notifications').where({ tenant_id: tenantId }).delete();
     await db()('users').where({ tenant_id: tenantId }).delete();
     await db()('tenants').where({ id: tenantId }).delete();
   }

@@ -17,6 +17,8 @@ import { MfaChallengeScreen } from './app/auth/screens/MfaChallengeScreen.jsx';
 import { AcceptInvitationScreen } from './app/auth/screens/AcceptInvitationScreen.jsx';
 import { SignupScreen } from './app/auth/screens/SignupScreen.jsx';
 import { AppShell, isNavItemAllowed } from './app/shell/index.js';
+import { NotificationPopups } from './app/shell/NotificationPopups.jsx';
+import { notificationTarget } from './app/shell/notificationText.js';
 import { HomeDashboard } from './app/dashboard/HomeDashboard.jsx';
 import { SetupScreen } from './app/setup/SetupScreen.jsx';
 import { BookingScreen } from './app/booking/BookingScreen.jsx';
@@ -34,7 +36,8 @@ import { DataMigrationScreen } from './app/migration/DataMigrationScreen.jsx';
 import { ChainOverviewScreen } from './app/chain-overview/ChainOverviewScreen.jsx';
 import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
-import { authApi, notificationsApi, setupApi } from './shared/api/index.js';
+import { useStaffNotifications } from './shared/hooks/useStaffNotifications.js';
+import { authApi, setupApi } from './shared/api/index.js';
 import { PortalApp } from './portal/PortalApp.jsx';
 import { PlatformApp } from './platform/PlatformApp.jsx';
 import { QrOrderApp } from './qr-order/QrOrderApp.jsx';
@@ -90,7 +93,6 @@ function Demo() {
   const [toast, setToast] = useState(null);
   const [switchError, setSwitchError] = useState(null);
   const [activeItemKey, setActiveItemKey] = useState('home');
-  const [notifications, setNotifications] = useState([]);
   // Gap closure: real property records (name, current_business_date) —
   // see this file's own header for why `GET /properties` is safe to call
   // here but must never widen WHICH ids are offered.
@@ -100,16 +102,6 @@ function Demo() {
   // user's menu while the new fetch is in flight.
   const [grants, setGrants] = useState(null);
   const [grantsError, setGrantsError] = useState(null);
-
-  async function reloadNotifications() {
-    try {
-      setNotifications(await notificationsApi.listBellNotifications());
-    } catch {
-      // The bell is a convenience, not a critical path — a failed fetch
-      // just leaves it at its last-known (or empty) state rather than
-      // surfacing a banner over the whole app shell.
-    }
-  }
 
   async function reloadProperties() {
     try {
@@ -126,7 +118,6 @@ function Demo() {
   useEffect(() => {
     if (status !== 'authenticated') return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-authentication; no data-fetching library exists yet to own this, same pattern every other screen's mount-time fetch already uses.
-    reloadNotifications();
     reloadProperties();
   }, [status]);
 
@@ -158,14 +149,13 @@ function Demo() {
     };
   }, [status, userId, activePropertyId]);
 
-  async function handleMarkNotificationRead(id) {
-    try {
-      await notificationsApi.markNotificationRead(id);
-      await reloadNotifications();
-    } catch {
-      // Same convenience-not-critical reasoning as the initial load above.
-    }
-  }
+  // Gap closure (staff notifications): the bell polls for new activity
+  // instead of loading once at sign-in, and new guest QR orders also raise
+  // an on-screen card (`useStaffNotifications`' own header).
+  const staffNotifications = useStaffNotifications({
+    enabled: status === 'authenticated',
+    sessionKey: status === 'authenticated' ? `${user?.userId}:${user?.activePropertyId}` : null,
+  });
 
   // No router exists in this app yet — an invitation link's `?invite_token=`
   // query parameter is this screen's only "route," checked ahead of the
@@ -224,6 +214,14 @@ function Demo() {
   const activePropertyRecord = realPropertyById(user.activePropertyId);
   const businessDate = activePropertyRecord?.current_business_date ?? null;
 
+  // A bell row or QR card opens the screen it's about, when this user's
+  // role can see that screen, and is marked read either way.
+  function handleOpenNotification(notification) {
+    staffNotifications.markRead(notification.id);
+    const target = notificationTarget(notification.type);
+    if (target && isNavItemAllowed(target, grantedPermissions)) setActiveItemKey(target);
+  }
+
   async function handleSwitchProperty(propertyId) {
     setSwitchError(null);
     try {
@@ -256,12 +254,19 @@ function Demo() {
       }))}
       onSwitchProperty={handleSwitchProperty}
       businessDate={businessDate}
-      notificationCount={notifications.filter((n) => !n.read_at).length}
-      notifications={notifications}
-      onMarkNotificationRead={handleMarkNotificationRead}
+      notificationCount={staffNotifications.unreadCount}
+      notifications={staffNotifications.notifications}
+      onMarkNotificationRead={staffNotifications.markRead}
+      onMarkAllNotificationsRead={staffNotifications.markAllRead}
+      onOpenNotification={handleOpenNotification}
       isOffline={!isOnline}
       onLogout={logout}
     >
+      <NotificationPopups
+        popups={staffNotifications.popups}
+        onView={isNavItemAllowed('pos', grantedPermissions) ? handleOpenNotification : undefined}
+        onDismiss={staffNotifications.dismissPopup}
+      />
       {switchError && (
         <p role="alert" className={styles.switchError}>
           {switchError}

@@ -193,6 +193,10 @@ const TABLE_SCOPES = Object.freeze({
   // TENANT_SCOPED, following `users` — a notification belongs to one staff
   // member, not one property (see that migration's own header).
   in_app_notifications: { scope: SCOPES.TENANT },
+  // Gap closure (staff notifications): which roles receive each staff
+  // notification type, per property — overrides on top of the event
+  // catalogue's defaults (see that migration's own header).
+  notification_role_rules: { scope: SCOPES.PROPERTY },
 
   // Cashiering — PLAN.md Phase 2.5, 20260909091000_create_payments through
   // 20260909093000_create_folio_line_items. PROPERTY_SCOPED, following

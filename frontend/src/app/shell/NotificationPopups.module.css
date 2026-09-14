@@ -1,0 +1,153 @@
+/* The QR order card stack — top-right, below the top bar, above page content. */
+.stack {
+  position: fixed;
+  top: calc(var(--control-h-touch) + var(--space-5));
+  right: var(--space-4);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: min(22rem, calc(100vw - var(--space-4) * 2));
+}
+
+.card {
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.badge {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-md);
+  background: var(--accent-tint);
+  color: var(--accent);
+  font-size: var(--text-caption-size);
+  font-weight: var(--text-h3-weight);
+}
+
+.headingText {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-h3-size);
+  line-height: var(--text-h3-line);
+  font-weight: var(--text-h3-weight);
+  color: var(--text-primary);
+}
+
+.where {
+  margin: 0;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  color: var(--text-secondary);
+}
+
+.time {
+  flex-shrink: 0;
+  font-size: var(--text-caption-size);
+  color: var(--text-muted);
+}
+
+.who {
+  margin: 0;
+  font-size: var(--text-body-size);
+  color: var(--text-primary);
+}
+
+.items {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  list-style: none;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.item {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--text-body-size);
+  color: var(--text-primary);
+}
+
+.qty {
+  flex-shrink: 0;
+  min-width: var(--space-6);
+  font-weight: var(--text-label-weight);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.itemName {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.more {
+  font-size: var(--text-caption-size);
+  color: var(--text-secondary);
+}
+
+.totalRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.payment {
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
+.total {
+  font-size: var(--text-h3-size);
+  font-weight: var(--text-h3-weight);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.overflow {
+  margin: 0;
+  align-self: flex-end;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-raised);
+  font-size: var(--text-caption-size);
+  color: var(--text-secondary);
+}
+
+@media print {
+  .stack {
+    display: none;
+  }
+}

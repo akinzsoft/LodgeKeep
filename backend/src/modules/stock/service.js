@@ -97,6 +97,7 @@
 
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
+const { notifyStaff } = require('../notifications/staff-notifications');
 const { sumQuantity, negateQuantity, multiplyQuantityByInteger, compareQuantity, extendedCost } = require('../../shared/quantity');
 const {
   StockItemNotFoundError,
@@ -182,10 +183,49 @@ async function resolveLockClosure({ trx, stockItemIds }) {
  * snapshot and reads what was actually just committed.
  */
 async function recomputeStockItemQuantity({ trx, stockItemId }) {
+  // A locking read (every caller already holds this row's lock via
+  // `lockStockItemsSorted`), so the "before" quantity is the latest
+  // committed value, not an older REPEATABLE READ snapshot.
+  const before = await trx.table('stock_items').where({ id: stockItemId }).forUpdate().first();
   const movements = await trx.table('stock_movements').where({ stock_item_id: stockItemId }).forUpdate().select('quantity');
   const currentQuantity = sumQuantity(movements.map((row) => row.quantity));
   await trx.table('stock_items').where({ id: stockItemId }).update({ current_quantity: currentQuantity });
+  if (before) await notifyStockThresholdCrossings({ trx, item: before, currentQuantity });
   return currentQuantity;
+}
+
+/**
+ * Gap closure (staff notifications): alert on the CROSSING only — the one
+ * movement that takes an item from above its reorder level to at-or-below
+ * it (or from above zero to at-or-below zero), never on every later
+ * decrement while it stays low. A restock back above the line re-arms it.
+ * This is the single writer of `current_quantity`, so every path (sales,
+ * reversals, wastage, deliveries, stock takes) is covered here.
+ */
+async function notifyStockThresholdCrossings({ trx, item, currentQuantity }) {
+  const payload = {
+    stockItemId: item.id,
+    name: item.name,
+    unit: item.unit,
+    outletId: item.outlet_id,
+    quantity: currentQuantity,
+    reorderLevel: item.reorder_level,
+  };
+  const wasOut = compareQuantity(item.current_quantity, ZERO_QTY) <= 0;
+  const isOut = compareQuantity(currentQuantity, ZERO_QTY) <= 0;
+  if (!wasOut && isOut) {
+    await notifyStaff({ trx, eventType: 'stock.out_of_stock', payload });
+    return; // out of stock already says more than "at reorder level"
+  }
+  const reorderLevelSet = compareQuantity(item.reorder_level, ZERO_QTY) > 0;
+  if (
+    reorderLevelSet &&
+    !isOut &&
+    compareQuantity(item.current_quantity, item.reorder_level) > 0 &&
+    compareQuantity(currentQuantity, item.reorder_level) <= 0
+  ) {
+    await notifyStaff({ trx, eventType: 'stock.reorder_level_reached', payload });
+  }
 }
 
 /**

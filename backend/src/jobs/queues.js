@@ -45,12 +45,14 @@ const TRIAL_EXPIRY_QUEUE = 'trial-expiry';
 const SUBSCRIPTION_BILLING_QUEUE = 'subscription-billing';
 const TENANT_DATA_EXPORT_QUEUE = 'tenant-data-export';
 const DATA_IMPORT_QUEUE = 'imports';
+const NOTIFICATIONS_SWEEP_QUEUE = 'notifications-sweep';
 
 let queue = null;
 let trialExpiryQueueInstance = null;
 let subscriptionBillingQueueInstance = null;
 let tenantDataExportQueueInstance = null;
 let dataImportQueueInstance = null;
+let notificationsSweepQueueInstance = null;
 
 function outboxDispatchQueue() {
   if (!queue) {
@@ -87,6 +89,13 @@ function dataImportQueue() {
   return dataImportQueueInstance;
 }
 
+function notificationsSweepQueue() {
+  if (!notificationsSweepQueueInstance) {
+    notificationsSweepQueueInstance = new Queue(NOTIFICATIONS_SWEEP_QUEUE, { connection: redisConnection() });
+  }
+  return notificationsSweepQueueInstance;
+}
+
 /** Test-only teardown — BullMQ's `Queue` holds its own connection handles beyond the shared `redisConnection()` instance, and both must close for the process to exit without `--forceExit`. */
 async function __closeQueuesForTesting() {
   if (queue) {
@@ -109,6 +118,10 @@ async function __closeQueuesForTesting() {
     await dataImportQueueInstance.close();
     dataImportQueueInstance = null;
   }
+  if (notificationsSweepQueueInstance) {
+    await notificationsSweepQueueInstance.close();
+    notificationsSweepQueueInstance = null;
+  }
 }
 
 module.exports = {
@@ -122,5 +135,7 @@ module.exports = {
   tenantDataExportQueue,
   DATA_IMPORT_QUEUE,
   dataImportQueue,
+  NOTIFICATIONS_SWEEP_QUEUE,
+  notificationsSweepQueue,
   __closeQueuesForTesting,
 };

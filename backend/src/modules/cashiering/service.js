@@ -63,6 +63,8 @@ const { OrderNotOpenError, SettlementAlreadyVoidedError } = require('../pos/erro
 // silently never deduct stock at all.
 const stockService = require('../stock/service');
 const { writeOutboxEvent } = require('../../shared/outbox');
+const { notifyStaff } = require('../notifications/staff-notifications');
+const { notifyGuestOrderReceived } = require('../qr-ordering/staff-alert');
 // PLAN.md Phase 4 (Accounts Receivable) — a one-way dependency: this module
 // calls into `ar/service.js`, never the other way, so there is no import
 // cycle. See that module's own header for the credit-limit lock this
@@ -732,8 +734,18 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
     userId: userId ?? null,
   });
 
+  const chargedTotal = sumMoney([netAmount, taxAmount]);
+  if (!guestOrder) {
+    await notifyStaff({
+      trx,
+      eventType: 'pos.order_settled',
+      payload: { orderId: order.id, tableLabel: order.table_label ?? null, total: chargedTotal, currency: payment.currency, methods: ['card'] },
+    });
+  }
+
   if (guestOrder) {
     await trx.table('pos_guest_orders').where({ id: guestOrder.id }).update({ payment_status: 'paid', status: 'received' });
+    await notifyGuestOrderReceived({ db: trx, guestOrderId: guestOrder.id, total: chargedTotal, currency: payment.currency });
     // A receipt is genuinely optional — a large share of guest orders
     // supply no contact at all (`pos_guest_orders.guest_contact` is
     // nullable by design). Sent only when the contact actually looks like

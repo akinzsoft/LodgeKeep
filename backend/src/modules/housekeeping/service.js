@@ -19,6 +19,7 @@
  */
 
 const { scopedDb } = require('../../db');
+const { notifyStaff } = require('../notifications/staff-notifications');
 const { ValidationError } = require('../../shared/errors');
 const { AssignmentAlreadyExistsError, InvalidAssignmentTransitionError, DiscrepancyAlreadyResolvedError } = require('./errors');
 
@@ -201,23 +202,14 @@ async function reportRoomStatus({ context, roomId, cleanliness, occupancyObserve
     await db.table('rooms').where({ id: roomId }).update({ has_discrepancy: true });
 
     // The in-app bell (PRODUCT_REQUIREMENTS.md §3.21: "housekeeping
-    // discrepancy raised" is explicitly named as a bell event) — written
-    // directly, not through the outbox, per that table's own header (an
-    // internal DB row, not an external side effect). Every user who holds
-    // ANY role at this property is notified; a finer per-permission filter
-    // (front desk/manager only) is a real refinement left for a later pass
-    // rather than invented here without a spec citation for the exact cut.
-    const staffAtProperty = await db.table('user_property_access').select('user_id');
-    const uniqueUserIds = [...new Set(staffAtProperty.map((row) => row.user_id))];
-    if (uniqueUserIds.length > 0) {
-      await db.table('in_app_notifications').insert(
-        uniqueUserIds.map((uid) => ({
-          user_id: uid,
-          type: 'housekeeping.discrepancy_raised',
-          payload: JSON.stringify({ roomId, roomNumber: room.room_number, discrepancyId }),
-        }))
-      );
-    }
+    // discrepancy raised" is explicitly named as a bell event). Recipients
+    // come from the property's staff notification settings (Setup >
+    // Notifications); by default every role, exactly as before.
+    await notifyStaff({
+      trx: db,
+      eventType: 'housekeeping.discrepancy_raised',
+      payload: { roomId, roomNumber: room.room_number, discrepancyId },
+    });
 
     return { room: await db.table('rooms').where({ id: roomId }).first(), discrepancyRaised: true, reportedByUserId: userId };
   }

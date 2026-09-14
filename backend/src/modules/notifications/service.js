@@ -20,7 +20,12 @@ const { workerContext } = require('../tenancy');
 const { resolveEmailAdapter } = require('./email-adapter');
 const { escapeHtml, heading, paragraph, note, details, button, codeBlock, loadEmailBranding, renderEmailShell, preheaderFrom } = require('./email-layout');
 
+const staffNotifications = require('./staff-notifications');
+
+const { NOTIFICATION_EVENTS } = staffNotifications;
+
 const MAX_ATTEMPTS = 5;
+const BELL_LIMIT = 50;
 
 /** ARCHITECTURE.md §13's event vocabulary, mapped to this pass's actual template keys — see this module's own `index.js` header for exactly which events are wired. */
 const EVENT_TEMPLATE_KEYS = {
@@ -454,7 +459,38 @@ async function listInAppNotifications({ context, userId, unreadOnly }) {
   const db = scopedDb().for(context);
   let query = db.table('in_app_notifications').where({ user_id: userId });
   if (unreadOnly) query = query.whereNull('read_at');
-  return query.orderBy('created_at', 'desc');
+  // Bounded: the bell is polled every few seconds by every signed-in staff
+  // member, and a busy property now produces many rows a day.
+  return query.orderBy('created_at', 'desc').orderBy('id', 'desc').limit(BELL_LIMIT);
+}
+
+/** How many unread notifications this user holds in total — the badge count, independent of `BELL_LIMIT`. */
+async function countUnreadNotifications({ context, userId }) {
+  const db = scopedDb().for(context);
+  return db.table('in_app_notifications').where({ user_id: userId }).whereNull('read_at').count();
+}
+
+async function markAllNotificationsRead({ context, userId }) {
+  const db = scopedDb().for(context);
+  return db.table('in_app_notifications').where({ user_id: userId }).whereNull('read_at').update({ read_at: new Date() });
+}
+
+function listNotificationCatalogue() {
+  return NOTIFICATION_EVENTS.map(({ eventType, group, label, description, defaultRoles }) => ({
+    eventType,
+    group,
+    label,
+    description,
+    defaultRoles,
+  }));
+}
+
+async function listNotificationRoleRules({ context }) {
+  return staffNotifications.listRoleRules({ db: scopedDb().for(context) });
+}
+
+async function saveNotificationRoleRules({ context, rules }) {
+  return staffNotifications.saveRoleRules({ db: scopedDb().for(context), rules });
 }
 
 async function markNotificationRead({ context, id, userId }) {
@@ -496,5 +532,10 @@ module.exports = {
   getNotificationLogEntry,
   resendNotification,
   listInAppNotifications,
+  countUnreadNotifications,
   markNotificationRead,
+  markAllNotificationsRead,
+  listNotificationCatalogue,
+  listNotificationRoleRules,
+  saveNotificationRoleRules,
 };
