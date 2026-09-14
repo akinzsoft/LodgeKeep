@@ -59,7 +59,7 @@ const { scopedDb } = require('../db');
 const { workerContext } = require('../modules/tenancy');
 const { parseImportFile } = require('../modules/migration/parse');
 const { matchExistingGuestByContact, matchExistingCompanyByEmail } = require('../modules/migration/dedup');
-const { expandStayDates, reserveInventoryForDates } = require('../modules/reservations/service');
+const { expandStayDates, reserveInventoryForDates, lockRooms, isRoomOccupied } = require('../modules/reservations/service');
 const { resolveRate } = require('../modules/setup/service');
 const { recomputeArAccountBalance } = require('../modules/ar/service');
 const { generateUlid } = require('../shared/ulid');
@@ -161,6 +161,9 @@ async function commitCompanyRow({ trx, importRunId, row }) {
   await trx.table('imported_record_map').insert({ import_run_id: importRunId, row_number: row.__rowNumber, entity_type: 'company_profile', entity_id: id, created: true });
 }
 
+/** Statuses whose file room_number becomes the reservation's preferred room. */
+const PREFERRED_ROOM_STATUSES = new Set(['waitlisted', 'tentative', 'confirmed']);
+
 async function commitReservationRow({ trx, importRunId, run, row, roomTypes, rateCodes, rooms, existingGuests, conflictedRows }) {
   const guestMatch = matchExistingGuestByContact({ email: row.guest_email, phone: row.guest_phone }, existingGuests);
   if (guestMatch === null || guestMatch === 'ambiguous') {
@@ -181,12 +184,33 @@ async function commitReservationRow({ trx, importRunId, run, row, roomTypes, rat
   const isHistorical = property?.current_business_date ? departureDate <= property.current_business_date : false;
   const holdsInventory = !isHistorical && !NON_INVENTORY_HOLDING_STATUSES.has(status);
 
+  // The file's room_number means different things by status. checked_in:
+  // the room the guest is in now — locked and checked like a live check-in,
+  // so an occupied room fails this row instead of double-assigning it.
+  // checked_out: historical, recorded as a closed assignment. An active
+  // booking not yet checked in: a non-binding preferred room (a room is only
+  // assigned at check-in), kept only when it matches the booked room type,
+  // the same rule `createReservation` applies. Cancelled/no-show/expired: ignored.
+  // Checked before inventory is reserved, so a skipped row changes nothing.
+  const roomNumber = normalizedCode(row.room_number);
+  const listedRoom = roomNumber ? rooms.get(roomNumber) : null;
+  let inHouseRoom = null;
+  if (listedRoom && status === 'checked_in') {
+    inHouseRoom = (await lockRooms({ trx, roomIds: [listedRoom.id] })).get(String(listedRoom.id));
+    if (inHouseRoom && (await isRoomOccupied({ trx, room: inHouseRoom }))) {
+      throw new Error(`Room ${trimmed(row.room_number)} is already occupied — this in-house guest was not imported.`);
+    }
+  }
+  const preferredRoomId =
+    listedRoom && PREFERRED_ROOM_STATUSES.has(status) && String(listedRoom.room_type_id) === String(roomType.id) ? listedRoom.id : null;
+
   if (holdsInventory) {
     await reserveInventoryForDates({ trx, roomTypeId: roomType.id, stayDates, bypassThreshold: conflictedRows.has(row.__rowNumber) });
   }
 
   const [reservationId] = await trx.table('reservations').insert({
     guest_id: guestMatch,
+    preferred_room_id: preferredRoomId,
     room_type_id: roomType.id,
     rate_code_id: rateCode.id,
     arrival_date: arrivalDate,
@@ -208,14 +232,15 @@ async function commitReservationRow({ trx, importRunId, run, row, roomTypes, rat
     }))
   );
 
-  const roomNumber = normalizedCode(row.room_number);
-  const room = roomNumber ? rooms.get(roomNumber) : null;
-  if (room) {
+  if (inHouseRoom) {
+    await trx.table('reservation_rooms').insert({ reservation_id: reservationId, room_id: inHouseRoom.id, effective_from: `${arrivalDate} 00:00:00`, effective_to: null });
+    await trx.table('rooms').where({ id: inHouseRoom.id }).update({ front_desk_status: 'occupied' });
+  } else if (listedRoom && status === 'checked_out') {
     await trx.table('reservation_rooms').insert({
       reservation_id: reservationId,
-      room_id: room.id,
+      room_id: listedRoom.id,
       effective_from: `${arrivalDate} 00:00:00`,
-      effective_to: status === 'checked_out' ? `${departureDate} 00:00:00` : null,
+      effective_to: `${departureDate} 00:00:00`,
     });
   }
 
