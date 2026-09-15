@@ -40,6 +40,17 @@
  * needed no change (it already defaulted to every role); `door_access.
  * critical_alert_raised` needed no change either (already admin/super_admin
  * only, per §3.23's own "not front desk/housekeeping" rule).
+ *
+ * Gap closure, user-reported ("add night audit to notification"):
+ * `night_audit.completed`/`night_audit.failed` — both confirmed with the
+ * user (bell only, no outbox email, matching the "activity alert" tier
+ * check-in/check-out already sit at rather than AR's own emailed tier).
+ * `night_audit.failed` deliberately covers BOTH a genuine mid-run failure
+ * and a run refused up front because it's blocked by an unresolved
+ * housekeeping discrepancy — one catalogue entry, `payload.reason`
+ * distinguishes the two for the bell's own wording, rather than a second
+ * entry nobody would configure differently (both default to the same
+ * manager/admin/super_admin roles).
  */
 
 const { SYSTEM_ROLES } = require('../tenancy');
@@ -150,6 +161,24 @@ const NOTIFICATION_EVENTS = Object.freeze([
     label: 'Door access alert (critical)',
     description:
       'An uploaded door-lock log flagged unsold occupancy or post-checkout access. Front desk and housekeeping are deliberately excluded by default (PRODUCT_REQUIREMENTS.md section 3.23).',
+    defaultRoles: ['manager', 'admin', 'super_admin'],
+  },
+  {
+    eventType: 'night_audit.completed',
+    group: 'Night audit',
+    label: 'Night audit closed the day',
+    description: 'A night audit run finished successfully and the business date advanced.',
+    // Matches night_audit.view/.run's own RBAC (manager/admin/super_admin
+    // only, no front_desk/cashier) — the same "who can act, notify" shape
+    // door_access.critical_alert_raised already established.
+    defaultRoles: ['manager', 'admin', 'super_admin'],
+  },
+  {
+    eventType: 'night_audit.failed',
+    group: 'Night audit',
+    label: 'Night audit failed or blocked',
+    description:
+      'A night audit run failed, or was refused because an unresolved housekeeping discrepancy is blocking it. Needs attention before the day can close.',
     defaultRoles: ['manager', 'admin', 'super_admin'],
   },
 ]);

@@ -8,6 +8,14 @@
  * crash recovery (NA-2/NA-3) need genuinely separate connections and live
  * elapsed time instead — see `tests/night-audit/concurrency.test.js`, the
  * same split `tests/reservations/concurrency.test.js` made for RES-5.
+ *
+ * Also covers the staff bell notification gap closure ("add night audit
+ * to notification"): `night_audit.completed`/`night_audit.failed`, the
+ * latter proven via the existing blocked-by-discrepancy scenario — a
+ * genuine, non-blocking mid-transaction crash is not separately
+ * constructed here (the reason-selecting branch is a one-line ternary and
+ * the surrounding try/catch always rethrows the original error regardless
+ * of whether the notification itself succeeds).
  */
 
 const { useTestApp } = require('../helpers/app');
@@ -145,6 +153,16 @@ describe('Night Audit (PLAN.md Phase 2.5)', () => {
 
     const outboxEvent = await t.trx('outbox_events').where({ event_type: 'night_audit.completed', aggregate_id: run.id }).first();
     expect(outboxEvent).toBeDefined();
+
+    // Staff bell notification — gap closure, user-reported ("add night
+    // audit to notification"). The only role granted at this fresh
+    // property is manager (freshInHouseSetup's own setup), the acting
+    // user themselves — not excluded from their own notification.
+    const bellRow = await t.trx('in_app_notifications').where({ dedup_key: `night_audit:completed:${run.id}` }).first();
+    expect(bellRow).toBeDefined();
+    expect(String(bellRow.user_id)).toBe(String(ctx.a.users[0].id));
+    const bellPayload = typeof bellRow.payload === 'string' ? JSON.parse(bellRow.payload) : bellRow.payload;
+    expect(bellPayload).toMatchObject({ businessDate: '2027-02-01', nextBusinessDate: '2027-02-02' });
   });
 
   it('does not double-post a room charge already posted for the business date (the idempotency guard, §6.2 step 4)', async () => {
@@ -205,6 +223,15 @@ describe('Night Audit (PLAN.md Phase 2.5)', () => {
     const run = await t.trx('night_audit_runs').where({ property_id: setup.propertyId, business_date: '2027-02-15' }).first();
     expect(run.status).toBe('FAILED');
     expect(run.error).toMatch(/blocking condition/);
+
+    // Staff bell notification — gap closure, user-reported. Blocked and a
+    // genuine mid-run failure share one catalogue entry (`night_audit.
+    // failed`), distinguished by `payload.reason` for the bell's wording.
+    const bellRow = await t.trx('in_app_notifications').where({ dedup_key: `night_audit:failed:${run.id}:blocked` }).first();
+    expect(bellRow).toBeDefined();
+    expect(String(bellRow.user_id)).toBe(String(ctx.a.users[0].id));
+    const bellPayload = typeof bellRow.payload === 'string' ? JSON.parse(bellRow.payload) : bellRow.payload;
+    expect(bellPayload).toMatchObject({ businessDate: '2027-02-15', reason: 'blocked_by_discrepancy', conditionCount: 1 });
   });
 
   it('refuses cleanly on a property with no current_business_date configured yet, rather than a raw NULL constraint error', async () => {

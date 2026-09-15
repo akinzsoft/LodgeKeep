@@ -104,6 +104,18 @@ export function describeNotification(notification) {
         detail: `${rule}, found in an uploaded lock log (retrospective).`,
       };
     }
+    case 'night_audit.completed':
+      return {
+        title: `Night audit closed ${p.businessDate ?? 'the day'}`,
+        detail: p.nextBusinessDate ? `Business date is now ${p.nextBusinessDate}.` : '',
+      };
+    case 'night_audit.failed':
+      return p.reason === 'blocked_by_discrepancy'
+        ? {
+            title: `Night audit blocked — ${p.businessDate ?? 'today'}`,
+            detail: `${p.conditionCount ?? 'An'} unresolved housekeeping discrepanc${p.conditionCount === 1 ? 'y is' : 'ies are'} blocking it.`,
+          }
+        : { title: `Night audit failed — ${p.businessDate ?? 'today'}`, detail: p.message ?? '' };
     default:
       return { title: notification.type, detail: '' };
   }
@@ -115,6 +127,7 @@ export function notificationTarget(type) {
   if (type.startsWith('reservation.') || type.startsWith('guest.') || type.startsWith('front_desk.')) return 'booking';
   if (type.startsWith('room.') || type.startsWith('housekeeping.')) return 'housekeeping';
   if (type.startsWith('door_access.')) return 'door_access';
+  if (type.startsWith('night_audit.')) return 'night_audit';
   return null;
 }
 
