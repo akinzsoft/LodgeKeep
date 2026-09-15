@@ -11,6 +11,16 @@
  * Migration are later-phase work), so none is created here. Adding an
  * empty queue nothing ever enqueues to is exactly the "not preemptively
  * for everything" case ARCHITECTURE.md §14 itself warns against. `trial-expiry`
+ *
+ * `night-audit-overdue` (gap closure, user-requested — "if night audit have
+ * not been run at the appropriate time it shld send notification including
+ * mail") is its OWN queue, deliberately named distinctly from the
+ * still-unbuilt `night-audit` category above — running the audit itself
+ * remains on-demand, unchanged; this queue only ever checks whether it's
+ * overdue and alerts. Its own queue for the same recurring reason every
+ * periodic sweep here already gets one: a slow overdue check at one
+ * property must never delay the outbox, trial-expiry, or any other sweep's
+ * own work.
  * is its own queue, separate from `outbox-dispatch`, for the identical
  * reason `email` is named as its own category there: a stuck/slow sweep in
  * one job class must never back up the other's dispatch work.
@@ -65,6 +75,7 @@ const DATA_IMPORT_QUEUE = 'imports';
 const NOTIFICATIONS_SWEEP_QUEUE = 'notifications-sweep';
 const DOOR_ACCESS_RETENTION_QUEUE = 'door-access-retention';
 const EXPENSE_SCHEDULES_QUEUE = 'expense-schedules';
+const NIGHT_AUDIT_OVERDUE_QUEUE = 'night-audit-overdue';
 
 let queue = null;
 let trialExpiryQueueInstance = null;
@@ -74,6 +85,7 @@ let dataImportQueueInstance = null;
 let notificationsSweepQueueInstance = null;
 let doorAccessRetentionQueueInstance = null;
 let expenseSchedulesQueueInstance = null;
+let nightAuditOverdueQueueInstance = null;
 
 function outboxDispatchQueue() {
   if (!queue) {
@@ -131,6 +143,13 @@ function expenseSchedulesQueue() {
   return expenseSchedulesQueueInstance;
 }
 
+function nightAuditOverdueQueue() {
+  if (!nightAuditOverdueQueueInstance) {
+    nightAuditOverdueQueueInstance = new Queue(NIGHT_AUDIT_OVERDUE_QUEUE, { connection: redisConnection() });
+  }
+  return nightAuditOverdueQueueInstance;
+}
+
 /** Test-only teardown — BullMQ's `Queue` holds its own connection handles beyond the shared `redisConnection()` instance, and both must close for the process to exit without `--forceExit`. */
 async function __closeQueuesForTesting() {
   if (queue) {
@@ -165,6 +184,10 @@ async function __closeQueuesForTesting() {
     await expenseSchedulesQueueInstance.close();
     expenseSchedulesQueueInstance = null;
   }
+  if (nightAuditOverdueQueueInstance) {
+    await nightAuditOverdueQueueInstance.close();
+    nightAuditOverdueQueueInstance = null;
+  }
 }
 
 module.exports = {
@@ -184,5 +207,7 @@ module.exports = {
   doorAccessRetentionQueue,
   EXPENSE_SCHEDULES_QUEUE,
   expenseSchedulesQueue,
+  NIGHT_AUDIT_OVERDUE_QUEUE,
+  nightAuditOverdueQueue,
   __closeQueuesForTesting,
 };

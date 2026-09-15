@@ -66,6 +66,12 @@ describe('describeNotification', () => {
       describeNotification({ type: 'night_audit.failed', payload: { businessDate: '2027-02-15', reason: 'error', message: 'boom' } })
     ).toEqual({ title: 'Night audit failed — 2027-02-15', detail: 'boom' });
   });
+
+  it('flags an overdue night audit with how stale the business date is', () => {
+    expect(
+      describeNotification({ type: 'night_audit.overdue', payload: { businessDate: '2027-02-15', todayInPropertyTz: '2027-02-16' } })
+    ).toEqual({ title: 'Night audit overdue — 2027-02-15', detail: "It's already 2027-02-16 and that date is still open." });
+  });
 });
 
 describe('helpers', () => {

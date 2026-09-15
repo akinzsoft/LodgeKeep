@@ -181,6 +181,14 @@ const NOTIFICATION_EVENTS = Object.freeze([
       'A night audit run failed, or was refused because an unresolved housekeeping discrepancy is blocking it. Needs attention before the day can close.',
     defaultRoles: ['manager', 'admin', 'super_admin'],
   },
+  {
+    eventType: 'night_audit.overdue',
+    group: 'Night audit',
+    label: 'Night audit overdue',
+    description:
+      "It's already a new calendar day in the property's own time zone and the previous business date still hasn't been closed. Checked hourly; also sent by email (src/jobs/night-audit-overdue.js).",
+    defaultRoles: ['manager', 'admin', 'super_admin'],
+  },
 ]);
 
 const NOTIFICATION_EVENTS_BY_TYPE = new Map(NOTIFICATION_EVENTS.map((event) => [event.eventType, event]));

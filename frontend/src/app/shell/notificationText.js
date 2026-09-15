@@ -116,6 +116,11 @@ export function describeNotification(notification) {
             detail: `${p.conditionCount ?? 'An'} unresolved housekeeping discrepanc${p.conditionCount === 1 ? 'y is' : 'ies are'} blocking it.`,
           }
         : { title: `Night audit failed — ${p.businessDate ?? 'today'}`, detail: p.message ?? '' };
+    case 'night_audit.overdue':
+      return {
+        title: `Night audit overdue — ${p.businessDate ?? 'a business date'}`,
+        detail: p.todayInPropertyTz ? `It's already ${p.todayInPropertyTz} and that date is still open.` : '',
+      };
     default:
       return { title: notification.type, detail: '' };
   }
