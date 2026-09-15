@@ -28,6 +28,14 @@ function todayIso() {
  * of sales, POS revenue, and operating expenses are always freshly
  * computed regardless of whether Night Audit has closed every day in
  * range (see the backend's own `expenses/reporting.js` header).
+ *
+ * Gap closure, user-reported: a warning banner (`itemsSoldWithoutRecipeCost`)
+ * shows above that caveat whenever a menu item sold in range has no recipe
+ * configured — its cost never reaches the Cost of sales line above, so
+ * Gross profit is a genuine overstatement in that case, not merely an
+ * approximation. Deliberately visible on print (the exported statement),
+ * not `.noPrint` — an owner reading the printed P&L needs the same warning
+ * a screen reader gets.
  */
 export function ReportsTab({ activeProperty }) {
   const [dateFrom, setDateFrom] = useState(todayIso());
@@ -189,6 +197,13 @@ export function ReportsTab({ activeProperty }) {
               </tr>
             </tbody>
           </table>
+
+          {statement.itemsSoldWithoutRecipeCost > 0 && (
+            <p className={formStyles.costWarningBanner} role="alert">
+              {statement.itemsSoldWithoutRecipeCost} menu item(s) sold in this range with no recipe configured — cost not tracked in Cost of sales above,
+              so Gross profit is overstated by an unknown amount. Add a recipe (or a cost price) for these items in POS Setup to fix this.
+            </p>
+          )}
 
           <p className={formStyles.hint}>
             Room revenue is {statement.revenue.roomRevenueFullyAudited ? 'fully reconciled by Night Audit' : 'not yet fully reconciled by Night Audit'} for this

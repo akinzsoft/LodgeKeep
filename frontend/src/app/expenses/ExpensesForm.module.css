@@ -72,6 +72,20 @@
   font-size: var(--text-label-size);
 }
 
+/* A recipe-less menu item's cost never reaches Cost of sales, so Gross
+   profit can be overstated with no other signal — this is deliberately a
+   warning tone, not the plain `.hint` above, and stays visible on print
+   (the exported statement) rather than being scoped `.noPrint`. */
+.costWarningBanner {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--state-warning-bg);
+  color: var(--state-warning);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+}
+
 .voided {
   text-decoration: line-through;
   color: var(--text-secondary);

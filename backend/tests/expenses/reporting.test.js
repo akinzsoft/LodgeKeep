@@ -10,6 +10,11 @@
  * (restructured on the user's own follow-up request, "restructure it like
  * a proper P&L statement" — the original per-day "profit summary" shape
  * is gone).
+ *
+ * Also covers `itemsSoldWithoutRecipeCost` — a real, user-reported gap
+ * closure: a menu item sold with no recipe never contributes to Cost of
+ * Sales (see `expenses/reporting.js`'s own header), which silently
+ * overstates Gross Profit unless flagged.
  */
 
 const { useTestApp } = require('../helpers/app');
@@ -129,6 +134,7 @@ describe('Expense report and profit summary', () => {
     expect(Number(statement.revenue.posRevenue)).toBeGreaterThanOrEqual(20); // the real ₦20 sale
     expect(statement.revenue.totalRevenue).toBe(sumMoneyForTest([statement.revenue.roomRevenue, statement.revenue.posRevenue]));
     expect(statement.costOfSales).toBe('0.00'); // the settled item in beforeAll has no recipe/BOM
+    expect(statement.itemsSoldWithoutRecipeCost).toBe(1); // flagged, not silently zeroed — exactly the beforeAll item
     expect(statement.grossProfit).toBe(statement.revenue.totalRevenue); // gross profit = revenue when cost of sales is zero
     // Exact identity: grossProfit - totalOperatingExpenses === netProfit (BigInt-cents, never float).
     const expectedNetProfitCents = Math.round(Number(statement.grossProfit) * 100) - Math.round(Number(statement.operatingExpenses.total) * 100);
@@ -170,6 +176,9 @@ describe('Expense report and profit summary', () => {
     const statement = res.body.data;
     expect(statement.costOfSales).toBe('8.00'); // 2 units x ₦4.00 purchase cost
     expect(statement.grossProfit).toBe(sumMoneyForTest([statement.revenue.totalRevenue, '-8.00']));
+    // The recipe-linked item sold here is correctly excluded from the
+    // warning — only the beforeAll item (still no recipe) counts.
+    expect(statement.itemsSoldWithoutRecipeCost).toBe(1);
   });
 
   it('a period with real revenue but zero expenses: net profit exactly equals gross profit', async () => {
@@ -179,6 +188,7 @@ describe('Expense report and profit summary', () => {
     const statement = res.body.data;
     expect(statement.revenue.totalRevenue).toBe('0.00');
     expect(statement.costOfSales).toBe('0.00');
+    expect(statement.itemsSoldWithoutRecipeCost).toBe(0); // honestly zero, not a stale warning
     expect(statement.operatingExpenses.total).toBe('0.00');
     expect(statement.netProfit).toBe('0.00');
   });
@@ -218,6 +228,9 @@ describe('Expense report and profit summary', () => {
     const profitCsv = await t.request.get(`/api/v1/expenses/reports/profit?date_from=${BUSINESS_DATE}&date_to=${BUSINESS_DATE}&format=csv`).set('Authorization', `Bearer ${manager()}`);
     expect(profitCsv.status).toBe(200);
     expect(profitCsv.headers['content-type']).toContain('text/csv');
+    // BUSINESS_DATE carries the beforeAll no-recipe sale by this point in
+    // the file — the CSV export must carry the same warning the JSON does.
+    expect(profitCsv.text).toContain('no recipe configured');
   });
 
   it('RBAC: housekeeping (no expenses.view) is refused both reports', async () => {
