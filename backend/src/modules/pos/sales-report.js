@@ -320,4 +320,31 @@ async function computeMenuItemSalesTotals({ db, dateFrom, dateTo, outletId }) {
   return [...itemTotals.values()].map(({ menuItemId, name, quantity, amounts }) => ({ menuItemId, name, quantity, revenue: sumMoney(amounts) }));
 }
 
-module.exports = { computeSalesReport, computeMenuItemSalesTotals, TENDERS };
+/**
+ * Real per-day POS revenue over a date range — gap closure, for
+ * `expenses/reporting.js`'s composed profit view (a cross-module caller:
+ * `expenses` depends on `pos`, the same one-way direction `stock` already
+ * established for its own margin report; `pos` never depends back on
+ * either). Sums each standing settlement's own `subtotal` (pre-tax,
+ * pre-tip, pre-service — the real product-revenue figure, matching
+ * `computeSalesReport`'s own `summary.subtotal`), bucketed by
+ * `business_date`. Reuses `listStandingSettlements` — the voided-check and
+ * split-group exclusion is already correct there, no duplication needed.
+ *
+ * Deliberately NOT read from `daily_reports.pos_revenue` — that column has
+ * been permanently stuck at `0.00` since Phase 2.5 and was never wired up
+ * even after POS shipped (a real, separately-flagged staleness); this
+ * function always computes live, for every day in range, audited or not.
+ */
+async function computeDailyPosRevenueTotals({ db, dateFrom, dateTo, outletId }) {
+  const settlements = await listStandingSettlements({ db, dateFrom, dateTo, outletId });
+  const amountsByDate = new Map();
+  for (const row of settlements) {
+    const key = String(row.business_date);
+    if (!amountsByDate.has(key)) amountsByDate.set(key, []);
+    amountsByDate.get(key).push(row.subtotal);
+  }
+  return new Map([...amountsByDate.entries()].map(([date, amounts]) => [date, sumMoney(amounts)]));
+}
+
+module.exports = { computeSalesReport, computeMenuItemSalesTotals, computeDailyPosRevenueTotals, TENDERS };

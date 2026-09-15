@@ -153,6 +153,11 @@ export const DEFAULT_NAV_GROUPS = [
       // back-office review screens; gated on `door_access.view`
       // (manager/admin/super_admin only).
       { key: 'door_access', label: 'Door Access', requiredPermission: 'door_access.view' },
+      // Expense tracking & reporting — a greenfield feature, no PLAN.md
+      // phase or PRODUCT_REQUIREMENTS.md section of its own. Filed under
+      // SETUP next to Night Audit/AR/Billing — a back-office financial
+      // screen, gated on `expenses.view` (manager/admin/super_admin only).
+      { key: 'expenses', label: 'Expenses', requiredPermission: 'expenses.view' },
     ],
   },
 ];

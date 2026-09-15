@@ -3084,6 +3084,127 @@ const ENTITIES = [
       },
     ],
   },
+
+  // Expense tracking (greenfield feature).
+  {
+    table: 'expense_categories',
+    uniqueKeys: [['property_id', 'name']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      name: 'New Fixture Expense Category',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      name: 'Utilities', // Matches seedTwoTenants' own fixture category.
+    }),
+    crossTenant: [
+      {
+        name: "registers an expense category against another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          name: 'Cross-Tenant Expense Category',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'recurring_expense_schedules',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      expense_category_id: t.expenseCategories[0].id,
+      description: 'New Fixture Recurring Expense',
+      amount: '100.00',
+      currency: 'NGN',
+      payment_method: 'bank_transfer',
+      frequency: 'monthly',
+      day_of_month: 1,
+      next_due_date: '2025-02-01',
+    }),
+    crossTenant: [
+      {
+        name: "creates a recurring schedule against another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          expense_category_id: own.expenseCategories[0].id,
+          description: 'Cross-Tenant Schedule',
+          amount: '100.00',
+          currency: 'NGN',
+          payment_method: 'bank_transfer',
+          frequency: 'monthly',
+          day_of_month: 1,
+          next_due_date: '2025-02-01',
+        }),
+      },
+      {
+        name: "creates a recurring schedule against another tenant's category",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          expense_category_id: other.expenseCategories[0].id,
+          description: 'Cross-Tenant Category Schedule',
+          amount: '100.00',
+          currency: 'NGN',
+          payment_method: 'bank_transfer',
+          frequency: 'monthly',
+          day_of_month: 1,
+          next_due_date: '2025-02-01',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'expenses',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      expense_category_id: t.expenseCategories[0].id,
+      description: 'New Fixture Expense',
+      amount: '50.00',
+      currency: 'NGN',
+      payment_method: 'cash',
+      business_date: '2025-01-01',
+      source: 'manual',
+    }),
+    crossTenant: [
+      {
+        name: "records an expense against another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          expense_category_id: own.expenseCategories[0].id,
+          description: 'Cross-Tenant Expense',
+          amount: '50.00',
+          currency: 'NGN',
+          payment_method: 'cash',
+          business_date: '2025-01-01',
+          source: 'manual',
+        }),
+      },
+      {
+        name: "records an expense against another tenant's category",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          expense_category_id: other.expenseCategories[0].id,
+          description: 'Cross-Tenant Category Expense',
+          amount: '50.00',
+          currency: 'NGN',
+          payment_method: 'cash',
+          business_date: '2025-01-01',
+          source: 'manual',
+        }),
+      },
+    ],
+  },
 ];
 
 const byTable = (table) => ENTITIES.find((e) => e.table === table);

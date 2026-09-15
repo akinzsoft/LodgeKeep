@@ -172,6 +172,9 @@ async function seedTwoTenants(trx) {
     stockMovements: [],
     stockTakes: [],
     stockTakeLines: [],
+    expenseCategories: [],
+    recurringExpenseSchedules: [],
+    expenses: [],
     lockSystemConfigs: [],
     doorAccessEvents: [],
     accessAlerts: [],
@@ -1184,6 +1187,60 @@ async function seedTwoTenants(trx) {
   }
 
   // ------------------------------------------------------------------
+  // Expense tracking (greenfield feature). One registered category on
+  // properties[0] — the entity newRow factories for `expenses` and
+  // `recurring_expense_schedules` both reference it — plus one real
+  // recurring schedule and one real expense per tenant, so the generic
+  // `ISO-*` isolation suite's own "the fixture guarantees tenant B has
+  // rows here too" assumption holds for both new tables.
+  // ------------------------------------------------------------------
+  for (const t of both) {
+    const property = t.properties[0];
+    const user = t.users[0];
+    t.expenseCategories.push({
+      id: await insertReturningId(trx, 'expense_categories', {
+        tenant_id: t.id,
+        property_id: property.id,
+        name: 'Utilities',
+      }),
+      property_id: property.id,
+    });
+
+    t.recurringExpenseSchedules.push({
+      id: await insertReturningId(trx, 'recurring_expense_schedules', {
+        tenant_id: t.id,
+        property_id: property.id,
+        expense_category_id: t.expenseCategories[0].id,
+        description: 'Fixture rent',
+        amount: '1000.00',
+        currency: 'NGN',
+        payment_method: 'bank_transfer',
+        frequency: 'monthly',
+        day_of_month: 1,
+        next_due_date: '2025-02-01',
+        created_by_user_id: user.id,
+      }),
+      property_id: property.id,
+    });
+
+    t.expenses.push({
+      id: await insertReturningId(trx, 'expenses', {
+        tenant_id: t.id,
+        property_id: property.id,
+        expense_category_id: t.expenseCategories[0].id,
+        description: 'Fixture utility bill',
+        amount: '50.00',
+        currency: 'NGN',
+        payment_method: 'cash',
+        business_date: '2025-01-01',
+        source: 'manual',
+        recorded_by_user_id: user.id,
+      }),
+      property_id: property.id,
+    });
+  }
+
+  // ------------------------------------------------------------------
   // Door access monitoring (PLAN.md Phase 7). One lock config on
   // properties[0] (properties[1] stays unconfigured so an entity newRow
   // can target it without colliding on UNIQUE(tenant_id, property_id)),
@@ -1728,6 +1785,8 @@ async function seedTwoTenants(trx) {
     ['pos.stock_manage', 'pos'],
     ['door_access.view', 'door_access'],
     ['door_access.manage', 'door_access'],
+    ['expenses.view', 'expenses'],
+    ['expenses.manage', 'expenses'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -1921,6 +1980,19 @@ async function seedTwoTenants(trx) {
     const rows = [];
     for (const role of ['manager', 'admin', 'super_admin']) {
       for (const key of ['door_access.view', 'door_access.manage']) {
+        rows.push({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions[key] });
+      }
+    }
+    await trx('role_permissions').insert(rows);
+  }
+
+  // Expense tracking (greenfield feature) — both keys, manager/admin/
+  // super_admin only, matching Night Audit's/Billing's shape exactly. Front
+  // desk/cashier/housekeeping/pos_operator deliberately get neither.
+  for (const t of both) {
+    const rows = [];
+    for (const role of ['manager', 'admin', 'super_admin']) {
+      for (const key of ['expenses.view', 'expenses.manage']) {
         rows.push({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions[key] });
       }
     }
