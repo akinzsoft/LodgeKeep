@@ -47,3 +47,14 @@
   flex-direction: column;
   gap: var(--space-4);
 }
+
+/* Export to PDF (the browser's own print dialog — the same "no new
+   dependency" precedent `ProfilesScreen`'s own "Export to PDF" already
+   established) — this screen's own title and tab bar aren't part of the
+   exported document; `ReportsTab`'s own printed letterhead (`ExpensesForm.module.css`'s
+   `.printOnly`) replaces them. */
+@media print {
+  .noPrint {
+    display: none;
+  }
+}
