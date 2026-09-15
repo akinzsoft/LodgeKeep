@@ -21,6 +21,7 @@ const { startDataImportWorker } = require('./jobs/data-import');
 const { startNotificationsSweepWorker, scheduleNotificationsSweep } = require('./jobs/notifications-sweep');
 const { startDoorAccessRetentionWorker, scheduleDoorAccessRetentionSweep } = require('./jobs/door-access-retention');
 const { startExpenseSchedulesWorker, scheduleExpenseSchedulesSweep } = require('./jobs/expense-schedules');
+const { startNightAuditOverdueWorker, scheduleNightAuditOverdueSweep } = require('./jobs/night-audit-overdue');
 
 const port = Number(process.env.PORT || 3000);
 
@@ -89,4 +90,14 @@ scheduleDoorAccessRetentionSweep().catch((error) => {
 startExpenseSchedulesWorker();
 scheduleExpenseSchedulesSweep().catch((error) => {
   console.error('Failed to schedule the expense schedules sweep:', error);
+});
+
+// Gap closure (user-requested) — `src/jobs/night-audit-overdue.js`'s own
+// header. An hourly sweep flagging a property whose business date has
+// gone stale (a new calendar day has begun in the property's own
+// timezone and that date still hasn't been closed by night audit), bell
+// + email, once per property per stale date.
+startNightAuditOverdueWorker();
+scheduleNightAuditOverdueSweep().catch((error) => {
+  console.error('Failed to schedule the night audit overdue sweep:', error);
 });
