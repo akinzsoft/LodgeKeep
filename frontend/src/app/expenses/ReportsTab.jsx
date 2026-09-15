@@ -76,7 +76,7 @@ export function ReportsTab({ activeProperty }) {
   return (
     <div className={formStyles.form}>
       {error && (
-        <p role="alert" className={formStyles.errorBanner}>
+        <p role="alert" className={`${formStyles.errorBanner} ${formStyles.noPrint}`.trim()}>
           {error}
         </p>
       )}
@@ -84,8 +84,9 @@ export function ReportsTab({ activeProperty }) {
       {/* Outside DataTable's own toolbar slot, deliberately — Card only
           renders `children` while `state === 'success'`, so a persistent
           date-range control must never live inside it (the same fix this
-          codebase's Reporting tabs already established). */}
-      <form className={formStyles.row} onSubmit={runReports}>
+          codebase's Reporting tabs already established). Hidden on export —
+          the printed letterhead below states the range instead. */}
+      <form className={`${formStyles.row} ${formStyles.noPrint}`.trim()} onSubmit={runReports}>
         <label className={formStyles.field}>
           <span className={formStyles.label}>From</span>
           <input type="date" className={formStyles.input} value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} required />
@@ -101,6 +102,22 @@ export function ReportsTab({ activeProperty }) {
 
       {statement && (
         <Card title={`Profit & Loss statement — ${statement.dateFrom} to ${statement.dateTo}`}>
+          {/* Printed-only letterhead — the app chrome (Sidebar/TopBar, and
+              this screen's own title/tab bar) is hidden on print, so the
+              exported document needs its own property identity. The logo is
+              whatever's already configured via Setup → Branding; a property
+              with none set simply omits the <img>. */}
+          <div className={`${formStyles.letterhead} ${formStyles.printOnly}`.trim()}>
+            {activeProperty?.logo_url && (
+              <img className={formStyles.letterheadLogo} src={activeProperty.logo_url} alt="" />
+            )}
+            <div className={formStyles.letterheadText}>
+              <h2>{activeProperty?.name ?? 'Profit & Loss Statement'}</h2>
+              <p>Profit &amp; Loss Statement — {statement.dateFrom} to {statement.dateTo}</p>
+              <p>Printed {new Date().toLocaleString()}</p>
+            </div>
+          </div>
+
           <table className={formStyles.statementTable}>
             <tbody>
               <tr className={formStyles.statementSectionHeading}>
@@ -178,37 +195,45 @@ export function ReportsTab({ activeProperty }) {
             range. Cost of sales, POS revenue, and operating expenses are always freshly computed, regardless.
           </p>
 
-          <div className={formStyles.actionsRow}>
+          <div className={`${formStyles.actionsRow} ${formStyles.noPrint}`.trim()}>
             <Button size="compact" variant="ghost" onClick={exportPnlCsv}>
               Export P&amp;L statement (CSV)
+            </Button>
+            <Button size="compact" variant="ghost" onClick={() => window.print()}>
+              Export to PDF
             </Button>
           </div>
         </Card>
       )}
 
-      {expenseReport && (
-        <div className={formStyles.actionsRow}>
-          <Button size="compact" variant="ghost" onClick={exportExpenseCsv}>
-            Export expense list (CSV)
-          </Button>
-        </div>
-      )}
+      {/* The detailed ledger below is deliberately left out of the printed/PDF
+          output — the statement Card above is the whole exported document,
+          matching a real accountant-style P&L handed to an owner. */}
+      <div className={formStyles.noPrint}>
+        {expenseReport && (
+          <div className={formStyles.actionsRow}>
+            <Button size="compact" variant="ghost" onClick={exportExpenseCsv}>
+              Export expense list (CSV)
+            </Button>
+          </div>
+        )}
 
-      <DataTable
-        title="Every expense in range"
-        state={expenseReport === null || expenseReport.expenses.length === 0 ? 'empty' : 'success'}
-        emptyMessage="Choose a date range and run the reports."
-        columns={[
-          { key: 'businessDate', label: 'Date' },
-          { key: 'description', label: 'Description' },
-          { key: 'categoryName', label: 'Category' },
-          { key: 'payee', label: 'Payee', render: (row) => row.payee ?? '—' },
-          { key: 'paymentMethod', label: 'Payment method' },
-          { key: 'amount', label: 'Amount', align: 'right', render: (row) => <Money amount={row.amount} currencyCode={row.currency} /> },
-        ]}
-        rows={expenseReport?.expenses ?? []}
-        rowKey={(row) => row.id}
-      />
+        <DataTable
+          title="Every expense in range"
+          state={expenseReport === null || expenseReport.expenses.length === 0 ? 'empty' : 'success'}
+          emptyMessage="Choose a date range and run the reports."
+          columns={[
+            { key: 'businessDate', label: 'Date' },
+            { key: 'description', label: 'Description' },
+            { key: 'categoryName', label: 'Category' },
+            { key: 'payee', label: 'Payee', render: (row) => row.payee ?? '—' },
+            { key: 'paymentMethod', label: 'Payment method' },
+            { key: 'amount', label: 'Amount', align: 'right', render: (row) => <Money amount={row.amount} currencyCode={row.currency} /> },
+          ]}
+          rows={expenseReport?.expenses ?? []}
+          rowKey={(row) => row.id}
+        />
+      </div>
     </div>
   );
 }

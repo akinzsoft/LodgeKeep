@@ -48,9 +48,9 @@ export function ExpensesScreen({ activeProperty, isOffline = false }) {
 
   return (
     <div className={styles.page}>
-      <h1 className={styles.title}>Expenses</h1>
+      <h1 className={`${styles.title} ${styles.noPrint}`.trim()}>Expenses</h1>
 
-      <div className={styles.tabs} role="tablist" aria-label="Expenses sections">
+      <div className={`${styles.tabs} ${styles.noPrint}`.trim()} role="tablist" aria-label="Expenses sections">
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -66,7 +66,7 @@ export function ExpensesScreen({ activeProperty, isOffline = false }) {
       </div>
 
       {categoriesError && (
-        <p role="alert" className={styles.panel}>
+        <p role="alert" className={`${styles.panel} ${styles.noPrint}`.trim()}>
           {categoriesError}
         </p>
       )}

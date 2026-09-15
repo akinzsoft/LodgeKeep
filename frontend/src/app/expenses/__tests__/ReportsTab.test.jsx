@@ -113,4 +113,43 @@ describe('ReportsTab', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
     expect(await screen.findByRole('alert')).toBeInTheDocument();
   });
+
+  it('renders a printed letterhead with the property name, logo, and statement range', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT);
+    const { container } = render(
+      <ReportsTab activeProperty={{ ...activeProperty, name: 'Alpha Hotels', logo_url: 'https://example.com/logo.png' }} />
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+
+    expect(await screen.findByRole('heading', { name: 'Alpha Hotels' })).toBeInTheDocument();
+    expect(screen.getByText(/Profit & Loss Statement — 2027-01-01 to 2027-01-01/)).toBeInTheDocument();
+    const logo = container.querySelector('img');
+    expect(logo).toHaveAttribute('src', 'https://example.com/logo.png');
+  });
+
+  it('omits the logo image when the property has none configured', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT);
+    const { container } = render(<ReportsTab activeProperty={{ ...activeProperty, name: 'Alpha Hotels' }} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+
+    expect(await screen.findByRole('heading', { name: 'Alpha Hotels' })).toBeInTheDocument();
+    expect(container.querySelector('img')).not.toBeInTheDocument();
+  });
+
+  it('has an Export to PDF button that calls window.print', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT);
+    const printSpy = vi.spyOn(window, 'print').mockImplementation(() => {});
+    render(<ReportsTab activeProperty={activeProperty} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Export to PDF' }));
+
+    expect(printSpy).toHaveBeenCalledTimes(1);
+    printSpy.mockRestore();
+  });
 });
