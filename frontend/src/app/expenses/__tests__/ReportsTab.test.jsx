@@ -6,8 +6,8 @@ import { ReportsTab } from '../ReportsTab.jsx';
 const mocks = vi.hoisted(() => ({
   getExpenseReport: vi.fn(),
   getExpenseReportCsv: vi.fn(),
-  getProfitSummary: vi.fn(),
-  getProfitSummaryCsv: vi.fn(),
+  getProfitAndLoss: vi.fn(),
+  getProfitAndLossCsv: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -17,8 +17,8 @@ vi.mock('../../../shared/api/index.js', async () => {
     expensesApi: {
       getExpenseReport: mocks.getExpenseReport,
       getExpenseReportCsv: mocks.getExpenseReportCsv,
-      getProfitSummary: mocks.getProfitSummary,
-      getProfitSummaryCsv: mocks.getProfitSummaryCsv,
+      getProfitAndLoss: mocks.getProfitAndLoss,
+      getProfitAndLossCsv: mocks.getProfitAndLossCsv,
     },
   };
 });
@@ -26,7 +26,15 @@ vi.mock('../../../shared/api/index.js', async () => {
 vi.mock('../../../shared/download.js', () => ({ triggerDownload: vi.fn() }));
 
 const EMPTY_EXPENSE_REPORT = { totalExpenses: '0.00', byCategory: [], expenses: [] };
-const EMPTY_PROFIT_SUMMARY = { totals: { roomRevenue: '0.00', posRevenue: '0.00', totalRevenue: '0.00', totalExpenses: '0.00', profit: '0.00' }, byDay: [], expensesByCategory: [] };
+const EMPTY_STATEMENT = {
+  dateFrom: '2027-01-01',
+  dateTo: '2027-01-01',
+  revenue: { roomRevenue: '0.00', posRevenue: '0.00', totalRevenue: '0.00', roomRevenueFullyAudited: false },
+  costOfSales: '0.00',
+  grossProfit: '0.00',
+  operatingExpenses: { byCategory: [], total: '0.00' },
+  netProfit: '0.00',
+};
 
 const activeProperty = { base_currency: 'NGN' };
 
@@ -35,53 +43,71 @@ describe('ReportsTab', () => {
     vi.clearAllMocks();
   });
 
-  it('runs both reports and renders the totals line including the audited caveat', async () => {
+  it('runs both reports and renders the full P&L statement', async () => {
     mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
-    mocks.getProfitSummary.mockResolvedValue({
-      ...EMPTY_PROFIT_SUMMARY,
-      totals: { roomRevenue: '100.00', posRevenue: '20.00', totalRevenue: '120.00', totalExpenses: '30.00', profit: '90.00' },
-      byDay: [{ date: '2027-01-15', roomRevenue: '100.00', posRevenue: '20.00', totalRevenue: '120.00', totalExpenses: '30.00', profit: '90.00', audited: true }],
+    mocks.getProfitAndLoss.mockResolvedValue({
+      ...EMPTY_STATEMENT,
+      revenue: { roomRevenue: '100.00', posRevenue: '20.00', totalRevenue: '120.00', roomRevenueFullyAudited: true },
+      costOfSales: '8.00',
+      grossProfit: '112.00',
+      operatingExpenses: { byCategory: [{ categoryId: '1', categoryName: 'Utilities', total: '30.00' }], total: '30.00' },
+      netProfit: '82.00',
     });
     render(<ReportsTab activeProperty={activeProperty} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
 
-    // "90.00" (the profit figure) appears twice — once in the totals line, once in the by-day table row.
-    expect((await screen.findAllByText(/90\.00/)).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText(/reflects room revenue only/i)).toBeInTheDocument();
-    expect(screen.getByText(/Yes \(room revenue\)/)).toBeInTheDocument();
+    expect(await screen.findByText('Room revenue')).toBeInTheDocument();
+    expect(screen.getByText('POS revenue')).toBeInTheDocument();
+    expect(screen.getByText('Total revenue')).toBeInTheDocument();
+    expect(screen.getByText('Cost of sales')).toBeInTheDocument();
+    expect(screen.getByText('Gross profit')).toBeInTheDocument();
+    expect(screen.getByText('Utilities')).toBeInTheDocument();
+    expect(screen.getByText('Total operating expenses')).toBeInTheDocument();
+    expect(screen.getByText('Net profit')).toBeInTheDocument();
+    expect(screen.getByText(/112\.00/)).toBeInTheDocument(); // gross profit figure
+    expect(screen.getByText(/82\.00/)).toBeInTheDocument(); // net profit figure
+    expect(screen.getByText(/fully reconciled by Night Audit/i)).toBeInTheDocument();
   });
 
-  it('a zero-expense, zero-revenue day shows an honest 0.00 profit, not an error', async () => {
+  it('shows an honest "not yet fully reconciled" caveat when the room-revenue figure spans an un-audited day', async () => {
     mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
-    mocks.getProfitSummary.mockResolvedValue({ ...EMPTY_PROFIT_SUMMARY, byDay: [{ date: '2027-01-16', roomRevenue: '0.00', posRevenue: '0.00', totalRevenue: '0.00', totalExpenses: '0.00', profit: '0.00', audited: false }] });
+    mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT); // roomRevenueFullyAudited: false
     render(<ReportsTab activeProperty={activeProperty} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
-    await screen.findByText('2027-01-16');
-    expect(screen.getAllByText(/0\.00/).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/not yet fully reconciled by Night Audit/i)).toBeInTheDocument();
   });
 
-  it('exports both reports as CSV via the shared download helper', async () => {
+  it('shows "None recorded" when no operating expenses exist in range, and an honest zero net profit', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT);
+    render(<ReportsTab activeProperty={activeProperty} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    expect(await screen.findByText('None recorded in this range.')).toBeInTheDocument();
+  });
+
+  it('exports both the P&L statement and the expense list as CSV via the shared download helper', async () => {
     const { triggerDownload } = await import('../../../shared/download.js');
     mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
-    mocks.getProfitSummary.mockResolvedValue(EMPTY_PROFIT_SUMMARY);
+    mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT);
     mocks.getExpenseReportCsv.mockResolvedValue(new Blob(['csv']));
-    mocks.getProfitSummaryCsv.mockResolvedValue(new Blob(['csv']));
+    mocks.getProfitAndLossCsv.mockResolvedValue(new Blob(['csv']));
     render(<ReportsTab activeProperty={activeProperty} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
-    await userEvent.click(await screen.findByRole('button', { name: /export profit summary/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /export p&l statement/i }));
     await userEvent.click(screen.getByRole('button', { name: /export expense list/i }));
 
-    expect(mocks.getProfitSummaryCsv).toHaveBeenCalled();
+    expect(mocks.getProfitAndLossCsv).toHaveBeenCalled();
     expect(mocks.getExpenseReportCsv).toHaveBeenCalled();
     expect(triggerDownload).toHaveBeenCalledTimes(2);
   });
 
   it('surfaces a real backend error without breaking the rest of the screen', async () => {
     mocks.getExpenseReport.mockRejectedValue(new Error('boom'));
-    mocks.getProfitSummary.mockResolvedValue(EMPTY_PROFIT_SUMMARY);
+    mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT);
     render(<ReportsTab activeProperty={activeProperty} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));

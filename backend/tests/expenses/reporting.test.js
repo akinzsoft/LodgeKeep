@@ -1,17 +1,21 @@
 'use strict';
 
 /**
- * Expense report and profit summary — composes real room revenue
+ * Expense report and the P&L statement — composes real room revenue
  * (`reporting/service.js`'s `computeRevenue`), real POS revenue
- * (`pos/sales-report.js`'s `computeDailyPosRevenueTotals`), and the real
- * expense ledger. Confirmed scope: profit = (room + POS revenue) minus
- * operating expenses ONLY — POS's own cost-of-sales/margin report stays
- * separate.
+ * (`pos/sales-report.js`'s `computeDailyPosRevenueTotals`), real cost of
+ * sales (`stock/reporting.js`'s `computeCostOfSales`), and the real
+ * expense ledger into one consolidated Revenue → Cost of Sales → Gross
+ * Profit → Operating Expenses → Net Profit statement for the period
+ * (restructured on the user's own follow-up request, "restructure it like
+ * a proper P&L statement" — the original per-day "profit summary" shape
+ * is gone).
  */
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { sumMoney: sumMoneyForTest } = require('../../src/shared/money');
 
 describe('Expense report and profit summary', () => {
   const t = useTestApp();
@@ -115,32 +119,71 @@ describe('Expense report and profit summary', () => {
     expect(filtered.body.data.expenses).toHaveLength(0);
   });
 
-  it('computeProfitSummary: real room + POS revenue minus real expenses, exactly', async () => {
+  it('computeProfitAndLoss: real room + POS revenue, zero cost of sales (no recipe sold in range), minus real operating expenses, exactly', async () => {
     await recordExpense({ amount: '30.00' });
 
     const res = await t.request.get(`/api/v1/expenses/reports/profit?date_from=${BUSINESS_DATE}&date_to=${BUSINESS_DATE}`).set('Authorization', `Bearer ${manager()}`);
     expect(res.status).toBe(200);
-    const day = res.body.data.byDay.find((d) => d.date === BUSINESS_DATE);
-    expect(day).toBeTruthy();
-    expect(Number(day.roomRevenue)).toBeGreaterThan(0); // a real night was booked
-    expect(Number(day.posRevenue)).toBeGreaterThanOrEqual(20); // the real ₦20 sale
-    expect(day.totalRevenue).toBe(res.body.data.byDay.find((d) => d.date === BUSINESS_DATE).totalRevenue);
-    // Exact identity: totalRevenue - totalExpenses === profit (BigInt-cents, never float).
-    const expectedProfitCents = Math.round(Number(day.totalRevenue) * 100) - Math.round(Number(day.totalExpenses) * 100);
-    expect(Math.round(Number(day.profit) * 100)).toBe(expectedProfitCents);
+    const statement = res.body.data;
+    expect(Number(statement.revenue.roomRevenue)).toBeGreaterThan(0); // a real night was booked
+    expect(Number(statement.revenue.posRevenue)).toBeGreaterThanOrEqual(20); // the real ₦20 sale
+    expect(statement.revenue.totalRevenue).toBe(sumMoneyForTest([statement.revenue.roomRevenue, statement.revenue.posRevenue]));
+    expect(statement.costOfSales).toBe('0.00'); // the settled item in beforeAll has no recipe/BOM
+    expect(statement.grossProfit).toBe(statement.revenue.totalRevenue); // gross profit = revenue when cost of sales is zero
+    // Exact identity: grossProfit - totalOperatingExpenses === netProfit (BigInt-cents, never float).
+    const expectedNetProfitCents = Math.round(Number(statement.grossProfit) * 100) - Math.round(Number(statement.operatingExpenses.total) * 100);
+    expect(Math.round(Number(statement.netProfit) * 100)).toBe(expectedNetProfitCents);
   });
 
-  it('a day with real revenue but zero expenses: profit exactly equals total revenue', async () => {
+  it('a real, non-zero cost of sales flows through as its own line, correctly reducing gross profit', async () => {
+    const suffix = `${Date.now().toString(36)}`;
+    const propertyId = ctx.a.properties[0].id;
+    const [outletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: `COGS-${suffix}`, name: 'COGS Outlet', type: 'bar' });
+    const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, device_ref: `COGS-TERM-${suffix}` });
+    const [menuItemId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'COGS Item', category: 'Beverages', price: '10.00' });
+    const [stockItemId] = await t.trx('stock_items').insert({
+      tenant_id: ctx.a.id,
+      property_id: propertyId,
+      outlet_id: outletId,
+      name: 'COGS Stock',
+      unit: 'ml',
+      purchase_cost: '4.00',
+      reorder_level: '0.000',
+      current_quantity: '10000.000',
+    });
+    const linked = await t.request
+      .put(`/api/v1/pos/stock/menu-items/${menuItemId}/components`)
+      .set('Authorization', `Bearer ${manager()}`)
+      .send({ components: [{ stock_item_id: stockItemId, quantity: '1.000' }] });
+    expect(linked.status).toBe(200);
+
+    const order = await t.request.post('/api/v1/pos/orders').set('Authorization', `Bearer ${manager()}`).send({ outlet_id: outletId, terminal_id: terminalId, table_label: 'COGS' });
+    await t.request.post(`/api/v1/pos/orders/${order.body.data.id}/items`).set('Authorization', `Bearer ${manager()}`).send({ menu_item_id: menuItemId, quantity: 2 });
+    const settled = await t.request
+      .post(`/api/v1/pos/orders/${order.body.data.id}/settle`)
+      .set('Authorization', `Bearer ${manager()}`)
+      .set('Idempotency-Key', idemKey())
+      .send({ settlements: [{ method: 'cash' }] });
+    expect(settled.status).toBe(200);
+
+    const res = await t.request.get(`/api/v1/expenses/reports/profit?date_from=${BUSINESS_DATE}&date_to=${BUSINESS_DATE}`).set('Authorization', `Bearer ${manager()}`);
+    const statement = res.body.data;
+    expect(statement.costOfSales).toBe('8.00'); // 2 units x ₦4.00 purchase cost
+    expect(statement.grossProfit).toBe(sumMoneyForTest([statement.revenue.totalRevenue, '-8.00']));
+  });
+
+  it('a period with real revenue but zero expenses: net profit exactly equals gross profit', async () => {
     // ZERO_EXPENSE_DATE has neither a booking nor a POS sale nor an expense —
-    // profit must be genuinely 0.00, not merely "no error."
+    // every figure must be genuinely 0.00, not merely "no error."
     const res = await t.request.get(`/api/v1/expenses/reports/profit?date_from=${ZERO_EXPENSE_DATE}&date_to=${ZERO_EXPENSE_DATE}`).set('Authorization', `Bearer ${manager()}`);
-    const day = res.body.data.byDay.find((d) => d.date === ZERO_EXPENSE_DATE);
-    expect(day.totalRevenue).toBe('0.00');
-    expect(day.totalExpenses).toBe('0.00');
-    expect(day.profit).toBe('0.00');
+    const statement = res.body.data;
+    expect(statement.revenue.totalRevenue).toBe('0.00');
+    expect(statement.costOfSales).toBe('0.00');
+    expect(statement.operatingExpenses.total).toBe('0.00');
+    expect(statement.netProfit).toBe('0.00');
   });
 
-  it('a voided expense is fully excluded from both reports\' totals', async () => {
+  it('a voided expense is fully excluded from both the expense report and the P&L\'s operating expenses', async () => {
     const created = await recordExpense({ business_date: ZERO_EXPENSE_DATE, amount: '999.00' });
     const before = await t.request.get(`/api/v1/expenses/reports/summary?date_from=${ZERO_EXPENSE_DATE}&date_to=${ZERO_EXPENSE_DATE}`).set('Authorization', `Bearer ${manager()}`);
     expect(before.body.data.totalExpenses).toBe('999.00');
@@ -151,9 +194,20 @@ describe('Expense report and profit summary', () => {
     expect(afterSummary.body.data.totalExpenses).toBe('0.00');
 
     const afterProfit = await t.request.get(`/api/v1/expenses/reports/profit?date_from=${ZERO_EXPENSE_DATE}&date_to=${ZERO_EXPENSE_DATE}`).set('Authorization', `Bearer ${manager()}`);
-    const day = afterProfit.body.data.byDay.find((d) => d.date === ZERO_EXPENSE_DATE);
-    expect(day.totalExpenses).toBe('0.00');
-    expect(day.profit).toBe(day.totalRevenue);
+    const statement = afterProfit.body.data;
+    expect(statement.operatingExpenses.total).toBe('0.00');
+    expect(statement.netProfit).toBe(statement.grossProfit);
+  });
+
+  it('operating expense categories are itemized, largest first', async () => {
+    await recordExpense({ amount: '10.00', business_date: ZERO_EXPENSE_DATE, expense_category_id: ctx.a.expenseCategories[0].id });
+    const secondCategory = await t.request.post('/api/v1/expenses/categories').set('Authorization', `Bearer ${manager()}`).send({ name: `Second Category ${Date.now()}` });
+    await recordExpense({ amount: '500.00', business_date: ZERO_EXPENSE_DATE, expense_category_id: secondCategory.body.data.id });
+
+    const res = await t.request.get(`/api/v1/expenses/reports/profit?date_from=${ZERO_EXPENSE_DATE}&date_to=${ZERO_EXPENSE_DATE}`).set('Authorization', `Bearer ${manager()}`);
+    const byCategory = res.body.data.operatingExpenses.byCategory;
+    expect(Number(byCategory[0].total)).toBeGreaterThanOrEqual(Number(byCategory[1]?.total ?? 0));
+    expect(String(byCategory[0].categoryId)).toBe(String(secondCategory.body.data.id));
   });
 
   it('exports both reports as CSV', async () => {

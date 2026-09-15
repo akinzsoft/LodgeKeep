@@ -287,20 +287,37 @@ async function getExpenseReport(req, res, next) {
   }
 }
 
-async function getProfitSummary(req, res, next) {
+/** Flattens the P&L statement into "line item, amount" rows for CSV — the natural shape for a real financial statement, replacing the old day-by-day export now that the statement is one consolidated period (restructured on the user's own follow-up request). */
+function flattenProfitAndLossForCsv(statement) {
+  const rows = [
+    { line: 'Room revenue', amount: statement.revenue.roomRevenue },
+    { line: 'POS revenue', amount: statement.revenue.posRevenue },
+    { line: 'Total revenue', amount: statement.revenue.totalRevenue },
+    { line: 'Cost of sales', amount: statement.costOfSales },
+    { line: 'Gross profit', amount: statement.grossProfit },
+  ];
+  for (const category of statement.operatingExpenses.byCategory) {
+    rows.push({ line: category.categoryName, amount: category.total });
+  }
+  rows.push({ line: 'Total operating expenses', amount: statement.operatingExpenses.total });
+  rows.push({ line: 'Net profit', amount: statement.netProfit });
+  return rows;
+}
+
+async function getProfitAndLoss(req, res, next) {
   try {
     const dateFrom = require_(req.query, 'date_from');
     const dateTo = require_(req.query, 'date_to');
-    const summary = await reporting.computeProfitSummary({ context: req.context, dateFrom, dateTo });
+    const statement = await reporting.computeProfitAndLoss({ context: req.context, dateFrom, dateTo });
     if (req.query?.format === 'csv') {
       res
         .status(200)
         .set('Content-Type', 'text/csv')
-        .set('Content-Disposition', 'attachment; filename="profit-summary.csv"')
-        .send(toCsv(summary.byDay, ['date', 'roomRevenue', 'posRevenue', 'totalRevenue', 'totalExpenses', 'profit', 'audited']));
+        .set('Content-Disposition', 'attachment; filename="profit-and-loss.csv"')
+        .send(toCsv(flattenProfitAndLossForCsv(statement), ['line', 'amount']));
       return;
     }
-    res.status(200).json(ok(summary));
+    res.status(200).json(ok(statement));
   } catch (error) {
     next(error);
   }
@@ -322,5 +339,5 @@ module.exports = {
   pauseRecurringExpenseSchedule,
   resumeRecurringExpenseSchedule,
   getExpenseReport,
-  getProfitSummary,
+  getProfitAndLoss,
 };

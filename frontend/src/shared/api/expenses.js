@@ -156,13 +156,22 @@ export function getExpenseReportCsv({ dateFrom, dateTo, categoryId }) {
   return requestBlob(`/expenses/reports/summary?${params}`);
 }
 
-/** Revenue (rooms + POS) minus operating expenses, per day and totalled. `byDay[].audited` reflects the room-revenue figure only — see the backend's own header for why POS revenue/expenses are always live-computed regardless. */
-export function getProfitSummary({ dateFrom, dateTo }) {
+/**
+ * A proper P&L statement for the period: Revenue (room + POS) minus Cost
+ * of Sales (real POS stock-consumption cost) = Gross Profit, minus
+ * itemized Operating Expenses = Net Profit. One consolidated statement for
+ * the whole date range, not a day-by-day table.
+ * `revenue.roomRevenueFullyAudited` reflects the room-revenue figure only
+ * (true only when every day in range has been closed by Night Audit) —
+ * see the backend's own header for why cost of sales/POS revenue/expenses
+ * are always live-computed regardless.
+ */
+export function getProfitAndLoss({ dateFrom, dateTo }) {
   const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
   return request(`/expenses/reports/profit?${params}`);
 }
 
-export function getProfitSummaryCsv({ dateFrom, dateTo }) {
+export function getProfitAndLossCsv({ dateFrom, dateTo }) {
   const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo, format: 'csv' });
   return requestBlob(`/expenses/reports/profit?${params}`);
 }
