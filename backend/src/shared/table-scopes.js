@@ -372,6 +372,17 @@ const TABLE_SCOPES = Object.freeze({
   access_alerts: { scope: SCOPES.PROPERTY },
   access_alert_events: { scope: SCOPES.PROPERTY },
   door_access_stay_confirmations: { scope: SCOPES.PROPERTY },
+
+  // Expense tracking & reporting — greenfield feature (no PLAN.md/DATABASE.md
+  // spec existed for this before this pass). 20261024090000_create_expense_categories.js
+  // through 20261024092000_create_expenses.js. All PROPERTY_SCOPED, following
+  // `stock_item_categories`/`ar_accounts` for the same reason every other
+  // money-bearing ledger and its own category catalogue already is: an
+  // operating expense (and the categories/recurring schedules feeding it) is
+  // a per-property financial fact, not shared across a tenant's properties.
+  expense_categories: { scope: SCOPES.PROPERTY },
+  recurring_expense_schedules: { scope: SCOPES.PROPERTY },
+  expenses: { scope: SCOPES.PROPERTY },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

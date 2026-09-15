@@ -20,6 +20,7 @@ const { startTenantDataExportWorker } = require('./jobs/tenant-data-export');
 const { startDataImportWorker } = require('./jobs/data-import');
 const { startNotificationsSweepWorker, scheduleNotificationsSweep } = require('./jobs/notifications-sweep');
 const { startDoorAccessRetentionWorker, scheduleDoorAccessRetentionSweep } = require('./jobs/door-access-retention');
+const { startExpenseSchedulesWorker, scheduleExpenseSchedulesSweep } = require('./jobs/expense-schedules');
 
 const port = Number(process.env.PORT || 3000);
 
@@ -80,4 +81,12 @@ scheduleNotificationsSweep().catch((error) => {
 startDoorAccessRetentionWorker();
 scheduleDoorAccessRetentionSweep().catch((error) => {
   console.error('Failed to schedule the door access retention sweep:', error);
+});
+
+// Expense tracking (greenfield feature) — a once-daily sweep auto-posting
+// every recurring expense schedule (rent, salaries) due at a property's
+// current business date, fully automatic, no manual approval gate.
+startExpenseSchedulesWorker();
+scheduleExpenseSchedulesSweep().catch((error) => {
+  console.error('Failed to schedule the expense schedules sweep:', error);
 });

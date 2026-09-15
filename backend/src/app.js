@@ -60,6 +60,7 @@ const { offboardingRouter } = require('./modules/offboarding');
 const { migrationRouter } = require('./modules/migration');
 const { accessMonitoringRouter } = require('./modules/access-monitoring');
 const { qrOrderPublicRouter, qrOrderStaffRouter } = require('./modules/qr-ordering');
+const { expensesRouter } = require('./modules/expenses');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -132,6 +133,9 @@ function buildStaffRouter() {
   router.use(stockRouter());
   // PLAN.md Phase 7 — door access monitoring (manual lock-log import).
   router.use(accessMonitoringRouter());
+  // Expense tracking & reporting — greenfield feature, no phase/spec of its
+  // own. No mounting-order dependency on any other router.
+  router.use(expensesRouter());
   router.use((req, res) => notFound(res));
   return router;
 }

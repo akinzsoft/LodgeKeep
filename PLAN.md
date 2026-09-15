@@ -201,6 +201,17 @@ Genuinely optional until customers ask. Building these early is the most likely 
 
 ---
 
+## Expense tracking and reporting — ✅ shipped (greenfield feature, no PLAN.md phase or PRODUCT_REQUIREMENTS.md section names this module)
+
+**User-requested directly**, not a gap against an existing spec — confirmed by grepping PLAN.md/PRODUCT_REQUIREMENTS.md/DATABASE.md for "expense"/"P&L"/"profit and loss" before designing: zero matches anywhere. Deliberately narrow, per the user's own confirmed scope: expense tracking, not a full double-entry general ledger (no chart of accounts, no journal entries, no trial balance, no balance sheet).
+
+- ✅ **Shipped**: configurable, per-property expense categories (a registered catalogue mirroring `stock_item_categories`, but with a real live foreign key rather than a copied name string); recording an expense (amount, currency, date, category, payee, payment method, who recorded it) with the same void-never-delete financial-record immutability `folio_line_items` already has; recurring expenses (rent, salaries) via a schedule table and a daily background sweep that auto-posts a real expense when due, fully automatically, no approval gate; expense reporting by category/period; a profit view — (room revenue + POS revenue) minus operating expenses, per period, composed from the existing Reporting and POS sales-report modules rather than duplicating either; audit trail on every mutation, matching folio-posting discipline.
+- 🔲 **Deliberately out of scope, confirmed with the user**: a plan-entitlement gate (ungated, like AR/Night Audit/Cashiering); cross-currency/FX expense handling (an expense must match the property's own base currency); a manual "post this schedule now" action (use Record Expense directly for an early one-off).
+
+See CLAUDE.md's own status section for the full architecture, the confirmed decisions, and the live-verification narrative.
+
+---
+
 ## Cross-cutting, every phase
 
 - Cross-tenant isolation test for every new module **before it ships** (TESTING.md)

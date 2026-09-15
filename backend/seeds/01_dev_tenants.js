@@ -264,6 +264,15 @@ exports.seed = async function seed(knex) {
     await grantManagerKeys(tenantId, ['door_access.view', 'door_access.manage']);
   }
 
+  /**
+   * Expense tracking (greenfield feature) — manager holds both keys
+   * (`expenses.view`/`expenses.manage`, manager/admin/super_admin only;
+   * admin/super_admin get them via `ensureAdminSuperAdminFullAccess`).
+   */
+  async function ensureManagerExpensesAccess(tenantId) {
+    await grantManagerKeys(tenantId, ['expenses.view', 'expenses.manage']);
+  }
+
   async function grantManagerKeys(tenantId, keys) {
     const permissions = await knex('permissions').whereIn('permission_key', keys).select('id', 'permission_key');
     if (permissions.length !== keys.length) return; // migrations not yet run — nothing to grant
@@ -494,6 +503,7 @@ exports.seed = async function seed(knex) {
       await ensureManagerArAccess(existingTenant.id);
       await ensureManagerGroupBlocksAccess(existingTenant.id);
       await ensureManagerDoorAccessAccess(existingTenant.id);
+      await ensureManagerExpensesAccess(existingTenant.id);
       await ensurePosOperatorRoleAccess(existingTenant.id);
       // src/auth/mfa.js's dev-only bypass: backfill the admin account and
       // its full-access grant onto a pre-existing dev tenant too, same
@@ -589,6 +599,9 @@ exports.seed = async function seed(knex) {
 
     // PLAN.md Phase 7's door access monitoring.
     await ensureManagerDoorAccessAccess(tenantId);
+
+    // Expense tracking (greenfield feature) — see `ensureManagerExpensesAccess`'s own header.
+    await ensureManagerExpensesAccess(tenantId);
 
     // PLAN.md Phase 1 gap closure — see `ensureReferenceData`'s own header.
     await ensureReferenceData(tenantId, propertyId);

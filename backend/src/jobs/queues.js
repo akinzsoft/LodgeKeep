@@ -45,6 +45,13 @@
  * purge has no user waiting on it the way a billing charge or a bell
  * notification does; daily is standard practice for this class of job and
  * there is no correctness reason to run it more often.
+ *
+ * `expense-schedules` (expense tracking, greenfield feature) is its own
+ * eighth queue for the identical reason — a slow recurring-expense
+ * auto-post pass at one property must never delay any other queue's own
+ * work, and vice versa. Runs once daily (`src/jobs/expense-schedules.js`):
+ * no user is waiting on a rent/salary auto-post the way they wait on a
+ * bell notification.
  */
 
 const { Queue } = require('bullmq');
@@ -57,6 +64,7 @@ const TENANT_DATA_EXPORT_QUEUE = 'tenant-data-export';
 const DATA_IMPORT_QUEUE = 'imports';
 const NOTIFICATIONS_SWEEP_QUEUE = 'notifications-sweep';
 const DOOR_ACCESS_RETENTION_QUEUE = 'door-access-retention';
+const EXPENSE_SCHEDULES_QUEUE = 'expense-schedules';
 
 let queue = null;
 let trialExpiryQueueInstance = null;
@@ -65,6 +73,7 @@ let tenantDataExportQueueInstance = null;
 let dataImportQueueInstance = null;
 let notificationsSweepQueueInstance = null;
 let doorAccessRetentionQueueInstance = null;
+let expenseSchedulesQueueInstance = null;
 
 function outboxDispatchQueue() {
   if (!queue) {
@@ -115,6 +124,13 @@ function doorAccessRetentionQueue() {
   return doorAccessRetentionQueueInstance;
 }
 
+function expenseSchedulesQueue() {
+  if (!expenseSchedulesQueueInstance) {
+    expenseSchedulesQueueInstance = new Queue(EXPENSE_SCHEDULES_QUEUE, { connection: redisConnection() });
+  }
+  return expenseSchedulesQueueInstance;
+}
+
 /** Test-only teardown — BullMQ's `Queue` holds its own connection handles beyond the shared `redisConnection()` instance, and both must close for the process to exit without `--forceExit`. */
 async function __closeQueuesForTesting() {
   if (queue) {
@@ -145,6 +161,10 @@ async function __closeQueuesForTesting() {
     await doorAccessRetentionQueueInstance.close();
     doorAccessRetentionQueueInstance = null;
   }
+  if (expenseSchedulesQueueInstance) {
+    await expenseSchedulesQueueInstance.close();
+    expenseSchedulesQueueInstance = null;
+  }
 }
 
 module.exports = {
@@ -162,5 +182,7 @@ module.exports = {
   notificationsSweepQueue,
   DOOR_ACCESS_RETENTION_QUEUE,
   doorAccessRetentionQueue,
+  EXPENSE_SCHEDULES_QUEUE,
+  expenseSchedulesQueue,
   __closeQueuesForTesting,
 };
