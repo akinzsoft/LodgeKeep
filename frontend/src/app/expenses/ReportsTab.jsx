@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { DataTable, Button } from '../../shared/components/index.js';
+import { DataTable, Button, Card } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { expensesApi, ApiError } from '../../shared/api/index.js';
 import { triggerDownload } from '../../shared/download.js';
@@ -10,22 +10,30 @@ function todayIso() {
 }
 
 /**
- * ReportsTab — the expense report (by category/period) and the profit
- * summary (confirmed scope: (room + POS revenue) minus operating expenses
- * only — POS's own cost-of-sales/margin report, elsewhere in this app,
- * stays a separate, more granular view).
+ * ReportsTab — a proper P&L statement for the chosen period (Revenue →
+ * Cost of Sales → Gross Profit → Operating Expenses → Net Profit,
+ * restructured on the user's own follow-up request), plus the detailed
+ * expense ledger for the same range.
  *
- * The `audited` caveat is stated plainly next to the totals line, not
- * buried in a tooltip: it reflects the room-revenue figure only — POS
- * revenue and expenses are always freshly computed regardless of whether
- * Night Audit has closed that date (see the backend's own
- * `expenses/reporting.js` header for the full reasoning).
+ * The statement is ONE consolidated set of figures for the whole date
+ * range — not a day-by-day table, the standard way a real P&L is
+ * presented. Cost of Sales is POS's own real stock-consumption cost
+ * (`stock/reporting.js`'s `computeCostOfSales`), composed in here for a
+ * true Gross Profit line — POS's own, more granular cost-of-sales/margin
+ * report (elsewhere in this app, under POS → Stock → Reports) still
+ * exists separately for per-item drill-down.
+ *
+ * The "fully audited" caveat is stated plainly next to the revenue lines,
+ * not buried in a tooltip: it reflects the room-revenue figure only — cost
+ * of sales, POS revenue, and operating expenses are always freshly
+ * computed regardless of whether Night Audit has closed every day in
+ * range (see the backend's own `expenses/reporting.js` header).
  */
 export function ReportsTab({ activeProperty }) {
   const [dateFrom, setDateFrom] = useState(todayIso());
   const [dateTo, setDateTo] = useState(todayIso());
   const [expenseReport, setExpenseReport] = useState(null);
-  const [profitSummary, setProfitSummary] = useState(null);
+  const [statement, setStatement] = useState(null);
   const [error, setError] = useState(null);
 
   const currency = activeProperty?.base_currency ?? null;
@@ -34,15 +42,15 @@ export function ReportsTab({ activeProperty }) {
     event?.preventDefault();
     setError(null);
     try {
-      const [expenses, profit] = await Promise.all([
+      const [expenses, pnl] = await Promise.all([
         expensesApi.getExpenseReport({ dateFrom, dateTo }),
-        expensesApi.getProfitSummary({ dateFrom, dateTo }),
+        expensesApi.getProfitAndLoss({ dateFrom, dateTo }),
       ]);
       setExpenseReport(expenses);
-      setProfitSummary(profit);
+      setStatement(pnl);
     } catch (caught) {
       setExpenseReport(null);
-      setProfitSummary(null);
+      setStatement(null);
       setError(caught instanceof ApiError ? caught.message : 'Could not load these reports.');
     }
   }
@@ -56,12 +64,12 @@ export function ReportsTab({ activeProperty }) {
     }
   }
 
-  async function exportProfitCsv() {
+  async function exportPnlCsv() {
     try {
-      const blob = await expensesApi.getProfitSummaryCsv({ dateFrom, dateTo });
-      triggerDownload(blob, `profit-summary-${dateFrom}-to-${dateTo}.csv`);
+      const blob = await expensesApi.getProfitAndLossCsv({ dateFrom, dateTo });
+      triggerDownload(blob, `profit-and-loss-${dateFrom}-to-${dateTo}.csv`);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not export this report.');
+      setError(caught instanceof ApiError ? caught.message : 'Could not export this statement.');
     }
   }
 
@@ -91,53 +99,92 @@ export function ReportsTab({ activeProperty }) {
         </div>
       </form>
 
-      {profitSummary && (
-        <>
+      {statement && (
+        <Card title={`Profit & Loss statement — ${statement.dateFrom} to ${statement.dateTo}`}>
+          <table className={formStyles.statementTable}>
+            <tbody>
+              <tr className={formStyles.statementSectionHeading}>
+                <td colSpan={2}>Revenue</td>
+              </tr>
+              <tr className={formStyles.statementRow}>
+                <td className={formStyles.statementIndent}>Room revenue</td>
+                <td className={formStyles.statementAmount}>
+                  <Money amount={statement.revenue.roomRevenue} currencyCode={currency} />
+                </td>
+              </tr>
+              <tr className={formStyles.statementRow}>
+                <td className={formStyles.statementIndent}>POS revenue</td>
+                <td className={formStyles.statementAmount}>
+                  <Money amount={statement.revenue.posRevenue} currencyCode={currency} />
+                </td>
+              </tr>
+              <tr className={formStyles.statementSubtotal}>
+                <td>Total revenue</td>
+                <td className={formStyles.statementAmount}>
+                  <Money amount={statement.revenue.totalRevenue} currencyCode={currency} />
+                </td>
+              </tr>
+
+              <tr className={formStyles.statementRow}>
+                <td className={formStyles.statementLabel}>Cost of sales</td>
+                <td className={formStyles.statementAmount}>
+                  <Money amount={statement.costOfSales} currencyCode={currency} />
+                </td>
+              </tr>
+              <tr className={formStyles.statementTotal}>
+                <td>Gross profit</td>
+                <td className={formStyles.statementAmount}>
+                  <Money amount={statement.grossProfit} currencyCode={currency} />
+                </td>
+              </tr>
+
+              <tr className={formStyles.statementSectionHeading}>
+                <td colSpan={2}>Operating expenses</td>
+              </tr>
+              {statement.operatingExpenses.byCategory.length === 0 ? (
+                <tr className={formStyles.statementRow}>
+                  <td className={formStyles.statementIndent} colSpan={2}>
+                    None recorded in this range.
+                  </td>
+                </tr>
+              ) : (
+                statement.operatingExpenses.byCategory.map((category) => (
+                  <tr className={formStyles.statementRow} key={category.categoryId}>
+                    <td className={formStyles.statementIndent}>{category.categoryName}</td>
+                    <td className={formStyles.statementAmount}>
+                      <Money amount={category.total} currencyCode={currency} />
+                    </td>
+                  </tr>
+                ))
+              )}
+              <tr className={formStyles.statementSubtotal}>
+                <td>Total operating expenses</td>
+                <td className={formStyles.statementAmount}>
+                  <Money amount={statement.operatingExpenses.total} currencyCode={currency} />
+                </td>
+              </tr>
+
+              <tr className={formStyles.statementTotal}>
+                <td>Net profit</td>
+                <td className={formStyles.statementAmount}>
+                  <Money amount={statement.netProfit} currencyCode={currency} />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
           <p className={formStyles.hint}>
-            Room revenue: <Money amount={profitSummary.totals.roomRevenue} currencyCode={currency} /> — POS revenue:{' '}
-            <Money amount={profitSummary.totals.posRevenue} currencyCode={currency} /> — Total revenue:{' '}
-            <Money amount={profitSummary.totals.totalRevenue} currencyCode={currency} /> — Expenses:{' '}
-            <Money amount={profitSummary.totals.totalExpenses} currencyCode={currency} /> — <strong>Profit: <Money amount={profitSummary.totals.profit} currencyCode={currency} /></strong>
+            Room revenue is {statement.revenue.roomRevenueFullyAudited ? 'fully reconciled by Night Audit' : 'not yet fully reconciled by Night Audit'} for this
+            range. Cost of sales, POS revenue, and operating expenses are always freshly computed, regardless.
           </p>
-          <p className={formStyles.hint}>
-            &ldquo;Audited&rdquo; below reflects room revenue only, reconciled by Night Audit — POS revenue and expenses are always freshly computed, whether or not that date has been audited.
-          </p>
+
           <div className={formStyles.actionsRow}>
-            <Button size="compact" variant="ghost" onClick={exportProfitCsv}>
-              Export profit summary (CSV)
+            <Button size="compact" variant="ghost" onClick={exportPnlCsv}>
+              Export P&amp;L statement (CSV)
             </Button>
           </div>
-        </>
+        </Card>
       )}
-
-      <DataTable
-        title="Profit summary — by day"
-        state={profitSummary === null || profitSummary.byDay.length === 0 ? 'empty' : 'success'}
-        emptyMessage="Choose a date range and run the reports."
-        columns={[
-          { key: 'date', label: 'Date' },
-          { key: 'roomRevenue', label: 'Room revenue', align: 'right', render: (row) => <Money amount={row.roomRevenue} currencyCode={currency} /> },
-          { key: 'posRevenue', label: 'POS revenue', align: 'right', render: (row) => <Money amount={row.posRevenue} currencyCode={currency} /> },
-          { key: 'totalExpenses', label: 'Expenses', align: 'right', render: (row) => <Money amount={row.totalExpenses} currencyCode={currency} /> },
-          { key: 'profit', label: 'Profit', align: 'right', render: (row) => <Money amount={row.profit} currencyCode={currency} /> },
-          { key: 'audited', label: 'Audited', render: (row) => (row.audited ? 'Yes (room revenue)' : 'No') },
-        ]}
-        rows={profitSummary?.byDay ?? []}
-        rowKey={(row) => row.date}
-      />
-
-      <DataTable
-        title="Expenses by category"
-        state={expenseReport === null || expenseReport.byCategory.length === 0 ? 'empty' : 'success'}
-        emptyMessage="Choose a date range and run the reports."
-        columns={[
-          { key: 'categoryName', label: 'Category' },
-          { key: 'count', label: 'Count', align: 'right' },
-          { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={currency} /> },
-        ]}
-        rows={expenseReport?.byCategory ?? []}
-        rowKey={(row) => row.categoryId}
-      />
 
       {expenseReport && (
         <div className={formStyles.actionsRow}>

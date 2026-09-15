@@ -35,7 +35,7 @@ function expensesRouter() {
   // Static report paths, ahead of no `:id` route they could ever collide
   // with here (this module's own `:id` routes are all further up).
   router.get('/expenses/reports/summary', requirePermission('expenses.view'), controller.getExpenseReport);
-  router.get('/expenses/reports/profit', requirePermission('expenses.view'), controller.getProfitSummary);
+  router.get('/expenses/reports/profit', requirePermission('expenses.view'), controller.getProfitAndLoss);
 
   router.get('/expenses', requirePermission('expenses.view'), controller.listExpenses);
   router.get('/expenses/:id', requirePermission('expenses.view'), controller.getExpense);

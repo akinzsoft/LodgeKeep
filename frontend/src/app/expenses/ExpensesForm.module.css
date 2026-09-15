@@ -76,3 +76,51 @@
   text-decoration: line-through;
   color: var(--text-secondary);
 }
+
+/* The P&L statement — a plain two-column table, not DataTable (a fixed
+   financial-statement layout, not a dynamic entity list). */
+.statementTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.statementRow td {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.statementLabel {
+  color: var(--text-primary);
+}
+
+.statementIndent {
+  padding-left: var(--space-4);
+  color: var(--text-secondary);
+}
+
+.statementAmount {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.statementSubtotal td {
+  font-weight: var(--text-label-weight);
+  border-top: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.statementTotal td {
+  font-weight: var(--text-h3-weight);
+  font-size: var(--text-h3-size);
+  border-top: 2px solid var(--text-primary);
+  border-bottom: 2px solid var(--text-primary);
+}
+
+.statementSectionHeading td {
+  padding-top: var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  border-bottom: none;
+}

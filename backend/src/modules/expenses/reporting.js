@@ -11,33 +11,45 @@
  * `stock/reporting.js` already reaches into `pos`. Neither `reporting/service.js`
  * nor `pos/sales-report.js` requires anything from `expenses` — no cycle.
  *
- * Confirmed scope: profit = (room revenue + POS revenue) minus operating
- * expenses ONLY. POS's own cost-of-sales/margin report
- * (`stock/reporting.js`) stays a separate, more granular view — not netted
- * out here, to avoid double-counting and to keep this report answering
- * exactly the plain question it was built for.
+ * Confirmed scope for the P&L statement (`computeProfitAndLoss`, restructured
+ * on the user's own explicit follow-up request, "restructure it like a
+ * proper P&L statement"): the standard shape — Revenue, Cost of Sales,
+ * Gross Profit, Operating Expenses (itemized by category), Net Profit —
+ * for ONE consolidated period, not a day-by-day table. Cost of Sales is
+ * real data already tracked (`stock/reporting.js`'s `computeCostOfSales`,
+ * summed across every outlet), composed in here rather than duplicated —
+ * this is the one place in this codebase POS's cost-of-sales figure and
+ * expense tracking's own operating-expense figure are netted against the
+ * SAME revenue total, which is exactly what makes it a real Gross-Profit-
+ * then-Net-Profit statement rather than the two staying two separate,
+ * never-reconciled reports.
  *
- * The `audited` flag on each `byDay` row reflects ONLY the room-revenue
- * half (`computeRevenue`'s own per-day flag, sourced from `daily_reports`
- * once Night Audit has closed a date) — POS revenue and expenses have NO
- * audited-snapshot equivalent (POS's own Night Audit reconciliation step is
- * still unbuilt; expenses predate any snapshot mechanism entirely), so
- * `posRevenue`/`totalExpenses` on that same day are ALWAYS freshly
- * live-computed regardless of the flag. Never read `audited: true` here as
- * "the whole day's profit figure is reconciled" — it names the room-revenue
- * figure only.
+ * Room revenue carries no cost-of-sales component of its own (this
+ * codebase tracks no per-room cost) — Cost of Sales applies to POS revenue
+ * only, the same real scope `stock/reporting.js`'s own report already has.
+ *
+ * `roomRevenueFullyAudited` is a single, honest boolean for the whole
+ * period — true only when EVERY day in range has already been closed by
+ * Night Audit (`computeRevenue`'s own per-day `audited` flag, sourced from
+ * `daily_reports`) — never fabricated as an average or a per-line
+ * caveat. Cost of Sales, POS revenue, and operating expenses have no
+ * audited-snapshot equivalent at all (POS's own Night Audit reconciliation
+ * step is still unbuilt; expenses predate any snapshot mechanism
+ * entirely) — they are always freshly live-computed regardless of this
+ * flag, which names the room-revenue component only.
  *
  * Currency: `expenses.currency` is enforced equal to the property's
- * `base_currency` at record time (`service.js`'s `recordExpense`), so
- * profit is always single-currency by construction — no
+ * `base_currency` at record time (`service.js`'s `recordExpense`), so this
+ * statement is always single-currency by construction — no
  * `revenueByCurrency`-style grouping is needed the way chain-overview needs
  * one across properties.
  */
 
 const { scopedDb } = require('../../db');
-const { sumMoney, negateMoney } = require('../../shared/money');
-const { computeRevenue, inclusiveDateRange } = require('../reporting/service');
+const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
+const { computeRevenue } = require('../reporting/service');
 const { computeDailyPosRevenueTotals } = require('../pos/sales-report');
+const { computeCostOfSales } = require('../stock/reporting');
 
 /** Every non-voided expense in range, joined to its category name. */
 async function listExpenseRowsWithCategory({ db, dateFrom, dateTo, categoryId }) {
@@ -100,64 +112,54 @@ async function computeExpenseReport({ context, dateFrom, dateTo, categoryId }) {
   };
 }
 
-/** Revenue minus operating expenses, per day and totalled — the plain question a hotel owner is asking (confirmed scope). */
-async function computeProfitSummary({ context, dateFrom, dateTo }) {
+/**
+ * A proper P&L statement for ONE consolidated period — Revenue, Cost of
+ * Sales, Gross Profit, Operating Expenses (itemized by category, largest
+ * first — the standard "what matters most" presentation with no chart of
+ * accounts to otherwise order them by), Net Profit. See file header for
+ * the full reasoning and the confirmed scope behind each line.
+ */
+async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
   const db = scopedDb().for(context);
   const property = await db.table('properties').first('base_currency');
-  const dates = inclusiveDateRange(dateFrom, dateTo);
 
-  const [revenueDays, posRevenueByDate, expenseRows] = await Promise.all([
+  const [revenueDays, posRevenueByDate, costOfSales, expenseRows] = await Promise.all([
     computeRevenue({ context, dateFrom, dateTo }),
     computeDailyPosRevenueTotals({ db, dateFrom, dateTo }),
+    computeCostOfSales({ context, dateFrom, dateTo }),
     listExpenseRowsWithCategory({ db, dateFrom, dateTo }),
   ]);
-  const revenueByDate = new Map(revenueDays.map((day) => [day.date, day]));
 
-  const expensesByDate = new Map();
+  const roomRevenue = sumMoney(revenueDays.map((day) => day.roomRevenue));
+  const posRevenue = sumMoney([...posRevenueByDate.values()]);
+  const totalRevenue = sumMoney([roomRevenue, posRevenue]);
+  const roomRevenueFullyAudited = revenueDays.length > 0 && revenueDays.every((day) => day.audited);
+
+  const grossProfit = sumMoney([totalRevenue, negateMoney(costOfSales.totalCost)]);
+
   const expensesByCategoryMap = new Map();
   for (const row of expenseRows) {
-    const dateKey = String(row.business_date);
-    if (!expensesByDate.has(dateKey)) expensesByDate.set(dateKey, []);
-    expensesByDate.get(dateKey).push(row.amount);
-
-    const categoryKey = String(row.category_id);
-    if (!expensesByCategoryMap.has(categoryKey)) expensesByCategoryMap.set(categoryKey, { categoryId: row.category_id, categoryName: row.category_name, amounts: [], count: 0 });
-    const bucket = expensesByCategoryMap.get(categoryKey);
-    bucket.amounts.push(row.amount);
-    bucket.count += 1;
+    const key = String(row.category_id);
+    if (!expensesByCategoryMap.has(key)) expensesByCategoryMap.set(key, { categoryId: row.category_id, categoryName: row.category_name, amounts: [] });
+    expensesByCategoryMap.get(key).amounts.push(row.amount);
   }
+  const operatingExpensesByCategory = [...expensesByCategoryMap.values()]
+    .map(({ categoryId, categoryName, amounts }) => ({ categoryId, categoryName, total: sumMoney(amounts) }))
+    .sort((a, b) => compareMoney(b.total, a.total) || a.categoryName.localeCompare(b.categoryName));
+  const totalOperatingExpenses = sumMoney(operatingExpensesByCategory.map((row) => row.total));
 
-  const byDay = dates.map((date) => {
-    const revenueDay = revenueByDate.get(date);
-    const roomRevenue = revenueDay?.roomRevenue ?? '0.00';
-    const posRevenue = posRevenueByDate.get(date) ?? '0.00';
-    const totalRevenue = sumMoney([roomRevenue, posRevenue]);
-    const totalExpenses = sumMoney(expensesByDate.get(date) ?? []);
-    const profit = sumMoney([totalRevenue, negateMoney(totalExpenses)]);
-    return { date, roomRevenue, posRevenue, totalRevenue, totalExpenses, profit, audited: revenueDay?.audited ?? false };
-  });
-
-  const totals = byDay.reduce(
-    (acc, day) => ({
-      roomRevenue: sumMoney([acc.roomRevenue, day.roomRevenue]),
-      posRevenue: sumMoney([acc.posRevenue, day.posRevenue]),
-      totalRevenue: sumMoney([acc.totalRevenue, day.totalRevenue]),
-      totalExpenses: sumMoney([acc.totalExpenses, day.totalExpenses]),
-      profit: sumMoney([acc.profit, day.profit]),
-    }),
-    { roomRevenue: '0.00', posRevenue: '0.00', totalRevenue: '0.00', totalExpenses: '0.00', profit: '0.00' }
-  );
+  const netProfit = sumMoney([grossProfit, negateMoney(totalOperatingExpenses)]);
 
   return {
     dateFrom,
     dateTo,
     currency: property?.base_currency ?? null,
-    totals,
-    byDay,
-    expensesByCategory: [...expensesByCategoryMap.values()]
-      .map(({ categoryId, categoryName, amounts, count }) => ({ categoryId, categoryName, total: sumMoney(amounts), count }))
-      .sort((a, b) => a.categoryName.localeCompare(b.categoryName)),
+    revenue: { roomRevenue, posRevenue, totalRevenue, roomRevenueFullyAudited },
+    costOfSales: costOfSales.totalCost,
+    grossProfit,
+    operatingExpenses: { byCategory: operatingExpensesByCategory, total: totalOperatingExpenses },
+    netProfit,
   };
 }
 
-module.exports = { computeExpenseReport, computeProfitSummary };
+module.exports = { computeExpenseReport, computeProfitAndLoss };
