@@ -28,6 +28,23 @@
  * codebase tracks no per-room cost) — Cost of Sales applies to POS revenue
  * only, the same real scope `stock/reporting.js`'s own report already has.
  *
+ * Gap closure, user-reported: Cost of Sales here (`computeCostOfSales`)
+ * only ever reflects a real `stock_movements` row, which only exists for a
+ * menu item with a real recipe (`pos_menu_item_components`) linking it to
+ * depleted stock. `cost_price` — the per-item fallback the separate,
+ * more granular margin report (`computeCostOfSalesMargin`) already
+ * accepts — never generates a stock movement and so never flows into
+ * THIS ledger-based figure either. A menu item sold with no recipe,
+ * priced or not, therefore contributes zero to Cost of Sales while its
+ * revenue counts in full, silently overstating Gross Profit with no
+ * signal anywhere that it happened. `itemsSoldWithoutRecipeCost` is that
+ * honest count — every menu item sold in range whose `costSource` (per
+ * `computeCostOfSalesMargin`) isn't `'recipe'` — surfaced on the
+ * statement, the CSV export, and the frontend rather than hidden, so a
+ * reader knows exactly when Gross Profit here is an overstatement, even
+ * though this pass doesn't attempt to say by how much.
+ *
+
  * `roomRevenueFullyAudited` is a single, honest boolean for the whole
  * period — true only when EVERY day in range has already been closed by
  * Night Audit (`computeRevenue`'s own per-day `audited` flag, sourced from
@@ -49,7 +66,7 @@ const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
 const { computeRevenue } = require('../reporting/service');
 const { computeDailyPosRevenueTotals } = require('../pos/sales-report');
-const { computeCostOfSales } = require('../stock/reporting');
+const { computeCostOfSales, computeCostOfSalesMargin } = require('../stock/reporting');
 
 /** Every non-voided expense in range, joined to its category name. */
 async function listExpenseRowsWithCategory({ db, dateFrom, dateTo, categoryId }) {
@@ -123,11 +140,12 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
   const db = scopedDb().for(context);
   const property = await db.table('properties').first('base_currency');
 
-  const [revenueDays, posRevenueByDate, costOfSales, expenseRows] = await Promise.all([
+  const [revenueDays, posRevenueByDate, costOfSales, expenseRows, costOfSalesMargin] = await Promise.all([
     computeRevenue({ context, dateFrom, dateTo }),
     computeDailyPosRevenueTotals({ db, dateFrom, dateTo }),
     computeCostOfSales({ context, dateFrom, dateTo }),
     listExpenseRowsWithCategory({ db, dateFrom, dateTo }),
+    computeCostOfSalesMargin({ context, dateFrom, dateTo }),
   ]);
 
   const roomRevenue = sumMoney(revenueDays.map((day) => day.roomRevenue));
@@ -136,6 +154,10 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
   const roomRevenueFullyAudited = revenueDays.length > 0 && revenueDays.every((day) => day.audited);
 
   const grossProfit = sumMoney([totalRevenue, negateMoney(costOfSales.totalCost)]);
+
+  // See file header — a menu item sold with no recipe never contributes
+  // to `costOfSales.totalCost` above, whether or not it has a `cost_price`.
+  const itemsSoldWithoutRecipeCost = costOfSalesMargin.byMenuItem.filter((row) => row.costSource !== 'recipe').length;
 
   const expensesByCategoryMap = new Map();
   for (const row of expenseRows) {
@@ -156,6 +178,7 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
     currency: property?.base_currency ?? null,
     revenue: { roomRevenue, posRevenue, totalRevenue, roomRevenueFullyAudited },
     costOfSales: costOfSales.totalCost,
+    itemsSoldWithoutRecipeCost,
     grossProfit,
     operatingExpenses: { byCategory: operatingExpensesByCategory, total: totalOperatingExpenses },
     netProfit,
