@@ -80,6 +80,11 @@ const EVENT_TEMPLATE_KEYS = {
   // super_admin per lock-log import that raised critical alerts; recipient
   // is staff, so `recipientEmail` like `ar.*`/`billing.*`.
   'door_access.critical_alerts_detected': 'door_access_critical_alerts',
+  // Gap closure (user-requested) — "if night audit have not been run at
+  // the appropriate time it shld send notification including mail."
+  // Recipient is staff (manager/admin/super_admin), so `recipientEmail`
+  // like `ar.*`/`billing.*`/`door_access.*` above.
+  'night_audit.overdue': 'night_audit_overdue',
 };
 
 /**
@@ -238,6 +243,17 @@ const DEFAULT_TEMPLATES = {
         ['Door events imported', '{{importedEventCount}}'],
       ]) +
       note('Review the evidence and acknowledge or resolve each alert under Door Access.'),
+  },
+  night_audit_overdue: {
+    subject: 'Night audit overdue for {{businessDate}} — {{propertyName}}',
+    body_html:
+      heading('Night audit is overdue') +
+      paragraph('Dear {{recipientName}},') +
+      paragraph('{{propertyName}} has not closed business date {{businessDate}} yet, and a new calendar day has already begun in the property’s own time zone.') +
+      details([
+        ['Business date still open', '{{businessDate}}'],
+      ]) +
+      note('Run night audit as soon as possible to close the date and advance the property to the next one.'),
   },
 };
 

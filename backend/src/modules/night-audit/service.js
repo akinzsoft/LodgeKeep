@@ -50,6 +50,7 @@ const { scopedDb } = require('../../db');
 const { livePhysicalCount } = require('../../shared/room-availability');
 const { sumMoney, negateMoney, divideMoney } = require('../../shared/money');
 const { writeOutboxEvent } = require('../../shared/outbox');
+const { notifyStaff } = require('../notifications/staff-notifications');
 const cashiering = require('../cashiering/service');
 const {
   NightAuditAlreadyCompletedError,
@@ -279,6 +280,18 @@ async function runCriticalTransaction({ db, propertyId, businessDate, runId }) {
       payload: { businessDate, nextBusinessDate, roomRevenue, occupancyPct, exceptionCount: exceptions.length },
     });
 
+    // Staff bell notification — gap closure, user-reported. Same event
+    // name as the outbox event above (two separate systems; nothing reads
+    // both), in the same transaction as everything else here — if this
+    // fails, the whole run rolls back, matching how `writeOutboxEvent`
+    // right above is unguarded too.
+    await notifyStaff({
+      trx,
+      eventType: 'night_audit.completed',
+      payload: { businessDate, nextBusinessDate, roomRevenue, occupancyPct, exceptionCount: exceptions.length },
+      dedupKey: `night_audit:completed:${runId}`,
+    });
+
     const dailyReport = await trx.table('daily_reports').where({ id: dailyReportId }).first();
     const run = await trx.table('night_audit_runs').where({ id: runId }).first();
     return { run, dailyReport, exceptions, nextBusinessDate };
@@ -315,6 +328,28 @@ async function runNightAudit({ context, userId }) {
       failed_at: new Date(),
       error: String(error?.message ?? error),
     });
+
+    // Staff bell notification — gap closure, user-reported. The run row's
+    // own FAILED status has already committed above, so this is purely a
+    // "let someone know" step: never let a notification-plumbing failure
+    // replace or hide the real night-audit error being thrown below.
+    const blocked = error instanceof NightAuditBlockingConditionsError;
+    try {
+      await notifyStaff({
+        trx: db,
+        eventType: 'night_audit.failed',
+        payload: {
+          businessDate,
+          reason: blocked ? 'blocked_by_discrepancy' : 'error',
+          message: String(error?.message ?? error),
+          conditionCount: blocked ? (error.details?.conditions?.length ?? null) : null,
+        },
+        dedupKey: `night_audit:failed:${runId}:${blocked ? 'blocked' : 'error'}`,
+      });
+    } catch (notifyError) {
+      console.error('night-audit: notifyStaff(night_audit.failed) itself failed', notifyError);
+    }
+
     throw error;
   }
 }

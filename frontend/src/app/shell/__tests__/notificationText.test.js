@@ -48,6 +48,30 @@ describe('describeNotification', () => {
   it('falls back to the raw type for an unknown notification', () => {
     expect(describeNotification({ type: 'something.new', payload: {} })).toEqual({ title: 'something.new', detail: '' });
   });
+
+  it('states the day night audit closed and the new business date', () => {
+    expect(
+      describeNotification({ type: 'night_audit.completed', payload: { businessDate: '2027-02-01', nextBusinessDate: '2027-02-02' } })
+    ).toEqual({ title: 'Night audit closed 2027-02-01', detail: 'Business date is now 2027-02-02.' });
+  });
+
+  it('names how many unresolved discrepancies are blocking night audit', () => {
+    expect(
+      describeNotification({ type: 'night_audit.failed', payload: { businessDate: '2027-02-15', reason: 'blocked_by_discrepancy', conditionCount: 1 } })
+    ).toEqual({ title: 'Night audit blocked — 2027-02-15', detail: '1 unresolved housekeeping discrepancy is blocking it.' });
+  });
+
+  it('shows the real error message for a genuine night audit failure', () => {
+    expect(
+      describeNotification({ type: 'night_audit.failed', payload: { businessDate: '2027-02-15', reason: 'error', message: 'boom' } })
+    ).toEqual({ title: 'Night audit failed — 2027-02-15', detail: 'boom' });
+  });
+
+  it('flags an overdue night audit with how stale the business date is', () => {
+    expect(
+      describeNotification({ type: 'night_audit.overdue', payload: { businessDate: '2027-02-15', todayInPropertyTz: '2027-02-16' } })
+    ).toEqual({ title: 'Night audit overdue — 2027-02-15', detail: "It's already 2027-02-16 and that date is still open." });
+  });
 });
 
 describe('helpers', () => {
@@ -65,6 +89,7 @@ describe('helpers', () => {
     expect(notificationTarget('stock.out_of_stock')).toBe('pos');
     expect(notificationTarget('guest.checked_out')).toBe('booking');
     expect(notificationTarget('room.became_dirty')).toBe('housekeeping');
+    expect(notificationTarget('night_audit.completed')).toBe('night_audit');
     expect(notificationTarget('other.thing')).toBeNull();
   });
 
