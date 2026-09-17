@@ -2,6 +2,9 @@ node_modules/
 .env
 .env.local
 .env.*.local
+# Production Docker deployment secrets (docker-compose.prod.yml's own
+# --env-file) — .env.*.local above does NOT match this literal filename.
+.env.production
 coverage/
 dist/
 *.log

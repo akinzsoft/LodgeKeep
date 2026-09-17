@@ -55,6 +55,23 @@ async function resolveByCustomDomain(scoped, hostname) {
 }
 
 /**
+ * Given a real hostname (never the dev `X-Tenant-Slug` override, which has
+ * no meaning outside a login/session request), resolves it to a tenant
+ * row — exactly what `resolveTenantMiddleware`'s own non-override branch
+ * already did inline. Extracted so a second caller
+ * (`src/shared/tenant-domain-ask.js`, the Caddy on-demand-TLS `ask`
+ * endpoint) can ask the identical "does a tenant really exist at this
+ * hostname" question without re-implementing the subdomain-vs-custom-domain
+ * branch — "is this hostname worth a certificate" and "does a real request
+ * to this hostname resolve to a tenant" must never be able to silently
+ * drift into two different answers for the same input.
+ */
+async function resolveTenantRowForHostname({ scoped, hostname, appDomain }) {
+  const subdomain = subdomainOf(hostname, appDomain);
+  return subdomain ? scoped.bootstrap('tenants', 'slug', subdomain) : resolveByCustomDomain(scoped, hostname);
+}
+
+/**
  * Resolves `req.tenantId` from the Host header (or the dev override) before
  * any route handler runs. A request whose host resolves to no tenant at all
  * gets a 404, still API.md §5's own status code for "does not exist" — but
@@ -107,15 +124,9 @@ function resolveTenant({ db, systemContext }) {
       const scoped = db.for(systemContext());
       const devOverride = process.env.NODE_ENV !== 'production' ? req.get('X-Tenant-Slug') : null;
 
-      let tenantRow;
-      if (devOverride) {
-        tenantRow = await scoped.bootstrap('tenants', 'slug', devOverride);
-      } else {
-        const subdomain = subdomainOf(req.hostname, currentAppDomain());
-        tenantRow = subdomain
-          ? await scoped.bootstrap('tenants', 'slug', subdomain)
-          : await resolveByCustomDomain(scoped, req.hostname);
-      }
+      const tenantRow = devOverride
+        ? await scoped.bootstrap('tenants', 'slug', devOverride)
+        : await resolveTenantRowForHostname({ scoped, hostname: req.hostname, appDomain: currentAppDomain() });
 
       if (!tenantRow) {
         // `code: null`, matching every other 404 in this codebase (API.md
@@ -133,4 +144,4 @@ function resolveTenant({ db, systemContext }) {
   };
 }
 
-module.exports = { resolveTenant, subdomainOf };
+module.exports = { resolveTenant, subdomainOf, resolveTenantRowForHostname, currentAppDomain };

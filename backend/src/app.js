@@ -26,6 +26,8 @@ const express = require('express');
 const { requestId } = require('./shared/request-id');
 const { notFound } = require('./shared/response');
 const { errorHandler } = require('./shared/error-handler');
+const { healthRouter } = require('./shared/health');
+const { tenantDomainAskRouter } = require('./shared/tenant-domain-ask');
 const { scopedDb } = require('./db');
 const { systemContext } = require('./modules/tenancy');
 const { resolveTenant } = require('./auth/tenant-resolution');
@@ -203,6 +205,15 @@ function createApp() {
   // client could otherwise forge.
   app.set('trust proxy', 1);
   app.use(requestId());
+  // Production Docker deployment (docker/) — GET /healthz (backend's own
+  // Dockerfile HEALTHCHECK, docker-compose.prod.yml's dependency graph,
+  // Caddy's own upstream health check) and GET /internal/ask-tls (Caddy's
+  // on_demand_tls `ask` gate). Both mount at top-level, unversioned paths,
+  // deliberately outside every /api/v1* route tree below — infra/internal
+  // concerns, not versioned public API surface — and ahead of tenant
+  // resolution/auth/the audit trail, which neither needs.
+  app.use(healthRouter());
+  app.use(tenantDomainAskRouter({ db: scopedDb(), systemContext }));
   // `verify` stashes the exact raw bytes onto `req.rawBody` — API.md §7's
   // webhook signature check (`src/modules/cashiering/paystack-adapter.js`)
   // must HMAC the raw body Paystack actually sent, not a re-serialized
