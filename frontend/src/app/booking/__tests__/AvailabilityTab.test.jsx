@@ -53,6 +53,7 @@ const ROOM_TYPE = { id: '1', code: 'DLX', name: 'Deluxe' };
 const RATE_CODE = { id: '1', code: 'BAR', base_rate: '150.00', currency: 'NGN' };
 const GUEST = { id: '1', first_name: 'Jordan', last_name: 'Fixture' };
 const GUEST_WITH_EMAIL = { id: '2', first_name: 'Sam', last_name: 'Withemail', email: 'sam@example.com' };
+const GUEST_WITH_PHONE = { id: '3', first_name: 'Pat', last_name: 'Withphone', phone: '0801 234 5678' };
 const ROOM = { id: '5', room_number: '101', room_type_id: '1', floor: '1', housekeeping_reported_status: 'clean' };
 
 describe('<AvailabilityTab>', () => {
@@ -60,7 +61,7 @@ describe('<AvailabilityTab>', () => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE]);
     mocks.listRateCodes.mockResolvedValue([RATE_CODE]);
-    mocks.listGuests.mockResolvedValue([GUEST, GUEST_WITH_EMAIL]);
+    mocks.listGuests.mockResolvedValue([GUEST, GUEST_WITH_EMAIL, GUEST_WITH_PHONE]);
     mocks.listFreeRooms.mockResolvedValue([ROOM]);
     mocks.listEligiblePreferredRooms.mockResolvedValue([ROOM]);
     mocks.listGroupBlocks.mockResolvedValue([]);
@@ -303,6 +304,63 @@ describe('<AvailabilityTab>', () => {
     expect(await screen.findByText(/Booked — confirmation ABC123/)).toBeInTheDocument();
     const call = mocks.createReservation.mock.calls[0][0];
     expect(call).not.toHaveProperty('preferred_room_id');
+  });
+
+  /**
+   * Gap closure (user-reported): a "Phone number" field before Guest —
+   * `guests` is already the tenant's full list, so matching is a plain
+   * synchronous scan by a normalized (digits-only) phone; no new network
+   * call. Deliberately typed with spaces to prove the normalization
+   * matches the fixture's own differently-formatted stored phone.
+   */
+  async function searchOnly() {
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2027-01-01');
+  }
+
+  it('finds a guest by phone number and auto-selects them in the Guest dropdown', async () => {
+    await searchOnly();
+
+    await userEvent.type(screen.getByLabelText('Phone number'), '08012345678');
+
+    expect(await screen.findByText(/Guest found — Pat Withphone/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Guest')).toHaveValue('3');
+  });
+
+  it('prompts to register a new guest when the phone number matches nobody, and opens the New guest panel pre-filled', async () => {
+    await searchOnly();
+
+    await userEvent.type(screen.getByLabelText('Phone number'), '09999999999');
+
+    expect(await screen.findByText('No guest found with this phone number.')).toBeInTheDocument();
+    expect(screen.queryByText(/Guest found/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Register new guest' }));
+
+    const detailsEl = screen.getByText('New guest').closest('details');
+    expect(detailsEl).toHaveAttribute('open');
+    expect(screen.getByLabelText('Phone')).toHaveValue('09999999999');
+  });
+
+  it('shows neither the found nor the not-found message for a partially-typed phone number', async () => {
+    await searchOnly();
+
+    await userEvent.type(screen.getByLabelText('Phone number'), '123');
+
+    expect(screen.queryByText(/Guest found/)).not.toBeInTheDocument();
+    expect(screen.queryByText('No guest found with this phone number.')).not.toBeInTheDocument();
   });
 
   /**

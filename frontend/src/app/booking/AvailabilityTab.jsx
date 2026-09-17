@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, Button, DataTable, StatusPill } from '../../shared/components/index.js';
 import { setupApi, reservationsApi, cashieringApi, groupBlocksApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
@@ -16,6 +16,19 @@ import styles from './BookingScreen.module.css';
  * Guest lookup is a plain dropdown, not a search box — this pass's guests
  * stub has no search endpoint (see the `guests` migration's own scope
  * note), so every tenant guest is listed and a new one can be added inline.
+ *
+ * Gap closure (user-reported): a "Phone number" field sits right before
+ * the Guest dropdown. `guests` is already the tenant's complete list (the
+ * dropdown above is built from it directly), so matching is a plain,
+ * synchronous scan of that same array by a normalized (digits-only) phone
+ * — no new search endpoint, no network round trip, no staleness/race
+ * concern at all. A match auto-selects that guest in the dropdown below;
+ * once the typed number is long enough to be a real phone (7+ digits) and
+ * genuinely matches nobody, a warning prompt offers to register a new
+ * guest, which opens (and scrolls to) the existing "New guest" panel below
+ * with the phone pre-filled — reusing that panel as this app's own
+ * "register a new guest" flow, since no separate registration screen
+ * exists anywhere in this app to navigate to instead.
  *
  * Gap closure — two additions, deliberately answering different questions
  * (see `backend/src/shared/room-availability.js`'s own header for the full
@@ -82,6 +95,10 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   });
   const [newGuest, setNewGuest] = useState({ first_name: '', last_name: '', email: '', phone: '' });
   const [addingGuest, setAddingGuest] = useState(false);
+  // Gap closure: phone-number guest lookup — see this file's own header.
+  const [guestPhone, setGuestPhone] = useState('');
+  const [newGuestPanelOpen, setNewGuestPanelOpen] = useState(false);
+  const newGuestPanelRef = useRef(null);
   const [bookError, setBookError] = useState(null);
   const [bookSuccess, setBookSuccess] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -203,11 +220,47 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
       setGuests((current) => [...(current ?? []), guest]);
       setBooking((current) => ({ ...current, guest_id: String(guest.id) }));
       setNewGuest({ first_name: '', last_name: '', email: '', phone: '' });
+      // Gap closure: the phone-lookup prompt's own reason to be open just
+      // resolved — close it rather than leaving it expanded with nothing
+      // left to do; `guestPhone` itself stays as typed, which now
+      // correctly shows "Guest found" for the guest just created.
+      setNewGuestPanelOpen(false);
     } catch (caught) {
       setBookError(caught instanceof ApiError ? caught.message : 'Could not add the guest.');
     } finally {
       setAddingGuest(false);
     }
+  }
+
+  // Gap closure: phone-number guest lookup — see this file's own header.
+  // A plain digits-only normalization (strips spaces/dashes/parens/plus)
+  // so "0801 234 5678" and "08012345678" match the same stored guest.
+  const MIN_PHONE_DIGITS = 7;
+  function normalizePhone(value) {
+    return String(value ?? '').replace(/\D/g, '');
+  }
+  const normalizedGuestPhone = normalizePhone(guestPhone);
+  const phoneMatchedGuest =
+    normalizedGuestPhone.length >= MIN_PHONE_DIGITS
+      ? (guests ?? []).find((guest) => guest.phone && normalizePhone(guest.phone) === normalizedGuestPhone)
+      : null;
+  const showPhoneNotFoundPrompt = normalizedGuestPhone.length >= MIN_PHONE_DIGITS && !phoneMatchedGuest;
+
+  function handlePhoneChange(value) {
+    setGuestPhone(value);
+    const normalized = normalizePhone(value);
+    if (normalized.length < MIN_PHONE_DIGITS) return;
+    const match = (guests ?? []).find((guest) => guest.phone && normalizePhone(guest.phone) === normalized);
+    if (match) setBooking((current) => ({ ...current, guest_id: String(match.id) }));
+  }
+
+  /** Pre-fills the phone into the existing "New guest" panel and opens/scrolls to it — this app's own only guest-registration mechanism (see this file's own header). */
+  function handleRegisterFromPhone() {
+    setNewGuest((current) => ({ ...current, phone: guestPhone }));
+    setNewGuestPanelOpen(true);
+    window.requestAnimationFrame(() => {
+      newGuestPanelRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    });
   }
 
   async function handleBook(event) {
@@ -495,6 +548,42 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
           <form className={formStyles.form} onSubmit={handleBook}>
             <div className={formStyles.row}>
               <label className={formStyles.field}>
+                <span className={formStyles.label}>Phone number</span>
+                {/* `type="tel"`, not `type="number"` as literally asked —
+                    a real `<input type="number">` strips a leading zero
+                    the moment it's typed (confirmed live in this exact
+                    change), which would break the overwhelmingly common
+                    local phone shape ("0801...") outright. `type="tel"`
+                    is the semantically-correct HTML5 type for a phone
+                    number anyway and preserves every character exactly as
+                    typed; `inputMode="numeric"` still gets a numeric
+                    keypad on mobile. */}
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  className={formStyles.input}
+                  value={guestPhone}
+                  onChange={(event) => handlePhoneChange(event.target.value)}
+                  placeholder="Look up a guest by phone"
+                />
+              </label>
+            </div>
+            {phoneMatchedGuest && (
+              <p className={formStyles.disabledNotice}>
+                Guest found — {phoneMatchedGuest.first_name} {phoneMatchedGuest.last_name}. Selected below.
+              </p>
+            )}
+            {showPhoneNotFoundPrompt && (
+              <div className={formStyles.phoneLookupPrompt} role="alert">
+                <span>No guest found with this phone number.</span>
+                <Button type="button" size="compact" variant="secondary" onClick={handleRegisterFromPhone}>
+                  Register new guest
+                </Button>
+              </div>
+            )}
+
+            <div className={formStyles.row}>
+              <label className={formStyles.field}>
                 <span className={formStyles.label}>Guest</span>
                 <select
                   className={formStyles.select}
@@ -643,7 +732,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
             )}
           </form>
 
-          <details>
+          <details ref={newGuestPanelRef} open={newGuestPanelOpen} onToggle={(event) => setNewGuestPanelOpen(event.target.open)}>
             <summary className={formStyles.label}>New guest</summary>
             <form className={formStyles.form} onSubmit={handleAddGuest}>
               <div className={formStyles.row}>

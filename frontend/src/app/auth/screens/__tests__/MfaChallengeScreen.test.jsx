@@ -164,12 +164,12 @@ describe('<MfaChallengeScreen>', () => {
     expect(mocks.logout).not.toHaveBeenCalled();
   });
 
-  it('shows the "Powered by LodgeKeep" footer', () => {
+  it('shows the "Powered by Planmsys" footer', () => {
     render(
       <AuthProvider>
         <MfaChallengeScreen />
       </AuthProvider>
     );
-    expect(screen.getByText('Powered by LodgeKeep')).toBeInTheDocument();
+    expect(screen.getByText('Powered by Planmsys')).toBeInTheDocument();
   });
 });

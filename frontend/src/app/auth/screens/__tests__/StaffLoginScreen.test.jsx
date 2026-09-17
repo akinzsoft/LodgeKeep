@@ -57,9 +57,9 @@ describe('<StaffLoginScreen>', () => {
     expect(screen.getByRole('link', { name: 'Create an account' })).toHaveAttribute('href', '/signup');
   });
 
-  it('shows the "Powered by LodgeKeep" footer — a signed-out visitor never reaches AppShell to see it there', () => {
+  it('shows the "Powered by Planmsys" footer — a signed-out visitor never reaches AppShell to see it there', () => {
     renderScreen();
-    expect(screen.getByText('Powered by LodgeKeep')).toBeInTheDocument();
+    expect(screen.getByText('Powered by Planmsys')).toBeInTheDocument();
   });
 
   it('submits email and password to login()', async () => {

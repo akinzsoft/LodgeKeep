@@ -91,8 +91,8 @@ describe('<AppShell>', () => {
     expect(screen.queryByText('Cashiering')).not.toBeInTheDocument();
   });
 
-  it('renders the "Powered by LodgeKeep" footer', () => {
+  it('renders the "Powered by Planmsys" footer', () => {
     render(<AppShell {...baseProps}>content</AppShell>);
-    expect(screen.getByText('Powered by LodgeKeep')).toBeInTheDocument();
+    expect(screen.getByText('Powered by Planmsys')).toBeInTheDocument();
   });
 });

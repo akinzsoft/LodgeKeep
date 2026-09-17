@@ -25,4 +25,10 @@
 .text {
   font-size: var(--text-caption-size);
   color: var(--text-muted);
+  text-decoration: none;
+}
+
+.text:hover,
+.text:focus-visible {
+  text-decoration: underline;
 }

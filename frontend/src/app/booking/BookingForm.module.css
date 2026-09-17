@@ -159,3 +159,21 @@
   align-items: flex-start;
   gap: var(--space-3);
 }
+
+/* Gap closure (user-reported): phone-number guest lookup on the booking
+   form. A warning tone, not `.errorBanner`'s danger — nothing has failed;
+   a genuinely new guest with no prior phone on file is a real, expected
+   outcome, with an inline action to register one right there. */
+.phoneLookupPrompt {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--state-warning-bg);
+  color: var(--state-warning);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+}
