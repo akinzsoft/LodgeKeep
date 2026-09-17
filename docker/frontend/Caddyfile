@@ -1,0 +1,62 @@
+{
+	# Let's Encrypt requires a contact address for expiry/problem notices.
+	email {$ACME_EMAIL}
+
+	# Live self-service signup (PRODUCT_REQUIREMENTS.md §3.22) means new
+	# tenant subdomains appear dynamically — a static per-hostname block
+	# here can't work. on_demand_tls issues a certificate the FIRST time a
+	# given hostname is actually connected to, after calling `ask` to
+	# confirm it's a real tenant. `ask` resolves on this compose project's
+	# internal Docker network only — docker-compose.prod.yml never
+	# publishes the backend service's port to the host — so this is the
+	# real security boundary, not merely a convention.
+	#
+	# No `interval`/`burst` here (an earlier Caddy version supported them
+	# directly on this block — this one, v2.11, rejects them outright:
+	# "the on_demand_tls 'interval' option is no longer supported",
+	# confirmed via `caddy validate`). Rate limiting now lives entirely in
+	# the ask endpoint itself (GET /internal/ask-tls,
+	# backend/src/shared/tenant-domain-ask.js — Redis-backed, per IP).
+	on_demand_tls {
+		ask http://backend:3000/internal/ask-tls
+	}
+
+	# Uncomment while first validating the on-demand-TLS + DNS flow, to
+	# avoid burning Let's Encrypt's real per-registered-domain rate limit
+	# (50 issuances/week) before it's confirmed working end to end:
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# A bare :80 (no hostname) matches every Host header — required here since
+# the whole point of on-demand TLS is serving hostnames this Caddyfile has
+# never enumerated in advance.
+:80 {
+	redir https://{host}{uri} permanent
+}
+
+:443 {
+	tls {
+		on_demand
+	}
+
+	encode gzip zstd
+
+	# Every backend route tree (src/app.js: /api/v1, /api/v1/portal,
+	# /api/v1/qr-order, /api/v1/media, /api/v1/platform) lives under one
+	# /api/v1/* prefix — one matcher covers all five. No CORS handling
+	# exists anywhere in the backend (confirmed) — frontend and API must
+	# share exactly this one origin, which is the entire reason this
+	# reverse proxy exists rather than two separately-hosted origins.
+	@api path /api/v1/*
+	reverse_proxy @api backend:3000 {
+		health_uri /healthz
+		health_interval 10s
+		health_timeout 3s
+	}
+
+	root * /srv
+	file_server
+	# Client-side routing (react-router-dom) — an unknown static path falls
+	# through to index.html rather than a bare Caddy 404.
+	try_files {path} /index.html
+}

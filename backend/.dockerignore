@@ -1,0 +1,18 @@
+node_modules
+npm-debug.log*
+.env
+.env.*
+!.env.example
+# 1,000+ leftover files from local test/dev runs sit directly in this
+# working tree today (backend/storage/imports/ especially) — never part of
+# a production image; storage is a named volume mounted at runtime instead
+# (docker-compose.prod.yml), created lazily by the app itself.
+storage
+coverage
+tests
+.git
+.gitignore
+*.md
+.vscode
+.idea
+.DS_Store

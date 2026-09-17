@@ -1,0 +1,169 @@
+# LodgeKeep — production stack. Entirely separate from the repo-root
+# docker-compose.yml (dev infra only — MySQL/Redis/adminer/phpMyAdmin, no
+# app containers — left completely untouched so local development keeps
+# working exactly as it does today). Always invoke this file explicitly:
+#
+#   docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+#
+# --env-file is required (not optional): this file's name isn't Compose's
+# default (".env"), so every ${VAR} substitution below resolves to empty
+# without it. Copy .env.production.example to .env.production first and
+# fill in every value (see that file's own header for what each one does).
+#
+# `name:` below is load-bearing, not cosmetic — confirmed live, the hard
+# way: without an explicit project name, Compose derives one from the
+# current directory ("lodgekeep" either way, since this file lives
+# alongside docker-compose.yml), so `docker compose -f
+# docker-compose.prod.yml up` and a plain `docker compose up` (the dev
+# file) land in the SAME default project namespace. Compose then treats
+# each same-named service (mysql, redis) as one resource with two
+# conflicting definitions and RECREATES it — stopping and replacing the
+# already-running dev container in place. Pinning a distinct name makes
+# this file's `mysql`/`redis`/etc. permanently different resources from
+# the dev file's, on a separate network, even run from the exact same
+# directory at the exact same time.
+name: lodgekeep-prod
+
+services:
+  mysql:
+    image: mysql:8
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-2G}
+      - --max-connections=150
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # No host port published — reachable only from other containers on this
+    # compose project's own default network.
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # No host port published.
+
+  # A dedicated one-shot job, not a shell hack folded into `backend`'s own
+  # startup — mixing "did migrations fail" with "did the app fail to
+  # start" is exactly the confusion to avoid while watching logs during a
+  # live demo. `backend` waits on this exiting 0 (service_completed_
+  # successfully) before it is even started, so `docker compose up -d` is
+  # fully self-sufficient — migrations can never be forgotten as a manual
+  # step. No `restart:` directive: this must exit, not restart-loop.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      DB_HOST: mysql
+      DB_PORT: "3306"
+    command: ["npx", "knex", "migrate:latest"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      # Hardcoded to the real Docker-network values on purpose — these must
+      # never be settable from .env.production, where a mismatch would be
+      # an easy, hard-to-diagnose mistake. `environment:` here takes
+      # precedence over the same keys in env_file above.
+      NODE_ENV: production
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - export_storage:/app/storage/exports
+      - import_storage:/app/storage/imports
+      - menu_image_storage:/app/storage/menu-images
+      - property_logo_storage:/app/storage/property-logos
+    # No host port published — reached only via the `frontend` service's
+    # reverse_proxy and Caddy's own on_demand_tls `ask` callback, both over
+    # this compose project's internal network. This IS the security
+    # boundary for GET /internal/ask-tls, not merely a convention.
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    restart: unless-stopped
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      # Caddy's ACME account + issued-certificate storage. Load-bearing,
+      # not optional: without this, every container recreation re-issues
+      # every tenant's certificate from scratch and can exhaust Let's
+      # Encrypt's real per-domain rate limit.
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # Uncomment for occasional DB inspection during demo prep. Bound to
+  # 127.0.0.1 only — never publicly reachable — reach it via an SSH tunnel:
+  #   ssh -L 8085:127.0.0.1:8085 <user>@<vps-ip>
+  # then browse http://127.0.0.1:8085 locally. Dropped from the default
+  # stack entirely (not just port-restricted) to keep the running
+  # footprint on a 12GB box as small as possible.
+  #
+  # phpmyadmin:
+  #   image: phpmyadmin:latest
+  #   restart: unless-stopped
+  #   environment:
+  #     PMA_HOST: mysql
+  #     PMA_PORT: 3306
+  #   ports:
+  #     - "127.0.0.1:8085:80"
+  #   depends_on:
+  #     mysql:
+  #       condition: service_healthy
+
+volumes:
+  mysql_data:
+  redis_data:
+  export_storage:
+  import_storage:
+  menu_image_storage:
+  property_logo_storage:
+  caddy_data:
+  caddy_config:

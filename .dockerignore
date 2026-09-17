@@ -1,0 +1,15 @@
+# Build context for docker/frontend/Dockerfile is the repo root (it needs
+# both frontend/ and docker/frontend/Caddyfile) — everything below is
+# irrelevant to that build and only slows down `docker build`'s own context
+# upload. The backend has its own, separate backend/.dockerignore.
+.git
+.gitignore
+*.md
+node_modules
+backend
+.env
+.env.*
+!.env.*.example
+frontend/node_modules
+frontend/dist
+frontend/coverage
