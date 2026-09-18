@@ -21,7 +21,7 @@
 # — Dependabot (`.github/dependabot.yml`) also opens a PR automatically
 # when a newer digest is available.
 ################################################################################
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS deps
+FROM node:25-bookworm-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 # Network access to BOTH registry.npmjs.org and cdn.sheetjs.com is required
@@ -32,7 +32,7 @@ RUN npm ci --omit=dev
 ################################################################################
 # Stage: runtime
 ################################################################################
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS runtime
+FROM node:25-bookworm-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS runtime
 ENV NODE_ENV=production \
     PORT=3000
 WORKDIR /app
