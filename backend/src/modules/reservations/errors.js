@@ -95,6 +95,35 @@ class FolioBalanceOwingError extends AppError {
   }
 }
 
+/**
+ * Gap closure: a NEW reservation's arrival date must not fall before the
+ * property's own current business date (ARCHITECTURE.md §6 — the business
+ * date, never the wall clock, is the accounting truth). Enforced in
+ * `createReservation` itself, not the controller, so both the staff booking
+ * path and the guest portal's own `createBookingWithPayment`
+ * (`portal/service.js`, which calls `createReservation` directly) inherit
+ * it for free — nothing can bypass it by calling this function a different
+ * way. Deliberately a floor, not an exact match: an arrival dated to the
+ * still-open CURRENT business date is allowed (a walk-in entered the
+ * following morning before Night Audit has rolled the date forward yet is
+ * not "backdating" in any meaningful sense — it is `>=`, not `>`).
+ * Bulk-imported historical reservations (`src/jobs/data-import.js`'s
+ * `commitReservationRow`) insert directly into `reservations` rather than
+ * calling this function at all, so they are correctly unaffected by this
+ * check — see that function's own header for why a historical row needs no
+ * override here.
+ */
+class ArrivalBeforeBusinessDateError extends AppError {
+  constructor(arrivalDate, businessDate) {
+    super(
+      'BUSINESS_RULE_ARRIVAL_BEFORE_BUSINESS_DATE',
+      `Cannot book — arrival date (${arrivalDate}) is before the property's current business date (${businessDate}).`,
+      422,
+      { arrivalDate, businessDate }
+    );
+  }
+}
+
 /** A waitlisted reservation can't be promoted once its arrival date is behind the property's business date. */
 class WaitlistArrivalPassedError extends AppError {
   constructor(arrivalDate, businessDate) {
@@ -115,5 +144,6 @@ module.exports = {
   RoomOutOfOrderError,
   InvalidReservationTransitionError,
   ArrivalAfterDepartureError,
+  ArrivalBeforeBusinessDateError,
   FolioBalanceOwingError,
 };

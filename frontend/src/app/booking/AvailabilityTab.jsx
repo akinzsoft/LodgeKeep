@@ -406,6 +406,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                   className={formStyles.input}
                   value={search.arrival_date}
                   onChange={(event) => setSearch({ ...search, arrival_date: event.target.value })}
+                  min={activeProperty?.current_business_date || undefined}
                   required
                 />
               </label>
