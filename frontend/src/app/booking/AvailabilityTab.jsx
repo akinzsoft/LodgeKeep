@@ -77,6 +77,24 @@ import styles from './BookingScreen.module.css';
  * and picking one by another rule (e.g. first alphabetically) would be
  * inventing a business decision, not implementing one; flagged back to the
  * user rather than guessed.
+ *
+ * Gap closure (user-reported): "wen Room type is selected it shld show the
+ * Rate/cost per night on the Rate code drop box only." Since a rate code is
+ * property-wide (above), its own `base_rate` doesn't reflect a per-room-type
+ * `rate_calendar` override — `reloadRoomRatesForType`/`describeRatePerNight`
+ * resolve the ACTUAL per-night rate for the searched room type (as of the
+ * search's arrival date — a real, deliberate simplification: a later night
+ * of a multi-night stay CAN carry its own different override this one
+ * figure doesn't show) via the same `setupApi.resolveRate` endpoint
+ * `RateCodesTab.jsx`'s own calendar panel already uses. "On the Rate code
+ * drop box only" — this stays purely a dropdown-option enhancement, not a
+ * separate field or summary elsewhere on this screen. Flagged, not fixed
+ * here: this reuses the same `setup.view` permission `listRoomTypes`/
+ * `listRateCodes` above already require, and SECURITY.md §5's matrix marks
+ * Setup `✗` for `front_desk` — the role this screen's own booking flow is
+ * for — so this resolve (like the room-type/rate-code lists themselves)
+ * degrades to `rc.base_rate` for a front_desk account today, a pre-existing
+ * gap this pass didn't introduce and doesn't fix.
  */
 export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const [roomTypes, setRoomTypes] = useState(null);
@@ -93,6 +111,20 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const [availability, setAvailability] = useState(null);
   const [freeRoomsNow, setFreeRoomsNow] = useState(null);
   const [eligiblePreferredRooms, setEligiblePreferredRooms] = useState(null);
+  // Gap closure (user-reported): "when Room type is selected it shld show
+  // the Rate/cost per night on the Rate code drop box only." `rateCodes`
+  // carries only each code's own property-wide `base_rate` — the ACTUAL
+  // per-night rate for the room type just searched can differ, via a
+  // `rate_calendar` date/room-type override (TESTING.md SET-6: "date
+  // override wins over rate-code base rate"). Keyed by rate_code_id (a
+  // string, since that's how the <option value> below compares it) ->
+  // `{rate, overridden}` from `setupApi.resolveRate`, resolved against the
+  // stay's own arrival date — the representative "per night" figure shown
+  // in the dropdown, not a per-night breakdown for the whole stay (a real,
+  // deliberate simplification: a multi-night stay CAN have a different
+  // rate on a later night via its own override, which this one figure
+  // doesn't capture — flagged here rather than silently assumed complete).
+  const [roomRatesByCode, setRoomRatesByCode] = useState({});
   const [searchError, setSearchError] = useState(null);
   const [searching, setSearching] = useState(false);
 
@@ -186,12 +218,40 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     }
   }
 
+  /**
+   * Gap closure (user-reported): the Rate code dropdown's own per-night
+   * figure — see `roomRatesByCode`'s own state comment for what "per
+   * night" means here. One `resolveRate` call per active rate code
+   * (there's no single endpoint that resolves every code for a room type
+   * at once — `GET /rate-calendar/resolve` is inherently per rate code),
+   * run in parallel and never let one code's failure blank the others —
+   * `Promise.allSettled`, the same reasoning `reloadFreeRoomsNow`'s own
+   * per-widget degradation uses, just per-entry instead of per-widget. A
+   * code whose resolve fails (or hasn't resolved yet) simply falls back to
+   * its own `base_rate` in the dropdown below — this is a display
+   * enhancement, never a reason booking can't proceed.
+   */
+  async function reloadRoomRatesForType(roomTypeId, arrivalDate) {
+    if (!roomTypeId || !arrivalDate) return;
+    const codes = rateCodes ?? [];
+    const results = await Promise.allSettled(
+      codes.map((rc) => setupApi.resolveRate({ rateCodeId: rc.id, roomTypeId, stayDate: arrivalDate }))
+    );
+    const next = {};
+    codes.forEach((rc, index) => {
+      const result = results[index];
+      if (result.status === 'fulfilled') next[String(rc.id)] = result.value;
+    });
+    setRoomRatesByCode(next);
+  }
+
   async function handleSearch(event) {
     event.preventDefault();
     setSearching(true);
     setSearchError(null);
     setBookSuccess(null);
     setFreeRoomsNow(null);
+    setRoomRatesByCode({});
     setBooking((current) => ({ ...current, preferred_room_id: '' }));
     // Gap closure (user-reported): "disable the book button ... wen payment
     // is done" — Book stays disabled once `bookSuccess` is set (see the
@@ -216,6 +276,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
         await reloadFreeRoomsNow(search.room_type_id);
       }
       await reloadEligiblePreferredRooms();
+      await reloadRoomRatesForType(search.room_type_id, search.arrival_date);
       // Gap closure (user-reported): the rate code dropdown showed every
       // active property-wide code regardless of the searched dates. A
       // previously-selected code that's no longer valid for THESE dates is
@@ -360,6 +421,23 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   // selectable when no code's own window covers these exact dates.
   const eligibleRateCodes = filterRateCodesForStay(rateCodes, search.arrival_date, search.departure_date);
   const rateCodesNarrowed = (rateCodes ?? []).length > 0 && eligibleRateCodes.length < (rateCodes ?? []).length;
+  /**
+   * Gap closure (user-reported): "when Room type is selected it shld show
+   * the Rate/cost per night on the Rate code drop box." Prefers the
+   * room-type-resolved rate (`roomRatesByCode`, from `reloadRoomRatesForType`)
+   * over the code's own generic `base_rate` — falls back to `base_rate`
+   * while that resolve is still in flight, or failed (e.g. a role without
+   * `setup.view` — see this file's own header on that gap). `overridden`
+   * flags a date/room-type-specific rate_calendar row, not the plain base
+   * rate, so staff can tell the figure isn't the code's own list price.
+   */
+  function describeRatePerNight(rateCode) {
+    const resolved = roomRatesByCode[String(rateCode.id)];
+    return {
+      amount: resolved ? resolved.rate : rateCode.base_rate,
+      overridden: Boolean(resolved?.overridden),
+    };
+  }
   const isFolioSettled = folio ? isBalanceSettled(folio.balance) : false;
 
   async function handleCashPayment() {
@@ -659,11 +737,14 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                   <option value="" disabled>
                     Select a rate code
                   </option>
-                  {eligibleRateCodes.map((rc) => (
-                    <option key={rc.id} value={rc.id}>
-                      {rc.code} — {rc.base_rate} {rc.currency}
-                    </option>
-                  ))}
+                  {eligibleRateCodes.map((rc) => {
+                    const { amount, overridden } = describeRatePerNight(rc);
+                    return (
+                      <option key={rc.id} value={rc.id}>
+                        {rc.code} — {amount} {rc.currency}/night{overridden ? ' (room override)' : ''}
+                      </option>
+                    );
+                  })}
                 </select>
                 {rateCodesNarrowed && (
                   <span className={formStyles.fieldHint}>Narrowed to rate codes valid for these dates.</span>
