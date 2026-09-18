@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AvailabilityTab } from '../AvailabilityTab.jsx';
 
@@ -162,19 +162,18 @@ describe('<AvailabilityTab>', () => {
 
     expect(mocks.resolveRate).toHaveBeenCalledWith({ rateCodeId: '1', roomTypeId: '1', stayDate: '2027-01-01' });
     const rateCodeSelect = screen.getByLabelText('Rate code');
-    expect(await within(rateCodeSelect).findByText('BAR — 175.00 NGN/night')).toBeInTheDocument();
+    expect(await within(rateCodeSelect).findByText(/^BAR — ₦175\.00\/night$/)).toBeInTheDocument();
     expect(within(rateCodeSelect).queryByText(/150\.00/)).not.toBeInTheDocument();
   });
 
   /**
-   * Gap closure (user-reported, with a screenshot): a closed, unselected
-   * native <select> only ever shows its placeholder text ("Select a rate
-   * code") — its own option list, however good, is invisible without a
-   * click. This proves the per-night rate is ALSO rendered directly on the
-   * page as plain text, with no interaction of any kind — the fix that
-   * closes the actual gap the screenshot showed.
+   * Gap closure (user-reported, fourth round): "remove the text list
+   * rendered below the field entirely — that information belongs in the
+   * dropdown, not duplicated beside it." The prior round's always-visible
+   * `<ul>` under the field is gone; the per-night rate lives ONLY inside
+   * each `<option>`'s own text now.
    */
-  it('shows the per-night rate directly on the page, with no dropdown interaction needed', async () => {
+  it('puts the per-night rate inside the dropdown option text, with no separate list rendered anywhere', async () => {
     mocks.resolveRate.mockResolvedValue({ rate: '5000.00', overridden: false });
     mocks.checkAvailability.mockResolvedValue({
       roomTypeId: '1',
@@ -192,17 +191,21 @@ describe('<AvailabilityTab>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
     await screen.findByText('2027-01-01');
 
-    // No click on the "Rate code" <select> at all — the amount is still on
-    // the page as plain, always-rendered text.
-    expect(await screen.findByText(/BAR: ₦5,000\.00\/night/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Rate code')).toHaveValue('');
+    const rateCodeSelect = await screen.findByLabelText('Rate code');
+    expect(within(rateCodeSelect).getByText(/^BAR — ₦5,000\.00\/night$/)).toBeInTheDocument();
+    // Not duplicated anywhere else on the page as a separate list item.
+    expect(screen.queryByRole('list')).not.toBeInTheDocument();
   });
 
   /**
-   * Gap closure (user-reported, third round, with a screenshot): "THE RATE
-   * CODE PUT ONLY THE PRICE OF THE ROOM TYPE SELECTED... SHOWING ALL THE
-   * RATE CODE ON THE DROP BOX [is] WRONG." Closed with a real
-   * room_types.primary_rate_code_id link, confirmed with the user.
+   * Gap closure (user-reported, rounds three and four): "THE RATE CODE PUT
+   * ONLY THE PRICE OF THE ROOM TYPE SELECTED... SHOWING ALL THE RATE CODE
+   * ON THE DROP BOX [is] WRONG" → "the dropdown still shows 'Select a rate
+   * code' — nothing pre-selected... those two rates belong to DIFFERENT
+   * room types." Closed with a real `room_types.primary_rate_code_id`
+   * link, confirmed with the user — and, round four, a single real
+   * `<select>` throughout (never a separate summary line) so the resolved
+   * price shows as the field's own closed-state text once auto-selected.
    */
   describe('a room type with a configured primary rate code', () => {
     const ROOM_TYPE_WITH_PRIMARY = { ...ROOM_TYPE, primary_rate_code_id: '1' };
@@ -219,7 +222,7 @@ describe('<AvailabilityTab>', () => {
       await screen.findByText('2027-01-01');
     }
 
-    it('collapses to just that one rate code, auto-selected, no dropdown shown', async () => {
+    it('auto-selects just that one rate code — the select shows its price as its own closed-state text, the other code not offered', async () => {
       mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE_WITH_PRIMARY]);
       mocks.listRateCodes.mockResolvedValue([RATE_CODE, OTHER_CODE]);
       mocks.resolveRate.mockResolvedValue({ rate: '150.00', overridden: false });
@@ -232,14 +235,15 @@ describe('<AvailabilityTab>', () => {
 
       await searchDeluxe();
 
-      expect(await screen.findByText(/BAR: ₦150\.00\/night/)).toBeInTheDocument();
-      // The other, non-primary rate code never appears — not in a select,
-      // not in a list, until "Use a different rate code" is clicked.
-      expect(screen.queryByText(/CORP-ACME/)).not.toBeInTheDocument();
-      expect(screen.queryByLabelText('Rate code')).not.toBeInTheDocument();
+      const rateCodeSelect = await screen.findByLabelText('Rate code');
+      await waitFor(() => expect(rateCodeSelect).toHaveValue('1'));
+      expect(within(rateCodeSelect).getByText(/^BAR — ₦150\.00\/night$/)).toBeInTheDocument();
+      // The other, non-primary rate code isn't even offered as an option
+      // until "Use a different rate code" is clicked.
+      expect(within(rateCodeSelect).queryByText(/CORP-ACME/)).not.toBeInTheDocument();
     });
 
-    it('auto-selects the primary rate code, so Book is enabled without any manual pick', async () => {
+    it('Book is enabled without any manual pick, since the primary is already selected', async () => {
       mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE_WITH_PRIMARY]);
       mocks.listRateCodes.mockResolvedValue([RATE_CODE]);
       mocks.resolveRate.mockResolvedValue({ rate: '150.00', overridden: false });
@@ -252,7 +256,7 @@ describe('<AvailabilityTab>', () => {
       mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
 
       await searchDeluxe();
-      await screen.findByText(/BAR: ₦150\.00\/night/);
+      await waitFor(() => expect(screen.getByLabelText('Rate code')).toHaveValue('1'));
       await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
       await userEvent.click(screen.getByRole('button', { name: 'Book' }));
 
@@ -260,7 +264,7 @@ describe('<AvailabilityTab>', () => {
       expect(mocks.createReservation).toHaveBeenCalledWith(expect.objectContaining({ rate_code_id: '1' }));
     });
 
-    it('"Use a different rate code" reveals the full picker for a corporate/negotiated rate', async () => {
+    it('"Use a different rate code" widens the SAME select\'s options for a corporate/negotiated rate, without resetting the current selection', async () => {
       mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE_WITH_PRIMARY]);
       mocks.listRateCodes.mockResolvedValue([RATE_CODE, OTHER_CODE]);
       mocks.resolveRate.mockResolvedValue({ rate: '150.00', overridden: false });
@@ -273,12 +277,14 @@ describe('<AvailabilityTab>', () => {
       mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
 
       await searchDeluxe();
-      await screen.findByText(/BAR: ₦150\.00\/night/);
+      const rateCodeSelect = screen.getByLabelText('Rate code');
+      await waitFor(() => expect(rateCodeSelect).toHaveValue('1'));
 
       await userEvent.click(screen.getByRole('button', { name: 'Use a different rate code' }));
 
-      const rateCodeSelect = await screen.findByLabelText('Rate code');
       expect(within(rateCodeSelect).getByText(/^CORP-ACME —/)).toBeInTheDocument();
+      expect(rateCodeSelect).toHaveValue('1'); // unchanged by revealing the rest
+
       await userEvent.selectOptions(rateCodeSelect, '2');
       await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
       await userEvent.click(screen.getByRole('button', { name: 'Book' }));
@@ -287,7 +293,7 @@ describe('<AvailabilityTab>', () => {
       expect(mocks.createReservation).toHaveBeenCalledWith(expect.objectContaining({ rate_code_id: '2' }));
     });
 
-    it('falls back to the full picker when this room type has no primary rate code configured', async () => {
+    it('falls back to the full picker, nothing pre-selected, when this room type has no primary rate code configured', async () => {
       mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE]); // no primary_rate_code_id
       mocks.listRateCodes.mockResolvedValue([RATE_CODE, OTHER_CODE]);
       mocks.checkAvailability.mockResolvedValue({
@@ -299,7 +305,10 @@ describe('<AvailabilityTab>', () => {
 
       await searchDeluxe();
 
-      expect(await screen.findByLabelText('Rate code')).toBeInTheDocument();
+      const rateCodeSelect = await screen.findByLabelText('Rate code');
+      expect(rateCodeSelect).toHaveValue('');
+      expect(within(rateCodeSelect).getByText(/^BAR —/)).toBeInTheDocument();
+      expect(within(rateCodeSelect).getByText(/^CORP-ACME —/)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Use a different rate code' })).not.toBeInTheDocument();
     });
 
@@ -316,7 +325,8 @@ describe('<AvailabilityTab>', () => {
 
       await searchDeluxe();
 
-      expect(await screen.findByLabelText('Rate code')).toBeInTheDocument();
+      const rateCodeSelect = await screen.findByLabelText('Rate code');
+      expect(rateCodeSelect).toHaveValue('');
       expect(screen.queryByRole('button', { name: 'Use a different rate code' })).not.toBeInTheDocument();
     });
   });
@@ -340,7 +350,7 @@ describe('<AvailabilityTab>', () => {
     await screen.findByText('2027-01-01');
 
     expect(
-      await within(screen.getByLabelText('Rate code')).findByText('BAR — 200.00 NGN/night (room override)')
+      await within(screen.getByLabelText('Rate code')).findByText(/^BAR — ₦200\.00\/night \(room override\)$/)
     ).toBeInTheDocument();
   });
 
@@ -363,7 +373,7 @@ describe('<AvailabilityTab>', () => {
     await screen.findByText('2027-01-01');
 
     expect(
-      await within(screen.getByLabelText('Rate code')).findByText('BAR — 150.00 NGN/night')
+      await within(screen.getByLabelText('Rate code')).findByText(/^BAR — ₦150\.00\/night$/)
     ).toBeInTheDocument();
   });
 
