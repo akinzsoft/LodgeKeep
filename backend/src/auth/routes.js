@@ -5,9 +5,12 @@
  *
  * `resolveTenant` is passed in and applied per-route, only to the endpoints
  * that genuinely run before — or without needing — a verified `req.context`
- * from `authenticate()`: login, refresh, the two password-reset steps, and
- * (gap closure — see `service.js`'s own `staffLogout` header) logout. Not
- * `/switch-property`, which genuinely needs the authenticated context's
+ * from `authenticate()`: login, refresh, the request-a-reset-code step, and
+ * (gap closure — see `service.js`'s own `staffLogout` header) logout. The
+ * staff reset-completion step below does NOT use it — gap closure: since
+ * that flow moved to a numeric code, `tenantId` comes from decoding the
+ * `reset_token` itself, the same shape `/mfa/verify` already uses, not the
+ * Host header. Not `/switch-property`, which genuinely needs the authenticated context's
  * `userId` to look up `user_property_access`, and would otherwise fail a
  * legitimate authenticated request the instant the Host header didn't happen
  * to resolve (a stripped header behind some proxy, a client that only sends
@@ -78,6 +81,26 @@ const mfaVerifyRateLimiters = (prefix) =>
     accountField: 'challenge_token',
   });
 
+/**
+ * Gap closure (user-reported): the forgot-password flow now checks a
+ * 6-digit CODE, not an opaque 256-bit token — `tokenActionIpRateLimiter`'s
+ * own "the token IS its own account-equivalent, IP-alone is enough"
+ * reasoning no longer holds (an attacker can rotate IPs to grind a single
+ * still-valid `reset_token`'s much smaller code space). Modeled on
+ * `mfaVerifyRateLimiters` instead — the identical shape for the identical
+ * problem — keyed on `reset_token`, the body field a caller presents here.
+ */
+const passwordResetVerifyRateLimiters = (prefix) =>
+  ipAndAccountRateLimiters({
+    prefix,
+    message: AUTH_RATE_LIMIT_MESSAGE,
+    ipWindowMs: 60_000,
+    ipLimit: 60,
+    accountWindowMs: 15 * 60_000,
+    accountLimit: 30,
+    accountField: 'reset_token',
+  });
+
 const tokenActionIpRateLimiter = (prefix) =>
   redisRateLimiter({ windowMs: 15 * 60_000, limit: 20, prefix, message: AUTH_RATE_LIMIT_MESSAGE });
 
@@ -90,8 +113,11 @@ function staffAuthRouter({ resolveTenant }) {
   // own header has the full reasoning (SameSite=Lax is the real, primary
   // defense; this is a second, explicit check on top of it).
   router.post('/refresh', resolveTenant, requireSameOrigin, controller.staffRefresh);
-  router.post('/password/forgot', resolveTenant, ...passwordResetRequestRateLimiters('auth-staff-forgot:'), controller.requestPasswordReset);
-  router.post('/password/reset', resolveTenant, tokenActionIpRateLimiter('auth-staff-reset:'), controller.completePasswordReset);
+  router.post('/password/forgot', resolveTenant, ...passwordResetRequestRateLimiters('auth-staff-forgot:'), controller.requestPasswordResetCode);
+  // No resolveTenant here — mirrors `/mfa/verify` exactly: `tenantId` comes
+  // from decoding `reset_token`, not the Host header (see
+  // `password-reset-code.js`'s own header for why the token must carry it).
+  router.post('/password/reset', ...passwordResetVerifyRateLimiters('auth-staff-reset:'), controller.completePasswordResetWithCode);
   // Public, same reasoning as the password-reset pair above — an invitee
   // holds a token, not a session, so this must run before authenticate().
   router.post('/invitations/accept', resolveTenant, tokenActionIpRateLimiter('auth-staff-invite-accept:'), controller.acceptInvitation);

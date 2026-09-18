@@ -10,8 +10,8 @@ const mocks = vi.hoisted(() => ({
   logout: vi.fn(),
   switchProperty: vi.fn(),
   refresh: vi.fn(),
-  requestPasswordReset: vi.fn(),
-  completePasswordReset: vi.fn(),
+  requestPasswordResetCode: vi.fn(),
+  completePasswordResetWithCode: vi.fn(),
   configureApiClient: vi.fn(),
 }));
 
@@ -24,8 +24,8 @@ vi.mock('../../../../shared/api/index.js', async () => {
       logout: mocks.logout,
       switchProperty: mocks.switchProperty,
       refresh: mocks.refresh,
-      requestPasswordReset: mocks.requestPasswordReset,
-      completePasswordReset: mocks.completePasswordReset,
+      requestPasswordResetCode: mocks.requestPasswordResetCode,
+      completePasswordResetWithCode: mocks.completePasswordResetWithCode,
     },
     configureApiClient: mocks.configureApiClient,
   };
@@ -111,27 +111,86 @@ describe('<StaffLoginScreen>', () => {
     expect(screen.getByText(/you.re offline/i)).toBeInTheDocument();
   });
 
-  it('walks the forgot-password flow through to the sent confirmation, including the dev-only token', async () => {
-    mocks.requestPasswordReset.mockResolvedValue({ status: 'ok', dev_only_token: 'reset-token-abc' });
+  it('disables the forgot-password request step when isOffline too, matching the rest of the screen', async () => {
+    renderScreen({ isOffline: true });
+    await userEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+    expect(screen.getByText(/requesting a reset code is disabled/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send reset code' })).toBeDisabled();
+  });
+
+  it('shows the real backend error when requesting a reset code fails (e.g. rate limited), rather than failing silently', async () => {
+    mocks.requestPasswordResetCode.mockRejectedValue(
+      new ApiError({ code: 'RATE_LIMITED', message: 'Too many attempts — please wait a moment and try again.' })
+    );
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+    await userEvent.type(screen.getByLabelText('Email'), 'manager@alpha-hotels.example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Send reset code' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Too many attempts — please wait a moment and try again.');
+    // Stays on the request step for a retry — never bounces to sign-in or hangs.
+    expect(screen.getByRole('heading', { name: 'Reset your password' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send reset code' })).not.toBeDisabled();
+  });
+
+  it('walks the forgot-password flow through to a real code entry step, including the dev-only code', async () => {
+    mocks.requestPasswordResetCode.mockResolvedValue({ status: 'ok', reset_token: 'rt-1', dev_only_code: '482913' });
     renderScreen();
     await userEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
     expect(screen.getByRole('heading', { name: 'Reset your password' })).toBeInTheDocument();
 
     await userEvent.type(screen.getByLabelText('Email'), 'manager@alpha-hotels.example.com');
-    await userEvent.click(screen.getByRole('button', { name: 'Send reset link' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Send reset code' }));
 
-    expect(await screen.findByRole('heading', { name: 'Check your email' })).toBeInTheDocument();
-    expect(screen.getByText('reset-token-abc')).toBeInTheDocument();
-    expect(mocks.requestPasswordReset).toHaveBeenCalledWith({
+    expect(await screen.findByRole('heading', { name: 'Enter your reset code' })).toBeInTheDocument();
+    expect(screen.getByText('482913')).toBeInTheDocument();
+    expect(mocks.requestPasswordResetCode).toHaveBeenCalledWith({
       email: 'manager@alpha-hotels.example.com',
+    });
+
+    mocks.completePasswordResetWithCode.mockResolvedValue({ status: 'ok' });
+    await userEvent.type(screen.getByLabelText('Reset code'), '482913');
+    await userEvent.type(screen.getByLabelText('New password'), 'a brand new strong passphrase');
+    await userEvent.click(screen.getByRole('button', { name: 'Reset password' }));
+
+    expect(await screen.findByRole('heading', { name: 'Password reset' })).toBeInTheDocument();
+    expect(mocks.completePasswordResetWithCode).toHaveBeenCalledWith({
+      resetToken: 'rt-1',
+      code: '482913',
+      newPassword: 'a brand new strong passphrase',
     });
   });
 
-  it('returns to sign-in from the forgot-password view', async () => {
+  it('shows the real backend error on a failed verify, and keeps the code-entry form for a retry', async () => {
+    mocks.requestPasswordResetCode.mockResolvedValue({ status: 'ok', reset_token: 'rt-1', dev_only_code: null });
+    mocks.completePasswordResetWithCode.mockRejectedValue(
+      new ApiError({ code: 'AUTH_PASSWORD_RESET_CODE_INVALID', message: 'That reset code is incorrect or has expired.' })
+    );
+    renderScreen();
+    await userEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+    await userEvent.type(screen.getByLabelText('Email'), 'manager@alpha-hotels.example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Send reset code' }));
+
+    await screen.findByRole('heading', { name: 'Enter your reset code' });
+    await userEvent.type(screen.getByLabelText('Reset code'), '111111');
+    await userEvent.type(screen.getByLabelText('New password'), 'a brand new strong passphrase');
+    await userEvent.click(screen.getByRole('button', { name: 'Reset password' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('That reset code is incorrect or has expired.');
+    expect(screen.getByRole('heading', { name: 'Enter your reset code' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Reset code')).toBeInTheDocument();
+  });
+
+  it('returns to sign-in from the forgot-password view, and clears any stale reset state for the next attempt', async () => {
+    mocks.requestPasswordResetCode.mockResolvedValue({ status: 'ok', reset_token: 'rt-1', dev_only_code: '111111' });
     renderScreen();
     await userEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
     await userEvent.click(screen.getByRole('button', { name: 'Back to sign in' }));
     expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+
+    // A fresh attempt shows no leftover code/email from an abandoned one.
+    await userEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+    expect(screen.getByLabelText('Email')).toHaveValue('');
   });
 
   it('shows an honest "not available" panel for find-my-company rather than a fake working flow', async () => {

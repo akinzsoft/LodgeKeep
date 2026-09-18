@@ -137,7 +137,7 @@ export function AuthProvider({ children }) {
           // production only, also discloses it here as `dev_only_code` —
           // the same disclosure shape every other credential-issuing
           // endpoint in this codebase already uses
-          // (`requestPasswordReset` et al.) — `MfaChallengeScreen` shows
+          // (`requestPasswordResetCode` et al.) — `MfaChallengeScreen` shows
           // it the same way `ForgotPasswordScreen` shows its own.
           setMfaChallenge({ challengeToken: result.challengeToken, email, devOnlyCode: result.dev_only_code ?? null });
           setStatus(MFA_REQUIRED);
@@ -306,8 +306,8 @@ export function AuthProvider({ children }) {
     logout,
     cancelMfaChallenge,
     switchProperty,
-    requestPasswordReset: authApi.requestPasswordReset,
-    completePasswordReset: authApi.completePasswordReset,
+    requestPasswordResetCode: authApi.requestPasswordResetCode,
+    completePasswordResetWithCode: authApi.completePasswordResetWithCode,
     // Self-service "My Profile" screen (user-requested). `getMyProfile`/
     // `changeMyPassword` are raw passthroughs — neither needs to mutate
     // this context's own `user` state (a password change touches no

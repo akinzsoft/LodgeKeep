@@ -454,7 +454,7 @@ async function verifyRoomChargeOtpAndSettle({ context, guestOrder, code }) {
 
   // The single-use claim (ARCHITECTURE.md §5) — a conditional UPDATE with
   // an affected-row check, not read-then-write, the same shape
-  // `verifyStaffMfa`/`completePasswordReset` both already use. Guards the
+  // `verifyStaffMfa`/`completePasswordResetWithCode` both already use. Guards the
   // case two concurrent submissions of the same correct code both pass
   // the hash comparison above.
   const claimed = await db.table('pos_room_charge_otps').where({ id: pending.id }).whereNull('used_at').update({ used_at: new Date() });

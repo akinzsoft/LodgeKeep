@@ -168,7 +168,7 @@ describe('auth credential lifecycle', () => {
   describe('secrets are stored as digests, never as tokens', () => {
     const tokenColumns = [
       ['sessions', 'refresh_token_hash'],
-      ['password_resets', 'token_hash'],
+      ['password_reset_codes', 'code_hash'],
       ['user_invitations', 'token_hash'],
     ];
 
@@ -273,32 +273,37 @@ describe('auth credential lifecycle', () => {
   // ==================================================================
   // AUTH-7 / AUTH-8 — password reset
   // ==================================================================
-  describe('a password reset token is single-use (AUTH-7)', () => {
+  // Gap closure (user-reported): the forgot-password flow moved from an
+  // emailed reset LINK to an emailed numeric CODE (password_reset_codes,
+  // replacing password_resets entirely) — the single-use claim mechanism
+  // itself is unchanged, still a conditional UPDATE with an affected-row
+  // check, not read-then-write.
+  describe('a password reset code is single-use (AUTH-7)', () => {
     it('is claimed by exactly one of two simultaneous submissions', async () => {
-      const pending = byLabel(ctx.a.passwordResets, 'pending');
+      const pending = byLabel(ctx.a.passwordResetCodes, 'pending');
 
       const first = await tx
-        .trx('password_resets')
+        .trx('password_reset_codes')
         .where({ id: pending.id })
         .whereNull('used_at')
         .update({ used_at: tx.trx.fn.now() });
 
       const second = await tx
-        .trx('password_resets')
+        .trx('password_reset_codes')
         .where({ id: pending.id })
         .whereNull('used_at')
         .update({ used_at: tx.trx.fn.now() });
 
       // One and only one. This is the assertion AUTH-7 rests on: the second
-      // submission of the same link is rejected because it claimed no row, not
+      // submission of the same code is rejected because it claimed no row, not
       // because the code re-read used_at and found it set.
       expect([first, second]).toEqual([1, 0]);
     });
 
-    it('treats an already-used token as spent without needing a status column', async () => {
-      const used = byLabel(ctx.a.passwordResets, 'used');
+    it('treats an already-used code as spent without needing a status column', async () => {
+      const used = byLabel(ctx.a.passwordResetCodes, 'used');
       const claimed = await tx
-        .trx('password_resets')
+        .trx('password_reset_codes')
         .where({ id: used.id })
         .whereNull('used_at')
         .update({ used_at: tx.trx.fn.now() });

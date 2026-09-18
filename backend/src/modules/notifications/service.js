@@ -44,6 +44,12 @@ const EVENT_TEMPLATE_KEYS = {
   // recipient is staff, not a guest, the same borrowed-field reuse
   // `staff.invited` already established.
   'staff.mfa_code_requested': 'staff_mfa_code',
+  // Gap closure (user-reported): the forgot-password flow now emails a
+  // 6-digit code, not a reset link — staff forgot-password had zero real
+  // email delivery before this pass (the old link-based flow only ever
+  // returned a dev-only token). Same borrowed `guestEmail` reuse as
+  // `staff.mfa_code_requested` immediately above.
+  'staff.password_reset_code_requested': 'staff_password_reset_code',
   // PLAN.md Phase 4 (Accounts Receivable) — the recipient is a company's own
   // billing contact, not a guest at all. Rather than borrowing `guestEmail`
   // a third time, these two events use the new, correctly-named
@@ -173,6 +179,14 @@ const DEFAULT_TEMPLATES = {
       paragraph('Use this code to finish signing in to LodgeKeep:') +
       codeBlock('{{code}}') +
       note('This code expires in {{expiresInMinutes}} minute(s). If you did not try to sign in, you can safely ignore this email.'),
+  },
+  staff_password_reset_code: {
+    subject: 'Your LodgeKeep password reset code',
+    body_html:
+      heading('Reset your password') +
+      paragraph('Use this code to finish resetting your LodgeKeep password:') +
+      codeBlock('{{code}}') +
+      note('This code expires in {{expiresInMinutes}} minute(s). If you did not request a password reset, you can safely ignore this email — your password will not change.'),
   },
   ar_invoice_generated: {
     subject: 'Invoice {{invoiceNumber}} from {{propertyName}}',

@@ -68,7 +68,7 @@ const { SCOPES, scopeOf } = require('../../shared/table-scopes');
  *
  *   - Every column here carries a real, migration-declared UNIQUE constraint
  *     (`tenants.slug`, `tenant_domains.domain`, `sessions.refresh_token_hash`,
- *     `password_resets.token_hash`, `user_invitations.token_hash`). A caller
+ *     `user_invitations.token_hash`). A caller
  *     can resolve the one row a value they already possess maps to; they
  *     cannot browse, list, or guess, because an exact-match lookup on a unique
  *     column returns at most one row no matter who asks.
@@ -89,7 +89,6 @@ const BOOTSTRAP_TABLES = Object.freeze({
   tenants: ['slug', 'id'],
   tenant_domains: ['domain'],
   sessions: ['refresh_token_hash'],
-  password_resets: ['token_hash'],
   user_invitations: ['token_hash'],
 });
 /**
