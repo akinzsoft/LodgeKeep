@@ -49,6 +49,25 @@
   color: var(--text-secondary);
 }
 
+/* Gap closure (user-reported, with a screenshot): the rate code dropdown's
+   own per-night figures, always visible with no click needed — a closed
+   native <select> shows only its placeholder/selected value, never its
+   option list, so the per-night amount on each <option> was invisible
+   until the dropdown was actually opened. */
+.rateList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.rateListItem {
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
 .checkboxField {
   display: flex;
   align-items: center;

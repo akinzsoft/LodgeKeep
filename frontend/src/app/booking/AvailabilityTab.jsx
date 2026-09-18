@@ -3,7 +3,7 @@ import { Card, Button, DataTable, StatusPill } from '../../shared/components/ind
 import { setupApi, reservationsApi, cashieringApi, groupBlocksApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { filterRateCodesForStay } from './rate-code-eligibility.js';
-import { Money, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
+import { Money, formatMoney, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
 
@@ -748,6 +748,33 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                 </select>
                 {rateCodesNarrowed && (
                   <span className={formStyles.fieldHint}>Narrowed to rate codes valid for these dates.</span>
+                )}
+                {/* Gap closure (user-reported, with a screenshot): a closed,
+                    unselected native <select> shows only its placeholder —
+                    the per-night rate on each <option> above is invisible
+                    until the dropdown is actually opened. This list is the
+                    same figures, always visible with no click required, so
+                    "select this room type, see the rate" is true the moment
+                    the search resolves, not only once the dropdown is
+                    opened. */}
+                {eligibleRateCodes.length > 0 && (
+                  <ul className={formStyles.rateList}>
+                    {eligibleRateCodes.map((rc) => {
+                      const { amount, overridden } = describeRatePerNight(rc);
+                      // Plain `formatMoney()` text, not the `<Money>` component
+                      // — this is a short inline list, not a money column
+                      // needing tabular-nums alignment, and one plain text
+                      // node per line keeps this simple to query in tests
+                      // (RTL's `getByText` doesn't need to reach into a
+                      // nested <span> to match the whole line).
+                      return (
+                        <li key={rc.id} className={formStyles.rateListItem}>
+                          {rc.code}: {formatMoney(amount, rc.currency)}/night
+                          {overridden ? ' (room override)' : ''}
+                        </li>
+                      );
+                    })}
+                  </ul>
                 )}
               </div>
             </div>
