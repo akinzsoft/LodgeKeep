@@ -40,6 +40,15 @@
   width: 100%;
 }
 
+/* Gap closure (user-reported): a small, muted note under a field — e.g.
+   the rate code dropdown explaining it was narrowed to this search's own
+   dates. Generic (unlike `.paymentPanelHint`, scoped to the payment panel
+   only) so any field can reuse it. */
+.fieldHint {
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
 .checkboxField {
   display: flex;
   align-items: center;

@@ -146,7 +146,7 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
           )}
           <p className={styles.hint}>
             Trial, suspended, and offboarding tenants all remain fully readable — every write is blocked until
-            reactivated (PRODUCT_REQUIREMENTS.md §3.22).{' '}
+            reactivated.{' '}
             {role !== 'admin' &&
               'Suspend/reactivate/offboard require the platform admin tier — your account can still try, but the server will refuse it.'}
           </p>
@@ -292,7 +292,7 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
           )}
           <p className={styles.hint}>
             View this tenant&apos;s own staff-app screens and data, read-only, for a time-bounded support session. Starting
-            and ending this session is recorded and shown to the tenant below (SECURITY.md §2); read-only access is
+            and ending this session is recorded and shown to the tenant below; read-only access is
             enforced by the server for the whole session, but individual reads are not separately logged.
           </p>
           <form className={styles.form} onSubmit={handleImpersonate}>

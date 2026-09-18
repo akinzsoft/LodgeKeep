@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Card, Button, DataTable, StatusPill } from '../../shared/components/index.js';
 import { setupApi, reservationsApi, cashieringApi, groupBlocksApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
+import { filterRateCodesForStay } from './rate-code-eligibility.js';
 import { Money, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
@@ -64,6 +65,18 @@ import styles from './BookingScreen.module.css';
  * payment happens now, and an unpaid balance is a normal, expected outcome
  * here, settled later via Cashiering or at check-out — never a reason to
  * roll the booking back.
+ *
+ * Gap closure (user-reported): "the rate code dropdown requires manual
+ * selection and shows all rate codes regardless of room type." Checked
+ * against the real schema first, not assumed — see `rate-code-eligibility.js`'s
+ * own header: rate codes are property-wide, not room-type scoped at all, so
+ * there is no room-type filter to apply; the one real filter is the rate
+ * code's own `valid_from`/`valid_to` window against the searched dates
+ * (`eligibleRateCodes` below). Auto-selecting a default rate code (the
+ * request's other half) was NOT built — `rate_codes` has no "default" flag,
+ * and picking one by another rule (e.g. first alphabetically) would be
+ * inventing a business decision, not implementing one; flagged back to the
+ * user rather than guessed.
  */
 export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const [roomTypes, setRoomTypes] = useState(null);
@@ -203,6 +216,22 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
         await reloadFreeRoomsNow(search.room_type_id);
       }
       await reloadEligiblePreferredRooms();
+      // Gap closure (user-reported): the rate code dropdown showed every
+      // active property-wide code regardless of the searched dates. A
+      // previously-selected code that's no longer valid for THESE dates is
+      // cleared here — checked against the freshly-searched dates, not
+      // reset unconditionally, so re-running the same search (unchanged
+      // dates) keeps a staff member's already-made choice rather than
+      // making them reselect it every time. See `eligibleRateCodes`'s own
+      // definition below and `rate-code-eligibility.js`'s header for what
+      // "valid" means here.
+      setBooking((current) => {
+        if (!current.rate_code_id) return current;
+        const stillEligible = filterRateCodesForStay(rateCodes, search.arrival_date, search.departure_date).some(
+          (rc) => String(rc.id) === String(current.rate_code_id)
+        );
+        return stillEligible ? current : { ...current, rate_code_id: '' };
+      });
     } catch (caught) {
       setAvailability(null);
       setSearchError(caught instanceof ApiError ? caught.message : 'Could not check availability.');
@@ -323,6 +352,14 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   }
 
   const selectedGuest = (guests ?? []).find((guest) => String(guest.id) === String(booking.guest_id));
+  // Gap closure (user-reported): narrowed to codes valid for this search's
+  // own date range — see `rate-code-eligibility.js`'s own header for why
+  // there's no room-type narrowing to do (rate codes aren't room-type
+  // scoped in this schema at all; every active code applies to every room
+  // type). Falls back to the full list rather than leaving nothing
+  // selectable when no code's own window covers these exact dates.
+  const eligibleRateCodes = filterRateCodesForStay(rateCodes, search.arrival_date, search.departure_date);
+  const rateCodesNarrowed = (rateCodes ?? []).length > 0 && eligibleRateCodes.length < (rateCodes ?? []).length;
   const isFolioSettled = folio ? isBalanceSettled(folio.balance) : false;
 
   async function handleCashPayment() {
@@ -601,9 +638,19 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                   ))}
                 </select>
               </label>
-              <label className={formStyles.field}>
-                <span className={formStyles.label}>Rate code</span>
+              {/* A wrapping <label> computes its accessible name from ALL
+                  of its text content — see `door-access/SettingsTab.jsx`'s
+                  own precedent for this exact fix. The optional narrowing
+                  hint below must be a SIBLING of the <label>, not nested
+                  inside it, or `getByLabelText('Rate code')` (and a screen
+                  reader announcing this field) would pick up the hint text
+                  too the moment it renders. */}
+              <div className={formStyles.field}>
+                <label className={formStyles.label} htmlFor="rate-code-select">
+                  Rate code
+                </label>
                 <select
+                  id="rate-code-select"
                   className={formStyles.select}
                   value={booking.rate_code_id}
                   onChange={(event) => setBooking({ ...booking, rate_code_id: event.target.value })}
@@ -612,13 +659,16 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                   <option value="" disabled>
                     Select a rate code
                   </option>
-                  {(rateCodes ?? []).map((rc) => (
+                  {eligibleRateCodes.map((rc) => (
                     <option key={rc.id} value={rc.id}>
                       {rc.code} — {rc.base_rate} {rc.currency}
                     </option>
                   ))}
                 </select>
-              </label>
+                {rateCodesNarrowed && (
+                  <span className={formStyles.fieldHint}>Narrowed to rate codes valid for these dates.</span>
+                )}
+              </div>
             </div>
 
             <div className={formStyles.row}>
