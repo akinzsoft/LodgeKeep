@@ -62,7 +62,7 @@ RUN npm run build
 # Also pinned by digest, same reasoning — the tag alone already carries
 # the real version-sensitivity note above; the digest additionally makes
 # the pull itself reproducible.
-FROM caddy:2.11-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+FROM caddy:2.11-alpine@sha256:de23def33b17fb5d1290b0f6c2add1d70780e52341896c00a4c8a2a2fe9d355e
 COPY --from=build /app/dist /srv
 COPY docker/frontend/Caddyfile /etc/caddy/Caddyfile
 EXPOSE 80 443
