@@ -39,6 +39,15 @@ COPY frontend/ ./
 # the build" mistake worth checking for, not assuming.
 ARG VITE_TURNSTILE_SITE_KEY
 ENV VITE_TURNSTILE_SITE_KEY=$VITE_TURNSTILE_SITE_KEY
+# Real production bug, user-reported: frontend/src/app/auth/screens/tenant-url.js
+# builds a brand-new tenant's post-signup login URL from window.location
+# alone, which cannot distinguish "the bare APP_DOMAIN" from "an existing
+# tenant subdomain of it" once APP_DOMAIN is itself multi-level (e.g.
+# lodgekeep.planmsys.com) — that file's own header has the full story.
+# Threaded through the same way as VITE_TURNSTILE_SITE_KEY, above, reusing
+# docker-compose.prod.yml's own top-level APP_DOMAIN value.
+ARG VITE_APP_DOMAIN
+ENV VITE_APP_DOMAIN=$VITE_APP_DOMAIN
 RUN npm run build
 
 ################################################################################
