@@ -215,6 +215,77 @@ describe('Setup module (PLAN.md Phase 1)', () => {
       expect(res.body.data.code).toBe('ADMRT');
     });
 
+    /**
+     * Gap closure (user-reported): "the rate code drop box shows all rate
+     * codes, not only the selected room type's own price" — closed for
+     * real with `room_types.primary_rate_code_id`. Create-time is
+     * `setup.manage`, matching `base_rate`'s own precedent (only EDITING
+     * an existing room type is narrower — see the `room_types.update`
+     * tests below).
+     */
+    it('admin (setup.manage) can create a room type with a primary rate code', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'admin' });
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+
+      const res = await t.request
+        .post('/api/v1/room-types')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          code: 'PRIMRT',
+          name: 'Has a primary rate',
+          default_occupancy: 2,
+          base_rate: '100.00',
+          primary_rate_code_id: ctx.a.rateCodes[0].id,
+        });
+      expect(res.status).toBe(201);
+      expect(String(res.body.data.primary_rate_code_id)).toBe(String(ctx.a.rateCodes[0].id));
+    });
+
+    it('rejects a primary rate code that does not exist at this property with a friendly 400, not a raw FK error', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'admin' });
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+
+      const res = await t.request
+        .post('/api/v1/room-types')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ code: 'BADRT', name: 'Bad primary rate', default_occupancy: 2, base_rate: '100.00', primary_rate_code_id: '999999' });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_PRIMARY_RATE_CODE_NOT_FOUND');
+    });
+
+    it('rejects a primary rate code that belongs to a different tenant', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'admin' });
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+
+      const res = await t.request
+        .post('/api/v1/room-types')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          code: 'CROSSRT',
+          name: 'Cross-tenant primary rate',
+          default_occupancy: 2,
+          base_rate: '100.00',
+          primary_rate_code_id: ctx.b.rateCodes[0].id,
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_PRIMARY_RATE_CODE_NOT_FOUND');
+    });
+
     it('with no active property at all, a setup.view-gated route is 403, not 500', async () => {
       const token = tokenFor({ tenant: ctx.a, propertyId: null });
       const res = await t.request.get('/api/v1/room-types').set('Authorization', `Bearer ${token}`);
@@ -261,6 +332,49 @@ describe('Setup module (PLAN.md Phase 1)', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.base_rate).toBe('999.00');
       expect(res.body.data.name).toBe('Renamed Deluxe');
+    });
+
+    it('super_admin (room_types.update) can set, then clear, a room type\'s primary rate code', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'super_admin' });
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+
+      const setRes = await t.request
+        .patch(`/api/v1/room-types/${ctx.a.roomTypes[0].id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ primary_rate_code_id: ctx.a.rateCodes[0].id });
+      expect(setRes.status).toBe(200);
+      expect(String(setRes.body.data.primary_rate_code_id)).toBe(String(ctx.a.rateCodes[0].id));
+
+      // An empty string (the shape a cleared <select> form field sends) means
+      // "no primary rate code," the same as omitting it entirely.
+      const clearRes = await t.request
+        .patch(`/api/v1/room-types/${ctx.a.roomTypes[0].id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ primary_rate_code_id: '' });
+      expect(clearRes.status).toBe(200);
+      expect(clearRes.body.data.primary_rate_code_id).toBeNull();
+    });
+
+    it('rejects updating a room type to a primary rate code from a different tenant', async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'super_admin' });
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+
+      const res = await t.request
+        .patch(`/api/v1/room-types/${ctx.a.roomTypes[0].id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ primary_rate_code_id: ctx.b.rateCodes[0].id });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_PRIMARY_RATE_CODE_NOT_FOUND');
     });
 
     /**

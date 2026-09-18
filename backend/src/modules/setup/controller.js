@@ -209,6 +209,7 @@ async function createRoomType(req, res, next) {
       defaultOccupancy,
       baseRate,
       photos: req.body?.photos,
+      primaryRateCodeId: normalizePrimaryRateCodeId(req.body?.primary_rate_code_id),
     });
     await req.audit({ entityType: 'room_types', entityId: roomType.id, action: 'create', afterState: roomType });
     res.status(201).json(ok(roomType));
@@ -236,7 +237,13 @@ function pickRoomTypeChanges(body) {
   if (body?.default_occupancy !== undefined) changes.default_occupancy = Number(body.default_occupancy);
   if (body?.base_rate !== undefined) changes.base_rate = body.base_rate;
   if (body?.photos !== undefined) changes.photos = body.photos;
+  if (body?.primary_rate_code_id !== undefined) changes.primary_rate_code_id = normalizePrimaryRateCodeId(body.primary_rate_code_id);
   return changes;
+}
+
+/** An empty-string form value means "no primary rate code," the same as omitting it — normalized to a real `null` before it ever reaches the FK-validated service layer. */
+function normalizePrimaryRateCodeId(value) {
+  return value === '' || value == null ? null : value;
 }
 
 async function updateRoomType(req, res, next) {

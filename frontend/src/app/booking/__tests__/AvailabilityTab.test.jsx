@@ -51,7 +51,13 @@ vi.mock('../../../shared/paystack.js', () => ({
 }));
 
 const ROOM_TYPE = { id: '1', code: 'DLX', name: 'Deluxe' };
-const RATE_CODE = { id: '1', code: 'BAR', base_rate: '150.00', currency: 'NGN' };
+// `valid_from` is NOT NULL on the real `rate_codes` table (backend/migrations/
+// 20260905092000_create_rate_codes.js) — always populated on real data, set
+// here too so `resolvePrimaryRateCodeForStay`'s own date check (no
+// empty-result fallback, unlike `filterRateCodesForStay`) resolves this
+// fixture correctly rather than accidentally exercising its "nothing is
+// date-valid" branch instead.
+const RATE_CODE = { id: '1', code: 'BAR', base_rate: '150.00', currency: 'NGN', valid_from: '2020-01-01', valid_to: null };
 const GUEST = { id: '1', first_name: 'Jordan', last_name: 'Fixture' };
 const GUEST_WITH_EMAIL = { id: '2', first_name: 'Sam', last_name: 'Withemail', email: 'sam@example.com' };
 const GUEST_WITH_PHONE = { id: '3', first_name: 'Pat', last_name: 'Withphone', phone: '0801 234 5678' };
@@ -62,7 +68,13 @@ describe('<AvailabilityTab>', () => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE]);
     mocks.listRateCodes.mockResolvedValue([RATE_CODE]);
-    mocks.resolveRate.mockResolvedValue({ rate: RATE_CODE.base_rate, overridden: false });
+    // A distinct value from `RATE_CODE.base_rate` (and from the folio/
+    // payment amounts other, unrelated tests in this file assert on
+    // broadly) — the new always-visible rate list (below) would otherwise
+    // duplicate "150.00" text elsewhere on the page and break an
+    // unscoped `findByText(/150\.00/)` in a test that has nothing to do
+    // with rate codes at all.
+    mocks.resolveRate.mockResolvedValue({ rate: '75.00', overridden: false });
     mocks.listGuests.mockResolvedValue([GUEST, GUEST_WITH_EMAIL, GUEST_WITH_PHONE]);
     mocks.listFreeRooms.mockResolvedValue([ROOM]);
     mocks.listEligiblePreferredRooms.mockResolvedValue([ROOM]);
@@ -152,6 +164,161 @@ describe('<AvailabilityTab>', () => {
     const rateCodeSelect = screen.getByLabelText('Rate code');
     expect(await within(rateCodeSelect).findByText('BAR — 175.00 NGN/night')).toBeInTheDocument();
     expect(within(rateCodeSelect).queryByText(/150\.00/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * Gap closure (user-reported, with a screenshot): a closed, unselected
+   * native <select> only ever shows its placeholder text ("Select a rate
+   * code") — its own option list, however good, is invisible without a
+   * click. This proves the per-night rate is ALSO rendered directly on the
+   * page as plain text, with no interaction of any kind — the fix that
+   * closes the actual gap the screenshot showed.
+   */
+  it('shows the per-night rate directly on the page, with no dropdown interaction needed', async () => {
+    mocks.resolveRate.mockResolvedValue({ rate: '5000.00', overridden: false });
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2027-01-01');
+
+    // No click on the "Rate code" <select> at all — the amount is still on
+    // the page as plain, always-rendered text.
+    expect(await screen.findByText(/BAR: ₦5,000\.00\/night/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Rate code')).toHaveValue('');
+  });
+
+  /**
+   * Gap closure (user-reported, third round, with a screenshot): "THE RATE
+   * CODE PUT ONLY THE PRICE OF THE ROOM TYPE SELECTED... SHOWING ALL THE
+   * RATE CODE ON THE DROP BOX [is] WRONG." Closed with a real
+   * room_types.primary_rate_code_id link, confirmed with the user.
+   */
+  describe('a room type with a configured primary rate code', () => {
+    const ROOM_TYPE_WITH_PRIMARY = { ...ROOM_TYPE, primary_rate_code_id: '1' };
+    const OTHER_CODE = { id: '2', code: 'CORP-ACME', base_rate: '120.00', currency: 'NGN', valid_from: '2020-01-01', valid_to: null };
+
+    async function searchDeluxe() {
+      render(<AvailabilityTab />);
+      await screen.findByText('Deluxe (DLX)');
+      await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+      const dateInputs = document.querySelectorAll('input[type="date"]');
+      await userEvent.type(dateInputs[0], '2027-01-01');
+      await userEvent.type(dateInputs[1], '2027-01-02');
+      await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+      await screen.findByText('2027-01-01');
+    }
+
+    it('collapses to just that one rate code, auto-selected, no dropdown shown', async () => {
+      mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE_WITH_PRIMARY]);
+      mocks.listRateCodes.mockResolvedValue([RATE_CODE, OTHER_CODE]);
+      mocks.resolveRate.mockResolvedValue({ rate: '150.00', overridden: false });
+      mocks.checkAvailability.mockResolvedValue({
+        roomTypeId: '1',
+        physicalCount: 5,
+        minSellable: 3,
+        nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+      });
+
+      await searchDeluxe();
+
+      expect(await screen.findByText(/BAR: ₦150\.00\/night/)).toBeInTheDocument();
+      // The other, non-primary rate code never appears — not in a select,
+      // not in a list, until "Use a different rate code" is clicked.
+      expect(screen.queryByText(/CORP-ACME/)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Rate code')).not.toBeInTheDocument();
+    });
+
+    it('auto-selects the primary rate code, so Book is enabled without any manual pick', async () => {
+      mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE_WITH_PRIMARY]);
+      mocks.listRateCodes.mockResolvedValue([RATE_CODE]);
+      mocks.resolveRate.mockResolvedValue({ rate: '150.00', overridden: false });
+      mocks.checkAvailability.mockResolvedValue({
+        roomTypeId: '1',
+        physicalCount: 5,
+        minSellable: 3,
+        nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+      });
+      mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
+
+      await searchDeluxe();
+      await screen.findByText(/BAR: ₦150\.00\/night/);
+      await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
+      await userEvent.click(screen.getByRole('button', { name: 'Book' }));
+
+      expect(await screen.findByText(/Booked — confirmation ABC123/)).toBeInTheDocument();
+      expect(mocks.createReservation).toHaveBeenCalledWith(expect.objectContaining({ rate_code_id: '1' }));
+    });
+
+    it('"Use a different rate code" reveals the full picker for a corporate/negotiated rate', async () => {
+      mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE_WITH_PRIMARY]);
+      mocks.listRateCodes.mockResolvedValue([RATE_CODE, OTHER_CODE]);
+      mocks.resolveRate.mockResolvedValue({ rate: '150.00', overridden: false });
+      mocks.checkAvailability.mockResolvedValue({
+        roomTypeId: '1',
+        physicalCount: 5,
+        minSellable: 3,
+        nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+      });
+      mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
+
+      await searchDeluxe();
+      await screen.findByText(/BAR: ₦150\.00\/night/);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Use a different rate code' }));
+
+      const rateCodeSelect = await screen.findByLabelText('Rate code');
+      expect(within(rateCodeSelect).getByText(/^CORP-ACME —/)).toBeInTheDocument();
+      await userEvent.selectOptions(rateCodeSelect, '2');
+      await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
+      await userEvent.click(screen.getByRole('button', { name: 'Book' }));
+
+      expect(await screen.findByText(/Booked — confirmation ABC123/)).toBeInTheDocument();
+      expect(mocks.createReservation).toHaveBeenCalledWith(expect.objectContaining({ rate_code_id: '2' }));
+    });
+
+    it('falls back to the full picker when this room type has no primary rate code configured', async () => {
+      mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE]); // no primary_rate_code_id
+      mocks.listRateCodes.mockResolvedValue([RATE_CODE, OTHER_CODE]);
+      mocks.checkAvailability.mockResolvedValue({
+        roomTypeId: '1',
+        physicalCount: 5,
+        minSellable: 3,
+        nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+      });
+
+      await searchDeluxe();
+
+      expect(await screen.findByLabelText('Rate code')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Use a different rate code' })).not.toBeInTheDocument();
+    });
+
+    it('falls back to the full picker when the configured primary is no longer date-valid for this search', async () => {
+      const lapsedPrimary = { ...RATE_CODE, valid_from: '2020-01-01', valid_to: '2021-12-31' };
+      mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE_WITH_PRIMARY]);
+      mocks.listRateCodes.mockResolvedValue([lapsedPrimary, OTHER_CODE]);
+      mocks.checkAvailability.mockResolvedValue({
+        roomTypeId: '1',
+        physicalCount: 5,
+        minSellable: 3,
+        nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+      });
+
+      await searchDeluxe();
+
+      expect(await screen.findByLabelText('Rate code')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Use a different rate code' })).not.toBeInTheDocument();
+    });
   });
 
   it('flags a room/date-specific override explicitly, in the dropdown text', async () => {

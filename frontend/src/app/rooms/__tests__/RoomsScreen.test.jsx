@@ -5,6 +5,7 @@ import { RoomsScreen } from '../RoomsScreen.jsx';
 
 const mocks = vi.hoisted(() => ({
   listRoomTypes: vi.fn(),
+  listRateCodes: vi.fn(),
   listRooms: vi.fn(),
 }));
 
@@ -14,6 +15,7 @@ vi.mock('../../../shared/api/index.js', async () => {
     ...actual,
     setupApi: {
       listRoomTypes: mocks.listRoomTypes,
+      listRateCodes: mocks.listRateCodes,
       listRooms: mocks.listRooms,
     },
   };
@@ -31,6 +33,7 @@ describe('<RoomsScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listRoomTypes.mockResolvedValue([]);
+    mocks.listRateCodes.mockResolvedValue([]);
     mocks.listRooms.mockResolvedValue([]);
   });
 

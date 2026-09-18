@@ -33,6 +33,14 @@
  * none covers this particular search), the full list is offered instead of
  * blocking a booking the backend would still accept — "filter," never "hide
  * the only way to book."
+ *
+ * Gap closure (user-reported, with a screenshot, after the above shipped):
+ * "put only the price of the room type selected" — every rate code being
+ * genuinely valid for every room type (above) is real, but it's not what a
+ * hotel actually wants shown. `room_types.primary_rate_code_id` (new
+ * migration, confirmed with the user via AskUserQuestion) is a real,
+ * schema-backed "this room type's own rate," resolved by
+ * `resolvePrimaryRateCodeForStay` below.
  */
 
 /** UTC-safe, matching `TapeChartTab.jsx`'s own local `addDays`. */
@@ -67,4 +75,25 @@ export function filterRateCodesForStay(rateCodes, arrivalDate, departureDate) {
   const all = [...(rateCodes ?? [])].sort((a, b) => a.code.localeCompare(b.code));
   const valid = all.filter((rc) => isRateCodeValidForStay(rc, arrivalDate, departureDate));
   return valid.length > 0 ? valid : all;
+}
+
+/**
+ * The selected room type's OWN configured rate code, for this exact stay —
+ * `null` when the room type has none configured (`primary_rate_code_id`
+ * is nullable — true for every room type until someone sets one in Setup),
+ * when it references a rate code that's no longer in the active list
+ * (e.g. archived since), or when it's genuinely lapsed/not-yet-open for
+ * these particular dates (`isRateCodeValidForStay`) — "no data to prefer,
+ * don't invent one," never a stale or invalid code forced through.
+ *
+ * @param {{primary_rate_code_id: string|number|null}|null|undefined} roomType
+ * @param {Array<object>} rateCodes  The full active list, unfiltered.
+ * @param {string} arrivalDate
+ * @param {string} departureDate
+ */
+export function resolvePrimaryRateCodeForStay(roomType, rateCodes, arrivalDate, departureDate) {
+  if (!roomType?.primary_rate_code_id) return null;
+  const candidate = (rateCodes ?? []).find((rc) => String(rc.id) === String(roomType.primary_rate_code_id));
+  if (!candidate) return null;
+  return isRateCodeValidForStay(candidate, arrivalDate, departureDate) ? candidate : null;
 }

@@ -20,24 +20,37 @@ import formStyles from './SetupForm.module.css';
  * signed-in user can actually do), so a non-super_admin sees the same
  * button and gets the real backend 403, surfaced through the same error
  * banner every other action here already uses.
+ *
+ * Gap closure (user-reported): "the rate code box shows all rate codes,
+ * not only the selected room type's own price." Closed for real with a
+ * new `primary_rate_code_id` link (this room type's own default rate
+ * code) rather than a fragile code-name-matching guess — confirmed with
+ * the user (AskUserQuestion) over a many-to-many alternative. Settable at
+ * creation (`setup.manage`) exactly like `base_rate` already is; CHANGING
+ * it on an existing room type stays behind the narrower `room_types.update`
+ * edit form, the same split `base_rate` itself already has.
  */
 export function RoomTypesTab({ activeProperty, disabled, onViewRooms }) {
   const [roomTypes, setRoomTypes] = useState(null);
-  const [form, setForm] = useState({ code: '', name: '', default_occupancy: '2', base_rate: '', description: '' });
+  const [rateCodes, setRateCodes] = useState(null);
+  const [form, setForm] = useState({ code: '', name: '', default_occupancy: '2', base_rate: '', description: '', primary_rate_code_id: '' });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ code: '', name: '', default_occupancy: '2', base_rate: '', description: '' });
+  const [editForm, setEditForm] = useState({ code: '', name: '', default_occupancy: '2', base_rate: '', description: '', primary_rate_code_id: '' });
 
   async function reload() {
     try {
-      setRoomTypes(await setupApi.listRoomTypes());
+      const [roomTypesResult, rateCodesResult] = await Promise.all([setupApi.listRoomTypes(), setupApi.listRateCodes()]);
+      setRoomTypes(roomTypesResult);
+      setRateCodes(rateCodesResult);
     } catch (caught) {
       // DESIGN_SYSTEM.md §2's error state, not empty — but the visible error
       // banner below is what actually says so; `[]` is what stops this
       // table showing a loading skeleton forever (the same bug class
       // `SetupScreen`'s own `reloadProperties` comment already documents).
       setRoomTypes([]);
+      setRateCodes([]);
       setError(caught instanceof ApiError ? caught.message : 'Could not load room types.');
     }
   }
@@ -66,8 +79,9 @@ export function RoomTypesTab({ activeProperty, disabled, onViewRooms }) {
         default_occupancy: Number(form.default_occupancy),
         base_rate: form.base_rate,
         description: form.description || undefined,
+        primary_rate_code_id: form.primary_rate_code_id || undefined,
       });
-      setForm({ code: '', name: '', default_occupancy: '2', base_rate: '', description: '' });
+      setForm({ code: '', name: '', default_occupancy: '2', base_rate: '', description: '', primary_rate_code_id: '' });
       await reload();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not create the room type.');
@@ -85,6 +99,7 @@ export function RoomTypesTab({ activeProperty, disabled, onViewRooms }) {
       default_occupancy: String(roomType.default_occupancy),
       base_rate: roomType.base_rate,
       description: roomType.description ?? '',
+      primary_rate_code_id: roomType.primary_rate_code_id != null ? String(roomType.primary_rate_code_id) : '',
     });
   }
 
@@ -99,6 +114,10 @@ export function RoomTypesTab({ activeProperty, disabled, onViewRooms }) {
         default_occupancy: Number(editForm.default_occupancy),
         base_rate: editForm.base_rate,
         description: editForm.description || undefined,
+        // An empty selection genuinely means "clear it" here (unlike create,
+        // where omitting the field entirely already means "none") — the
+        // backend's own `normalizePrimaryRateCodeId` treats '' as null.
+        primary_rate_code_id: editForm.primary_rate_code_id,
       });
       setEditingId(null);
       await reload();
@@ -130,6 +149,14 @@ export function RoomTypesTab({ activeProperty, disabled, onViewRooms }) {
             label: 'Base rate',
             align: 'right',
             render: (row) => <Money amount={row.base_rate} currencyCode={activeProperty.base_currency} />,
+          },
+          {
+            key: 'primary_rate_code_id',
+            label: 'Primary rate code',
+            render: (row) => {
+              const primary = (rateCodes ?? []).find((rc) => String(rc.id) === String(row.primary_rate_code_id));
+              return primary ? primary.code : '—';
+            },
           },
         ]}
         rows={roomTypes ?? []}
@@ -203,6 +230,21 @@ export function RoomTypesTab({ activeProperty, disabled, onViewRooms }) {
                 onChange={(event) => setEditForm({ ...editForm, description: event.target.value })}
               />
             </label>
+            <label className={formStyles.field}>
+              <span className={formStyles.label}>Primary rate code</span>
+              <select
+                className={formStyles.select}
+                value={editForm.primary_rate_code_id}
+                onChange={(event) => setEditForm({ ...editForm, primary_rate_code_id: event.target.value })}
+              >
+                <option value="">None — Booking shows every rate code</option>
+                {(rateCodes ?? []).map((rc) => (
+                  <option key={rc.id} value={rc.id}>
+                    {rc.code} — {rc.base_rate} {rc.currency}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className={formStyles.actionsRow}>
               <Button type="submit" loading={submitting}>
                 Save changes
@@ -272,6 +314,22 @@ export function RoomTypesTab({ activeProperty, disabled, onViewRooms }) {
               value={form.description}
               onChange={(event) => setForm({ ...form, description: event.target.value })}
             />
+          </label>
+
+          <label className={formStyles.field}>
+            <span className={formStyles.label}>Primary rate code (optional)</span>
+            <select
+              className={formStyles.select}
+              value={form.primary_rate_code_id}
+              onChange={(event) => setForm({ ...form, primary_rate_code_id: event.target.value })}
+            >
+              <option value="">None — Booking shows every rate code</option>
+              {(rateCodes ?? []).map((rc) => (
+                <option key={rc.id} value={rc.id}>
+                  {rc.code} — {rc.base_rate} {rc.currency}
+                </option>
+              ))}
+            </select>
           </label>
 
           <div className={formStyles.actionsRow}>

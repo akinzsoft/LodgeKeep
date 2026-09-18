@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isRateCodeValidForStay, filterRateCodesForStay } from '../rate-code-eligibility.js';
+import { isRateCodeValidForStay, filterRateCodesForStay, resolvePrimaryRateCodeForStay } from '../rate-code-eligibility.js';
 
 const bar = { id: 1, code: 'BAR', valid_from: '2020-01-01', valid_to: null };
 const summerPromo = { id: 2, code: 'SUMMER26', valid_from: '2026-06-01', valid_to: '2026-08-31' };
@@ -64,5 +64,40 @@ describe('filterRateCodesForStay', () => {
   it('handles a null/undefined list', () => {
     expect(filterRateCodesForStay(null, '2026-09-10', '2026-09-12')).toEqual([]);
     expect(filterRateCodesForStay(undefined, '2026-09-10', '2026-09-12')).toEqual([]);
+  });
+});
+
+/**
+ * Gap closure (user-reported, with a screenshot): "put only the price of
+ * the room type selected" — the room type's own configured rate code.
+ */
+describe('resolvePrimaryRateCodeForStay', () => {
+  const deluxe = { id: 10, primary_rate_code_id: bar.id };
+
+  it('resolves the room type\'s own primary rate code when it\'s valid for these dates', () => {
+    const result = resolvePrimaryRateCodeForStay(deluxe, [bar, summerPromo], '2026-09-10', '2026-09-12');
+    expect(result).toBe(bar);
+  });
+
+  it('returns null when the room type has none configured', () => {
+    const noPrimary = { id: 11, primary_rate_code_id: null };
+    expect(resolvePrimaryRateCodeForStay(noPrimary, [bar, summerPromo], '2026-09-10', '2026-09-12')).toBeNull();
+  });
+
+  it('returns null when the configured primary is no longer in the active rate code list', () => {
+    const archivedPrimary = { id: 12, primary_rate_code_id: 999 };
+    expect(resolvePrimaryRateCodeForStay(archivedPrimary, [bar, summerPromo], '2026-09-10', '2026-09-12')).toBeNull();
+  });
+
+  it('returns null rather than forcing a lapsed/not-yet-open primary onto these dates', () => {
+    const seasonalPrimary = { id: 13, primary_rate_code_id: summerPromo.id };
+    expect(resolvePrimaryRateCodeForStay(seasonalPrimary, [bar, summerPromo], '2026-09-10', '2026-09-12')).toBeNull();
+    // But resolves correctly once the dates genuinely fall inside its window.
+    expect(resolvePrimaryRateCodeForStay(seasonalPrimary, [bar, summerPromo], '2026-06-15', '2026-06-18')).toBe(summerPromo);
+  });
+
+  it('handles a missing/undefined room type', () => {
+    expect(resolvePrimaryRateCodeForStay(null, [bar], '2026-09-10', '2026-09-12')).toBeNull();
+    expect(resolvePrimaryRateCodeForStay(undefined, [bar], '2026-09-10', '2026-09-12')).toBeNull();
   });
 });
