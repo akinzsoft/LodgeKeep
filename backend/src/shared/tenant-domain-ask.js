@@ -18,6 +18,27 @@
  * "does this hostname resolve to a real tenant" can never silently drift
  * into two different answers for the same input.
  *
+ * The bare `APP_DOMAIN` itself is a real, deliberate exception to that
+ * "must resolve to a tenant" rule — a genuine deployment bug this pass
+ * fixes, found live against the real VPS: `/signup` and `/platform` are
+ * both mounted in `app.js` with NO tenant resolution at all (confirmed —
+ * `signupRouter()`/`buildPlatformRouter()` never call `resolveTenant`),
+ * and both are served from this exact bare hostname, not a tenant
+ * subdomain (`main.jsx`'s own pathname fork puts `/signup` and `/platform`
+ * on the same origin as everything else). `resolveTenantRowForHostname`
+ * correctly returns nothing for the bare domain — it isn't a tenant
+ * subdomain (`subdomainOf` requires the `.{appDomain}` suffix) and isn't a
+ * claimed custom domain either — which left a real chicken-and-egg: an
+ * empty database has zero tenants, so the bare domain could never get a
+ * certificate, so `/signup` itself (the only way a first tenant could ever
+ * come to exist) was unreachable over HTTPS. Allowed unconditionally here,
+ * ahead of the tenant lookup, rather than folded into
+ * `resolveTenantRowForHostname` itself — that function is also the real
+ * per-request tenant resolver (`resolveTenant` middleware), where a
+ * request to the bare domain genuinely has no tenant and must keep
+ * 404ing; only the TLS question ("should this hostname ever get a cert at
+ * all") has a different, wider answer.
+ *
  * Never reachable from outside the Docker network in production
  * (`docker-compose.prod.yml` publishes no host port for the `backend`
  * service) — Caddy, on the same compose network, is the only real caller.
@@ -64,12 +85,16 @@ function tenantDomainAskRouter({ db, systemContext }) {
         return;
       }
 
+      const appDomain = currentAppDomain().toLowerCase();
+      if (hostname === appDomain) {
+        // The platform's own bare domain — /signup and /platform both live
+        // here with no tenant to resolve; see this file's own header.
+        res.status(200).json(ok({ status: 'ok' }));
+        return;
+      }
+
       const scoped = db.for(systemContext());
-      const tenantRow = await resolveTenantRowForHostname({
-        scoped,
-        hostname,
-        appDomain: currentAppDomain(),
-      });
+      const tenantRow = await resolveTenantRowForHostname({ scoped, hostname, appDomain });
 
       if (!tenantRow) {
         res.status(404).json(fail(null, 'Unknown host.'));
