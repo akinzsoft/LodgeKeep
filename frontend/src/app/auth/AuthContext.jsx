@@ -232,6 +232,18 @@ export function AuthProvider({ children }) {
     return result;
   }, []);
 
+  /**
+   * Self-service "My Profile" screen (user-requested). Updates only
+   * `firstName`/`lastName` in context — `phone` isn't read anywhere else
+   * in this app (the sidebar/top bar show only the name), so there's
+   * nothing else here that needs it kept in sync.
+   */
+  const updateProfile = useCallback(async ({ firstName, lastName, phone }) => {
+    const result = await authApi.updateMyProfile({ firstName, lastName, phone });
+    setUser((previous) => ({ ...previous, firstName: result.firstName, lastName: result.lastName }));
+    return result;
+  }, []);
+
   // The refresh-on-expiry handshake `shared/api/client.js` calls into.
   // Registered once; reads the CURRENT access token via the ref, never a
   // stale closure over the render that first set it up. No refresh token to
@@ -296,6 +308,13 @@ export function AuthProvider({ children }) {
     switchProperty,
     requestPasswordReset: authApi.requestPasswordReset,
     completePasswordReset: authApi.completePasswordReset,
+    // Self-service "My Profile" screen (user-requested). `getMyProfile`/
+    // `changeMyPassword` are raw passthroughs — neither needs to mutate
+    // this context's own `user` state (a password change touches no
+    // display field; `updateProfile` above is the one that does).
+    getMyProfile: authApi.getMyProfile,
+    updateProfile,
+    changeMyPassword: authApi.changeMyPassword,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

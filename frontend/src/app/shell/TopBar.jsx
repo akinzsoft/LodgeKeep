@@ -29,6 +29,7 @@ import styles from './TopBar.module.css';
  * @param {(propertyId: string) => void} onSwitchProperty
  * @param {string} businessDate   'YYYY-MM-DD' — see BusinessDateIndicator's own header for why this stays a string.
  * @param {() => void} [onLogout]   Renders the user chip as a menu button with a "Log out" item when supplied; a plain non-interactive chip otherwise.
+ * @param {() => void} [onOpenProfile]   Self-service "My Profile" screen (user-requested) — renders a "My Profile" item above "Log out" when supplied.
  */
 export function TopBar({
   onToggleSidebar,
@@ -44,6 +45,7 @@ export function TopBar({
   onSwitchProperty,
   businessDate,
   onLogout,
+  onOpenProfile,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -212,6 +214,19 @@ export function TopBar({
                   <p className={styles.menuName}>{user.name}</p>
                   {user.role && <p className={styles.menuRole}>{user.role}</p>}
                 </div>
+                {onOpenProfile && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={styles.menuItem}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onOpenProfile();
+                    }}
+                  >
+                    My Profile
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"

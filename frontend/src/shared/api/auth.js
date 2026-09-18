@@ -94,6 +94,42 @@ export function getMyPermissions() {
   return request('/auth/me/permissions');
 }
 
+/**
+ * Self-service "My Profile" screen (user-requested) — email is
+ * deliberately read-only in this pass (no wrapper here ever sends it).
+ * @returns {Promise<{userId: string, email: string, firstName: string, lastName: string, phone: string|null}>}
+ */
+export function getMyProfile() {
+  return request('/auth/me');
+}
+
+/** @returns {Promise<{userId: string, email: string, firstName: string, lastName: string, phone: string|null}>} */
+export function updateMyProfile({ firstName, lastName, phone }) {
+  return request('/auth/me', {
+    method: 'PATCH',
+    body: {
+      ...(firstName !== undefined ? { first_name: firstName } : {}),
+      ...(lastName !== undefined ? { last_name: lastName } : {}),
+      ...(phone !== undefined ? { phone } : {}),
+    },
+  });
+}
+
+/**
+ * Password change WHILE LOGGED IN — distinct from `requestPasswordReset`/
+ * `completePasswordReset` above (the forgot-password flow). The backend
+ * reads the refresh-token cookie automatically (same-origin, sent by the
+ * browser) to identify and spare this device's own session while
+ * revoking every other one — nothing here needs to pass it explicitly.
+ * @returns {Promise<{status: 'ok', otherSessionsRevoked: number}>}
+ */
+export function changeMyPassword({ currentPassword, newPassword }) {
+  return request('/auth/me/password', {
+    method: 'POST',
+    body: { current_password: currentPassword, new_password: newPassword },
+  });
+}
+
 export function requestPasswordReset({ email }) {
   return request('/auth/password/forgot', { method: 'POST', body: { email }, auth: false });
 }

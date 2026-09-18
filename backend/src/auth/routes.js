@@ -114,6 +114,35 @@ function staffAuthRouter({ resolveTenant }) {
   // their own grants; the permission checks on each real route are unchanged.
   router.get('/me/permissions', authenticate('staff'), controller.myPermissions);
 
+  // Self-service "My Profile" screen (user-requested) — the same "every
+  // authenticated staff member may act on their OWN record, no permission
+  // gate" shape `/me/permissions` above already established. No `:id`
+  // anywhere in these routes for a caller to smuggle another user's id
+  // through — see `service.js`'s own header for the full reasoning.
+  router.get('/me', authenticate('staff'), controller.getMyProfile);
+  router.patch('/me', authenticate('staff'), controller.updateMyProfile);
+  // A caller holding ANY valid access token could otherwise repeatedly
+  // guess this account's own current password with no counter at all
+  // (`lockout.js`'s 423 tier only counts `login_failure`, not this route) —
+  // the same Redis-backed "auth tier" shape (per-IP loose, per-account
+  // tight) `/login` etc. already use, hand-built here (not
+  // `ipAndAccountRateLimiters`, whose account key generator only reads
+  // `req.body[field]`, never `req.context`) since the account being
+  // guarded is the AUTHENTICATED caller, not a body field.
+  router.post(
+    '/me/password',
+    authenticate('staff'),
+    redisRateLimiter({ windowMs: 60_000, limit: 30, prefix: 'auth-staff-password-change:ip:', message: AUTH_RATE_LIMIT_MESSAGE }),
+    redisRateLimiter({
+      windowMs: 15 * 60_000,
+      limit: 10,
+      prefix: 'auth-staff-password-change:acct:',
+      message: AUTH_RATE_LIMIT_MESSAGE,
+      keyGenerator: (req) => `acct:${req.context?.tenantId ?? 'no-tenant'}:${req.context?.userId ?? 'unknown'}`,
+    }),
+    controller.changeMyPassword
+  );
+
   return router;
 }
 

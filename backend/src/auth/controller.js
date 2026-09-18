@@ -153,6 +153,67 @@ async function myPermissions(req, res, next) {
   }
 }
 
+/**
+ * Self-service "My Profile" screen (user-requested). `changes`
+ * deliberately never reads `email`/`id`/`user_id`/`tenant_id` from the
+ * body at all — an injected value under any of those keys is silently
+ * ignored, never read, matching `getMyProfile`/`updateMyProfile`'s own
+ * "no `:id` anywhere for a caller to smuggle another user's id through"
+ * design in `service.js`.
+ */
+function pickMyProfileChanges(body) {
+  const changes = {};
+  if (body?.first_name !== undefined) changes.first_name = body.first_name;
+  if (body?.last_name !== undefined) changes.last_name = body.last_name;
+  if (body?.phone !== undefined) changes.phone = body.phone;
+  return changes;
+}
+
+/** GET /api/v1/auth/me */
+async function getMyProfile(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.getMyProfile({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** PATCH /api/v1/auth/me */
+async function updateMyProfile(req, res, next) {
+  try {
+    const result = await service.updateMyProfile({
+      context: req.context,
+      changes: pickMyProfileChanges(req.body),
+      ...requestMeta(req),
+    });
+    res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/v1/auth/me/password — reads the refresh-token cookie (the only
+ * thing that identifies "this session," per `service.js`'s own header) so
+ * `changeMyPassword` can spare it while revoking every other one.
+ */
+async function changeMyPassword(req, res, next) {
+  try {
+    const currentPassword = require_(req.body, 'current_password');
+    const newPassword = require_(req.body, 'new_password');
+    const result = await service.changeMyPassword({
+      context: req.context,
+      currentPassword,
+      newPassword,
+      refreshToken: readRefreshTokenCookie(req),
+      ...requestMeta(req),
+    });
+    res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
 /** POST /api/v1/auth/password/forgot */
 async function requestPasswordReset(req, res, next) {
   try {
@@ -354,6 +415,9 @@ module.exports = {
   staffLogout,
   switchProperty,
   myPermissions,
+  getMyProfile,
+  updateMyProfile,
+  changeMyPassword,
   requestPasswordReset,
   completePasswordReset,
   acceptInvitation,
