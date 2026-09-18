@@ -55,6 +55,7 @@ import styles from './AppShell.module.css';
  * @param {{tenantName: string, onExit: () => void}} [impersonation]     Present only while a platform-staff impersonation grant is active (SECURITY.md §2).
  * @param {boolean} [isOffline]                                          DESIGN_SYSTEM.md §2's sixth state — typically fed by `src/shared/hooks/useOnlineStatus.js`.
  * @param {() => void} [onLogout]                                       Renders the top bar's user chip as a menu with a "Log out" item — see TopBar's own header.
+ * @param {() => void} [onOpenProfile]                                  Self-service "My Profile" screen (user-requested) — see TopBar's own header.
  * @param {import('react').ReactNode} children
  */
 export function AppShell({
@@ -76,6 +77,7 @@ export function AppShell({
   impersonation,
   isOffline = false,
   onLogout,
+  onOpenProfile,
   children,
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -121,6 +123,7 @@ export function AppShell({
             onSwitchProperty={onSwitchProperty}
             businessDate={businessDate}
             onLogout={onLogout}
+            onOpenProfile={onOpenProfile}
           />
           <main className={styles.content}>{children}</main>
         </div>

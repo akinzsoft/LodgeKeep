@@ -84,6 +84,29 @@ describe('<TopBar>', () => {
     expect(screen.queryByRole('menuitem', { name: 'Log out' })).not.toBeInTheDocument();
     expect(onLogout).not.toHaveBeenCalled();
   });
+
+  // Self-service "My Profile" screen (user-requested).
+  it('renders a "My Profile" menu item above "Log out" when onOpenProfile is supplied, and calls it on click', async () => {
+    const onLogout = vi.fn();
+    const onOpenProfile = vi.fn();
+    render(<TopBar {...baseProps} onLogout={onLogout} onOpenProfile={onOpenProfile} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /Emily Smith/ }));
+    const profileItem = screen.getByRole('menuitem', { name: 'My Profile' });
+    expect(profileItem).toBeInTheDocument();
+
+    await userEvent.click(profileItem);
+    expect(onOpenProfile).toHaveBeenCalled();
+    expect(onLogout).not.toHaveBeenCalled();
+    // Clicking it closes the menu, same as Log out does.
+    expect(screen.queryByRole('menuitem', { name: 'Log out' })).not.toBeInTheDocument();
+  });
+
+  it('does not render "My Profile" when onOpenProfile is not supplied', async () => {
+    render(<TopBar {...baseProps} onLogout={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /Emily Smith/ }));
+    expect(screen.queryByRole('menuitem', { name: 'My Profile' })).not.toBeInTheDocument();
+  });
   describe('notification bell', () => {
     const notifications = [
       {

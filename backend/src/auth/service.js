@@ -51,6 +51,13 @@ const {
   MfaCodeInvalidError,
   DuplicateEntryError,
 } = require('./errors');
+// Self-service "My Profile" screen (user-requested) — no cycle: `src/audit`
+// never requires `src/auth` (confirmed directly against its own require
+// list). The same direct-call precedent `src/modules/signup/service.js`
+// already established for a service function outside the normal
+// `attachAudit()` request pipeline (this file's own `/auth/*` routes never
+// reach that middleware — see `updateMyProfile`'s own header for why).
+const { recordAuditEntry } = require('../audit');
 
 function hoursFromNow(hours) {
   return new Date(Date.now() + hours * 3600 * 1000);
@@ -621,6 +628,181 @@ async function switchProperty({ context, propertyId }) {
   });
 
   return { accessToken, activePropertyId: String(propertyId), role, context: nextContext };
+}
+
+const MY_PROFILE_MAX_NAME_LENGTH = 100; // matches users.first_name/last_name VARCHAR(100)
+const MY_PROFILE_MAX_PHONE_LENGTH = 30; // matches users.phone VARCHAR(30), 20261026090000_add_phone_to_users.js
+
+function serializeMyProfile(row) {
+  return {
+    userId: String(row.id),
+    email: row.email,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    phone: row.phone,
+  };
+}
+
+/**
+ * Self-service "My Profile" screen (user-requested) — every field a staff
+ * member may view/edit about their OWN account. Deliberately lives in
+ * `src/auth`, not `src/modules/users`: that module is "an admin acting on
+ * SOMEONE ELSE" (every route takes an `:id`, gated `setup.view`/
+ * `setup.manage`); this is "the caller acting on themselves," the exact
+ * shape `GET /auth/me/permissions` already established — `authenticate('staff')`
+ * only, no permission gate, the row touched is always
+ * `WHERE tenant_id = context.tenantId AND id = context.userId`, both from
+ * the verified token. There is no `:id` anywhere in these routes for a
+ * caller to smuggle another user's id through — a structural IDOR defense,
+ * not a remembered check.
+ */
+async function getMyProfile({ context }) {
+  const db = scopedDb().for(context);
+  const row = await db.table('users').where({ id: context.userId }).first('id', 'email', 'first_name', 'last_name', 'phone');
+  return serializeMyProfile(row);
+}
+
+/**
+ * Validates only the fields actually present in `changes` (a partial
+ * update) — mutates and returns the same object with trimmed values.
+ * `email` is never accepted here: it is read-only in this pass (confirmed
+ * with the user) — no edit path exists for it anywhere, for any role; this
+ * function has no branch that could ever touch it, by construction, not by
+ * a body-field filter alone.
+ */
+function validateMyProfileChanges(changes) {
+  if (changes.first_name !== undefined) {
+    const trimmed = String(changes.first_name).trim();
+    if (!trimmed) throw new ValidationError('FIRST_NAME_REQUIRED', 'First name is required.');
+    if (trimmed.length > MY_PROFILE_MAX_NAME_LENGTH) {
+      throw new ValidationError('FIRST_NAME_TOO_LONG', `First name must be ${MY_PROFILE_MAX_NAME_LENGTH} characters or fewer.`);
+    }
+    changes.first_name = trimmed;
+  }
+  if (changes.last_name !== undefined) {
+    const trimmed = String(changes.last_name).trim();
+    if (!trimmed) throw new ValidationError('LAST_NAME_REQUIRED', 'Last name is required.');
+    if (trimmed.length > MY_PROFILE_MAX_NAME_LENGTH) {
+      throw new ValidationError('LAST_NAME_TOO_LONG', `Last name must be ${MY_PROFILE_MAX_NAME_LENGTH} characters or fewer.`);
+    }
+    changes.last_name = trimmed;
+  }
+  if (changes.phone !== undefined) {
+    const trimmed = changes.phone == null ? null : String(changes.phone).trim();
+    if (trimmed && trimmed.length > MY_PROFILE_MAX_PHONE_LENGTH) {
+      throw new ValidationError('PHONE_TOO_LONG', `Phone number must be ${MY_PROFILE_MAX_PHONE_LENGTH} characters or fewer.`);
+    }
+    changes.phone = trimmed || null;
+  }
+  return changes;
+}
+
+async function updateMyProfile({ context, changes: rawChanges, ip, userAgent, requestId }) {
+  const changes = validateMyProfileChanges({ ...rawChanges });
+  const db = scopedDb().for(context);
+  if (Object.keys(changes).length === 0) return getMyProfile({ context }); // nothing recognized to change — no-op, no audit row
+
+  const before = await db.table('users').where({ id: context.userId }).first('id', 'email', 'first_name', 'last_name', 'phone');
+  await db.table('users').where({ id: context.userId }).update(changes);
+  const after = await db.table('users').where({ id: context.userId }).first('id', 'email', 'first_name', 'last_name', 'phone');
+
+  // `src/auth`'s own routes never pass through `attachAudit()` (mounted
+  // later, inside `buildStaffRouter()` — every route here responds
+  // directly, so `req.audit` is undefined) — calling `recordAuditEntry`
+  // directly is the same precedent `src/modules/signup/service.js`
+  // already established for a service function outside that pipeline.
+  await recordAuditEntry(db, {
+    entityType: 'users',
+    entityId: context.userId,
+    action: 'update_profile',
+    source: 'web',
+    userId: context.userId,
+    propertyId: context.propertyId ?? null,
+    beforeState: before,
+    afterState: after,
+    requestId,
+    ipAddress: ip,
+    userAgent,
+  });
+
+  return serializeMyProfile(after);
+}
+
+/**
+ * Self-service password change WHILE LOGGED IN — distinct from
+ * `completePasswordReset` (the forgot-password flow, which needs a reset
+ * TOKEN and has no "current password" to check, since it runs pre-auth).
+ * This requires the CURRENT password, and — confirmed with the user —
+ * revokes every OTHER active session for this account while sparing the
+ * one behind THIS request, so the device making the change stays signed
+ * in and every other device/browser is signed out.
+ *
+ * "This request's own session" can only be identified from the refresh-
+ * token cookie (`refresh-cookie.js`) — the access token's own `jti` claim
+ * is generated fresh on every sign and never persisted anywhere, so it has
+ * no relationship to a `sessions` row at all. That is the whole reason
+ * `POST /auth/me/password` (unlike `GET`/`PATCH /auth/me`) must live under
+ * `/api/v1/auth`, the one path prefix the cookie is actually scoped to
+ * (`refresh-cookie.js`'s `COOKIE_PATH`).
+ *
+ * A request that somehow carries no refresh cookie at all (should be
+ * near-impossible from a real browser hitting this exact path — the
+ * cookie's own path always matches) has nothing to spare, so it falls
+ * back to the same "revoke everything" shape `completePasswordReset`
+ * already uses — the safer of the two directions to fail in, matching
+ * this codebase's own instinct elsewhere (§7's "a false negative is safe,
+ * a false positive is the one that matters").
+ */
+async function changeMyPassword({ context, refreshToken, currentPassword, newPassword, ip, userAgent, requestId }) {
+  const validationIssue = await validatePassword(newPassword);
+  if (validationIssue) throw new ValidationError(validationIssue.code, validationIssue.message);
+
+  const db = scopedDb().for(context);
+  const user = await db.table('users').where({ id: context.userId }).first();
+
+  const currentOk = await verifyPassword(currentPassword, user.password_hash);
+  if (!currentOk) {
+    await writeAuthEvent({
+      audience: 'staff',
+      eventType: 'password_changed',
+      failureReason: 'invalid_password',
+      tenantId: context.tenantId,
+      userId: context.userId,
+      ip,
+      userAgent,
+      requestId,
+    });
+    throw new ValidationError('CURRENT_PASSWORD_INCORRECT', 'Current password is incorrect.');
+  }
+
+  let currentSessionId = null;
+  if (refreshToken) {
+    const hash = hashRefreshToken(refreshToken);
+    const session = await db.table('sessions').where({ refresh_token_hash: hash, user_id: context.userId }).whereNull('revoked_at').first('id');
+    currentSessionId = session?.id ?? null;
+  }
+
+  await db.table('users').where({ id: context.userId }).update({ password_hash: await hashPassword(newPassword) });
+
+  const baseQuery = () => db.table('sessions').where({ user_id: context.userId }).whereNull('revoked_at');
+  const otherSessionsRevoked = currentSessionId
+    ? await baseQuery().whereNot({ id: currentSessionId }).update({ revoked_at: new Date(), revoked_reason: 'password_changed' })
+    : await baseQuery().update({ revoked_at: new Date(), revoked_reason: 'password_changed' });
+
+  // Matches `completePasswordReset`'s own precedent: a password mutation is
+  // recorded in `auth_events`, never `audit_log` — the password hash
+  // itself must never end up in an audit `before_state`/`after_state`.
+  await writeAuthEvent({
+    audience: 'staff',
+    eventType: 'password_changed',
+    tenantId: context.tenantId,
+    userId: context.userId,
+    ip,
+    userAgent,
+    requestId,
+  });
+
+  return { status: 'ok', otherSessionsRevoked };
 }
 
 /**
@@ -1217,6 +1399,9 @@ module.exports = {
   staffRefresh,
   staffLogout,
   switchProperty,
+  getMyProfile,
+  updateMyProfile,
+  changeMyPassword,
   requestPasswordReset,
   completePasswordReset,
   acceptInvitation,

@@ -18,6 +18,7 @@ import { AcceptInvitationScreen } from './app/auth/screens/AcceptInvitationScree
 import { SignupScreen } from './app/auth/screens/SignupScreen.jsx';
 import { AppShell, isNavItemAllowed } from './app/shell/index.js';
 import { NotificationPopups } from './app/shell/NotificationPopups.jsx';
+import { MyAccountModal } from './app/account/MyAccountModal.jsx';
 import { notificationTarget } from './app/shell/notificationText.js';
 import { HomeDashboard } from './app/dashboard/HomeDashboard.jsx';
 import { SetupScreen } from './app/setup/SetupScreen.jsx';
@@ -95,6 +96,15 @@ function Demo() {
   const [toast, setToast] = useState(null);
   const [switchError, setSwitchError] = useState(null);
   const [activeItemKey, setActiveItemKey] = useState('home');
+  // Self-service "My Profile" screen (user-requested) — deliberately NOT
+  // driven through `activeItemKey`/`screenKey`: it's reachable from the
+  // TopBar user menu regardless of role/permissions, and registering it in
+  // `nav-config.js` would both surface it in the sidebar (wrong) and get
+  // it bounced back to `'home'` by `isNavItemAllowed`'s unknown-key
+  // fallback below. Rendered as a modal overlay, a direct child of
+  // `<AppShell>`, so the sidebar/business-date/property-switcher context
+  // stays intact underneath it.
+  const [profileOpen, setProfileOpen] = useState(false);
   // Gap closure: real property records (name, current_business_date) —
   // see this file's own header for why `GET /properties` is safe to call
   // here but must never widen WHICH ids are offered.
@@ -263,12 +273,14 @@ function Demo() {
       onOpenNotification={handleOpenNotification}
       isOffline={!isOnline}
       onLogout={logout}
+      onOpenProfile={() => setProfileOpen(true)}
     >
       <NotificationPopups
         popups={staffNotifications.popups}
         onView={isNavItemAllowed('pos', grantedPermissions) ? handleOpenNotification : undefined}
         onDismiss={staffNotifications.dismissPopup}
       />
+      {profileOpen && <MyAccountModal isOffline={!isOnline} onClose={() => setProfileOpen(false)} />}
       {switchError && (
         <p role="alert" className={styles.switchError}>
           {switchError}
