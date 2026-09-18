@@ -1,6 +1,6 @@
 /* Column: .center (the flex-1 area the card is vertically centred in) plus
    <Footer/> stacked below it — same shape as StaffLoginScreen.module.css's
-   .page/.mainRow, so the "Powered by LodgeKeep" credit shows on every
+   .page/.mainRow, so the "Powered by Planmsys" credit shows on every
    pre-auth screen, not just the ones that happen to reach AppShell. */
 .page {
   display: flex;

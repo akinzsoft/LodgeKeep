@@ -46,9 +46,30 @@ class PropertyNotOpenedError extends ValidationError {
   }
 }
 
+/**
+ * Gap closure, user-reported: running night audit while the property's own
+ * business date is still real "today" would advance it to a calendar date
+ * that, in the property's own local time, hasn't begun yet — every
+ * arrival/departure filter that keys off `current_business_date` would then
+ * be answering for a day that doesn't exist yet in real life. Night audit
+ * for business date D is only allowed once D has genuinely finished — i.e.
+ * once the property's own local "today" has moved past D.
+ */
+class NightAuditPrematureError extends AppError {
+  constructor({ businessDate, nextBusinessDate, todayInPropertyTimezone, propertyTimezone }) {
+    super(
+      'BUSINESS_RULE_NIGHT_AUDIT_PREMATURE',
+      `Night audit for ${businessDate} cannot run yet — it would advance the business date to ${nextBusinessDate}, but it is still ${todayInPropertyTimezone} in this property's own local time (${propertyTimezone}). Wait until that calendar day has actually begun.`,
+      422,
+      { businessDate, nextBusinessDate, todayInPropertyTimezone, propertyTimezone }
+    );
+  }
+}
+
 module.exports = {
   NightAuditAlreadyCompletedError,
   NightAuditAlreadyRunningError,
   NightAuditBlockingConditionsError,
   PropertyNotOpenedError,
+  NightAuditPrematureError,
 };

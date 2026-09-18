@@ -51,12 +51,14 @@ const { livePhysicalCount } = require('../../shared/room-availability');
 const { sumMoney, negateMoney, divideMoney } = require('../../shared/money');
 const { writeOutboxEvent } = require('../../shared/outbox');
 const { notifyStaff } = require('../notifications/staff-notifications');
+const { calendarDateInZone } = require('../../shared/timezone');
 const cashiering = require('../cashiering/service');
 const {
   NightAuditAlreadyCompletedError,
   NightAuditAlreadyRunningError,
   NightAuditBlockingConditionsError,
   PropertyNotOpenedError,
+  NightAuditPrematureError,
 } = require('./errors');
 
 /** A real per-process identifier (ARCHITECTURE.md §6.1: "not just a hostname"), generated once at module load. */
@@ -69,6 +71,40 @@ function addOneDay(dateString) {
   const date = new Date(`${dateString}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + 1);
   return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Gap closure, user-reported: "I clicked run night audit on the 17th and it
+ * changed to the 18th, but in real sense we are not in the 18th" — night
+ * audit was advancing the business date past the property's own real
+ * calendar day. Blocks exactly that: refuses to close `businessDate` unless
+ * the property's own local "today" (its own timezone, never the server's or
+ * a client's) has already moved past it — i.e. the calendar day being
+ * closed has genuinely finished in real life, not just in the app's state.
+ *
+ * A property with no `timezone` configured, or an invalid one (a stray
+ * non-IANA value slipping through, e.g. from a fixture predating this
+ * field's validation), has no reliable "today" to check against — this
+ * guard is skipped rather than guessed for those, a real, flagged gap
+ * (same reasoning `properties.timezone`'s own migration comment already
+ * gives for never assuming the platform's timezone is the property's).
+ *
+ * `now` is injectable for direct, deterministic unit testing only — the
+ * real caller (`runNightAudit`) never supplies one, so every real request
+ * is checked against the actual, current wall-clock instant; a client has
+ * no way to influence what "now" this function sees.
+ */
+function assertBusinessDateHasEnded({ businessDate, nextBusinessDate, property, now = new Date() }) {
+  if (!property.timezone) return;
+  let todayInPropertyTimezone;
+  try {
+    todayInPropertyTimezone = calendarDateInZone(now, property.timezone);
+  } catch {
+    return; // an invalid IANA timezone string — skip rather than guess.
+  }
+  if (nextBusinessDate > todayInPropertyTimezone) {
+    throw new NightAuditPrematureError({ businessDate, nextBusinessDate, todayInPropertyTimezone, propertyTimezone: property.timezone });
+  }
 }
 
 /**
@@ -310,6 +346,7 @@ async function runNightAudit({ context, userId }) {
   const property = await db.table('properties').where({ id: propertyId }).first();
   const businessDate = property.current_business_date;
   if (!businessDate) throw new PropertyNotOpenedError();
+  assertBusinessDateHasEnded({ businessDate, nextBusinessDate: addOneDay(businessDate), property });
 
   const existing = await reconcileExistingRun({ db, propertyId, businessDate });
   const runId = await claimRun({ db, propertyId, businessDate, userId, existing });
@@ -373,6 +410,7 @@ module.exports = {
   WORKER_ID,
   STALE_TIMEOUT_MS,
   addOneDay,
+  assertBusinessDateHasEnded,
   findBlockingConditions,
   reconcileExistingRun,
   claimRun,

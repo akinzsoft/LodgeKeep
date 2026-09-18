@@ -49,7 +49,7 @@ describe('Night Audit concurrency and crash recovery (ARCHITECTURE.md §5/§6.3)
       name: 'NA Concurrency Property',
       timezone: 'Africa/Lagos',
       base_currency: 'NGN',
-      current_business_date: '2028-01-01',
+      current_business_date: '2020-01-01',
     });
     const [roleId] = await db()('roles').insert({ tenant_id: tenantId, code: 'manager', name: 'manager', is_system: true });
     [userId] = await db()('users').insert({
@@ -67,7 +67,7 @@ describe('Night Audit concurrency and crash recovery (ARCHITECTURE.md §5/§6.3)
 
     [roomTypeId] = await db()('room_types').insert({ tenant_id: tenantId, property_id: propertyId, code: 'NARACE', name: 'NA Race', default_occupancy: 2, base_rate: '120.00' });
     [roomId] = await db()('rooms').insert({ tenant_id: tenantId, property_id: propertyId, room_type_id: roomTypeId, room_number: '1', status: 'active', front_desk_status: 'occupied' });
-    [rateCodeId] = await db()('rate_codes').insert({ tenant_id: tenantId, property_id: propertyId, code: 'NARACERATE', base_rate: '120.00', currency: 'NGN', valid_from: '2026-01-01' });
+    [rateCodeId] = await db()('rate_codes').insert({ tenant_id: tenantId, property_id: propertyId, code: 'NARACERATE', base_rate: '120.00', currency: 'NGN', valid_from: '2019-01-01' });
     [guestId] = await db()('guests').insert({ tenant_id: tenantId, first_name: 'NA', last_name: 'Guest' });
 
     const [reservationId] = await db()('reservations').insert({
@@ -76,7 +76,7 @@ describe('Night Audit concurrency and crash recovery (ARCHITECTURE.md §5/§6.3)
       guest_id: guestId,
       room_type_id: roomTypeId,
       rate_code_id: rateCodeId,
-      arrival_date: '2028-01-01',
+      arrival_date: '2020-01-01',
       departure_date: '2029-01-01',
       adults: 1,
       children: 0,
@@ -85,7 +85,7 @@ describe('Night Audit concurrency and crash recovery (ARCHITECTURE.md §5/§6.3)
       checked_in_at: new Date(),
     });
     await db()('reservation_daily_rates').insert(
-      ['2028-01-01', '2028-01-02', '2028-01-03'].map((stayDate) => ({
+      ['2020-01-01', '2020-01-02', '2020-01-03'].map((stayDate) => ({
         tenant_id: tenantId,
         property_id: propertyId,
         reservation_id: reservationId,
@@ -146,18 +146,18 @@ describe('Night Audit concurrency and crash recovery (ARCHITECTURE.md §5/§6.3)
     // time the loser's own reconcile step runs, which is still 409).
     expect(statuses).toEqual([200, 409]);
 
-    const runs = await db()('night_audit_runs').where({ property_id: propertyId, business_date: '2028-01-01' });
+    const runs = await db()('night_audit_runs').where({ property_id: propertyId, business_date: '2020-01-01' });
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe('COMPLETED');
 
     const chargeLines = await db()('folio_line_items').where({ folio_id: folioId, type: 'room_charge' });
     expect(chargeLines).toHaveLength(1);
 
-    const dailyReports = await db()('daily_reports').where({ property_id: propertyId, business_date: '2028-01-01' });
+    const dailyReports = await db()('daily_reports').where({ property_id: propertyId, business_date: '2020-01-01' });
     expect(dailyReports).toHaveLength(1);
 
     const property = await db()('properties').where({ id: propertyId }).first();
-    expect(property.current_business_date).toBe('2028-01-02');
+    expect(property.current_business_date).toBe('2020-01-02');
   });
 
   it('NA-3: a stale RUNNING row (worker died, transaction never committed) is recovered and a fresh trigger completes cleanly', async () => {
@@ -168,7 +168,7 @@ describe('Night Audit concurrency and crash recovery (ARCHITECTURE.md §5/§6.3)
     await db()('night_audit_runs').insert({
       tenant_id: tenantId,
       property_id: propertyId,
-      business_date: '2028-01-02',
+      business_date: '2020-01-02',
       status: 'RUNNING',
       worker_id: 'dead-worker-simulated',
       heartbeat_at: new Date(Date.now() - 5 * 60 * 1000),
@@ -180,12 +180,12 @@ describe('Night Audit concurrency and crash recovery (ARCHITECTURE.md §5/§6.3)
     expect(res.status).toBe(200);
     expect(res.body.meta.run.status).toBe('COMPLETED');
 
-    const runs = await db()('night_audit_runs').where({ property_id: propertyId, business_date: '2028-01-02' });
+    const runs = await db()('night_audit_runs').where({ property_id: propertyId, business_date: '2020-01-02' });
     expect(runs).toHaveLength(1); // The stale row was RECLAIMED, not duplicated.
     expect(runs[0].status).toBe('COMPLETED');
     expect(runs[0].worker_id).not.toBe('dead-worker-simulated');
 
-    const chargeLines = await db()('folio_line_items').where({ folio_id: folioId, type: 'room_charge', business_date: '2028-01-02' });
+    const chargeLines = await db()('folio_line_items').where({ folio_id: folioId, type: 'room_charge', business_date: '2020-01-02' });
     expect(chargeLines).toHaveLength(1); // Exactly once — no duplicate from the "dead" attempt, which never posted anything.
   });
 
@@ -193,7 +193,7 @@ describe('Night Audit concurrency and crash recovery (ARCHITECTURE.md §5/§6.3)
     await db()('night_audit_runs').insert({
       tenant_id: tenantId,
       property_id: propertyId,
-      business_date: '2028-01-03',
+      business_date: '2020-01-03',
       status: 'RUNNING',
       worker_id: 'still-alive-worker',
       heartbeat_at: new Date(),
@@ -205,6 +205,6 @@ describe('Night Audit concurrency and crash recovery (ARCHITECTURE.md §5/§6.3)
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('CONFLICT_NIGHT_AUDIT_ALREADY_RUNNING');
 
-    await db()('night_audit_runs').where({ property_id: propertyId, business_date: '2028-01-03' }).delete();
+    await db()('night_audit_runs').where({ property_id: propertyId, business_date: '2020-01-03' }).delete();
   });
 });

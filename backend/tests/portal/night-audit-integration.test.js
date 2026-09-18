@@ -49,7 +49,7 @@ describe('Portal booking + Night Audit non-collision (PLAN.md Phase 4)', () => {
       name: 'NA Portal Property',
       timezone: 'Africa/Lagos',
       base_currency: 'NGN',
-      current_business_date: '2027-03-01',
+      current_business_date: '2019-03-01',
     });
     await t.trx('user_property_access').insert({ tenant_id: ctx.a.id, property_id: propertyId, user_id: ctx.a.users[0].id, role: 'manager' });
 
@@ -75,7 +75,7 @@ describe('Portal booking + Night Audit non-collision (PLAN.md Phase 4)', () => {
       code: `NAPTRATE-${suffix}`,
       base_rate: '150.00',
       currency: 'NGN',
-      valid_from: '2026-01-01',
+      valid_from: '2019-01-01',
     });
     const property = await t.trx('properties').where({ id: propertyId }).first('slug');
 
@@ -89,8 +89,8 @@ describe('Portal booking + Night Audit non-collision (PLAN.md Phase 4)', () => {
         property_slug: property.slug,
         room_type_id: String(roomTypeId),
         rate_code_id: String(rateCodeId),
-        arrival_date: '2027-03-01',
-        departure_date: '2027-03-03', // two nights: 03-01 and 03-02
+        arrival_date: '2019-03-01',
+        departure_date: '2019-03-03', // two nights: 03-01 and 03-02
         first_name: 'NA',
         last_name: 'Portal',
         email: `na-portal-${suffix}@example.com`,
@@ -137,6 +137,6 @@ describe('Portal booking + Night Audit non-collision (PLAN.md Phase 4)', () => {
     expect(chargesAfterRun2.length).toBe(2); // still unchanged
 
     const finalProperty = await t.trx('properties').where({ id: propertyId }).first('current_business_date');
-    expect(String(finalProperty.current_business_date)).toBe('2027-03-03'); // advanced through both nights
+    expect(String(finalProperty.current_business_date)).toBe('2019-03-03'); // advanced through both nights
   });
 });

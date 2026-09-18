@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { runNightAudit } from '../night-audit.js';
+import { runNightAudit, listRuns } from '../night-audit.js';
 import { _resetApiClientForTesting } from '../client.js';
 
 function mockResponse(status, envelope) {
@@ -50,5 +50,18 @@ describe('runNightAudit()', () => {
     expect(result.data.business_date).toBe('2027-01-01');
     expect(result.meta.nextBusinessDate).toBe('2027-01-02');
     expect(result.meta.exceptions).toEqual([]);
+  });
+
+  // Cherry-picked from the night-audit-guard-and-ui-fixes branch: real
+  // coverage `main`'s own version of this file didn't have — proves
+  // `listRuns()` resolves the plain array (`data` only), matching how
+  // `NightAuditScreen.jsx` actually consumes it, rather than the
+  // `{data, meta}` shape `runNightAudit()` needs.
+  it('listRuns() returns the plain run array (data only), matching how the screen consumes it', async () => {
+    fetch.mockResolvedValueOnce(mockResponse(200, ok([{ id: '1', business_date: '2027-01-01', status: 'COMPLETED' }])));
+
+    const runs = await listRuns();
+
+    expect(runs).toEqual([{ id: '1', business_date: '2027-01-01', status: 'COMPLETED' }]);
   });
 });
