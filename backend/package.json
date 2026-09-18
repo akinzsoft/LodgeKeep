@@ -17,6 +17,7 @@
     "migrate:status": "knex migrate:status",
     "seed": "knex seed:run",
     "seed:make": "knex seed:make",
+    "create-platform-admin": "node scripts/create-platform-admin.js",
     "lint": "eslint .",
     "test": "jest --runInBand",
     "test:isolation": "jest --runInBand tests/isolation"
