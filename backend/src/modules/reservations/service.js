@@ -40,6 +40,7 @@ const {
   RoomOutOfOrderError,
   InvalidReservationTransitionError,
   ArrivalAfterDepartureError,
+  ArrivalBeforeBusinessDateError,
   FolioBalanceOwingError,
   WaitlistArrivalPassedError,
 } = require('./errors');
@@ -437,6 +438,21 @@ async function createReservation({
   if (!(departureDate > arrivalDate)) {
     throw new ArrivalAfterDepartureError();
   }
+
+  // Gap closure: the floor half of the business-date boundary — mirrors
+  // `expenses/service.js`'s own `recordExpense` ceiling check exactly
+  // (reject-if-on-the-wrong-side-of-`current_business_date`), just facing
+  // the opposite direction. An arrival dated to the still-open CURRENT
+  // business date is allowed (`>=`, not `>`) — see `ArrivalBeforeBusinessDateError`'s
+  // own header for why that's not really "backdating."
+  const propertyForFloorCheck = await trx.table('properties').first('current_business_date');
+  if (
+    propertyForFloorCheck?.current_business_date &&
+    String(arrivalDate) < String(propertyForFloorCheck.current_business_date)
+  ) {
+    throw new ArrivalBeforeBusinessDateError(arrivalDate, propertyForFloorCheck.current_business_date);
+  }
+
   const stayDates = expandStayDates(arrivalDate, departureDate);
 
   const rateCode = await trx.table('rate_codes').where({ id: rateCodeId }).first();

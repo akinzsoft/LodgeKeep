@@ -187,6 +187,57 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       expect(res.body.error.code).toBe('VALIDATION_ARRIVAL_AFTER_DEPARTURE');
     });
 
+    it('gap closure: an arrival date before the property\'s current business date is rejected', async () => {
+      const property = await t.trx('properties').where({ id: ctx.a.properties[0].id }).first('current_business_date');
+      try {
+        await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: '2027-06-10' });
+
+        const res = await t.request
+          .post('/api/v1/reservations')
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({
+            guest_id: String(ctx.a.guests[0].id),
+            room_type_id: String(roomTypeId),
+            rate_code_id: String(rateCodeId),
+            arrival_date: '2027-06-09',
+            departure_date: '2027-06-11',
+          });
+        expect(res.status).toBe(422);
+        expect(res.body.error.code).toBe('BUSINESS_RULE_ARRIVAL_BEFORE_BUSINESS_DATE');
+        // Nothing was reserved — a rejected booking must not hold inventory.
+        const inventoryRow = await t.trx('room_type_inventory')
+          .where({ tenant_id: ctx.a.id, room_type_id: roomTypeId, stay_date: '2027-06-09' })
+          .first();
+        expect(inventoryRow ? inventoryRow.rooms_sold : 0).toBe(0);
+      } finally {
+        await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: property.current_business_date });
+      }
+    });
+
+    it('gap closure: an arrival date equal to the current business date is allowed (not "backdating")', async () => {
+      const property = await t.trx('properties').where({ id: ctx.a.properties[0].id }).first('current_business_date');
+      try {
+        await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: '2027-06-20' });
+
+        const res = await t.request
+          .post('/api/v1/reservations')
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({
+            guest_id: String(ctx.a.guests[0].id),
+            room_type_id: String(roomTypeId),
+            rate_code_id: String(rateCodeId),
+            arrival_date: '2027-06-20',
+            departure_date: '2027-06-21',
+          });
+        expect(res.status).toBe(201);
+        expect(res.body.data.status).toBe('confirmed');
+      } finally {
+        await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: property.current_business_date });
+      }
+    });
+
     // RES-5 ("two concurrent requests for the last room") needs two
     // genuinely separate database connections to prove real lock
     // contention — this file's whole suite shares one transaction
