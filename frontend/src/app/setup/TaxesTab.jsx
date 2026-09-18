@@ -115,7 +115,7 @@ export function TaxesTab({ disabled, isOffline = false }) {
         )}
         <p className={formStyles.disabledNotice}>
           Changing an existing tax code&rsquo;s rate creates a new version effective from the date below. It never
-          alters what a historical folio already recorded (ARCHITECTURE.md §12.1).
+          alters what a historical folio already recorded.
         </p>
         <form
           className={formStyles.form}

@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AvailabilityTab } from '../AvailabilityTab.jsx';
 
 const mocks = vi.hoisted(() => ({
   listRoomTypes: vi.fn(),
   listRateCodes: vi.fn(),
+  resolveRate: vi.fn(),
   listGuests: vi.fn(),
   checkAvailability: vi.fn(),
   createReservation: vi.fn(),
@@ -25,7 +26,7 @@ vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return {
     ...actual,
-    setupApi: { listRoomTypes: mocks.listRoomTypes, listRateCodes: mocks.listRateCodes },
+    setupApi: { listRoomTypes: mocks.listRoomTypes, listRateCodes: mocks.listRateCodes, resolveRate: mocks.resolveRate },
     reservationsApi: {
       listGuests: mocks.listGuests,
       checkAvailability: mocks.checkAvailability,
@@ -61,6 +62,7 @@ describe('<AvailabilityTab>', () => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listRoomTypes.mockResolvedValue([ROOM_TYPE]);
     mocks.listRateCodes.mockResolvedValue([RATE_CODE]);
+    mocks.resolveRate.mockResolvedValue({ rate: RATE_CODE.base_rate, overridden: false });
     mocks.listGuests.mockResolvedValue([GUEST, GUEST_WITH_EMAIL, GUEST_WITH_PHONE]);
     mocks.listFreeRooms.mockResolvedValue([ROOM]);
     mocks.listEligiblePreferredRooms.mockResolvedValue([ROOM]);
@@ -89,6 +91,187 @@ describe('<AvailabilityTab>', () => {
       arrivalDate: '2027-01-01',
       departureDate: '2027-01-02',
     });
+  });
+
+  /**
+   * Gap closure (user-reported): "the rate code dropdown ... shows what
+   * appears to be all rate codes regardless of room type" — narrowed to
+   * codes valid for the searched dates (rate codes aren't room-type scoped
+   * in this schema at all; see `rate-code-eligibility.js`'s own header).
+   */
+  it('narrows the rate code dropdown to codes valid for the searched dates', async () => {
+    const lapsedPromo = { id: '2', code: 'OLDPROMO', base_rate: '99.00', currency: 'NGN', valid_from: '2020-01-01', valid_to: '2021-12-31' };
+    mocks.listRateCodes.mockResolvedValue([{ ...RATE_CODE, valid_from: '2020-01-01', valid_to: null }, lapsedPromo]);
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2027-01-01');
+
+    const rateCodeSelect = screen.getByLabelText('Rate code');
+    expect(within(rateCodeSelect).getByText(/^BAR —/)).toBeInTheDocument();
+    expect(within(rateCodeSelect).queryByText(/^OLDPROMO —/)).not.toBeInTheDocument();
+    expect(screen.getByText('Narrowed to rate codes valid for these dates.')).toBeInTheDocument();
+  });
+
+  /**
+   * Gap closure (user-reported): "wen Room type is selected it shld show
+   * the Rate/cost per night on the Rate code drop box only" — the dropdown
+   * shows the ROOM-TYPE-resolved per-night rate (`setupApi.resolveRate`),
+   * not just the rate code's own generic `base_rate`.
+   */
+  it('shows the room-type-resolved rate, not the plain base_rate, once a search resolves', async () => {
+    mocks.resolveRate.mockResolvedValue({ rate: '175.00', overridden: false });
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2027-01-01');
+
+    expect(mocks.resolveRate).toHaveBeenCalledWith({ rateCodeId: '1', roomTypeId: '1', stayDate: '2027-01-01' });
+    const rateCodeSelect = screen.getByLabelText('Rate code');
+    expect(await within(rateCodeSelect).findByText('BAR — 175.00 NGN/night')).toBeInTheDocument();
+    expect(within(rateCodeSelect).queryByText(/150\.00/)).not.toBeInTheDocument();
+  });
+
+  it('flags a room/date-specific override explicitly, in the dropdown text', async () => {
+    mocks.resolveRate.mockResolvedValue({ rate: '200.00', overridden: true });
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2027-01-01');
+
+    expect(
+      await within(screen.getByLabelText('Rate code')).findByText('BAR — 200.00 NGN/night (room override)')
+    ).toBeInTheDocument();
+  });
+
+  it('falls back to the rate code’s own base_rate when the resolve fails (e.g. a role without setup.view)', async () => {
+    mocks.resolveRate.mockRejectedValue(new Error('403 forbidden'));
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2027-01-01');
+
+    expect(
+      await within(screen.getByLabelText('Rate code')).findByText('BAR — 150.00 NGN/night')
+    ).toBeInTheDocument();
+  });
+
+  it('offers every rate code, unfiltered, when none of them covers the searched dates', async () => {
+    const lapsedPromo = { id: '2', code: 'OLDPROMO', base_rate: '99.00', currency: 'NGN', valid_from: '2020-01-01', valid_to: '2021-12-31' };
+    const notYetOpen = { id: '3', code: 'FUTUREPLAN', base_rate: '120.00', currency: 'NGN', valid_from: '2030-01-01', valid_to: null };
+    mocks.listRateCodes.mockResolvedValue([lapsedPromo, notYetOpen]);
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2027-01-01');
+
+    const rateCodeSelect = screen.getByLabelText('Rate code');
+    expect(within(rateCodeSelect).getByText(/^OLDPROMO —/)).toBeInTheDocument();
+    expect(within(rateCodeSelect).getByText(/^FUTUREPLAN —/)).toBeInTheDocument();
+    expect(screen.queryByText('Narrowed to rate codes valid for these dates.')).not.toBeInTheDocument();
+  });
+
+  it('clears a selected rate code that is no longer valid once the searched dates change, but keeps it across an unchanged re-search', async () => {
+    const summerOnly = { id: '1', code: 'SUMMER26', base_rate: '150.00', currency: 'NGN', valid_from: '2026-06-01', valid_to: '2026-08-31' };
+    // A second, always-open code so the September re-search has a genuinely
+    // valid option of its own — otherwise the empty-result fallback (see
+    // `rate-code-eligibility.js`) would keep offering SUMMER26 anyway as
+    // the only code there is, muddying what this test is actually proving.
+    const alwaysOpen = { id: '2', code: 'BAR', base_rate: '120.00', currency: 'NGN', valid_from: '2020-01-01', valid_to: null };
+    mocks.listRateCodes.mockResolvedValue([summerOnly, alwaysOpen]);
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2026-06-15', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2026-06-15');
+    await userEvent.type(dateInputs[1], '2026-06-18');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2026-06-15');
+    await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
+    expect(screen.getByLabelText('Rate code')).toHaveValue('1');
+
+    // Re-run the identical search (unchanged dates) — the selection survives.
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2026-06-15');
+    expect(screen.getByLabelText('Rate code')).toHaveValue('1');
+
+    // Now search dates the code no longer covers — the stale selection is cleared.
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2026-09-10', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    await userEvent.clear(dateInputs[0]);
+    await userEvent.type(dateInputs[0], '2026-09-10');
+    await userEvent.clear(dateInputs[1]);
+    await userEvent.type(dateInputs[1], '2026-09-12');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('2026-09-10');
+
+    expect(screen.getByLabelText('Rate code')).toHaveValue('');
   });
 
   it('books a reservation after a search, and shows the confirmation number', async () => {
