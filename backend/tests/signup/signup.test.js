@@ -9,11 +9,29 @@
  * `tests/platform/platform.test.js`.
  */
 
+// Security-review finding: `validatePassword` now makes a real network
+// call (`isPasswordBreached`, HaveIBeenPwned's k-anonymity API) — mocked
+// here (default: not breached) so this file's several signup calls stay
+// fast and immune to network flakiness or a fixture password's own
+// real-world breach-corpus membership. One test below overrides this to
+// prove the rejection path itself; a dedicated, unmocked, real-network
+// round trip lives in `tests/auth/breached-password.test.js`.
+jest.mock('../../src/auth/breached-password', () => ({ isPasswordBreached: jest.fn().mockResolvedValue(false) }));
+const { isPasswordBreached } = require('../../src/auth/breached-password');
+
 const { useTestApp } = require('../helpers/app');
 const { COOKIE_NAME: REFRESH_COOKIE_NAME } = require('../../src/auth/refresh-cookie');
+const { flushRateLimitPrefixes } = require('../helpers/rate-limit');
 
 describe('POST /api/v1/signup', () => {
   const t = useTestApp();
+
+  // Security-review finding: real HTTP volume against the new per-IP/
+  // per-account rate limiter (`src/modules/signup/routes.js`) would
+  // otherwise collide with real Redis state left over from an earlier run
+  // of this same file within the same window — see
+  // `tests/auth/auth.test.js`'s own identical flush for the full reasoning.
+  beforeAll(() => flushRateLimitPrefixes(['signup:ip:', 'signup:acct:']));
 
   function validBody(overrides = {}) {
     return {
@@ -158,6 +176,25 @@ describe('POST /api/v1/signup', () => {
     const res = await t.request.post('/api/v1/signup').send(body);
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_PASSWORD_TOO_SHORT');
+    const tenants = await t.trx('tenants').where({ slug: body.slug });
+    expect(tenants).toHaveLength(0);
+  });
+
+  it('rejects a password longer than the supported maximum and creates nothing', async () => {
+    const body = validBody({ admin_password: 'x'.repeat(129) });
+    const res = await t.request.post('/api/v1/signup').send(body);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_PASSWORD_TOO_LONG');
+    const tenants = await t.trx('tenants').where({ slug: body.slug });
+    expect(tenants).toHaveLength(0);
+  });
+
+  it('rejects a breached password and creates nothing — proving the real wiring, not just the underlying check', async () => {
+    isPasswordBreached.mockResolvedValueOnce(true);
+    const body = validBody();
+    const res = await t.request.post('/api/v1/signup').send(body);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_PASSWORD_BREACHED');
     const tenants = await t.trx('tenants').where({ slug: body.slug });
     expect(tenants).toHaveLength(0);
   });

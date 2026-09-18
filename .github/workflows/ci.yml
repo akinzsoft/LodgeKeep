@@ -108,6 +108,15 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Security-review finding: no dependency-vulnerability gate existed
+      # in CI at all — the csv-parse<7.0.2 prototype-pollution CVE this
+      # same review pass found and fixed would have shipped silently.
+      # `high` (not `critical`) so a real high-severity finding still
+      # blocks the build; Dependabot (.github/dependabot.yml) is the
+      # complementary "find and propose the fix" half of this.
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
   frontend:
     name: Frontend (test + lint)
     runs-on: ubuntu-latest
@@ -136,3 +145,7 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      # Same gate as the backend job — see that step's own comment.
+      - name: Audit dependencies
+        run: npm audit --audit-level=high

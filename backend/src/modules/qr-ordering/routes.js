@@ -38,6 +38,14 @@ const { requirePermission } = require('../../auth');
 const qrOrderOtpRequestIpRateLimiter = qrOrderIpRateLimiter({ limit: 20, prefix: 'qr-otp-request-ip-rl:' });
 const qrOrderOtpVerifyIpRateLimiter = qrOrderIpRateLimiter({ limit: 30, prefix: 'qr-otp-verify-ip-rl:' });
 
+// Security-review finding (2026-09): these two mutate a real order and call
+// out to Paystack, and had no rate limit at all — each gets its own
+// dedicated counter, the same "never share a budget with a different
+// action" reasoning above, rather than silently riding on order-creation's
+// own `qr-order-ip-rl:` prefix.
+const qrOrderRetryCheckoutIpRateLimiter = qrOrderIpRateLimiter({ limit: 20, prefix: 'qr-retry-checkout-ip-rl:' });
+const qrOrderConfirmPaymentIpRateLimiter = qrOrderIpRateLimiter({ limit: 20, prefix: 'qr-confirm-payment-ip-rl:' });
+
 function qrOrderPublicRouter({ resolveTenant }) {
   const router = Router();
   const withToken = [resolveTenant, resolveQrOrderToken()];
@@ -51,8 +59,8 @@ function qrOrderPublicRouter({ resolveTenant }) {
   router.get('/:token/branding', ...withToken, controller.getBranding);
   router.post('/:token/orders', ...withToken, qrOrderIpRateLimiter(), controller.createOrder);
   router.get('/:token/orders/:id', ...withToken, controller.getOrderStatus);
-  router.post('/:token/orders/:id/retry-checkout', ...withToken, controller.retryCheckout);
-  router.post('/:token/orders/:id/confirm-payment', ...withToken, controller.confirmCardPayment);
+  router.post('/:token/orders/:id/retry-checkout', ...withToken, qrOrderRetryCheckoutIpRateLimiter, controller.retryCheckout);
+  router.post('/:token/orders/:id/confirm-payment', ...withToken, qrOrderConfirmPaymentIpRateLimiter, controller.confirmCardPayment);
   router.get('/:token/orders/:id/room-charge/confirm-name', ...withToken, controller.confirmName);
   router.post('/:token/orders/:id/room-charge/request-otp', ...withToken, qrOrderOtpRequestIpRateLimiter, controller.requestOtp);
   router.post('/:token/orders/:id/room-charge/verify', ...withToken, qrOrderOtpVerifyIpRateLimiter, controller.verifyOtp);

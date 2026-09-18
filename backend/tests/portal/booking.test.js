@@ -23,6 +23,13 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => ({
   verifyWebhookSignature: jest.fn(),
 }));
 
+// Security-review finding: `validatePassword` now makes a real network
+// call (`isPasswordBreached`) — mocked here so this file's own guest
+// registration calls stay fast and immune to network flakiness. A
+// dedicated, unmocked, real-network round trip lives in
+// `tests/auth/breached-password.test.js`.
+jest.mock('../../src/auth/breached-password', () => ({ isPasswordBreached: jest.fn().mockResolvedValue(false) }));
+
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');

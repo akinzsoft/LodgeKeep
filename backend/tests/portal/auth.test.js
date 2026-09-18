@@ -9,9 +9,17 @@
  * against a staff route), in `tests/auth/auth.test.js`.
  */
 
+// Security-review finding: `validatePassword` now makes a real network
+// call (`isPasswordBreached`) — mocked here so this file's own
+// register/password-reset calls stay fast and immune to network
+// flakiness. A dedicated, unmocked, real-network round trip lives in
+// `tests/auth/breached-password.test.js`.
+jest.mock('../../src/auth/breached-password', () => ({ isPasswordBreached: jest.fn().mockResolvedValue(false) }));
+
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { issueRefreshToken } = require('../../src/auth/tokens');
+const { flushRateLimitPrefixes } = require('../helpers/rate-limit');
 
 describe('Guest portal auth (PLAN.md Phase 4)', () => {
   const t = useTestApp();
@@ -20,6 +28,21 @@ describe('Guest portal auth (PLAN.md Phase 4)', () => {
   let propertySlugs;
 
   beforeAll(async () => {
+    // Security-review finding: real HTTP volume against the new per-IP/
+    // per-account rate limiters (`src/auth/routes.js`) would otherwise
+    // collide with real Redis state left over from an earlier run of this
+    // same file within the same window — see `tests/auth/auth.test.js`'s
+    // own identical flush for the full reasoning.
+    await flushRateLimitPrefixes([
+      'auth-guest-register:ip:',
+      'auth-guest-register:acct:',
+      'auth-guest-login:ip:',
+      'auth-guest-login:acct:',
+      'auth-guest-forgot:ip:',
+      'auth-guest-forgot:acct:',
+      'auth-guest-reset:',
+    ]);
+
     ctx = await seedTwoTenants(t.trx);
     // The fixture's own `properties[i]` objects carry only {id, ordinal} —
     // `slug` lives in the real row (tests/helpers/fixtures.js's own

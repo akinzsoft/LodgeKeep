@@ -13,8 +13,15 @@
 #
 # package.json's engines field is ">=20" — this pins to the same major
 # version CI already tests the backend against (.github/workflows/ci.yml).
+#
+# Security-review finding: `node:20-bookworm-slim` is a moving tag — pinned
+# by digest instead so a plain `docker build` is reproducible and never
+# silently pulls in an unreviewed image. Bump deliberately (`docker pull
+# node:20-bookworm-slim && docker inspect --format='{{index .RepoDigests 0}}' node:20-bookworm-slim`)
+# — Dependabot (`.github/dependabot.yml`) also opens a PR automatically
+# when a newer digest is available.
 ################################################################################
-FROM node:20-bookworm-slim AS deps
+FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 # Network access to BOTH registry.npmjs.org and cdn.sheetjs.com is required
@@ -25,7 +32,7 @@ RUN npm ci --omit=dev
 ################################################################################
 # Stage: runtime
 ################################################################################
-FROM node:20-bookworm-slim AS runtime
+FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS runtime
 ENV NODE_ENV=production \
     PORT=3000
 WORKDIR /app

@@ -15,7 +15,14 @@
 # spike) happens here, on a throwaway layer, and never touches the image
 # that actually runs on the production box (the "caddy" stage below).
 ################################################################################
-FROM node:22-bookworm-slim AS build
+#
+# Security-review finding: `node:22-bookworm-slim` is a moving tag — pinned
+# by digest instead so a plain `docker build` is reproducible. Bump
+# deliberately (re-confirm the `^22.22.2` engines requirement still
+# resolves), and re-verify the frontend build still succeeds — Dependabot
+# (`.github/dependabot.yml`) also opens a PR automatically when a newer
+# digest is available.
+FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS build
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -40,7 +47,10 @@ RUN npm run build
 # config-validation failure at container start; bump this deliberately,
 # re-running `caddy validate` against the new tag, rather than drifting on it.
 ################################################################################
-FROM caddy:2.11-alpine
+# Also pinned by digest, same reasoning — the tag alone already carries
+# the real version-sensitivity note above; the digest additionally makes
+# the pull itself reproducible.
+FROM caddy:2.11-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
 COPY --from=build /app/dist /srv
 COPY docker/frontend/Caddyfile /etc/caddy/Caddyfile
 EXPOSE 80 443

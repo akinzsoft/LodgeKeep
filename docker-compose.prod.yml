@@ -26,7 +26,16 @@ name: lodgekeep-prod
 
 services:
   mysql:
-    image: mysql:8
+    # Security-review finding: `mysql:8` is a moving tag — the exact image
+    # it resolves to can change without this file changing at all,
+    # breaking reproducible builds and pulling in an unreviewed image on a
+    # plain `docker compose pull`. Pinned by digest (the real digest
+    # `mysql:8` resolved to at the time of this pass) instead; bump it
+    # deliberately — `docker pull mysql:8 && docker inspect --format='{{index .RepoDigests 0}}' mysql:8`
+    # — rather than letting the tag silently drift. Dependabot
+    # (`.github/dependabot.yml`) opens a PR automatically when a newer
+    # digest is available, so this doesn't need to be tracked by hand.
+    image: mysql:8@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: ${DB_NAME}
@@ -50,7 +59,9 @@ services:
     # compose project's own default network.
 
   redis:
-    image: redis:7-alpine
+    # Same reasoning as `mysql` above — pinned by digest, not the moving
+    # `redis:7-alpine` tag.
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
     volumes:
@@ -147,7 +158,10 @@ services:
   # footprint on a 12GB box as small as possible.
   #
   # phpmyadmin:
-  #   image: phpmyadmin:latest
+  #   # Pinned by digest, not `latest` — the worst of both worlds
+  #   # (unreproducible AND undated). Same reasoning as `mysql`/`redis`
+  #   # above.
+  #   image: phpmyadmin:latest@sha256:6db6e0bc9959eb00395f5d927cc786cb63530a265663950ecb9faf5955419c37
   #   restart: unless-stopped
   #   environment:
   #     PMA_HOST: mysql

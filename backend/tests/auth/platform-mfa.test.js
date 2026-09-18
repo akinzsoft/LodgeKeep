@@ -15,11 +15,28 @@ const { authenticator } = require('otplib');
 const { useTestApp } = require('../helpers/app');
 const { hashPassword } = require('../../src/auth/password');
 const { decrypt } = require('../../src/shared/encryption');
+const { flushRateLimitPrefixes } = require('../helpers/rate-limit');
 
 const PLATFORM_PASSWORD = 'a real platform password, not a fixture hash';
 
 describe('platform login + real TOTP MFA (PLAN.md Phase 5)', () => {
   const t = useTestApp();
+
+  // Security-review finding: real HTTP volume against the new per-IP/
+  // per-account rate limiters (`src/auth/routes.js`) would otherwise
+  // collide with real Redis state left over from an earlier run of this
+  // same file within the same window — see `tests/auth/auth.test.js`'s
+  // own identical flush for the full reasoning.
+  beforeAll(() =>
+    flushRateLimitPrefixes([
+      'auth-platform-login:ip:',
+      'auth-platform-login:acct:',
+      'auth-platform-mfa-enroll:ip:',
+      'auth-platform-mfa-enroll:acct:',
+      'auth-platform-mfa-verify:ip:',
+      'auth-platform-mfa-verify:acct:',
+    ])
+  );
 
   async function createPlatformUser({ email = `ops-${Date.now()}-${Math.random()}@lodgekeep.test`, mfaSecret = null } = {}) {
     const passwordHash = await hashPassword(PLATFORM_PASSWORD);

@@ -175,6 +175,89 @@ describe('Data migration (PLAN.md Phase 5)', () => {
   });
 
   // ---------------------------------------------------------------------
+  // Security review: a `__proto__`/`constructor`/`prototype` CSV header is
+  // a prototype-pollution vector against a naive `columns: true` CSV parse
+  // (GHSA-8cw4-87c7-c6xx) — rejected outright at dry-run, defense-in-depth
+  // on top of the upgraded, no-longer-vulnerable `csv-parse` dependency.
+  // ---------------------------------------------------------------------
+
+  describe('unsafe CSV headers', () => {
+    it.each(['__proto__', 'constructor', 'prototype', 'Constructor'])('rejects a "%s" column name at dry-run', async (columnName) => {
+      const uploadRes = await uploadRequest()
+        .field('entity_type', 'guests')
+        .attach('file', Buffer.from(`first_name,${columnName}\nJane,x\n`), 'guests.csv');
+      expect(uploadRes.status).toBe(201);
+
+      const dryRunRes = await t.request
+        .post(`/api/v1/migration/imports/${uploadRes.body.data.id}/dry-run`)
+        .set('Authorization', `Bearer ${adminToken()}`)
+        .send();
+
+      expect(dryRunRes.status).toBe(400);
+      expect(dryRunRes.body.error.code).toBe('VALIDATION_UNSAFE_CSV_HEADER');
+    });
+
+    it('accepts an ordinary header row with none of the reserved names', async () => {
+      const { importRunId } = await uploadAndDryRun({
+        entityType: 'guests',
+        fileContent: 'first_name,last_name,email,phone,date_of_birth\nJane,Doe,jane@example.com,,\n',
+        filename: 'guests.csv',
+      });
+      const run = await t.trx('import_runs').where({ id: importRunId }).first();
+      expect(run.status).toBe('dry_run_complete');
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Security review: a 20MB upload (multer's own cap) had no shape limit
+  // at all inside it — a pathologically wide header, an unbounded number
+  // of rows, or plain malformed CSV all used to reach the parser
+  // unguarded, the last of which used to 500 instead of a friendly 400.
+  // ---------------------------------------------------------------------
+
+  describe('CSV shape limits', () => {
+    async function dryRunFor(fileContent) {
+      const uploadRes = await uploadRequest().field('entity_type', 'guests').attach('file', Buffer.from(fileContent), 'guests.csv');
+      expect(uploadRes.status).toBe(201);
+      return t.request.post(`/api/v1/migration/imports/${uploadRes.body.data.id}/dry-run`).set('Authorization', `Bearer ${adminToken()}`).send();
+    }
+
+    it('rejects a header row with more than the supported number of columns', async () => {
+      const header = Array.from({ length: 250 }, (_, i) => `c${i}`).join(',');
+      const res = await dryRunFor(`${header}\nv\n`);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_TOO_MANY_IMPORT_COLUMNS');
+      expect(res.body.error.details.columnCount).toBe(250);
+    });
+
+    it('rejects a file with more data rows than the supported ceiling, without fully parsing it', async () => {
+      const rows = Array.from({ length: 50005 }, (_, i) => `Jane${i},Doe`).join('\n');
+      const res = await dryRunFor(`first_name,last_name\n${rows}\n`);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_TOO_MANY_IMPORT_ROWS');
+    });
+
+    it('rejects a genuinely malformed CSV (inconsistent column count) with a real 400, not a bare 500', async () => {
+      const res = await dryRunFor('first_name,last_name,email\nJane,Doe\n');
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_MALFORMED_CSV');
+      expect(res.body.error.details.csvErrorCode).toBe('CSV_RECORD_INCONSISTENT_COLUMNS');
+    });
+
+    it('rejects a single oversized field/record rather than buffering it unbounded', async () => {
+      const res = await dryRunFor(`first_name,last_name\n${'x'.repeat(30_000)},Doe\n`);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_MALFORMED_CSV');
+      expect(res.body.error.details.csvErrorCode).toBe('CSV_MAX_RECORD_SIZE');
+    });
+
+    it('a real file comfortably inside every limit still dry-runs normally', async () => {
+      const res = await dryRunFor('first_name,last_name,email,phone,date_of_birth\nJane,Doe,jane@example.com,,\n');
+      expect(res.status).toBe(200);
+    });
+  });
+
+  // ---------------------------------------------------------------------
   // Guests — the full dry-run -> duplicate-review -> commit loop
   // ---------------------------------------------------------------------
 
