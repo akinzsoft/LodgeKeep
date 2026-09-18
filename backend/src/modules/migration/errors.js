@@ -66,6 +66,70 @@ class InvalidDuplicateResolutionError extends AppError {
   }
 }
 
+/**
+ * Security review finding: an uploaded CSV is attacker-controlled input from
+ * a real (if privileged) user, and `__proto__`/`constructor`/`prototype`
+ * column names are a known prototype-pollution vector against a naive
+ * `columns: true` parse (GHSA-8cw4-87c7-c6xx). `csv-parse` itself no longer
+ * mutates the prototype for these names (fixed upstream, `parse.js`'s own
+ * header), but this is deliberate defense-in-depth: reject the file outright
+ * rather than trust that every future call site correctly treats a `row`
+ * object's own `__proto__`/`constructor`/`prototype` key as inert data.
+ */
+class UnsafeCsvHeaderError extends AppError {
+  constructor(columnNames) {
+    super(
+      'VALIDATION_UNSAFE_CSV_HEADER',
+      `The uploaded file's header row uses a reserved column name (${columnNames.join(', ')}) that is not permitted.`,
+      400,
+      { columnNames }
+    );
+  }
+}
+
+/**
+ * Security review finding: a 20MB file has no shape limit at all otherwise
+ * — a pathologically wide header (thousands of columns) builds an
+ * equally-wide object per row for the whole file. See `parse.js`'s own
+ * header for the full reasoning.
+ */
+class TooManyImportColumnsError extends AppError {
+  constructor(columnCount, maxColumns) {
+    super(
+      'VALIDATION_TOO_MANY_IMPORT_COLUMNS',
+      `The uploaded file's header row has ${columnCount} columns — at most ${maxColumns} are supported.`,
+      400,
+      { columnCount, maxColumns }
+    );
+  }
+}
+
+/** Same reasoning as `TooManyImportColumnsError`, for row count instead. */
+class TooManyImportRowsError extends AppError {
+  constructor(maxRows) {
+    super('VALIDATION_TOO_MANY_IMPORT_ROWS', `This file has more than ${maxRows} data rows — split it into smaller files and import each separately.`, 400, {
+      maxRows,
+    });
+  }
+}
+
+/**
+ * A real, pre-existing gap found while adding the two limits above, not
+ * introduced by them: `csv-parse` throws a bare `Error` (`.code` starting
+ * `CSV_...` — inconsistent column counts, an unterminated quoted field,
+ * this file's own new `CSV_MAX_RECORD_SIZE`, etc.) for any malformed
+ * input, which is not an `AppError` and was never caught anywhere —
+ * `error-handler.js`'s own catch-all turned every one of these into a bare
+ * `500 INTERNAL_ERROR` instead of a friendly, actionable rejection.
+ */
+class MalformedCsvError extends AppError {
+  constructor(csvErrorCode) {
+    super('VALIDATION_MALFORMED_CSV', 'This file could not be read as a valid CSV — check for a wrong delimiter, an unterminated quote, or an inconsistent number of columns per row.', 400, {
+      csvErrorCode,
+    });
+  }
+}
+
 module.exports = {
   UnknownEntityTypeError,
   MissingUploadedFileError,
@@ -75,4 +139,8 @@ module.exports = {
   UnresolvedDuplicatesError,
   DuplicateRowNotFoundError,
   InvalidDuplicateResolutionError,
+  UnsafeCsvHeaderError,
+  TooManyImportColumnsError,
+  TooManyImportRowsError,
+  MalformedCsvError,
 };

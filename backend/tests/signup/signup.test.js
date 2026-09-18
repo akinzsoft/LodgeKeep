@@ -9,11 +9,43 @@
  * `tests/platform/platform.test.js`.
  */
 
+// Security-review finding: `validatePassword` now makes a real network
+// call (`isPasswordBreached`, HaveIBeenPwned's k-anonymity API) — mocked
+// here (default: not breached) so this file's several signup calls stay
+// fast and immune to network flakiness or a fixture password's own
+// real-world breach-corpus membership. One test below overrides this to
+// prove the rejection path itself; a dedicated, unmocked, real-network
+// round trip lives in `tests/auth/breached-password.test.js`.
+jest.mock('../../src/auth/breached-password', () => ({ isPasswordBreached: jest.fn().mockResolvedValue(false) }));
+const { isPasswordBreached } = require('../../src/auth/breached-password');
+
+// Security-review finding: `POST /signup` now requires a verified CAPTCHA
+// token (`requireCaptcha()`, `shared/captcha-middleware.js`) — mocked here
+// (default: always verifies) so this file's several signup calls stay
+// fast and don't depend on a real Cloudflare round trip. Two tests below
+// override this to prove both real rejection paths (missing token,
+// verification failure); a dedicated, unmocked, real-network round trip
+// lives in `tests/shared/captcha-verify.test.js`.
+jest.mock('../../src/shared/captcha-verify', () => ({ verifyTurnstileToken: jest.fn().mockResolvedValue(true) }));
+const { verifyTurnstileToken } = require('../../src/shared/captcha-verify');
+
 const { useTestApp } = require('../helpers/app');
 const { COOKIE_NAME: REFRESH_COOKIE_NAME } = require('../../src/auth/refresh-cookie');
+const { flushRateLimitPrefixes } = require('../helpers/rate-limit');
 
 describe('POST /api/v1/signup', () => {
   const t = useTestApp();
+
+  // Security-review finding: real HTTP volume against the new per-IP/
+  // per-account rate limiter (`src/modules/signup/routes.js`) would
+  // otherwise collide with real Redis state left over from an earlier run
+  // of this same file within the same window — see
+  // `tests/auth/auth.test.js`'s own identical flush for the full reasoning.
+  beforeAll(() => flushRateLimitPrefixes(['signup:ip:', 'signup:acct:']));
+
+  beforeEach(() => {
+    verifyTurnstileToken.mockReset().mockResolvedValue(true);
+  });
 
   function validBody(overrides = {}) {
     return {
@@ -25,6 +57,7 @@ describe('POST /api/v1/signup', () => {
       admin_password: 'a genuinely long enough password',
       admin_first_name: 'Ada',
       admin_last_name: 'Okafor',
+      captcha_token: 'dummy-test-token',
       ...overrides,
     };
   }
@@ -160,6 +193,46 @@ describe('POST /api/v1/signup', () => {
     expect(res.body.error.code).toBe('VALIDATION_PASSWORD_TOO_SHORT');
     const tenants = await t.trx('tenants').where({ slug: body.slug });
     expect(tenants).toHaveLength(0);
+  });
+
+  it('rejects a password longer than the supported maximum and creates nothing', async () => {
+    const body = validBody({ admin_password: 'x'.repeat(129) });
+    const res = await t.request.post('/api/v1/signup').send(body);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_PASSWORD_TOO_LONG');
+    const tenants = await t.trx('tenants').where({ slug: body.slug });
+    expect(tenants).toHaveLength(0);
+  });
+
+  it('rejects a breached password and creates nothing — proving the real wiring, not just the underlying check', async () => {
+    isPasswordBreached.mockResolvedValueOnce(true);
+    const body = validBody();
+    const res = await t.request.post('/api/v1/signup').send(body);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_PASSWORD_BREACHED');
+    const tenants = await t.trx('tenants').where({ slug: body.slug });
+    expect(tenants).toHaveLength(0);
+  });
+
+  describe('CAPTCHA screening (security-review finding)', () => {
+    it('rejects with VALIDATION_CAPTCHA_TOKEN_REQUIRED when captcha_token is missing, without ever calling Cloudflare', async () => {
+      const body = validBody();
+      delete body.captcha_token;
+      const res = await t.request.post('/api/v1/signup').send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_CAPTCHA_TOKEN_REQUIRED');
+      expect(verifyTurnstileToken).not.toHaveBeenCalled();
+    });
+
+    it('rejects with VALIDATION_CAPTCHA_FAILED when Turnstile verification fails, and creates nothing', async () => {
+      verifyTurnstileToken.mockResolvedValueOnce(false);
+      const body = validBody();
+      const res = await t.request.post('/api/v1/signup').send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_CAPTCHA_FAILED');
+      const tenants = await t.trx('tenants').where({ slug: body.slug });
+      expect(tenants).toHaveLength(0);
+    });
   });
 
   it('rejects an invalid slug format', async () => {

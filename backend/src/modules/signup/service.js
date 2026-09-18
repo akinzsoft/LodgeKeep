@@ -94,9 +94,9 @@ async function signupTenant(input) {
   assertRequiredFields(input);
   assertValidSlug(input.slug);
 
-  const passwordIssue = validatePassword(input.adminPassword);
+  const passwordIssue = await validatePassword(input.adminPassword);
   if (passwordIssue) {
-    throw new ValidationError('PASSWORD_TOO_SHORT', passwordIssue, [{ field: 'adminPassword', issue: 'too_short' }]);
+    throw new ValidationError(passwordIssue.code, passwordIssue.message, [{ field: 'adminPassword', issue: passwordIssue.code.toLowerCase() }]);
   }
 
   const adminEmail = input.adminEmail.trim().toLowerCase();

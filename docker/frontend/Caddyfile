@@ -41,22 +41,96 @@
 
 	encode gzip zstd
 
-	# Every backend route tree (src/app.js: /api/v1, /api/v1/portal,
-	# /api/v1/qr-order, /api/v1/media, /api/v1/platform) lives under one
-	# /api/v1/* prefix — one matcher covers all five. No CORS handling
-	# exists anywhere in the backend (confirmed) — frontend and API must
-	# share exactly this one origin, which is the entire reason this
-	# reverse proxy exists rather than two separately-hosted origins.
-	@api path /api/v1/*
-	reverse_proxy @api backend:3000 {
-		health_uri /healthz
-		health_interval 10s
-		health_timeout 3s
+	# Security-review finding: neither this site nor the backend set any
+	# browser-security headers at all — `src/shared/image-store.js`'s own
+	# `default-src 'none'` CSP is scoped to one binary-response route, not
+	# the app. Set here, once, for every response this site serves —
+	# HSTS/nosniff/Referrer-Policy/Permissions-Policy are all safe on a
+	# JSON API response too, so they apply ahead of the `handle` blocks
+	# below rather than being duplicated in both branches.
+	#
+	# `preload` is deliberately NOT set — HSTS preload is a real, largely
+	# irreversible commitment (submission to browsers' own hardcoded list)
+	# that belongs to a domain owner's own decision, not a default this
+	# Caddyfile should silently opt every tenant subdomain into.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(self)"
+		# Defaults-off, not a full CSP — the SPA's own `handle` block below
+		# sets the real one, scoped to the actual HTML page it protects.
+		# Kept here too as a harmless floor for any response the SPA's own
+		# CSP doesn't otherwise reach.
+		X-Frame-Options "DENY"
 	}
 
-	root * /srv
-	file_server
-	# Client-side routing (react-router-dom) — an unknown static path falls
-	# through to index.html rather than a bare Caddy 404.
-	try_files {path} /index.html
+	# A REAL BUG THIS PASS FOUND AND FIXED, confirmed against the actual
+	# compiled Caddy config (`caddy adapt`), not assumed from reading the
+	# Caddyfile: named matchers (`@api path /api/v1/*` on a bare
+	# `reverse_proxy`, as this block used to read) do NOT control ordering
+	# BETWEEN different directive types — Caddy runs `rewrite` (what
+	# `try_files` compiles to) before `reverse_proxy` regardless of
+	# textual order in the file, and `try_files`'s own `file` matcher
+	# always succeeds (its second candidate, `/index.html`, always
+	# exists) — so EVERY `/api/v1/*` request was being rewritten to
+	# `/index.html` before the API matcher ever saw it, and silently
+	# served the SPA's HTML instead of reaching the backend at all. This
+	# was true of the ORIGINAL Caddyfile too, entirely independent of the
+	# header work above — confirmed by running this exact config against
+	# a real Caddy 2.11 container and a real backend stand-in on a shared
+	# Docker network: `curl /api/v1/foo` returned `index.html`'s content,
+	# not the backend's response, until this fix.
+	#
+	# `handle` blocks are Caddy's real, documented answer to this shape
+	# ("API + SPA fallback") — mutually exclusive, evaluated in the order
+	# written, the first match wins and nothing else in the site block
+	# runs. `/api/v1/*` now unconditionally reaches the backend; nothing
+	# else ever falls through to `try_files` and back into this branch.
+	handle /api/v1/* {
+		# Every backend route tree (src/app.js: /api/v1, /api/v1/portal,
+		# /api/v1/qr-order, /api/v1/media, /api/v1/platform) lives under
+		# one /api/v1/* prefix — one handle block covers all five. No CORS
+		# handling exists anywhere in the backend (confirmed) — frontend
+		# and API must share exactly this one origin, which is the entire
+		# reason this reverse proxy exists rather than two separately-
+		# hosted origins.
+		reverse_proxy backend:3000 {
+			health_uri /healthz
+			health_interval 10s
+			health_timeout 3s
+		}
+	}
+
+	handle {
+		# A real Content-Security-Policy for the SPA's own HTML/JS —
+		# `frame-ancestors 'none'` restates `X-Frame-Options: DENY` in the
+		# directive browsers actually prefer (CSP wins where both apply).
+		# `script-src`/`connect-src`/`frame-src` allow-list Paystack's own
+		# domains (`shared/paystack.js` loads `js.paystack.co`'s Inline
+		# JS, which opens a real checkout iframe/popup) — nothing else is
+		# loaded from a CDN (self-hosted fonts, per this file's own
+		# design-system history). NOT live-verified against a real browser
+		# checkout in this environment (no browser-automation tool exists
+		# here, per this repo's own established caveat) — confirm the
+		# Paystack popup still opens cleanly before relying on this in
+		# production.
+		#
+		# `challenges.cloudflare.com` (`script-src`/`frame-src` only) is
+		# Cloudflare Turnstile's own real, documented CSP requirement
+		# (developers.cloudflare.com/turnstile/reference/content-security-policy/,
+		# confirmed directly, not assumed) for the CAPTCHA widget on the
+		# signup screen — deliberately NOT added to `connect-src`: that
+		# domain is only required there for Turnstile's "pre-clearance"
+		# mode, which this app doesn't use; the widget's own iframe (its
+		# own separate origin, subject to Cloudflare's own CSP, not this
+		# page's) makes whatever connections it needs internally.
+		header Content-Security-Policy "default-src 'self'; script-src 'self' https://js.paystack.co https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+		root * /srv
+		file_server
+		# Client-side routing (react-router-dom) — an unknown static path
+		# falls through to index.html rather than a bare Caddy 404.
+		try_files {path} /index.html
+	}
 }

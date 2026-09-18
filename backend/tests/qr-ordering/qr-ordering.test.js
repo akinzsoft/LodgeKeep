@@ -52,9 +52,17 @@ const { rateLimitRedisConnection, destroyRateLimitRedisConnection } = require('.
  */
 async function flushIpRateLimitKeys() {
   const redis = rateLimitRedisConnection();
-  const keys = await redis.keys('qr-order-ip-rl:*');
-  const otpKeys = [...(await redis.keys('qr-otp-request-ip-rl:*')), ...(await redis.keys('qr-otp-verify-ip-rl:*'))];
-  const all = [...keys, ...otpKeys];
+  const prefixes = [
+    'qr-order-ip-rl:',
+    'qr-otp-request-ip-rl:',
+    'qr-otp-verify-ip-rl:',
+    // Security-review finding: retry-checkout/confirm-payment gained their
+    // own dedicated per-IP counters too, for the identical reason.
+    'qr-retry-checkout-ip-rl:',
+    'qr-confirm-payment-ip-rl:',
+  ];
+  const keyLists = await Promise.all(prefixes.map((prefix) => redis.keys(`${prefix}*`)));
+  const all = keyLists.flat();
   if (all.length) await redis.del(...all);
 }
 

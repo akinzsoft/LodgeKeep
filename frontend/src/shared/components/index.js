@@ -17,3 +17,4 @@ export { IconBadge } from './IconBadge/IconBadge.jsx';
 export { Toast } from './Toast/Toast.jsx';
 export { ConfirmDialog } from './ConfirmDialog/ConfirmDialog.jsx';
 export { Skeleton } from './Skeleton/Skeleton.jsx';
+export { Turnstile } from './Turnstile/Turnstile.jsx';

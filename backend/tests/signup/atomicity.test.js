@@ -9,6 +9,13 @@
 const { db } = require('../helpers/db');
 const dbModule = require('../../src/db');
 
+// Security-review finding: `validatePassword` now makes a real network
+// call (`isPasswordBreached`) — mocked here so this file's own real-MySQL
+// signup calls stay fast and immune to network flakiness. A dedicated,
+// unmocked, real-network round trip lives in
+// `tests/auth/breached-password.test.js`.
+jest.mock('../../src/auth/breached-password', () => ({ isPasswordBreached: jest.fn().mockResolvedValue(false) }));
+
 let mockFailHashAt = null;
 jest.mock('../../src/auth', () => {
   const actual = jest.requireActual('../../src/auth');

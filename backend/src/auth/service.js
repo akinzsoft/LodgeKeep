@@ -677,8 +677,8 @@ async function requestPasswordReset({ tenantId, email, ip, userAgent, requestId 
  * actually flip it, and the loser's affected-row count is 0.
  */
 async function completePasswordReset({ tenantId, token, newPassword, ip, userAgent, requestId }) {
-  const validationIssue = validatePassword(newPassword);
-  if (validationIssue) throw new ValidationError('PASSWORD_TOO_SHORT', validationIssue);
+  const validationIssue = await validatePassword(newPassword);
+  if (validationIssue) throw new ValidationError(validationIssue.code, validationIssue.message);
 
   const db = scopedDb();
   const context = contextFromSession({ tenantId });
@@ -757,8 +757,8 @@ async function completePasswordReset({ tenantId, token, newPassword, ip, userAge
  * here rather than silently mishandled.
  */
 async function acceptInvitation({ tenantId, token, firstName, lastName, password, ip, userAgent, requestId }) {
-  const validationIssue = validatePassword(password);
-  if (validationIssue) throw new ValidationError('PASSWORD_TOO_SHORT', validationIssue);
+  const validationIssue = await validatePassword(password);
+  if (validationIssue) throw new ValidationError(validationIssue.code, validationIssue.message);
 
   const db = scopedDb();
   const context = contextFromSession({ tenantId });
@@ -839,8 +839,8 @@ async function acceptInvitation({ tenantId, token, firstName, lastName, password
  * `acceptInvitation`'s own header already accepts for staff invitations.
  */
 async function guestRegister({ tenantId, propertySlug, email, password, firstName, lastName, phone, ip, userAgent, requestId }) {
-  const validationIssue = validatePassword(password);
-  if (validationIssue) throw new ValidationError('PASSWORD_TOO_SHORT', validationIssue);
+  const validationIssue = await validatePassword(password);
+  if (validationIssue) throw new ValidationError(validationIssue.code, validationIssue.message);
 
   const db = scopedDb();
   const property = await resolvePropertyBySlug({ db, tenantId, propertySlug });
@@ -1056,8 +1056,8 @@ async function requestGuestPasswordReset({ tenantId, propertySlug, email, ip, us
  * no revocable-session table at all.
  */
 async function completeGuestPasswordReset({ tenantId, token, newPassword, ip, userAgent, requestId }) {
-  const validationIssue = validatePassword(newPassword);
-  if (validationIssue) throw new ValidationError('PASSWORD_TOO_SHORT', validationIssue);
+  const validationIssue = await validatePassword(newPassword);
+  if (validationIssue) throw new ValidationError(validationIssue.code, validationIssue.message);
 
   const db = scopedDb();
   const context = contextFromSession({ tenantId });

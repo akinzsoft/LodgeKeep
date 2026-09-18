@@ -66,6 +66,10 @@ jobs:
       # never a real secret. Required to encrypt/decrypt email_settings'
       # smtp_password_encrypted column.
       ENCRYPTION_KEY: QHPmf9o+5XHE98VJUL6OTl/xicwtWLhDrZsSOOnhtIo=
+      # Cloudflare Turnstile — the official "always passes" dummy secret
+      # key (never a real credential), required by src/shared/startup-
+      # checks.js's fail-fast validation. See backend/.env.example.
+      TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
 
     steps:
       - uses: actions/checkout@v4
@@ -108,6 +112,15 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Security-review finding: no dependency-vulnerability gate existed
+      # in CI at all — the csv-parse<7.0.2 prototype-pollution CVE this
+      # same review pass found and fixed would have shipped silently.
+      # `high` (not `critical`) so a real high-severity finding still
+      # blocks the build; Dependabot (.github/dependabot.yml) is the
+      # complementary "find and propose the fix" half of this.
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
   frontend:
     name: Frontend (test + lint)
     runs-on: ubuntu-latest
@@ -136,3 +149,7 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      # Same gate as the backend job — see that step's own comment.
+      - name: Audit dependencies
+        run: npm audit --audit-level=high

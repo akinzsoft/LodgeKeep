@@ -15,15 +15,13 @@
  * (`rate-limit.js`) is the tighter, more meaningful guard against any one
  * table/room's own QR code being spammed.
  *
- * Uses the SAME dedicated `rateLimitRedisConnection()` singleton the
- * per-token counter uses — a genuinely different Redis consumer from
- * BullMQ's own connection (see that file's own header).
+ * A thin wrapper over `shared/rate-limit.js`'s `redisRateLimiter` — this
+ * was the first real caller (hence the QR-specific defaults/wording below),
+ * promoted to shared infra once auth/signup/portal-booking needed the same
+ * shape (that file's own header has the full reasoning).
  */
 
-const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
-const { RedisStore } = require('rate-limit-redis');
-const { rateLimitRedisConnection } = require('../../shared/rate-limit-redis-connection');
-const { fail } = require('../../shared/response');
+const { redisRateLimiter } = require('../../shared/rate-limit');
 
 /**
  * `limit`/`prefix` are overridable (code-review fix, IMPORTANT) so a
@@ -32,19 +30,11 @@ const { fail } = require('../../shared/response');
  * (`routes.js`), each with its own appropriately-scoped ceiling.
  */
 function qrOrderIpRateLimiter({ limit = 30, prefix = 'qr-order-ip-rl:' } = {}) {
-  return rateLimit({
+  return redisRateLimiter({
     windowMs: 60_000,
     limit,
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: ipKeyGenerator,
-    store: new RedisStore({
-      prefix,
-      sendCommand: (...args) => rateLimitRedisConnection().call(...args),
-    }),
-    handler: (req, res) => {
-      res.status(429).json(fail('RATE_LIMITED', 'Too many requests from this network — please wait a moment and try again.'));
-    },
+    prefix,
+    message: 'Too many requests from this network — please wait a moment and try again.',
   });
 }
 

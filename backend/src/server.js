@@ -12,6 +12,20 @@
 
 require('dotenv').config();
 
+const { validateStartupConfig } = require('./shared/startup-checks');
+
+// Security-review finding: fail fast, loudly, before ever listening —
+// `startup-checks.js`'s own header has the full reasoning. A misconfigured
+// JWT_SECRET/ENCRYPTION_KEY used to only surface on whichever real request
+// happened to need it first, with the container reporting healthy the
+// whole time.
+try {
+  validateStartupConfig();
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
+
 const { createApp } = require('./app');
 const { startOutboxWorker, scheduleOutboxSweep } = require('./jobs/outbox-dispatcher');
 const { startTrialExpiryWorker, scheduleTrialExpirySweep } = require('./jobs/trial-expiry');

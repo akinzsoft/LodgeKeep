@@ -1,0 +1,49 @@
+# Security-review finding: no automated dependency-update mechanism existed
+# anywhere in this repo — a pinned Docker image digest (backend/Dockerfile,
+# docker/frontend/Dockerfile, docker-compose.prod.yml) or an npm dependency
+# with a known CVE (the csv-parse<7.0.2 prototype-pollution gap this same
+# review pass found and fixed) would otherwise never get bumped except by
+# someone remembering to check. Dependabot opens a PR when a newer version
+# is available; CI (.github/workflows/ci.yml) still gates every one of them
+# on the real test suite before merge — this file finds the update, it
+# doesn't bypass review.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  # One entry per directory that actually contains a Dockerfile —
+  # Dependabot's `docker` ecosystem tracks the `FROM` line(s) in whatever
+  # Dockerfile(s) live in `directory`.
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /docker/frontend
+    schedule:
+      interval: weekly
+
+  # Repo-root `docker-compose.prod.yml`'s own pinned `mysql`/`redis` image
+  # digests (and docker-compose.yml's dev-infra images) — the `docker`
+  # ecosystem also tracks `image:` references in a compose file found in
+  # `directory`.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

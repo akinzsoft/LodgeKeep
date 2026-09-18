@@ -11,12 +11,21 @@
  * production code path.
  */
 
+// Security-review finding: `validatePassword` now makes a real network
+// call (`isPasswordBreached`, HaveIBeenPwned's k-anonymity API) — mocked
+// here so this file's several `completePasswordReset` calls stay fast and
+// immune to network flakiness or a fixture password's own real-world
+// breach-corpus membership. A dedicated, unmocked, real-network round trip
+// lives in `tests/auth/breached-password.test.js`.
+jest.mock('../../src/auth/breached-password', () => ({ isPasswordBreached: jest.fn().mockResolvedValue(false) }));
+
 const jwt = require('jsonwebtoken');
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants, seedPlatformUser, PASSWORD_HASH } = require('../helpers/fixtures');
 const { hashPassword } = require('../../src/auth/password');
 const { issueRefreshToken, hashRefreshToken } = require('../../src/auth/tokens');
 const { hashMfaCode } = require('../../src/auth/mfa');
+const { flushRateLimitPrefixes } = require('../helpers/rate-limit');
 
 // Only `enqueueOutboxDispatch` is mocked (real elsewhere, including
 // `runOutboxDispatchSweep`/`startOutboxWorker`, per `jest.requireActual`) —
@@ -48,6 +57,25 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
   let adminNoMfa; // a user with the admin role at a property, mfa_enabled=false
 
   beforeAll(async () => {
+    // Security-review finding: real HTTP volume against the new per-IP/
+    // per-account rate limiters (`src/auth/routes.js`) would otherwise
+    // collide with real Redis state left over from an earlier run of this
+    // same file within the same window — the identical idiom
+    // `tests/qr-ordering/qr-ordering.test.js` already established for its
+    // own per-IP counters.
+    await flushRateLimitPrefixes([
+      'auth-staff-login:ip:',
+      'auth-staff-login:acct:',
+      'auth-staff-forgot:ip:',
+      'auth-staff-forgot:acct:',
+      'auth-staff-reset:',
+      'auth-staff-invite-accept:',
+      'auth-staff-mfa-verify:ip:',
+      'auth-staff-mfa-verify:acct:',
+      'auth-platform-login:ip:',
+      'auth-platform-login:acct:',
+    ]);
+
     ctx = await seedTwoTenants(t.trx);
     ctx.platform = await seedPlatformUser(t.trx);
 
@@ -531,6 +559,86 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.revoked).toBe(true);
+    });
+  });
+
+  // ==================================================================
+  // Security-review finding: CSRF defense-in-depth for the two cookie-only-
+  // authenticated actions (`same-origin-guard.js`'s own header has the full
+  // reasoning — SameSite=Lax is the real, primary defense; this is a
+  // second, explicit check on top of it). Every OTHER test in this file
+  // sends neither `Origin` nor `Referer` at all (supertest's own default),
+  // which the guard deliberately allows through — proven implicitly by the
+  // whole rest of this file passing; these tests instead prove the guard
+  // actually rejects a genuine MISMATCH.
+  // ==================================================================
+  describe('CSRF defense-in-depth — same-origin check on /refresh and /logout', () => {
+    it('rejects /auth/refresh when the Origin header names a different host than this request arrived on', async () => {
+      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+        email: loginable.email,
+        password: STRONG_PASSWORD,
+      });
+      const loginCookie = refreshCookieHeader(login);
+
+      const res = await asTenantA(t.request.post('/api/v1/auth/refresh'))
+        .set('Cookie', loginCookie)
+        .set('Host', 'alpha-hotels.lodgekeep.app')
+        .set('Origin', 'https://attacker.example');
+
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_CROSS_ORIGIN');
+    });
+
+    it('allows /auth/refresh when the Origin header genuinely matches the request Host', async () => {
+      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+        email: loginable.email,
+        password: STRONG_PASSWORD,
+      });
+      const loginCookie = refreshCookieHeader(login);
+
+      const res = await asTenantA(t.request.post('/api/v1/auth/refresh'))
+        .set('Cookie', loginCookie)
+        .set('Host', 'alpha-hotels.lodgekeep.app')
+        .set('Origin', 'https://alpha-hotels.lodgekeep.app');
+
+      expect(res.status).toBe(200);
+    });
+
+    it('rejects /auth/logout when Origin names a different host, and does NOT revoke the session', async () => {
+      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+        email: loginable.email,
+        password: STRONG_PASSWORD,
+      });
+      const loginCookie = refreshCookieHeader(login);
+
+      const res = await asTenantA(t.request.post('/api/v1/auth/logout'))
+        .set('Cookie', loginCookie)
+        .set('Host', 'alpha-hotels.lodgekeep.app')
+        .set('Origin', 'https://attacker.example');
+
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_CROSS_ORIGIN');
+
+      // The session behind the cookie must still be genuinely live —
+      // proving this is a real rejection, not a no-op that quietly still
+      // revoked it.
+      const stillWorks = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', loginCookie);
+      expect(stillWorks.status).toBe(200);
+    });
+
+    it('falls back to a matching Referer when Origin is absent', async () => {
+      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+        email: loginable.email,
+        password: STRONG_PASSWORD,
+      });
+      const loginCookie = refreshCookieHeader(login);
+
+      const res = await asTenantA(t.request.post('/api/v1/auth/refresh'))
+        .set('Cookie', loginCookie)
+        .set('Host', 'alpha-hotels.lodgekeep.app')
+        .set('Referer', 'https://alpha-hotels.lodgekeep.app/booking');
+
+      expect(res.status).toBe(200);
     });
   });
 
