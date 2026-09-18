@@ -43,6 +43,14 @@ COPY knexfile.js ./
 COPY src ./src
 COPY migrations ./migrations
 COPY seeds ./seeds
+# scripts/create-platform-admin.js — run via `docker compose exec backend
+# npm run create-platform-admin`, the only documented way to bootstrap the
+# first platform_users row in production (seeds/01_dev_tenants.js refuses
+# outright under NODE_ENV=production). There is only this one runtime
+# stage — docker-compose.prod.yml's `migrate` service builds this exact
+# image too, just with a different `command:` — so one COPY here covers
+# both.
+COPY scripts ./scripts
 
 # Every local-disk storage path (src/shared/image-store.js,
 # src/jobs/tenant-data-export.js, src/modules/migration/storage.js) is
