@@ -85,3 +85,4 @@ Tenant isolation is this project's core guarantee, so it has its own dedicated s
 ## License
 
 No license file is currently checked into this repository — that's an open question, not a default. Until one is added, treat this code as all-rights-reserved.
+
