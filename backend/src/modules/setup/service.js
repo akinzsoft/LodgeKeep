@@ -11,7 +11,7 @@
 
 const { scopedDb } = require('../../db');
 const imageStore = require('../../shared/image-store');
-const { withDuplicateMapping } = require('../../shared/errors');
+const { withDuplicateMapping, ValidationError } = require('../../shared/errors');
 const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError } = require('./errors');
 const { encrypt } = require('../../shared/encryption');
 const { resolveEmailAdapter } = require('../notifications/email-adapter');
@@ -268,8 +268,27 @@ async function sendTestEmail({ context, to }) {
 // Room types
 // ---------------------------------------------------------------------
 
-async function createRoomType({ context, code, name, description, defaultOccupancy, baseRate, photos }) {
+/**
+ * Gap closure (user-reported): a room type's own default rate code, so
+ * Booking's Rate code picker can show just THIS room type's price instead
+ * of every property-wide code — see the migration adding this column for
+ * the full reasoning. A friendly existence check here (same property, not
+ * merely same tenant — `assertRateCodeBelongsToProperty` reuses the exact
+ * lookup a real `rate_codes.id` at this property would satisfy) rather
+ * than letting a bad id fall through to the raw FK-violation error the
+ * column's own constraint would otherwise surface.
+ */
+async function assertRateCodeBelongsToProperty({ db, primaryRateCodeId }) {
+  if (primaryRateCodeId == null) return;
+  const rateCode = await db.table('rate_codes').where({ id: primaryRateCodeId }).first();
+  if (!rateCode) {
+    throw new ValidationError('PRIMARY_RATE_CODE_NOT_FOUND', 'The specified primary rate code does not exist at this property.');
+  }
+}
+
+async function createRoomType({ context, code, name, description, defaultOccupancy, baseRate, photos, primaryRateCodeId }) {
   const db = scopedDb().for(context);
+  await assertRateCodeBelongsToProperty({ db, primaryRateCodeId });
   return withDuplicateMapping(
     'room_types',
     `A room type with code "${code}" already exists at this property.`,
@@ -281,6 +300,7 @@ async function createRoomType({ context, code, name, description, defaultOccupan
         default_occupancy: defaultOccupancy,
         base_rate: baseRate,
         photos: photos ?? null,
+        primary_rate_code_id: primaryRateCodeId ?? null,
       });
       return getRoomType({ context, id });
     }
@@ -289,6 +309,9 @@ async function createRoomType({ context, code, name, description, defaultOccupan
 
 async function updateRoomType({ context, id, changes }) {
   const db = scopedDb().for(context);
+  if (Object.prototype.hasOwnProperty.call(changes, 'primary_rate_code_id')) {
+    await assertRateCodeBelongsToProperty({ db, primaryRateCodeId: changes.primary_rate_code_id });
+  }
   await db.table('room_types').where({ id }).update(changes);
   return getRoomType({ context, id });
 }

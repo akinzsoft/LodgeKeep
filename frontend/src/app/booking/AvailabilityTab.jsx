@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Card, Button, DataTable, StatusPill } from '../../shared/components/index.js';
 import { setupApi, reservationsApi, cashieringApi, groupBlocksApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
-import { filterRateCodesForStay } from './rate-code-eligibility.js';
+import { filterRateCodesForStay, resolvePrimaryRateCodeForStay } from './rate-code-eligibility.js';
 import { Money, formatMoney, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
@@ -66,35 +66,48 @@ import styles from './BookingScreen.module.css';
  * here, settled later via Cashiering or at check-out — never a reason to
  * roll the booking back.
  *
- * Gap closure (user-reported): "the rate code dropdown requires manual
- * selection and shows all rate codes regardless of room type." Checked
- * against the real schema first, not assumed — see `rate-code-eligibility.js`'s
- * own header: rate codes are property-wide, not room-type scoped at all, so
- * there is no room-type filter to apply; the one real filter is the rate
- * code's own `valid_from`/`valid_to` window against the searched dates
- * (`eligibleRateCodes` below). Auto-selecting a default rate code (the
- * request's other half) was NOT built — `rate_codes` has no "default" flag,
- * and picking one by another rule (e.g. first alphabetically) would be
- * inventing a business decision, not implementing one; flagged back to the
- * user rather than guessed.
+ * Gap closure (user-reported, three rounds): "the rate code dropdown ...
+ * shows all rate codes regardless of room type" → "wen Room type is
+ * selected it shld show the Rate/cost per night" → "THE RATE CODE PUT ONLY
+ * THE PRICE OF THE ROOM TYPE SELECTED... SHOWING ALL THE RATE CODE ON THE
+ * DROP BOX [is] WRONG." The first two passes were real, honest fixes
+ * against the schema as it stood at the time (rate codes are property-wide
+ * — `rate_codes` carries no room-type column at all, confirmed by reading
+ * the migration directly, so every active code genuinely applied to every
+ * room type) — but that's not what a hotel actually wants, and the third
+ * round said so plainly. Closed for real this time with a genuine
+ * room-type-to-rate-code link, confirmed with the user via AskUserQuestion
+ * over two alternatives (a many-to-many table; a fragile code-name-match
+ * heuristic): `room_types.primary_rate_code_id`, one rate code per room
+ * type, editable in Setup's Room Types tab.
  *
- * Gap closure (user-reported): "wen Room type is selected it shld show the
- * Rate/cost per night on the Rate code drop box only." Since a rate code is
- * property-wide (above), its own `base_rate` doesn't reflect a per-room-type
- * `rate_calendar` override — `reloadRoomRatesForType`/`describeRatePerNight`
- * resolve the ACTUAL per-night rate for the searched room type (as of the
- * search's arrival date — a real, deliberate simplification: a later night
- * of a multi-night stay CAN carry its own different override this one
- * figure doesn't show) via the same `setupApi.resolveRate` endpoint
- * `RateCodesTab.jsx`'s own calendar panel already uses. "On the Rate code
- * drop box only" — this stays purely a dropdown-option enhancement, not a
- * separate field or summary elsewhere on this screen. Flagged, not fixed
- * here: this reuses the same `setup.view` permission `listRoomTypes`/
- * `listRateCodes` above already require, and SECURITY.md §5's matrix marks
- * Setup `✗` for `front_desk` — the role this screen's own booking flow is
- * for — so this resolve (like the room-type/rate-code lists themselves)
- * degrades to `rc.base_rate` for a front_desk account today, a pre-existing
- * gap this pass didn't introduce and doesn't fix.
+ * `primaryRateCode` below resolves the SELECTED room type's own configured
+ * rate — falling back to the full eligible list (unchanged from the prior
+ * pass) whenever no primary is set (a room type nobody has configured one
+ * for yet, including every room type that existed before this migration)
+ * OR the configured one has lapsed/isn't active for these exact dates —
+ * "no data to prefer, don't invent one," the same reasoning
+ * `rate-code-eligibility.js`'s own empty-result fallback already uses.
+ * `booking.rate_code_id` auto-selects to it the instant a search resolves
+ * — a REAL default now exists to auto-select, closing the "no default flag
+ * exists" gap the first pass correctly declined to guess around. "Don't
+ * remove the ability to choose" (the user's own words, first round) stays
+ * true throughout: a collapsed "Use a different rate code" panel — this
+ * screen's own established `<details>` pattern, matching "New guest" below
+ * — reveals the full picker for a corporate/negotiated rate on the same
+ * room type.
+ *
+ * The room-type-resolved per-night amount itself (`reloadRoomRatesForType`/
+ * `describeRatePerNight`, second round) is unchanged — it still accounts
+ * for a per-room-type `rate_calendar` override the code's own flat
+ * `base_rate` wouldn't show, resolved as of the search's arrival date.
+ * Flagged, not fixed here (unchanged from the prior pass): this reuses the
+ * same `setup.view` permission `listRoomTypes`/`listRateCodes` already
+ * require, and SECURITY.md §5's matrix marks Setup `✗` for `front_desk` —
+ * the role this screen's own booking flow is for — so this whole feature
+ * degrades to the old, unfiltered full-list behavior for a front_desk
+ * account today, a pre-existing gap this pass didn't introduce and doesn't
+ * fix.
  */
 export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const [roomTypes, setRoomTypes] = useState(null);
@@ -138,6 +151,15 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     preferred_room_id: '',
     group_block_id: '',
   });
+  // Gap closure (user-reported, third round): "put only the price of the
+  // room type selected" — once a valid primary rate code is resolved (see
+  // `resolvePrimaryRateCodeForStay`), the Rate code field collapses to
+  // just that one rate. This one-way reveal (matching the "New guest"
+  // `<details>` panel's own established shape in this file) is what
+  // "don't remove the ability to choose" still means here — never reset
+  // back to false mid-cycle once opened, so a staff member's explicit
+  // switch to a corporate/negotiated code is never silently discarded.
+  const [showAllRateCodes, setShowAllRateCodes] = useState(false);
   const [newGuest, setNewGuest] = useState({ first_name: '', last_name: '', email: '', phone: '' });
   const [addingGuest, setAddingGuest] = useState(false);
   // Gap closure: phone-number guest lookup — see this file's own header.
@@ -277,16 +299,19 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
       }
       await reloadEligiblePreferredRooms();
       await reloadRoomRatesForType(search.room_type_id, search.arrival_date);
-      // Gap closure (user-reported): the rate code dropdown showed every
-      // active property-wide code regardless of the searched dates. A
-      // previously-selected code that's no longer valid for THESE dates is
-      // cleared here — checked against the freshly-searched dates, not
-      // reset unconditionally, so re-running the same search (unchanged
-      // dates) keeps a staff member's already-made choice rather than
-      // making them reselect it every time. See `eligibleRateCodes`'s own
-      // definition below and `rate-code-eligibility.js`'s header for what
-      // "valid" means here.
+      // Gap closure (user-reported, third round): resolve THIS room type's
+      // own configured rate code and auto-select it — a real default now
+      // exists to auto-select (`room_types.primary_rate_code_id`), closing
+      // the "no default flag exists" gap the first round correctly
+      // declined to guess around. No primary configured/valid for this
+      // room type falls back to the prior pass's own behavior: keep a
+      // still-eligible prior selection, or clear it, against the full
+      // eligible list. See `resolvePrimaryRateCodeForStay`'s own header.
+      setShowAllRateCodes(false);
       setBooking((current) => {
+        const chosenRoomType = (roomTypes ?? []).find((rt) => String(rt.id) === String(search.room_type_id));
+        const primary = resolvePrimaryRateCodeForStay(chosenRoomType, rateCodes, search.arrival_date, search.departure_date);
+        if (primary) return { ...current, rate_code_id: String(primary.id) };
         if (!current.rate_code_id) return current;
         const stillEligible = filterRateCodesForStay(rateCodes, search.arrival_date, search.departure_date).some(
           (rc) => String(rc.id) === String(current.rate_code_id)
@@ -421,6 +446,15 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   // selectable when no code's own window covers these exact dates.
   const eligibleRateCodes = filterRateCodesForStay(rateCodes, search.arrival_date, search.departure_date);
   const rateCodesNarrowed = (rateCodes ?? []).length > 0 && eligibleRateCodes.length < (rateCodes ?? []).length;
+  // Gap closure (user-reported, third round, with a screenshot): "put only
+  // the price of the room type selected" — see this file's own header for
+  // the full story across all three rounds. `visibleRateCodes` is what the
+  // field actually renders: just the one primary code, unless there isn't
+  // one (nothing to narrow to — the pre-existing full-list behavior
+  // stands) or the staff member has explicitly asked to see the rest.
+  const selectedRoomType = (roomTypes ?? []).find((rt) => String(rt.id) === String(search.room_type_id));
+  const primaryRateCode = resolvePrimaryRateCodeForStay(selectedRoomType, rateCodes, search.arrival_date, search.departure_date);
+  const visibleRateCodes = primaryRateCode && !showAllRateCodes ? [primaryRateCode] : eligibleRateCodes;
   /**
    * Gap closure (user-reported): "when Room type is selected it shld show
    * the Rate/cost per night on the Rate code drop box." Prefers the
@@ -718,63 +752,84 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
               </label>
               {/* A wrapping <label> computes its accessible name from ALL
                   of its text content — see `door-access/SettingsTab.jsx`'s
-                  own precedent for this exact fix. The optional narrowing
-                  hint below must be a SIBLING of the <label>, not nested
-                  inside it, or `getByLabelText('Rate code')` (and a screen
-                  reader announcing this field) would pick up the hint text
-                  too the moment it renders. */}
+                  own precedent for this exact fix. Hint/summary text below
+                  must be a SIBLING of the <label>, not nested inside it, or
+                  `getByLabelText('Rate code')` (and a screen reader
+                  announcing this field) would pick up that text too. */}
               <div className={formStyles.field}>
                 <label className={formStyles.label} htmlFor="rate-code-select">
                   Rate code
                 </label>
-                <select
-                  id="rate-code-select"
-                  className={formStyles.select}
-                  value={booking.rate_code_id}
-                  onChange={(event) => setBooking({ ...booking, rate_code_id: event.target.value })}
-                  required
-                >
-                  <option value="" disabled>
-                    Select a rate code
-                  </option>
-                  {eligibleRateCodes.map((rc) => {
-                    const { amount, overridden } = describeRatePerNight(rc);
-                    return (
-                      <option key={rc.id} value={rc.id}>
-                        {rc.code} — {amount} {rc.currency}/night{overridden ? ' (room override)' : ''}
+                {primaryRateCode && !showAllRateCodes ? (
+                  // Gap closure (user-reported, third round, with a
+                  // screenshot): "put only the price of the room type
+                  // selected" — a single, plain summary line, already
+                  // auto-selected (`booking.rate_code_id`, set in
+                  // `handleSearch`), no dropdown to open at all. "Use a
+                  // different rate code" is the one-way reveal that
+                  // restores the full picker below, for a corporate or
+                  // negotiated rate on the same room type.
+                  <>
+                    <p className={formStyles.disabledNotice}>
+                      {primaryRateCode.code}: {formatMoney(describeRatePerNight(primaryRateCode).amount, primaryRateCode.currency)}/night
+                      {describeRatePerNight(primaryRateCode).overridden ? ' (room override)' : ''}
+                    </p>
+                    {eligibleRateCodes.length > 1 && (
+                      <Button type="button" variant="ghost" size="compact" onClick={() => setShowAllRateCodes(true)}>
+                        Use a different rate code
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <select
+                      id="rate-code-select"
+                      className={formStyles.select}
+                      value={booking.rate_code_id}
+                      onChange={(event) => setBooking({ ...booking, rate_code_id: event.target.value })}
+                      required
+                    >
+                      <option value="" disabled>
+                        Select a rate code
                       </option>
-                    );
-                  })}
-                </select>
-                {rateCodesNarrowed && (
-                  <span className={formStyles.fieldHint}>Narrowed to rate codes valid for these dates.</span>
-                )}
-                {/* Gap closure (user-reported, with a screenshot): a closed,
-                    unselected native <select> shows only its placeholder —
-                    the per-night rate on each <option> above is invisible
-                    until the dropdown is actually opened. This list is the
-                    same figures, always visible with no click required, so
-                    "select this room type, see the rate" is true the moment
-                    the search resolves, not only once the dropdown is
-                    opened. */}
-                {eligibleRateCodes.length > 0 && (
-                  <ul className={formStyles.rateList}>
-                    {eligibleRateCodes.map((rc) => {
-                      const { amount, overridden } = describeRatePerNight(rc);
-                      // Plain `formatMoney()` text, not the `<Money>` component
-                      // — this is a short inline list, not a money column
-                      // needing tabular-nums alignment, and one plain text
-                      // node per line keeps this simple to query in tests
-                      // (RTL's `getByText` doesn't need to reach into a
-                      // nested <span> to match the whole line).
-                      return (
-                        <li key={rc.id} className={formStyles.rateListItem}>
-                          {rc.code}: {formatMoney(amount, rc.currency)}/night
-                          {overridden ? ' (room override)' : ''}
-                        </li>
-                      );
-                    })}
-                  </ul>
+                      {visibleRateCodes.map((rc) => {
+                        const { amount, overridden } = describeRatePerNight(rc);
+                        return (
+                          <option key={rc.id} value={rc.id}>
+                            {rc.code} — {amount} {rc.currency}/night{overridden ? ' (room override)' : ''}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {rateCodesNarrowed && (
+                      <span className={formStyles.fieldHint}>Narrowed to rate codes valid for these dates.</span>
+                    )}
+                    {/* Gap closure (user-reported, with a screenshot): a
+                        closed, unselected native <select> shows only its
+                        placeholder — the per-night rate on each <option>
+                        above is invisible until the dropdown is actually
+                        opened. This list is the same figures, always
+                        visible with no click required. */}
+                    {visibleRateCodes.length > 0 && (
+                      <ul className={formStyles.rateList}>
+                        {visibleRateCodes.map((rc) => {
+                          const { amount, overridden } = describeRatePerNight(rc);
+                          // Plain `formatMoney()` text, not the `<Money>`
+                          // component — this is a short inline list, not a
+                          // money column needing tabular-nums alignment,
+                          // and one plain text node per line keeps this
+                          // simple to query in tests (RTL's `getByText`
+                          // doesn't need to reach into a nested <span>).
+                          return (
+                            <li key={rc.id} className={formStyles.rateListItem}>
+                              {rc.code}: {formatMoney(amount, rc.currency)}/night
+                              {overridden ? ' (room override)' : ''}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </>
                 )}
               </div>
             </div>

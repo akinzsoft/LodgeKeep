@@ -6,6 +6,7 @@ import { ApiError } from '../../../shared/api/ApiError.js';
 
 const mocks = vi.hoisted(() => ({
   listRoomTypes: vi.fn(),
+  listRateCodes: vi.fn(),
   createRoomType: vi.fn(),
   updateRoomType: vi.fn(),
 }));
@@ -14,7 +15,12 @@ vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return {
     ...actual,
-    setupApi: { listRoomTypes: mocks.listRoomTypes, createRoomType: mocks.createRoomType, updateRoomType: mocks.updateRoomType },
+    setupApi: {
+      listRoomTypes: mocks.listRoomTypes,
+      listRateCodes: mocks.listRateCodes,
+      createRoomType: mocks.createRoomType,
+      updateRoomType: mocks.updateRoomType,
+    },
   };
 });
 
@@ -23,6 +29,11 @@ const PROPERTY = { id: '1', base_currency: 'NGN' };
 describe('<RoomTypesTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
+    // Gap closure (user-reported): "Primary rate code" picker — every test
+    // below now needs a rate code list to load alongside room types
+    // (`reload()`'s own `Promise.all`), even the ones with nothing to do
+    // with it.
+    mocks.listRateCodes.mockResolvedValue([]);
   });
 
   it('shows a disabled notice with no active property, and never calls the API', () => {
@@ -118,7 +129,71 @@ describe('<RoomTypesTab>', () => {
       default_occupancy: 2,
       base_rate: '200.00',
       description: 'Nice room',
+      primary_rate_code_id: '',
     });
+  });
+
+  /**
+   * Gap closure (user-reported, with a screenshot): "put only the price
+   * of the room type selected" — closed with a real room-type-to-rate-code
+   * link, confirmed with the user. This is where it's configured.
+   */
+  it('creates a room type with a primary rate code', async () => {
+    mocks.listRoomTypes.mockResolvedValue([]);
+    mocks.listRateCodes.mockResolvedValue([{ id: '9', code: 'BAR', base_rate: '150.00', currency: 'NGN' }]);
+    mocks.createRoomType.mockResolvedValue({ id: '6', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00', primary_rate_code_id: '9' });
+    render(<RoomTypesTab activeProperty={PROPERTY} disabled={false} />);
+    await screen.findByText(/no room types yet/i);
+
+    await userEvent.type(screen.getByPlaceholderText('DLX'), 'DLX');
+    await userEvent.type(screen.getByPlaceholderText('Deluxe'), 'Deluxe');
+    await userEvent.type(screen.getByPlaceholderText('150.00'), '150.00');
+    await userEvent.selectOptions(screen.getByLabelText('Primary rate code (optional)'), '9');
+    await userEvent.click(screen.getByRole('button', { name: 'Add room type' }));
+
+    expect(mocks.createRoomType).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'DLX', name: 'Deluxe', base_rate: '150.00', primary_rate_code_id: '9' })
+    );
+  });
+
+  it('shows the room type\'s own configured primary rate code, by name, in the table', async () => {
+    mocks.listRoomTypes.mockResolvedValue([
+      { id: '5', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00', primary_rate_code_id: '9' },
+    ]);
+    mocks.listRateCodes.mockResolvedValue([{ id: '9', code: 'BAR', base_rate: '150.00', currency: 'NGN' }]);
+    render(<RoomTypesTab activeProperty={PROPERTY} disabled={false} />);
+
+    expect(await screen.findByText('BAR')).toBeInTheDocument();
+  });
+
+  it('shows a dash in the table when no primary rate code is configured', async () => {
+    mocks.listRoomTypes.mockResolvedValue([
+      { id: '5', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00', primary_rate_code_id: null },
+    ]);
+    mocks.listRateCodes.mockResolvedValue([{ id: '9', code: 'BAR', base_rate: '150.00', currency: 'NGN' }]);
+    render(<RoomTypesTab activeProperty={PROPERTY} disabled={false} />);
+
+    await screen.findByText('DLX');
+    expect(screen.getByText('—')).toBeInTheDocument();
+  });
+
+  it('can clear a room type\'s primary rate code via the Edit form', async () => {
+    mocks.listRoomTypes.mockResolvedValue([
+      { id: '5', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00', description: '', primary_rate_code_id: '9' },
+    ]);
+    mocks.listRateCodes.mockResolvedValue([{ id: '9', code: 'BAR', base_rate: '150.00', currency: 'NGN' }]);
+    mocks.updateRoomType.mockResolvedValue({ id: '5', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00', primary_rate_code_id: null });
+    render(<RoomTypesTab activeProperty={PROPERTY} disabled={false} />);
+    await screen.findByText('DLX');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const primaryRateSelect = screen.getByLabelText('Primary rate code');
+    expect(primaryRateSelect).toHaveValue('9');
+
+    await userEvent.selectOptions(primaryRateSelect, '');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(mocks.updateRoomType).toHaveBeenCalledWith('5', expect.objectContaining({ primary_rate_code_id: '' }));
   });
 
   it('shows the real backend 403 when a non-super_admin tries to save an edit', async () => {
