@@ -20,7 +20,7 @@
  * challenge token `staffLogin` issues instead of full access tokens
  * whenever `roleRequiresMfa`/`user.mfa_enabled` triggers a challenge — the
  * code itself, and its email delivery, live in `service.js`, matching
- * where `requestPasswordReset`/`completePasswordReset` already keep the
+ * where `requestPasswordResetCode`/`completePasswordResetWithCode` already keep the
  * identical shape of logic for password resets.
  *
  * Real TOTP/authenticator-app enrollment (`mfa_devices.secret`) is still

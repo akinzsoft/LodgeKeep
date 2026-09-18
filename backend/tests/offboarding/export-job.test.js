@@ -36,9 +36,21 @@ describe('Tenant data export bundle — PLAN.md Phase 5', () => {
 
   it('never includes a table on the denylist, regardless of scope', () => {
     const tables = exportableTables();
-    for (const denied of ['sessions', 'password_resets', 'mfa_devices', 'mfa_login_codes', 'audit_log', 'roles', 'role_permissions', 'tenant_domains', 'idempotency_keys', 'tenants', 'properties']) {
+    // Gap closure: the forgot-password flow moved from an emailed reset
+    // link to an emailed numeric code — `password_reset_codes` replaced
+    // `password_resets`, and must stay just as denylisted (a real,
+    // previously-caught regression: this assertion silently stopped
+    // proving anything the moment `password_resets` was dropped, since a
+    // nonexistent table can never appear in `tables` regardless of the
+    // denylist).
+    for (const denied of ['sessions', 'password_reset_codes', 'mfa_devices', 'mfa_login_codes', 'audit_log', 'roles', 'role_permissions', 'tenant_domains', 'idempotency_keys', 'tenants', 'properties']) {
       expect(tables).not.toContain(denied);
     }
+    // password_reset_codes is TENANT_SCOPED and genuinely exportable-shaped
+    // (it would appear here if it weren't denylisted) — proves the
+    // assertion above is real, not vacuous the way it was for the dropped
+    // password_resets table.
+    expect(require('../../src/shared/table-scopes').TABLE_SCOPES.password_reset_codes).toBeDefined();
     // Sanity: real guest/reservation/folio tables ARE included — the whole point of the export.
     for (const included of ['guests', 'reservations', 'folios', 'folio_line_items', 'room_types', 'rooms']) {
       expect(tables).toContain(included);

@@ -36,7 +36,7 @@ function stripRefreshToken(result) {
  * (outside production only — `service.js`'s own `staffLogin` header) —
  * renamed to snake_case here to match the `dev_only_token` shape every
  * other credential-issuing endpoint in this file already uses
- * (`requestPasswordReset` below, `guestRegister`/`inviteUser` elsewhere).
+ * (`requestPasswordResetCode` below, `guestRegister`/`inviteUser` elsewhere).
  */
 function renameDevOnlyCode(result) {
   if (!('devOnlyCode' in result)) return result;
@@ -214,33 +214,41 @@ async function changeMyPassword(req, res, next) {
   }
 }
 
-/** POST /api/v1/auth/password/forgot */
-async function requestPasswordReset(req, res, next) {
+/**
+ * POST /api/v1/auth/password/forgot — gap closure (user-reported): the
+ * forgot-password flow now emails a 6-digit code, not a reset link.
+ * `reset_token` is returned UNCONDITIONALLY, in every environment — unlike
+ * `dev_only_code`, it is not a dev convenience: it's how the app itself
+ * carries the correlation id between this call and the verify step below,
+ * since the email only ever contains the human-typed code.
+ */
+async function requestPasswordResetCode(req, res, next) {
   try {
     const email = require_(req.body, 'email');
-    const result = await service.requestPasswordReset({
+    const result = await service.requestPasswordResetCode({
       tenantId: req.tenantId,
       email,
       ...requestMeta(req),
     });
-    // AUTH-7/PRODUCT_REQUIREMENTS.md §3.16: same response whether or not the
-    // address resolved. devOnlyToken is undefined/null outside dev-mode
-    // handling in the service, and is omitted from the response entirely once
-    // a real email sender exists.
-    res.status(200).json(ok({ status: 'ok', dev_only_token: result.devOnlyToken }));
+    // AUTH-7/PRODUCT_REQUIREMENTS.md §3.16: same response shape whether or
+    // not the address resolved — `dev_only_code` is the only field that
+    // legitimately differs (present only outside production, and only when
+    // a real user was found).
+    res.status(200).json(ok({ status: 'ok', reset_token: result.resetToken, dev_only_code: result.devOnlyCode }));
   } catch (error) {
     next(error);
   }
 }
 
 /** POST /api/v1/auth/password/reset */
-async function completePasswordReset(req, res, next) {
+async function completePasswordResetWithCode(req, res, next) {
   try {
-    const token = require_(req.body, 'token');
+    const resetToken = require_(req.body, 'reset_token');
+    const code = require_(req.body, 'code');
     const newPassword = require_(req.body, 'new_password');
-    const result = await service.completePasswordReset({
-      tenantId: req.tenantId,
-      token,
+    const result = await service.completePasswordResetWithCode({
+      resetToken,
+      code,
       newPassword,
       ...requestMeta(req),
     });
@@ -418,8 +426,8 @@ module.exports = {
   getMyProfile,
   updateMyProfile,
   changeMyPassword,
-  requestPasswordReset,
-  completePasswordReset,
+  requestPasswordResetCode,
+  completePasswordResetWithCode,
   acceptInvitation,
   guestRegister,
   guestLogin,

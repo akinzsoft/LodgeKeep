@@ -9,8 +9,8 @@ const mocks = vi.hoisted(() => ({
   logout: vi.fn(),
   switchProperty: vi.fn(),
   refresh: vi.fn(),
-  requestPasswordReset: vi.fn(),
-  completePasswordReset: vi.fn(),
+  requestPasswordResetCode: vi.fn(),
+  completePasswordResetWithCode: vi.fn(),
   configureApiClient: vi.fn(),
 }));
 
@@ -24,8 +24,8 @@ vi.mock('../../../shared/api/index.js', async () => {
       logout: mocks.logout,
       switchProperty: mocks.switchProperty,
       refresh: mocks.refresh,
-      requestPasswordReset: mocks.requestPasswordReset,
-      completePasswordReset: mocks.completePasswordReset,
+      requestPasswordResetCode: mocks.requestPasswordResetCode,
+      completePasswordResetWithCode: mocks.completePasswordResetWithCode,
     },
     configureApiClient: mocks.configureApiClient,
   };

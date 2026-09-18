@@ -102,7 +102,7 @@ async function inviteUser({ context, email, role, invitedByUserId }) {
     });
 
     // Dev-only exposure outside production — the exact precedent
-    // `requestPasswordReset` (src/auth/service.js) already established for
+    // `requestPasswordResetCode` (src/auth/service.js) already established for
     // a token that would otherwise only ever leave this codebase by email.
     const devOnlyToken = process.env.NODE_ENV !== 'production' ? token : null;
 

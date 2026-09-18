@@ -3,8 +3,8 @@
 /**
  * Self-service "My Profile" screen (user-requested) —
  * `POST /api/v1/auth/me/password`, the password change WHILE LOGGED IN,
- * distinct from `completePasswordReset` (the forgot-password flow, which
- * needs a reset token and has no "current password" to check). Confirmed
+ * distinct from `completePasswordResetWithCode` (the forgot-password flow,
+ * which needs a reset code and has no "current password" to check). Confirmed
  * with the user: revokes every OTHER active session, spares the one
  * behind the request itself.
  */

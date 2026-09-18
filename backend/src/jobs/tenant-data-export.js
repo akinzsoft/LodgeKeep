@@ -90,7 +90,14 @@ async function enqueueTenantDataExportJob({ tenantId, exportId }) {
 const EXPORT_TABLE_DENYLIST = new Set([
   // Secrets / credential / session state — never leaves the platform, regardless of scope.
   'sessions',
-  'password_resets',
+  // Gap closure: the forgot-password flow moved from an emailed reset link
+  // to an emailed numeric code, replacing `password_resets` (this
+  // denylist's own former entry) with `password_reset_codes` — a
+  // `code_hash` is structurally identical secret/credential state, and
+  // genuinely weaker (a 6-digit code's ~1,000,000-value keyspace, vs. a
+  // 256-bit token) — must stay denylisted exactly like `mfa_login_codes`
+  // below, its own direct precedent.
+  'password_reset_codes',
   'mfa_devices',
   'mfa_login_codes',
   'guest_password_resets',

@@ -41,6 +41,14 @@ const {
   MFA_CODE_TTL_MINUTES,
   MFA_CODE_MAX_ATTEMPTS,
 } = require('./mfa');
+const {
+  signPasswordResetChallengeToken,
+  verifyPasswordResetChallengeToken,
+  generatePasswordResetCode,
+  hashPasswordResetCode,
+  PASSWORD_RESET_CODE_TTL_MINUTES,
+  PASSWORD_RESET_CODE_MAX_ATTEMPTS,
+} = require('./password-reset-code');
 const { generateTotpSecret, buildOtpAuthUrl, generateQrCodeDataUrl, verifiedTotpStep } = require('./totp');
 const {
   InvalidCredentialsError,
@@ -49,6 +57,7 @@ const {
   ValidationError,
   MfaNotImplementedError,
   MfaCodeInvalidError,
+  PasswordResetCodeInvalidError,
   DuplicateEntryError,
 } = require('./errors');
 // Self-service "My Profile" screen (user-requested) — no cycle: `src/audit`
@@ -181,7 +190,7 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
     // real 6-digit code, hashed and stored with a 10-minute expiry
     // (`mfa_login_codes`) and delivered through the real outbox — the
     // exact "both a real send AND a dev-only disclosure" precedent
-    // `inviteUser`/`requestPasswordReset`/`requestGuestPasswordReset` all
+    // `inviteUser`/`requestPasswordResetCode`/`requestGuestPasswordReset` all
     // already establish, not a hardcoded bypass string any more.
     let devOnlyCode = null;
     // The outbox/notifications pipeline is PROPERTY_SCOPED end to end
@@ -390,7 +399,7 @@ async function verifyStaffMfa({ challengeToken, code, ip, userAgent, requestId }
 
   // The single-use claim itself (ARCHITECTURE.md §5) — a conditional
   // UPDATE with an affected-row check, not read-then-write, the same
-  // shape `completePasswordReset`/`acceptInvitation` both already use.
+  // shape `completePasswordResetWithCode`/`acceptInvitation` both already use.
   // Guards the case two concurrent submissions of the same correct code
   // both pass the hash comparison above.
   const claimed = await scoped
@@ -730,7 +739,7 @@ async function updateMyProfile({ context, changes: rawChanges, ip, userAgent, re
 
 /**
  * Self-service password change WHILE LOGGED IN — distinct from
- * `completePasswordReset` (the forgot-password flow, which needs a reset
+ * `completePasswordResetWithCode` (the forgot-password flow, which needs a reset
  * TOKEN and has no "current password" to check, since it runs pre-auth).
  * This requires the CURRENT password, and — confirmed with the user —
  * revokes every OTHER active session for this account while sparing the
@@ -748,7 +757,7 @@ async function updateMyProfile({ context, changes: rawChanges, ip, userAgent, re
  * A request that somehow carries no refresh cookie at all (should be
  * near-impossible from a real browser hitting this exact path — the
  * cookie's own path always matches) has nothing to spare, so it falls
- * back to the same "revoke everything" shape `completePasswordReset`
+ * back to the same "revoke everything" shape `completePasswordResetWithCode`
  * already uses — the safer of the two directions to fail in, matching
  * this codebase's own instinct elsewhere (§7's "a false negative is safe,
  * a false positive is the one that matters").
@@ -789,7 +798,7 @@ async function changeMyPassword({ context, refreshToken, currentPassword, newPas
     ? await baseQuery().whereNot({ id: currentSessionId }).update({ revoked_at: new Date(), revoked_reason: 'password_changed' })
     : await baseQuery().update({ revoked_at: new Date(), revoked_reason: 'password_changed' });
 
-  // Matches `completePasswordReset`'s own precedent: a password mutation is
+  // Matches `completePasswordResetWithCode`'s own precedent: a password mutation is
   // recorded in `auth_events`, never `audit_log` — the password hash
   // itself must never end up in an audit `before_state`/`after_state`.
   await writeAuthEvent({
@@ -806,33 +815,81 @@ async function changeMyPassword({ context, refreshToken, currentPassword, newPas
 }
 
 /**
- * TESTING.md AUTH-7. Always returns the same shape whether or not the email
- * resolves — the request-a-reset endpoint must not confirm account existence
- * any more than login does (PRODUCT_REQUIREMENTS.md §3.16).
+ * TESTING.md AUTH-7. Gap closure (user-reported): the forgot-password flow
+ * moved from an emailed reset LINK to an emailed 6-digit numeric CODE,
+ * reusing `mfa.js`'s exact pattern (see `password-reset-code.js`'s own
+ * header) rather than inventing a second one. Confirmed with the user: the
+ * old link-based flow is removed entirely, not kept alongside this one.
  *
- * Actual delivery goes through the outbox/notifications module once it
- * exists (ARCHITECTURE.md §13 — an external send does not belong inside this
- * transaction). Until then, outside `production`, the raw token is returned
- * directly so the flow is testable end to end without a mail sender; this is
- * a Phase 0 stopgap, not the shipped behaviour.
+ * Always returns the same shape whether or not the email resolves — the
+ * request-a-reset endpoint must not confirm account existence any more than
+ * login does (PRODUCT_REQUIREMENTS.md §3.16). `resetToken` is a syntactically
+ * identical, always-present JWT regardless of whether a real user was
+ * found — it carries only a fresh, otherwise-meaningless `request_id`
+ * (`password-reset-code.js`'s own header explains why this couldn't be
+ * `userId` the way `mfa.js`'s challenge token is). `devOnlyCode` is present,
+ * outside production only, only when a real user was actually found — the
+ * one accepted, pre-existing, non-production-only side channel this flow
+ * has always had, unchanged in shape from the old `devOnlyToken`.
+ *
+ * Delivered through the real outbox (`staff.password_reset_code_requested`)
+ * — staff forgot-password never sent a real email before this pass; the
+ * dev-only disclosure was the ONLY delivery mechanism it ever had.
  */
-async function requestPasswordReset({ tenantId, email, ip, userAgent, requestId }) {
+async function requestPasswordResetCode({ tenantId, email, ip, userAgent, requestId }) {
   const db = scopedDb();
   const context = contextFromSession({ tenantId });
   const scoped = db.for(context);
 
   const user = await scoped.table('users').where({ email, status: 'active' }).first();
 
-  let devOnlyToken = null;
+  const requestIdForToken = crypto.randomUUID();
+  const resetToken = signPasswordResetChallengeToken({ tenantId, requestId: requestIdForToken });
+
+  let devOnlyCode = null;
   if (user) {
-    const token = crypto.randomBytes(32).toString('base64url');
-    const hash = crypto.createHash('sha256').update(token).digest('hex');
-    await scoped.table('password_resets').insert({
-      user_id: user.id,
-      token_hash: hash,
-      expires_at: hoursFromNow(1),
+    const access = await listPropertyAccess(scoped, context, user.id);
+    // Same "which property's template config to render against" choice
+    // `staffLogin`'s own MFA branch already makes for this identical class
+    // of tenant-level security email — see that function's own comment.
+    const notifyPropertyId = access[0]?.property_id ?? null;
+    const emailDeliveryReal = notifyPropertyId
+      ? await isEmailDeliveryReal({ db: db.for(withActiveProperty(context, notifyPropertyId)), propertyId: notifyPropertyId })
+      : await isEmailDeliveryReal({});
+
+    await scoped.transaction(async (trx) => {
+      // Supersede any still-outstanding code for this user — the same
+      // "repeat request invalidates the earlier one" rule staffLogin's own
+      // MFA branch already applies to mfa_login_codes.
+      await trx.table('password_reset_codes').where({ user_id: user.id }).whereNull('used_at').delete();
+
+      const { code, hash } = generatePasswordResetCode();
+      await trx.table('password_reset_codes').insert({
+        user_id: user.id,
+        request_id: requestIdForToken,
+        code_hash: hash,
+        expires_at: minutesFromNow(PASSWORD_RESET_CODE_TTL_MINUTES),
+      });
+
+      if (process.env.NODE_ENV !== 'production' && !emailDeliveryReal) devOnlyCode = code;
+
+      if (notifyPropertyId) {
+        await writeOutboxEvent({
+          trx,
+          eventType: 'staff.password_reset_code_requested',
+          aggregateType: 'password_reset_codes',
+          aggregateId: user.id,
+          propertyId: notifyPropertyId,
+          payload: { guestEmail: user.email, code, expiresInMinutes: PASSWORD_RESET_CODE_TTL_MINUTES },
+        });
+      }
     });
-    if (process.env.NODE_ENV !== 'production') devOnlyToken = token;
+
+    if (notifyPropertyId) {
+      enqueueOutboxDispatch({ tenantId, propertyId: notifyPropertyId }).catch((error) => {
+        console.error('Failed to enqueue outbox dispatch for password-reset code (will be caught by the periodic sweep):', error);
+      });
+    }
   }
 
   await writeAuthEvent({
@@ -846,67 +903,111 @@ async function requestPasswordReset({ tenantId, email, ip, userAgent, requestId 
     requestId,
   });
 
-  return { status: 'ok', devOnlyToken };
+  return { status: 'ok', resetToken, devOnlyCode };
 }
 
 /**
  * TESTING.md AUTH-7 (single-use, expiry) and AUTH-8 (completing a reset
  * invalidates every existing session).
  *
+ * `resetToken` decodes to a `request_id`, never a `userId` — see
+ * `password-reset-code.js`'s own header. A garbage/expired/wrong-audience
+ * TOKEN gets the existing, generic `TokenInvalidError` (mirroring
+ * `verifyStaffMfa`'s identical split for its own challenge token) with no
+ * audit write — nothing is yet known about which account, if any, this
+ * attempt concerns. A valid token paired with a wrong/expired/already-used/
+ * attempts-exhausted CODE gets `PasswordResetCodeInvalidError` instead,
+ * with a real `password_reset_code_failed` audit row.
+ *
+ * The new password is validated FIRST, before the token is even decoded —
+ * matching the OLD flow's exact ordering (its very first line, ahead of any
+ * DB read) rather than checking the code first: a malformed `new_password`
+ * must not consume one of the code's limited guess attempts.
+ *
  * The single-use claim is a conditional UPDATE with an affected-row check
  * (ARCHITECTURE.md §5), not a read-then-write: two concurrent completions of
- * the same token can each read `used_at IS NULL`, but only one UPDATE can
- * actually flip it, and the loser's affected-row count is 0.
+ * the same code can each pass the hash comparison, but only one UPDATE can
+ * actually flip `used_at`, and the loser's affected-row count is 0.
  */
-async function completePasswordReset({ tenantId, token, newPassword, ip, userAgent, requestId }) {
+async function completePasswordResetWithCode({ resetToken, code, newPassword, ip, userAgent, requestId }) {
   const validationIssue = await validatePassword(newPassword);
   if (validationIssue) throw new ValidationError(validationIssue.code, validationIssue.message);
+
+  let payload;
+  try {
+    payload = verifyPasswordResetChallengeToken(resetToken);
+  } catch {
+    throw new TokenInvalidError();
+  }
+
+  const tenantId = Number(payload.tenant_id);
+  const requestIdForToken = payload.request_id;
 
   const db = scopedDb();
   const context = contextFromSession({ tenantId });
   const scoped = db.for(context);
 
-  const hash = crypto.createHash('sha256').update(token).digest('hex');
-  const reset = await scoped.table('password_resets').where({ token_hash: hash }).first();
+  // request_id is UNIQUE — at most one row can ever match.
+  const pending = await scoped.table('password_reset_codes').where({ request_id: requestIdForToken }).whereNull('used_at').first();
 
-  const reject = async (failureReason) => {
+  // `pending` is captured by reference — `fail` is only ever CALLED after
+  // this line runs, even where it's declared textually above it, so the
+  // closure always sees the real, already-resolved value. `userId` is
+  // `null` only for the "no such request_id" case, the one branch where
+  // it's genuinely unknowable — matching `login_failure`'s own
+  // unknown-email precedent.
+  const fail = async () => {
     await writeAuthEvent({
       audience: 'staff',
-      eventType: 'password_reset_completed',
-      failureReason,
+      eventType: 'password_reset_code_failed',
       tenantId,
-      userId: reset?.user_id ?? null,
+      userId: pending?.user_id ?? null,
       ip,
       userAgent,
       requestId,
     });
-    throw new TokenInvalidError();
+    throw new PasswordResetCodeInvalidError();
   };
 
-  if (!reset) return reject('token_unknown');
-  if (reset.expires_at && new Date(reset.expires_at) <= new Date()) return reject('token_expired');
-  if (reset.used_at) return reject('token_already_used');
+  if (!pending) return fail();
+  if (new Date(pending.expires_at) <= new Date()) return fail();
+  if (pending.attempts >= PASSWORD_RESET_CODE_MAX_ATTEMPTS) return fail();
+
+  if (hashPasswordResetCode(String(code)) !== pending.code_hash) {
+    // Plain read-then-write, not a raw SQL increment — the scoped accessor
+    // deliberately exposes no raw-knex passthrough. A rare concurrent-guess
+    // race under-counting this by one only affects how soon the cap trips —
+    // the real security boundaries (`expires_at`, the single-use `used_at`
+    // claim) are unaffected, the same reasoning `verifyStaffMfa` already
+    // documents for the identical shape.
+    await scoped
+      .table('password_reset_codes')
+      .where({ id: pending.id })
+      .whereNull('used_at')
+      .update({ attempts: pending.attempts + 1 });
+    return fail();
+  }
 
   // The single-use claim itself (ARCHITECTURE.md §5).
   const claimed = await scoped
-    .table('password_resets')
-    .where({ id: reset.id })
+    .table('password_reset_codes')
+    .where({ id: pending.id })
     .whereNull('used_at')
     .update({ used_at: new Date() });
-  if (claimed === 0) return reject('token_already_used');
+  if (claimed === 0) return fail();
 
-  const authedContext = contextFromSession({ tenantId, userId: reset.user_id });
+  const authedContext = contextFromSession({ tenantId, userId: pending.user_id });
   const authedScoped = db.for(authedContext);
 
   await authedScoped
     .table('users')
-    .where({ id: reset.user_id })
+    .where({ id: pending.user_id })
     .update({ password_hash: await hashPassword(newPassword) });
 
   // AUTH-8: every existing session for this user dies, not just a future one.
   await authedScoped
     .table('sessions')
-    .where({ user_id: reset.user_id })
+    .where({ user_id: pending.user_id })
     .whereNull('revoked_at')
     .update({ revoked_at: new Date(), revoked_reason: 'password_reset' });
 
@@ -914,7 +1015,7 @@ async function completePasswordReset({ tenantId, token, newPassword, ip, userAge
     audience: 'staff',
     eventType: 'password_reset_completed',
     tenantId,
-    userId: reset.user_id,
+    userId: pending.user_id,
     ip,
     userAgent,
     requestId,
@@ -929,7 +1030,7 @@ async function completePasswordReset({ tenantId, token, newPassword, ip, userAge
  * a password on someone's behalf." `invitation_accepted` (this pass's own
  * migration, 20260910094000) is reused for both the success and every
  * rejection branch, distinguished by `failureReason` — the exact shape
- * `completePasswordReset` above already established.
+ * `completePasswordResetWithCode` above already established.
  *
  * Scoped to the common case only (this session's confirmed simplification):
  * accepting always creates a brand-new user. An email that already belongs
@@ -973,7 +1074,7 @@ async function acceptInvitation({ tenantId, token, firstName, lastName, password
   if (existingUser) return reject('token_already_used');
 
   // Single-use claim (ARCHITECTURE.md §5) — same conditional-UPDATE-with-
-  // affected-row-check shape `completePasswordReset` above already uses.
+  // affected-row-check shape `completePasswordResetWithCode` above already uses.
   const claimed = await scoped
     .acrossProperties()
     .table('user_invitations')
@@ -1134,7 +1235,7 @@ async function guestLogin({ tenantId, propertySlug, email, password, ip, userAge
 
 /**
  * Gap closure (flagged in CLAUDE.md's own Phase 4 section, built via
- * feature-dev): guest password-reset. Follows `requestPasswordReset`'s own
+ * feature-dev): guest password-reset. Follows `requestPasswordResetCode`'s own
  * shape — anti-enumeration (identical response whether or not the email
  * resolves), single-use token, 1-hour expiry, an `auth_events` row
  * regardless of outcome — against `guest_accounts` instead of `users`.
@@ -1228,7 +1329,7 @@ async function requestGuestPasswordReset({ tenantId, propertySlug, email, ip, us
  *
  * Single-use claim is a conditional UPDATE with an affected-row check
  * (ARCHITECTURE.md §5), not read-then-write — the same shape
- * `completePasswordReset`/`acceptInvitation` both already use.
+ * `completePasswordResetWithCode`/`acceptInvitation` both already use.
  *
  * Session invalidation: sets `guest_accounts.password_changed_at`, which
  * `authenticate('guest')`'s live per-request re-check
@@ -1402,8 +1503,8 @@ module.exports = {
   getMyProfile,
   updateMyProfile,
   changeMyPassword,
-  requestPasswordReset,
-  completePasswordReset,
+  requestPasswordResetCode,
+  completePasswordResetWithCode,
   acceptInvitation,
   guestRegister,
   guestLogin,

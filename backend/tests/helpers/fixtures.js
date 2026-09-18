@@ -89,7 +89,7 @@ async function insertReturningId(trx, table, row) {
  * Returns `{ a, b, permissions }`, where each tenant carries:
  *   id, slug, properties[2], roles{code->id}, exclusiveRoleCode,
  *   users[2], access[], guestAccounts[],
- *   sessions[2], passwordResets[2], mfaDevices[2], invitations[2], auditLog[2]
+ *   sessions[2], passwordResetCodes[2], mfaDevices[2], invitations[2], auditLog[2]
  *
  * The four credential arrays each hold one live row and one spent one, found by
  * their `label` — 'live'/'revoked', 'pending'/'used', 'confirmed'/'unconfirmed',
@@ -111,7 +111,7 @@ async function seedTwoTenants(trx) {
     guestAccounts: [],
     guestPasswordResets: [],
     sessions: [],
-    passwordResets: [],
+    passwordResetCodes: [],
     mfaLoginCodes: [],
     mfaDevices: [],
     invitations: [],
@@ -1523,8 +1523,8 @@ async function seedTwoTenants(trx) {
   }
 
   // guest_password_resets: one unspent, one already used — the same
-  // two-state shape password_resets uses below, for the guest audience's
-  // own separate credential store (feature-dev gap closure).
+  // two-state shape password_reset_codes uses below, for the guest
+  // audience's own separate credential store (feature-dev gap closure).
   const guestResetPlan = [
     { guestAccountIndex: 0, label: 'pending', used_at: null, expiresInHours: 1 },
     { guestAccountIndex: 1, label: 'used', used_at: hoursFromNow(-0.5), expiresInHours: 1 },
@@ -1595,7 +1595,11 @@ async function seedTwoTenants(trx) {
     }
   }
 
-  // password_resets: one unspent, one already used (AUTH-7).
+  // password_reset_codes: one unspent, one already used (AUTH-7). Gap
+  // closure: the forgot-password flow moved from an emailed link to an
+  // emailed code — same two-state shape the old password_resets fixture
+  // used, keyed by request_id instead of token_hash (see that table's own
+  // migration header for why).
   const resetPlan = [
     { user: 0, label: 'pending', used_at: null, expiresInHours: 1 },
     { user: 1, label: 'used', used_at: hoursFromNow(-0.5), expiresInHours: 1 },
@@ -1603,15 +1607,18 @@ async function seedTwoTenants(trx) {
   for (const plan of resetPlan) {
     for (const t of both) {
       const hash = tokenHash(`${t.slug}-reset-${plan.label}`);
-      t.passwordResets.push({
-        id: await insertReturningId(trx, 'password_resets', {
+      const requestId = `${t.slug}-reset-${plan.label}-req`;
+      t.passwordResetCodes.push({
+        id: await insertReturningId(trx, 'password_reset_codes', {
           tenant_id: t.id,
           user_id: t.users[plan.user].id,
-          token_hash: hash,
+          request_id: requestId,
+          code_hash: hash,
           expires_at: hoursFromNow(plan.expiresInHours),
           used_at: plan.used_at,
         }),
-        token_hash: hash,
+        request_id: requestId,
+        code_hash: hash,
         user_id: t.users[plan.user].id,
         label: plan.label,
       });
@@ -1619,7 +1626,7 @@ async function seedTwoTenants(trx) {
   }
 
   // Gap closure: real emailed MFA login codes — one unspent, one already
-  // used, the same two-state shape password_resets uses above.
+  // used, the same two-state shape password_reset_codes uses above.
   const mfaCodePlan = [
     { user: 0, label: 'pending', used_at: null, expiresInHours: 1 },
     { user: 1, label: 'used', used_at: hoursFromNow(-0.5), expiresInHours: 1 },

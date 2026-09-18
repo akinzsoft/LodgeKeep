@@ -18,7 +18,7 @@
  *
  * `secure` is gated on `NODE_ENV`, the same production/non-production split
  * this codebase already uses for the MFA dev bypass (`mfa.js`) and the
- * password-reset dev-only token (`service.js`'s `requestPasswordReset`) — a
+ * password-reset dev-only token (`service.js`'s `requestPasswordResetCode`) — a
  * plain-HTTP local dev origin (`alpha-hotels.localhost:5173`) cannot receive
  * a `Secure` cookie at all, so hardcoding `secure: true` would silently
  * break every dev/test login. `sameSite: 'lax'`: this cookie is read only by

@@ -25,6 +25,7 @@ const { seedTwoTenants, seedPlatformUser, PASSWORD_HASH } = require('../helpers/
 const { hashPassword } = require('../../src/auth/password');
 const { issueRefreshToken, hashRefreshToken } = require('../../src/auth/tokens');
 const { hashMfaCode } = require('../../src/auth/mfa');
+const { hashPasswordResetCode } = require('../../src/auth/password-reset-code');
 const { flushRateLimitPrefixes } = require('../helpers/rate-limit');
 
 // Only `enqueueOutboxDispatch` is mocked (real elsewhere, including
@@ -68,7 +69,8 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
       'auth-staff-login:acct:',
       'auth-staff-forgot:ip:',
       'auth-staff-forgot:acct:',
-      'auth-staff-reset:',
+      'auth-staff-reset:ip:',
+      'auth-staff-reset:acct:',
       'auth-staff-invite-accept:',
       'auth-staff-mfa-verify:ip:',
       'auth-staff-mfa-verify:acct:',
@@ -645,13 +647,23 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
   // ==================================================================
   // AUTH-7 — password reset: single-use, expires
   // ==================================================================
-  describe('AUTH-7: password reset token', () => {
-    it('completes once, rejects the second use, and rejects an expired token', async () => {
-      // A fresh account, never `loginable` — completing a reset changes the
-      // real password, and `loginable` is reused by later AUTH-N tests that
-      // still expect to log in with STRONG_PASSWORD.
-      const email = 'resettable@example.com';
-      await t.trx('users').insert({
+  // Gap closure (user-reported): "change the forgot-password flow from an
+  // emailed reset link to an emailed numeric code the user types into the
+  // app" — reusing the exact `mfa_login_codes` pattern. Confirmed with the
+  // user: the old link-based flow is removed entirely, not kept alongside
+  // this one, so these tests replace AUTH-7/AUTH-8's old token-based
+  // versions rather than adding a second, parallel set.
+  describe('AUTH-7 / AUTH-8: password reset (real emailed code)', () => {
+    let resetCounter = 0;
+
+    // A fresh account every call, never `loginable`/`adminNoMfa` —
+    // completing a reset changes the real password, and both of those
+    // accounts are reused by other AUTH-N tests that still expect to log
+    // in with STRONG_PASSWORD.
+    async function freshResettableUser() {
+      resetCounter += 1;
+      const email = `resettable-${resetCounter}@example.com`;
+      const [userId] = await t.trx('users').insert({
         tenant_id: ctx.a.id,
         email,
         password_hash: await hashPassword(STRONG_PASSWORD),
@@ -659,87 +671,293 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
         last_name: 'Settable',
         status: 'active',
       });
-
-      const forgot = await asTenantA(t.request.post('/api/v1/auth/password/forgot')).send({
-        email,
+      await t.trx('user_property_access').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        user_id: userId,
+        role: 'front_desk',
       });
-      expect(forgot.status).toBe(200);
-      const token = forgot.body.data.dev_only_token;
-      expect(typeof token).toBe('string');
+      return { id: userId, email };
+    }
 
-      const first = await asTenantA(t.request.post('/api/v1/auth/password/reset')).send({
-        token,
+    async function requestReset(email) {
+      const res = await asTenantA(t.request.post('/api/v1/auth/password/forgot')).send({ email });
+      return { status: res.status, resetToken: res.body.data.reset_token, devOnlyCode: res.body.data.dev_only_code };
+    }
+
+    it('issues a real code: stored hashed, emailed via the outbox, and disclosed as dev_only_code outside production', async () => {
+      const user = await freshResettableUser();
+      const { status, resetToken, devOnlyCode } = await requestReset(user.email);
+
+      expect(status).toBe(200);
+      expect(typeof resetToken).toBe('string');
+      expect(devOnlyCode).toMatch(/^\d{6}$/);
+
+      const stored = await t.trx('password_reset_codes').where({ user_id: user.id }).whereNull('used_at').orderBy('id', 'desc').first();
+      expect(stored).toBeDefined();
+      expect(stored.code_hash).toBe(hashPasswordResetCode(devOnlyCode));
+      expect(stored.attempts).toBe(0);
+
+      const outboxEvent = await t.trx('outbox_events').where({ event_type: 'staff.password_reset_code_requested' }).orderBy('id', 'desc').first();
+      expect(outboxEvent).toBeDefined();
+      const payload = typeof outboxEvent.payload === 'string' ? JSON.parse(outboxEvent.payload) : outboxEvent.payload;
+      expect(payload.guestEmail).toBe(user.email);
+      expect(payload.code).toBe(devOnlyCode);
+    });
+
+    it('fires the reactive outbox-dispatch trigger immediately, rather than relying solely on the periodic sweep', async () => {
+      const user = await freshResettableUser();
+      enqueueOutboxDispatch.mockClear();
+      await requestReset(user.email);
+
+      expect(enqueueOutboxDispatch).toHaveBeenCalledWith(expect.objectContaining({ tenantId: String(ctx.a.id), propertyId: expect.anything() }));
+    });
+
+    it('completes the reset with the real code, changes the password, and revokes every existing session (AUTH-8)', async () => {
+      const user = await freshResettableUser();
+
+      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({ email: user.email, password: STRONG_PASSWORD });
+      expect(login.status).toBe(200);
+      const liveRefreshCookie = refreshCookieHeader(login);
+
+      const { resetToken, devOnlyCode } = await requestReset(user.email);
+      const res = await t.request.post('/api/v1/auth/password/reset').send({
+        reset_token: resetToken,
+        code: devOnlyCode,
+        new_password: 'a brand new strong passphrase',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('ok');
+
+      const stored = await t.trx('password_reset_codes').where({ code_hash: hashPasswordResetCode(devOnlyCode) }).first();
+      expect(stored.used_at).not.toBeNull();
+
+      // AUTH-8: the session opened BEFORE the reset is dead.
+      const refreshAfterReset = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', liveRefreshCookie);
+      expect(refreshAfterReset.status).toBe(401);
+      const session = await t.trx('sessions').where({ user_id: user.id }).first();
+      expect(session.revoked_reason).toBe('password_reset');
+
+      // The new password genuinely works.
+      const reloggedIn = await asTenantA(t.request.post('/api/v1/auth/login')).send({
+        email: user.email,
+        password: 'a brand new strong passphrase',
+      });
+      expect(reloggedIn.status).toBe(200);
+
+      const events = await authEventsFor(user.id);
+      expect(events.some((e) => e.event_type === 'password_reset_completed')).toBe(true);
+    });
+
+    it('rejects a wrong code with a real 401, and audits it as password_reset_code_failed', async () => {
+      const user = await freshResettableUser();
+      const { resetToken, devOnlyCode } = await requestReset(user.email);
+      const wrongCode = devOnlyCode === '111111' ? '222222' : '111111';
+
+      const res = await t.request.post('/api/v1/auth/password/reset').send({
+        reset_token: resetToken,
+        code: wrongCode,
+        new_password: 'a brand new strong passphrase',
+      });
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('AUTH_PASSWORD_RESET_CODE_INVALID');
+
+      const events = await authEventsFor(user.id);
+      expect(events.some((e) => e.event_type === 'password_reset_code_failed')).toBe(true);
+
+      const stored = await t.trx('password_reset_codes').where({ code_hash: hashPasswordResetCode(devOnlyCode) }).first();
+      expect(stored.attempts).toBe(1);
+      expect(stored.used_at).toBeNull();
+    });
+
+    it('rejects reuse of an already-used code (single-use)', async () => {
+      const user = await freshResettableUser();
+      const { resetToken, devOnlyCode } = await requestReset(user.email);
+
+      const first = await t.request.post('/api/v1/auth/password/reset').send({
+        reset_token: resetToken,
+        code: devOnlyCode,
         new_password: 'a brand new strong passphrase',
       });
       expect(first.status).toBe(200);
 
-      const second = await asTenantA(t.request.post('/api/v1/auth/password/reset')).send({
-        token,
+      const second = await t.request.post('/api/v1/auth/password/reset').send({
+        reset_token: resetToken,
+        code: devOnlyCode,
         new_password: 'a different passphrase entirely',
       });
       expect(second.status).toBe(401);
-      expect(second.body.error.code).toBe('AUTH_TOKEN_INVALID');
+      expect(second.body.error.code).toBe('AUTH_PASSWORD_RESET_CODE_INVALID');
+    });
 
-      const [expiredUserId] = await t.trx('users').insert({
-        tenant_id: ctx.a.id,
-        email: 'expired-reset@example.com',
-        password_hash: await hashPassword(STRONG_PASSWORD),
-        first_name: 'Ex',
-        last_name: 'Pired',
-        status: 'active',
-      });
-      const { token: expiredToken, hash: expiredHash } = issueRefreshToken();
-      await t.trx('password_resets').insert({
-        tenant_id: ctx.a.id,
-        user_id: expiredUserId,
-        token_hash: expiredHash,
-        expires_at: new Date(Date.now() - 1000),
-      });
+    it('rejects an expired code', async () => {
+      const user = await freshResettableUser();
+      const { resetToken, devOnlyCode } = await requestReset(user.email);
+      await t.trx('password_reset_codes').where({ code_hash: hashPasswordResetCode(devOnlyCode) }).update({ expires_at: new Date(Date.now() - 1000) });
 
-      const expiredRes = await asTenantA(t.request.post('/api/v1/auth/password/reset')).send({
-        token: expiredToken,
+      const res = await t.request.post('/api/v1/auth/password/reset').send({
+        reset_token: resetToken,
+        code: devOnlyCode,
         new_password: 'irrelevant but long enough',
       });
-      expect(expiredRes.status).toBe(401);
-      expect(expiredRes.body.error.code).toBe('AUTH_TOKEN_INVALID');
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('AUTH_PASSWORD_RESET_CODE_INVALID');
     });
-  });
 
-  // ==================================================================
-  // AUTH-8 — completing a reset invalidates existing sessions
-  // ==================================================================
-  describe('AUTH-8: password reset invalidates existing sessions', () => {
-    it('revokes a session opened before the reset', async () => {
-      const email = 'reset-invalidates@example.com';
-      const [userId] = await t.trx('users').insert({
-        tenant_id: ctx.a.id,
-        email,
-        password_hash: await hashPassword(STRONG_PASSWORD),
-        first_name: 'Re',
-        last_name: 'Set',
-        status: 'active',
+    it('locks out a code after the attempt cap, even once the right code is finally submitted', async () => {
+      const user = await freshResettableUser();
+      const { resetToken, devOnlyCode } = await requestReset(user.email);
+      const wrongCode = devOnlyCode === '111111' ? '222222' : '111111';
+
+      for (let i = 0; i < 5; i += 1) {
+        const attempt = await t.request.post('/api/v1/auth/password/reset').send({
+          reset_token: resetToken,
+          code: wrongCode,
+          new_password: 'a brand new strong passphrase',
+        });
+        expect(attempt.status).toBe(401);
+      }
+
+      const finalAttempt = await t.request.post('/api/v1/auth/password/reset').send({
+        reset_token: resetToken,
+        code: devOnlyCode,
+        new_password: 'a brand new strong passphrase',
       });
+      expect(finalAttempt.status).toBe(401);
+      expect(finalAttempt.body.error.code).toBe('AUTH_PASSWORD_RESET_CODE_INVALID');
 
-      const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
-        email,
-        password: STRONG_PASSWORD,
+      const stored = await t.trx('password_reset_codes').where({ code_hash: hashPasswordResetCode(devOnlyCode) }).first();
+      expect(stored.attempts).toBe(5);
+      expect(stored.used_at).toBeNull();
+    });
+
+    it('a repeat request supersedes the earlier code — the old one no longer works', async () => {
+      const user = await freshResettableUser();
+      const first = await requestReset(user.email);
+      const second = await requestReset(user.email);
+      expect(second.devOnlyCode).not.toBe(first.devOnlyCode);
+
+      const staleAttempt = await t.request.post('/api/v1/auth/password/reset').send({
+        reset_token: first.resetToken,
+        code: first.devOnlyCode,
+        new_password: 'a brand new strong passphrase',
       });
-      expect(login.status).toBe(200);
-      const liveRefreshCookie = refreshCookieHeader(login);
+      expect(staleAttempt.status).toBe(401);
 
-      const forgot = await asTenantA(t.request.post('/api/v1/auth/password/forgot')).send({ email });
-      const resetToken = forgot.body.data.dev_only_token;
-      const completed = await asTenantA(t.request.post('/api/v1/auth/password/reset')).send({
-        token: resetToken,
-        new_password: 'a totally different passphrase',
+      const freshAttempt = await t.request.post('/api/v1/auth/password/reset').send({
+        reset_token: second.resetToken,
+        code: second.devOnlyCode,
+        new_password: 'a brand new strong passphrase',
       });
-      expect(completed.status).toBe(200);
+      expect(freshAttempt.status).toBe(200);
+    });
 
-      const refreshAfterReset = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', liveRefreshCookie);
-      expect(refreshAfterReset.status).toBe(401);
+    it('rejects a garbage/expired reset_token with AUTH_TOKEN_INVALID, not the code-invalid error, and writes no password_reset_code_failed event', async () => {
+      const user = await freshResettableUser();
+      const beforeCount = (await authEventsFor(user.id)).filter((e) => e.event_type === 'password_reset_code_failed').length;
 
-      const session = await t.trx('sessions').where({ user_id: userId }).first();
-      expect(session.revoked_reason).toBe('password_reset');
+      const res = await t.request.post('/api/v1/auth/password/reset').send({
+        reset_token: 'not-a-real-token',
+        code: '000000',
+        new_password: 'irrelevant but long enough',
+      });
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('AUTH_TOKEN_INVALID');
+
+      const afterCount = (await authEventsFor(user.id)).filter((e) => e.event_type === 'password_reset_code_failed').length;
+      expect(afterCount).toBe(beforeCount);
+    });
+
+    it('validates the new password BEFORE checking the code — a malformed password never consumes an attempt', async () => {
+      const user = await freshResettableUser();
+      const { resetToken, devOnlyCode } = await requestReset(user.email);
+
+      const badPasswordRes = await t.request.post('/api/v1/auth/password/reset').send({
+        reset_token: resetToken,
+        code: devOnlyCode,
+        new_password: 'short',
+      });
+      expect(badPasswordRes.status).toBe(400);
+
+      const stored = await t.trx('password_reset_codes').where({ code_hash: hashPasswordResetCode(devOnlyCode) }).first();
+      expect(stored.attempts).toBe(0);
+      expect(stored.used_at).toBeNull();
+
+      // The code is still genuinely usable afterward.
+      const goodRes = await t.request.post('/api/v1/auth/password/reset').send({
+        reset_token: resetToken,
+        code: devOnlyCode,
+        new_password: 'a brand new strong passphrase',
+      });
+      expect(goodRes.status).toBe(200);
+    });
+
+    it('never discloses dev_only_code when NODE_ENV is production, though real verification still works', async () => {
+      const user = await freshResettableUser();
+      const originalNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      try {
+        const forgotRes = await t.request
+          .post('/api/v1/auth/password/forgot')
+          .set('Host', `${ctx.a.slug}.${process.env.APP_DOMAIN}`)
+          .send({ email: user.email });
+        expect(forgotRes.body.data.dev_only_code).toBeNull();
+        expect(typeof forgotRes.body.data.reset_token).toBe('string');
+
+        const stored = await t.trx('password_reset_codes').where({ user_id: user.id }).whereNull('used_at').orderBy('id', 'desc').first();
+        const outboxEvent = await t.trx('outbox_events').where({ event_type: 'staff.password_reset_code_requested' }).orderBy('id', 'desc').first();
+        const payload = typeof outboxEvent.payload === 'string' ? JSON.parse(outboxEvent.payload) : outboxEvent.payload;
+        expect(stored.code_hash).toBe(hashPasswordResetCode(payload.code));
+
+        const completeRes = await t.request.post('/api/v1/auth/password/reset').send({
+          reset_token: forgotRes.body.data.reset_token,
+          code: payload.code,
+          new_password: 'a brand new strong passphrase',
+        });
+        expect(completeRes.status).toBe(200);
+      } finally {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+    });
+
+    it('never discloses dev_only_code once a real email adapter (not console) is configured, even outside production', async () => {
+      const user = await freshResettableUser();
+      const originalProvider = process.env.EMAIL_PROVIDER;
+      process.env.EMAIL_PROVIDER = 'smtp';
+      try {
+        const forgotRes = await asTenantA(t.request.post('/api/v1/auth/password/forgot')).send({ email: user.email });
+        expect(forgotRes.body.data.dev_only_code).toBeNull();
+
+        const stored = await t.trx('password_reset_codes').where({ user_id: user.id }).whereNull('used_at').orderBy('id', 'desc').first();
+        const outboxEvent = await t.trx('outbox_events').where({ event_type: 'staff.password_reset_code_requested' }).orderBy('id', 'desc').first();
+        const payload = typeof outboxEvent.payload === 'string' ? JSON.parse(outboxEvent.payload) : outboxEvent.payload;
+        expect(stored.code_hash).toBe(hashPasswordResetCode(payload.code));
+
+        const completeRes = await t.request.post('/api/v1/auth/password/reset').send({
+          reset_token: forgotRes.body.data.reset_token,
+          code: payload.code,
+          new_password: 'a brand new strong passphrase',
+        });
+        expect(completeRes.status).toBe(200);
+      } finally {
+        if (originalProvider === undefined) delete process.env.EMAIL_PROVIDER;
+        else process.env.EMAIL_PROVIDER = originalProvider;
+      }
+    });
+
+    it('returns an identical response shape for a known vs. an unknown email — anti-enumeration, proven byte-for-byte', async () => {
+      const user = await freshResettableUser();
+      const knownRes = await asTenantA(t.request.post('/api/v1/auth/password/forgot')).send({ email: user.email });
+      const unknownRes = await asTenantA(t.request.post('/api/v1/auth/password/forgot')).send({ email: 'no-such-account@example.com' });
+
+      expect(knownRes.status).toBe(unknownRes.status);
+      expect(Object.keys(knownRes.body.data).sort()).toEqual(Object.keys(unknownRes.body.data).sort());
+      expect(knownRes.body.data.status).toBe(unknownRes.body.data.status);
+      expect(typeof knownRes.body.data.reset_token).toBe(typeof unknownRes.body.data.reset_token);
+      // dev_only_code is the one field that legitimately differs: present
+      // (outside production) only when a real account was actually found.
+      expect(typeof knownRes.body.data.dev_only_code).toBe('string');
+      expect(unknownRes.body.data.dev_only_code).toBeNull();
     });
   });
 

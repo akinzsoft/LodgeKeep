@@ -49,7 +49,7 @@ const TABLE_SCOPES = Object.freeze({
 
   // Gap closure (feature-dev): guest password-reset. PROPERTY_SCOPED,
   // matching its parent `guest_accounts` — NOT TENANT_SCOPED like staff's
-  // own `password_resets` below, since a guest's whole identity is
+  // own `password_reset_codes` below, since a guest's whole identity is
   // anchored to one property, not the tenant.
   guest_password_resets: { scope: SCOPES.PROPERTY },
 
@@ -60,14 +60,20 @@ const TABLE_SCOPES = Object.freeze({
   // comment explains why it carries a property_id the DATABASE.md §1 column
   // list does not mention.
   sessions: { scope: SCOPES.TENANT },
-  password_resets: { scope: SCOPES.TENANT },
   mfa_devices: { scope: SCOPES.TENANT },
   user_invitations: { scope: SCOPES.PROPERTY },
 
   // Gap closure: real emailed MFA login codes (20260916090000_create_mfa_login_codes)
-  // — TENANT_SCOPED, matching password_resets above (no active property
-  // exists yet at the point a login challenge is issued).
+  // — TENANT_SCOPED (no active property exists yet at the point a login
+  // challenge is issued).
   mfa_login_codes: { scope: SCOPES.TENANT },
+
+  // Gap closure: the forgot-password flow moved from an emailed reset LINK
+  // to an emailed numeric CODE (20261027090000_create_password_reset_codes),
+  // replacing `password_resets` (dropped by 20261027091000_drop_password_resets)
+  // entirely, per the user's own confirmed "remove, don't keep both" choice.
+  // TENANT_SCOPED, matching `mfa_login_codes` above for the identical reason.
+  password_reset_codes: { scope: SCOPES.TENANT },
 
   // Auth audit — 20260904101500_create_auth_events
   //

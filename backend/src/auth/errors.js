@@ -114,6 +114,24 @@ class MfaCodeInvalidError extends AppError {
 }
 
 /**
+ * Gap closure (user-reported): the real rejection for a forgot-password
+ * code that is wrong, expired, already used, or has exceeded
+ * `PASSWORD_RESET_CODE_MAX_ATTEMPTS` (`src/auth/password-reset-code.js`) —
+ * the STAFF forgot-password counterpart to `MfaCodeInvalidError`, same
+ * shape. A garbage/expired/wrong-audience reset TOKEN (the correlation JWT
+ * itself) is a separate case and still gets the existing `TokenInvalidError`
+ * instead — that class already documents covering exactly "this credential
+ * no longer works" for an opaque token, and this is genuinely that. One
+ * code for every wrong-CODE case: a caller learns only "that code did not
+ * work", never which specific case applied.
+ */
+class PasswordResetCodeInvalidError extends AppError {
+  constructor() {
+    super('AUTH_PASSWORD_RESET_CODE_INVALID', 'That reset code is incorrect or has expired.', 401);
+  }
+}
+
+/**
  * SECURITY.md §3: "every request that touches property-scoped data is
  * verified server-side against user_property_access for the currently active
  * property." An RBAC check has no property to check a grant at — the caller
@@ -242,6 +260,7 @@ module.exports = {
   SessionInvalidError,
   MfaNotImplementedError,
   MfaCodeInvalidError,
+  PasswordResetCodeInvalidError,
   NoActivePropertyError,
   PermissionDeniedError,
   ImpersonationEndedError,

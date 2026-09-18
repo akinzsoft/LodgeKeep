@@ -116,8 +116,8 @@ export function updateMyProfile({ firstName, lastName, phone }) {
 }
 
 /**
- * Password change WHILE LOGGED IN — distinct from `requestPasswordReset`/
- * `completePasswordReset` above (the forgot-password flow). The backend
+ * Password change WHILE LOGGED IN — distinct from `requestPasswordResetCode`/
+ * `completePasswordResetWithCode` below (the forgot-password flow). The backend
  * reads the refresh-token cookie automatically (same-origin, sent by the
  * browser) to identify and spare this device's own session while
  * revoking every other one — nothing here needs to pass it explicitly.
@@ -130,15 +130,25 @@ export function changeMyPassword({ currentPassword, newPassword }) {
   });
 }
 
-export function requestPasswordReset({ email }) {
+/**
+ * Gap closure (user-reported): the forgot-password flow now emails a
+ * 6-digit code, not a reset link. `reset_token` is returned UNCONDITIONALLY
+ * (every environment, never gated on dev) — it's how the app itself carries
+ * the correlation id across the request/verify round trip, since the email
+ * only ever contains the human-typed code. `dev_only_code` is the actual
+ * dev-only field, present only outside production and only when the
+ * address resolved to a real account.
+ * @returns {Promise<{status: 'ok', reset_token: string, dev_only_code: string|null}>}
+ */
+export function requestPasswordResetCode({ email }) {
   return request('/auth/password/forgot', { method: 'POST', body: { email }, auth: false });
 }
 
 /** @returns {Promise<{status: 'ok'}>} */
-export function completePasswordReset({ token, newPassword }) {
+export function completePasswordResetWithCode({ resetToken, code, newPassword }) {
   return request('/auth/password/reset', {
     method: 'POST',
-    body: { token, new_password: newPassword },
+    body: { reset_token: resetToken, code, new_password: newPassword },
     auth: false,
   });
 }

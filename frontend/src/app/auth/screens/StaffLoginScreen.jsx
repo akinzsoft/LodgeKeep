@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../AuthContext.jsx';
 import { Button } from '../../../shared/components/index.js';
+import { ApiError } from '../../../shared/api/index.js';
 import { Footer } from '../../shell/Footer.jsx';
 import { deriveTenantLabelFromHost } from './tenant-label.js';
 import lodgekeepIcon from '../../../assets/brand/lodgekeep-icon.png';
@@ -13,16 +14,24 @@ import styles from './StaffLoginScreen.module.css';
  *
  * Implements, from that section: tenant-branded panel (see `tenant-label.js`
  * for what "branded" honestly means today), email/password, "remember this
- * device", forgot-password (inline request → sent confirmation, not a
- * separate route — there is no router in this app yet), a "find my company"
- * link, generic invalid-credentials messaging (the backend already collapses
- * "wrong password" and "no such account" into one message — this screen
- * never re-splits it), and the lockout state's own message. All six
+ * device", forgot-password (inline request → enter code + new password, not
+ * a separate route — there is no router in this app yet), a "find my
+ * company" link, generic invalid-credentials messaging (the backend already
+ * collapses "wrong password" and "no such account" into one message — this
+ * screen never re-splits it), and the lockout state's own message. All six
  * DESIGN_SYSTEM.md §2 states apply: loading (submit button), error (banner),
  * offline (submit disabled, banner shown), success (handled by the caller
  * switching `status` to 'authenticated' — no toast; a redirect *is* the
  * confirmation here, per §2's "the toast is the success" reasoning applied
  * to a full navigation instead).
+ *
+ * Gap closure (user-reported): the forgot-password flow now emails a
+ * 6-digit code the person types into the app, rather than a reset link — it
+ * reuses `MfaChallengeScreen`'s own numeric-code-entry shape (a single
+ * digit-code field, a dev-only disclosure outside production) plus a new
+ * password field, since there is no link here to click through. Confirmed
+ * with the user: the old link-based flow is removed entirely, not kept
+ * alongside this one.
  *
  * NOT implemented, deliberately, rather than faked:
  *   - Real tenant branding (logo/colour) — no endpoint returns it pre-login.
@@ -41,14 +50,20 @@ import styles from './StaffLoginScreen.module.css';
  * @param {boolean} [isOffline]
  */
 export function StaffLoginScreen({ isOffline = false }) {
-  const { status, error, login, requestPasswordReset } = useAuth();
-  const [view, setView] = useState('signin'); // 'signin' | 'forgot-request' | 'forgot-sent' | 'find-company'
+  const { status, error, login, requestPasswordResetCode, completePasswordResetWithCode } = useAuth();
+  const [view, setView] = useState('signin'); // 'signin' | 'forgot-request' | 'forgot-verify' | 'find-company'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [resetEmail, setResetEmail] = useState('');
   const [resetToken, setResetToken] = useState(null);
+  const [resetDevOnlyCode, setResetDevOnlyCode] = useState(null);
+  const [resetCode, setResetCode] = useState('');
+  const [resetNewPassword, setResetNewPassword] = useState('');
   const [resetSubmitting, setResetSubmitting] = useState(false);
+  const [resetRequestError, setResetRequestError] = useState(null);
+  const [resetCompleteError, setResetCompleteError] = useState(null);
+  const [resetDone, setResetDone] = useState(false);
 
   const tenantLabel = deriveTenantLabelFromHost();
   const isSubmitting = status === 'authenticating';
@@ -65,13 +80,54 @@ export function StaffLoginScreen({ isOffline = false }) {
     }
   }
 
-  async function handleResetSubmit(event) {
+  /** Returns every reset-flow field to its initial value — used both by "Back to sign in" and right before a fresh "Forgot password?" request, so a later attempt never resurfaces a stale code/token/error from an abandoned one. */
+  function resetToSignin() {
+    setView('signin');
+    setResetEmail('');
+    setResetToken(null);
+    setResetDevOnlyCode(null);
+    setResetCode('');
+    setResetNewPassword('');
+    setResetRequestError(null);
+    setResetCompleteError(null);
+    setResetDone(false);
+  }
+
+  /**
+   * User-reported: a 429 (or any other real backend rejection — e.g. an
+   * unresolvable property, a transient failure) left this button appearing
+   * dead — the request's rejection was never caught, so nothing set an
+   * error state and nothing rendered one. Fixed the same way
+   * `handleResetCompleteSubmit` already handles its own failure: catch,
+   * surface the real backend message, never swallow it silently.
+   */
+  async function handleResetRequestSubmit(event) {
     event.preventDefault();
+    if (isOffline || resetSubmitting) return;
     setResetSubmitting(true);
+    setResetRequestError(null);
     try {
-      const result = await requestPasswordReset({ email: resetEmail });
-      setResetToken(result.dev_only_token ?? null);
-      setView('forgot-sent');
+      const result = await requestPasswordResetCode({ email: resetEmail });
+      setResetToken(result.reset_token);
+      setResetDevOnlyCode(result.dev_only_code ?? null);
+      setView('forgot-verify');
+    } catch (caught) {
+      setResetRequestError(caught instanceof ApiError ? caught.message : 'Could not send a reset code.');
+    } finally {
+      setResetSubmitting(false);
+    }
+  }
+
+  async function handleResetCompleteSubmit(event) {
+    event.preventDefault();
+    if (isOffline || resetSubmitting) return;
+    setResetSubmitting(true);
+    setResetCompleteError(null);
+    try {
+      await completePasswordResetWithCode({ resetToken, code: resetCode, newPassword: resetNewPassword });
+      setResetDone(true);
+    } catch (caught) {
+      setResetCompleteError(caught instanceof ApiError ? caught.message : 'Could not reset your password.');
     } finally {
       setResetSubmitting(false);
     }
@@ -171,7 +227,7 @@ export function StaffLoginScreen({ isOffline = false }) {
                 </form>
 
                 <div className={styles.links}>
-                  <button type="button" className={styles.linkButton} onClick={() => setView('forgot-request')}>
+                  <button type="button" className={styles.linkButton} onClick={() => { resetToSignin(); setView('forgot-request'); }}>
                     Forgot password?
                   </button>
                   <button type="button" className={styles.linkButton} onClick={() => setView('find-company')}>
@@ -187,8 +243,13 @@ export function StaffLoginScreen({ isOffline = false }) {
             {view === 'forgot-request' && (
               <>
                 <h1 className={styles.title}>Reset your password</h1>
-                <p className={styles.subtitle}>We&rsquo;ll email a single-use reset link to this address.</p>
-                <form className={styles.form} onSubmit={handleResetSubmit}>
+                <p className={styles.subtitle}>We&rsquo;ll email a 6-digit code to this address.</p>
+                {resetRequestError && (
+                  <p className={styles.errorBanner} role="alert">
+                    {resetRequestError}
+                  </p>
+                )}
+                <form className={styles.form} onSubmit={handleResetRequestSubmit}>
                   <label className={styles.field}>
                     <span className={styles.label}>Email</span>
                     <input
@@ -200,31 +261,91 @@ export function StaffLoginScreen({ isOffline = false }) {
                       required
                     />
                   </label>
-                  <Button type="submit" loading={resetSubmitting} className={styles.submit}>
-                    Send reset link
+                  {isOffline && (
+                    <p className={styles.errorBanner} role="alert">
+                      You&rsquo;re offline — requesting a reset code is disabled until the connection returns.
+                    </p>
+                  )}
+                  <Button type="submit" loading={resetSubmitting} disabled={isOffline} className={styles.submit}>
+                    Send reset code
                   </Button>
                 </form>
                 <div className={styles.links}>
-                  <button type="button" className={styles.linkButton} onClick={() => setView('signin')}>
+                  <button type="button" className={styles.linkButton} onClick={resetToSignin}>
                     Back to sign in
                   </button>
                 </div>
               </>
             )}
 
-            {view === 'forgot-sent' && (
+            {view === 'forgot-verify' && !resetDone && (
               <>
-                <h1 className={styles.title}>Check your email</h1>
+                <h1 className={styles.title}>Enter your reset code</h1>
                 <p className={styles.subtitle}>
-                  If an account exists for that address, a reset link is on its way.
+                  We&rsquo;ve emailed a 6-digit code to {resetEmail || 'that address'}.
                 </p>
-                {resetToken && (
-                  <p className={styles.devNote}>
-                    Dev-only (never shown outside a non-production environment): reset token <code>{resetToken}</code>
+                {resetCompleteError && (
+                  <p className={styles.errorBanner} role="alert">
+                    {resetCompleteError}
                   </p>
                 )}
+                {resetDevOnlyCode && (
+                  <p className={styles.devNote}>
+                    Dev-only (never shown outside a non-production environment): reset code <code>{resetDevOnlyCode}</code>
+                  </p>
+                )}
+                <form className={styles.form} onSubmit={handleResetCompleteSubmit}>
+                  <label className={styles.field}>
+                    <span className={styles.label}>Reset code</span>
+                    <input
+                      className={styles.input}
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={resetCode}
+                      onChange={(event) => setResetCode(event.target.value)}
+                      required
+                    />
+                  </label>
+                  <label className={styles.field}>
+                    <span className={styles.label}>New password</span>
+                    <input
+                      className={styles.input}
+                      type="password"
+                      autoComplete="new-password"
+                      value={resetNewPassword}
+                      onChange={(event) => setResetNewPassword(event.target.value)}
+                      required
+                    />
+                  </label>
+                  {isOffline && (
+                    <p className={styles.errorBanner} role="alert">
+                      You&rsquo;re offline — resetting your password is disabled until the connection returns.
+                    </p>
+                  )}
+                  <Button
+                    type="submit"
+                    loading={resetSubmitting}
+                    disabled={isOffline || resetSubmitting || resetCode.length === 0}
+                    className={styles.submit}
+                  >
+                    Reset password
+                  </Button>
+                </form>
                 <div className={styles.links}>
-                  <button type="button" className={styles.linkButton} onClick={() => setView('signin')}>
+                  <button type="button" className={styles.linkButton} onClick={resetToSignin}>
+                    Back to sign in
+                  </button>
+                </div>
+              </>
+            )}
+
+            {view === 'forgot-verify' && resetDone && (
+              <>
+                <h1 className={styles.title}>Password reset</h1>
+                <p className={styles.subtitle}>Your password has been reset. Sign in with your new password.</p>
+                <div className={styles.links}>
+                  <button type="button" className={styles.linkButton} onClick={resetToSignin}>
                     Back to sign in
                   </button>
                 </div>

@@ -251,7 +251,7 @@ const ENTITIES = [
 
   // Gap closure (feature-dev): guest password-reset. PROPERTY_SCOPED,
   // matching its parent guest_accounts — a genuinely separate store from
-  // staff's own TENANT_SCOPED password_resets below.
+  // staff's own TENANT_SCOPED password_reset_codes below.
   {
     table: 'guest_password_resets',
     uniqueKeys: [['token_hash']],
@@ -333,27 +333,30 @@ const ENTITIES = [
   },
 
   {
-    table: 'password_resets',
-    uniqueKeys: [['token_hash']],
+    table: 'password_reset_codes',
+    uniqueKeys: [['request_id']],
     newRow: (ctx, t) => ({
       tenant_id: t.id,
       user_id: t.users[0].id,
-      token_hash: tokenHash(`${t.slug}-reset-additional`),
+      request_id: `${t.slug}-reset-additional-req`,
+      code_hash: tokenHash(`${t.slug}-reset-additional`),
       expires_at: hoursFromNow(1),
     }),
     duplicateRow: (ctx, t) => ({
       tenant_id: t.id,
       user_id: t.users[1].id,
-      token_hash: byLabel(t.passwordResets, 'pending').token_hash,
+      request_id: byLabel(t.passwordResetCodes, 'pending').request_id,
+      code_hash: tokenHash(`${t.slug}-reset-duplicate`),
       expires_at: hoursFromNow(1),
     }),
     crossTenant: [
       {
-        name: "issues a reset token against another tenant's user",
+        name: "issues a reset code against another tenant's user",
         row: (ctx, own, other) => ({
           tenant_id: own.id,
           user_id: other.users[0].id,
-          token_hash: tokenHash(`${own.slug}-reset-crossing`),
+          request_id: `${own.slug}-reset-crossing-req`,
+          code_hash: tokenHash(`${own.slug}-reset-crossing`),
           expires_at: hoursFromNow(1),
         }),
       },
