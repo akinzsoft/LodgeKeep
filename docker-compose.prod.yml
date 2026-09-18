@@ -138,8 +138,18 @@ services:
       # `import.meta.env.VITE_*`), threaded through as a build arg rather
       # than a runtime `environment:` entry — see the Dockerfile's own
       # comment on this ARG for why.
+      #
+      # VITE_APP_DOMAIN reuses this same file's own top-level APP_DOMAIN
+      # value (not a second var to keep in sync by hand) — a real
+      # production bug, user-reported: without it, the frontend's own
+      # post-signup redirect (frontend/src/app/auth/screens/tenant-url.js)
+      # had no way to tell "the bare APP_DOMAIN itself" apart from "an
+      # existing tenant subdomain of it" once APP_DOMAIN is itself a
+      # multi-level domain (e.g. lodgekeep.planmsys.com, not a bare
+      # lodgekeep.app) — see that file's own header for the full story.
       args:
         VITE_TURNSTILE_SITE_KEY: ${VITE_TURNSTILE_SITE_KEY}
+        VITE_APP_DOMAIN: ${APP_DOMAIN}
     restart: unless-stopped
     environment:
       ACME_EMAIL: ${ACME_EMAIL}
