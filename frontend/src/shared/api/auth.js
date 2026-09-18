@@ -135,7 +135,7 @@ export function acceptInvitation({ token, firstName, lastName, password }) {
  *
  * @returns {Promise<{status: 'ok', accessToken: string, tenantId: string, userId: string, propertyId: string, activePropertyId: string, role: string, trialEndsAt: string, properties: Array<{propertyId: string, role: string}>}>}
  */
-export function signup({ companyName, slug, timezone, baseCurrency, adminEmail, adminPassword, adminFirstName, adminLastName }) {
+export function signup({ companyName, slug, timezone, baseCurrency, adminEmail, adminPassword, adminFirstName, adminLastName, captchaToken }) {
   return request('/signup', {
     method: 'POST',
     body: {
@@ -147,6 +147,9 @@ export function signup({ companyName, slug, timezone, baseCurrency, adminEmail, 
       admin_password: adminPassword,
       admin_first_name: adminFirstName,
       admin_last_name: adminLastName,
+      // Security-review finding: POST /signup now requires a verified
+      // Cloudflare Turnstile token (`shared/captcha-middleware.js`).
+      captcha_token: captchaToken,
     },
     auth: false,
   });

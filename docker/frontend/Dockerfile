@@ -27,6 +27,18 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+# Security-review finding: the Cloudflare Turnstile PUBLIC site key
+# (SignupScreen.jsx) is a build-time value — Vite statically inlines
+# `import.meta.env.VITE_*` into the compiled bundle, it is never read at
+# container-start/request time the way a backend env var is. Threaded
+# through from docker-compose.prod.yml's `frontend.build.args` (itself from
+# `.env.production`'s `VITE_TURNSTILE_SITE_KEY`). Confirmed live: a real
+# `docker build` with this ARG set produces a `dist/assets/*.js` that
+# genuinely contains the real site key value (grepped directly) — this is
+# exactly the "the wiring looks right but the value never actually reaches
+# the build" mistake worth checking for, not assuming.
+ARG VITE_TURNSTILE_SITE_KEY
+ENV VITE_TURNSTILE_SITE_KEY=$VITE_TURNSTILE_SITE_KEY
 RUN npm run build
 
 ################################################################################

@@ -66,6 +66,10 @@ jobs:
       # never a real secret. Required to encrypt/decrypt email_settings'
       # smtp_password_encrypted column.
       ENCRYPTION_KEY: QHPmf9o+5XHE98VJUL6OTl/xicwtWLhDrZsSOOnhtIo=
+      # Cloudflare Turnstile — the official "always passes" dummy secret
+      # key (never a real credential), required by src/shared/startup-
+      # checks.js's fail-fast validation. See backend/.env.example.
+      TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
 
     steps:
       - uses: actions/checkout@v4

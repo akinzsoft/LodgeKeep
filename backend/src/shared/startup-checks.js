@@ -26,6 +26,20 @@
  * and a round-tripped encrypt/decrypt at boot exercise the exact checks a
  * real request would hit, so this can never silently drift from what
  * actually gets validated at request time.
+ *
+ * `TURNSTILE_SECRET_KEY` (CAPTCHA screening on `POST /signup`,
+ * `shared/captcha-verify.js`) joined this list as a REQUIRED var, unlike
+ * Paystack/SMTP — an unprotected public, tenant-creating endpoint is a
+ * structural risk the confirmed design fails CLOSED on, not an optional
+ * integration. Unlike the two checks above, this is presence-only, not a
+ * functional round-trip: proving the key actually WORKS needs a live call
+ * to Cloudflare paired with a real response token, and a secret key alone
+ * proves nothing — a network call to a third party on every process boot
+ * would also cut against this file's own instinct (above) of never letting
+ * an external dependency block startup, which the CAPTCHA case deliberately
+ * overrides at request time (`captcha-verify.js`'s own header) but has no
+ * reason to also apply at boot time, where the value can't yet be tested
+ * against anything.
  */
 
 const { signAccessToken } = require('../auth/tokens');
@@ -47,6 +61,10 @@ function validateStartupConfig() {
     }
   } catch (error) {
     problems.push(`ENCRYPTION_KEY — ${error.message}`);
+  }
+
+  if (!process.env.TURNSTILE_SECRET_KEY || process.env.TURNSTILE_SECRET_KEY.trim() === '') {
+    problems.push('TURNSTILE_SECRET_KEY — required (CAPTCHA screening on public signup); refusing to start without it.');
   }
 
   if (problems.length > 0) {

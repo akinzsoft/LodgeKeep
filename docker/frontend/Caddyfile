@@ -108,15 +108,24 @@
 		# directive browsers actually prefer (CSP wins where both apply).
 		# `script-src`/`connect-src`/`frame-src` allow-list Paystack's own
 		# domains (`shared/paystack.js` loads `js.paystack.co`'s Inline
-		# JS, which opens a real checkout iframe/popup) — the one genuine
-		# third-party origin this app's browser-side code talks to;
-		# nothing else is loaded from a CDN (self-hosted fonts, per this
-		# file's own design-system history). NOT live-verified against a
-		# real browser checkout in this environment (no browser-
-		# automation tool exists here, per this repo's own established
-		# caveat) — confirm the Paystack popup still opens cleanly before
-		# relying on this in production.
-		header Content-Security-Policy "default-src 'self'; script-src 'self' https://js.paystack.co; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		# JS, which opens a real checkout iframe/popup) — nothing else is
+		# loaded from a CDN (self-hosted fonts, per this file's own
+		# design-system history). NOT live-verified against a real browser
+		# checkout in this environment (no browser-automation tool exists
+		# here, per this repo's own established caveat) — confirm the
+		# Paystack popup still opens cleanly before relying on this in
+		# production.
+		#
+		# `challenges.cloudflare.com` (`script-src`/`frame-src` only) is
+		# Cloudflare Turnstile's own real, documented CSP requirement
+		# (developers.cloudflare.com/turnstile/reference/content-security-policy/,
+		# confirmed directly, not assumed) for the CAPTCHA widget on the
+		# signup screen — deliberately NOT added to `connect-src`: that
+		# domain is only required there for Turnstile's "pre-clearance"
+		# mode, which this app doesn't use; the widget's own iframe (its
+		# own separate origin, subject to Cloudflare's own CSP, not this
+		# page's) makes whatever connections it needs internally.
+		header Content-Security-Policy "default-src 'self'; script-src 'self' https://js.paystack.co https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 		root * /srv
 		file_server

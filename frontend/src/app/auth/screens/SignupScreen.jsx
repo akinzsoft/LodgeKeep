@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button } from '../../../shared/components/index.js';
+import { Button, Turnstile } from '../../../shared/components/index.js';
 import { Footer } from '../../shell/Footer.jsx';
 import { authApi, ApiError } from '../../../shared/api/index.js';
 import { buildTenantLoginUrl } from './tenant-url.js';
@@ -17,6 +17,15 @@ const EMPTY_FORM = {
   adminEmail: '',
   adminPassword: '',
 };
+
+// Security-review finding: real network CAPTCHA screening on this one
+// public, tenant-creating endpoint. The SITE key is public by design (baked
+// into the built JS bundle at build time via Vite's static
+// `import.meta.env.VITE_*` inlining — see docker/frontend/Dockerfile's
+// VITE_TURNSTILE_SITE_KEY build ARG for how a real production value
+// reaches the build); only the SECRET key (backend-only,
+// `TURNSTILE_SECRET_KEY`) is sensitive.
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY;
 
 /**
  * SignupScreen — PLAN.md Phase 5 gap closure. `POST /api/v1/signup` has been
@@ -58,6 +67,11 @@ export function SignupScreen({ isOffline = false }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
+  const [captchaToken, setCaptchaToken] = useState(null);
+  // Remount key for <Turnstile> — see that component's own header for why
+  // a fresh widget (and fresh token) is needed after any failed submission,
+  // not just a captcha-specific failure.
+  const [captchaKey, setCaptchaKey] = useState(0);
 
   function update(field) {
     return (event) => setForm((current) => ({ ...current, [field]: event.target.value }));
@@ -82,14 +96,20 @@ export function SignupScreen({ isOffline = false }) {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    if (isOffline || submitting) return;
+    if (isOffline || submitting || !captchaToken) return;
     setSubmitting(true);
     setError(null);
     try {
-      const response = await authApi.signup(form);
+      const response = await authApi.signup({ ...form, captchaToken });
       setResult({ slug: form.slug, trialEndsAt: response.trialEndsAt });
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not create your organization.');
+      // A Turnstile response token is single-use, consumed the moment the
+      // backend's siteverify call succeeds — regardless of what happens
+      // afterward in this same request. Force a fresh widget/token for the
+      // retry rather than leaving the old, already-spent one selected.
+      setCaptchaToken(null);
+      setCaptchaKey((key) => key + 1);
     } finally {
       setSubmitting(false);
     }
@@ -284,7 +304,15 @@ export function SignupScreen({ isOffline = false }) {
               {/* See the identical note on the Subdomain field above. */}
               <p className={styles.hint}>At least 12 characters.</p>
 
-              <Button type="submit" loading={submitting} disabled={isOffline} className={styles.submit}>
+              <Turnstile
+                key={captchaKey}
+                siteKey={TURNSTILE_SITE_KEY}
+                onVerify={setCaptchaToken}
+                onExpire={() => setCaptchaToken(null)}
+                onError={() => setCaptchaToken(null)}
+              />
+
+              <Button type="submit" loading={submitting} disabled={isOffline || !captchaToken} className={styles.submit}>
                 Create organization
               </Button>
             </form>

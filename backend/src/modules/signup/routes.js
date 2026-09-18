@@ -13,6 +13,7 @@
 const { Router } = require('express');
 const controller = require('./controller');
 const { ipAndAccountRateLimiters } = require('../../shared/rate-limit');
+const { requireCaptcha } = require('../../shared/captcha-middleware');
 
 /**
  * Security-review finding (2026-09): a fully public, fully unthrottled
@@ -23,12 +24,14 @@ const { ipAndAccountRateLimiters } = require('../../shared/rate-limit');
  * though signup itself predates any account existing) closes the request-
  * volume half of that gap.
  *
- * NOT closed by this pass, and flagged rather than faked: real bot/CAPTCHA
- * screening (hCaptcha/Turnstile or similar) needs a third-party service
- * this environment has no credentials for — the same "flagged stub, not
- * invented behaviour" precedent this codebase already applies to Paystack
- * and SMTP. A generous-but-real request-volume ceiling is genuine
- * mitigation on its own; it is not a substitute for that missing piece.
+ * Follow-up (2026-09): real bot/CAPTCHA screening — the rate limiter alone
+ * doesn't stop a distributed bot spreading requests across many IPs, which
+ * this file's own earlier comment already flagged as the real gap a pure
+ * request-volume ceiling can't close. `requireCaptcha()` (Cloudflare
+ * Turnstile, `shared/captcha-verify.js`) runs AFTER the rate limiters —
+ * rate limiting is a cheap Redis INCR, captcha verification is a real
+ * outbound HTTP call to Cloudflare, so a flood of bad attempts gets
+ * throttled before spending that call on each one.
  */
 function signupRouter() {
   const router = Router();
@@ -43,6 +46,7 @@ function signupRouter() {
       accountLimit: 5,
       accountField: 'admin_email',
     }),
+    requireCaptcha(),
     controller.signup
   );
   return router;

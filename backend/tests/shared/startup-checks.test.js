@@ -14,13 +14,15 @@ const { validateStartupConfig } = require('../../src/shared/startup-checks');
 describe('validateStartupConfig', () => {
   const originalJwtSecret = process.env.JWT_SECRET;
   const originalEncryptionKey = process.env.ENCRYPTION_KEY;
+  const originalTurnstileSecretKey = process.env.TURNSTILE_SECRET_KEY;
 
   afterEach(() => {
     process.env.JWT_SECRET = originalJwtSecret;
     process.env.ENCRYPTION_KEY = originalEncryptionKey;
+    process.env.TURNSTILE_SECRET_KEY = originalTurnstileSecretKey;
   });
 
-  it('passes silently when both secrets are real and correctly shaped', () => {
+  it('passes silently when all three required values are set', () => {
     expect(() => validateStartupConfig()).not.toThrow();
   });
 
@@ -44,15 +46,27 @@ describe('validateStartupConfig', () => {
     expect(() => validateStartupConfig()).toThrow(/ENCRYPTION_KEY/);
   });
 
-  it('reports BOTH problems at once when both secrets are broken, not just the first', () => {
+  it('refuses to start when TURNSTILE_SECRET_KEY is unset', () => {
+    delete process.env.TURNSTILE_SECRET_KEY;
+    expect(() => validateStartupConfig()).toThrow(/TURNSTILE_SECRET_KEY/);
+  });
+
+  it('refuses to start when TURNSTILE_SECRET_KEY is an empty string', () => {
+    process.env.TURNSTILE_SECRET_KEY = '';
+    expect(() => validateStartupConfig()).toThrow(/TURNSTILE_SECRET_KEY/);
+  });
+
+  it('reports ALL THREE problems at once when every required value is broken, not just the first', () => {
     delete process.env.JWT_SECRET;
     delete process.env.ENCRYPTION_KEY;
+    delete process.env.TURNSTILE_SECRET_KEY;
     try {
       validateStartupConfig();
       throw new Error('expected validateStartupConfig to throw');
     } catch (error) {
       expect(error.message).toMatch(/JWT_SECRET/);
       expect(error.message).toMatch(/ENCRYPTION_KEY/);
+      expect(error.message).toMatch(/TURNSTILE_SECRET_KEY/);
     }
   });
 });

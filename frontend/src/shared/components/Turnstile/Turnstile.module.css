@@ -1,0 +1,4 @@
+.container {
+  margin: var(--space-4) 0;
+  min-height: 65px; /* Turnstile's own real rendered widget height, avoids layout shift while the script/widget loads */
+}

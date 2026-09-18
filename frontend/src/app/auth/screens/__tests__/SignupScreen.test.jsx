@@ -1,16 +1,47 @@
+import { useEffect } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SignupScreen } from '../SignupScreen.jsx';
 import { ApiError } from '../../../../shared/api/ApiError.js';
 
-const mocks = vi.hoisted(() => ({ signup: vi.fn() }));
+const mocks = vi.hoisted(() => ({ signup: vi.fn(), turnstileOnVerify: vi.fn(), turnstileAutoVerify: vi.fn(() => true), turnstileMountCount: 0 }));
 
 vi.mock('../../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../../shared/api/index.js');
   return {
     ...actual,
     authApi: { signup: mocks.signup },
+  };
+});
+
+// Security-review finding: `SignupScreen` now renders a real Cloudflare
+// Turnstile widget, which loads a real third-party script no test
+// environment can (or should) actually reach. Mocked here — by default it
+// auto-verifies on mount so every EXISTING test below keeps passing with
+// zero changes of its own; the two new CAPTCHA-specific tests further down
+// override `turnstileAutoVerify` to prove the widget's own gating and the
+// remount-after-failure behavior instead. The real widget's own rendering/
+// callback-wiring is covered separately, unmocked, by
+// `shared/components/Turnstile/__tests__/Turnstile.test.jsx`.
+vi.mock('../../../../shared/components/index.js', async () => {
+  const actual = await vi.importActual('../../../../shared/components/index.js');
+  return {
+    ...actual,
+    Turnstile: ({ onVerify }) => {
+      mocks.turnstileOnVerify = onVerify;
+      useEffect(() => {
+        // Runs exactly once per real MOUNT (empty deps) — remounting via a
+        // changed `key` (SignupScreen.jsx's own fresh-widget-after-failure
+        // mechanism) unmounts the old instance and runs this again on the
+        // new one, which is what proves a genuine remount happened rather
+        // than the same instance quietly re-rendering.
+        mocks.turnstileMountCount += 1;
+        if (mocks.turnstileAutoVerify()) onVerify('mock-turnstile-token');
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only stub
+      }, []);
+      return <div data-testid="turnstile-stub" />;
+    },
   };
 });
 
@@ -31,6 +62,8 @@ async function fillForm() {
 describe('<SignupScreen>', () => {
   beforeEach(() => {
     mocks.signup.mockReset();
+    mocks.turnstileAutoVerify.mockReset().mockReturnValue(true);
+    mocks.turnstileMountCount = 0;
   });
 
   afterEach(() => {
@@ -53,6 +86,7 @@ describe('<SignupScreen>', () => {
       adminLastName: 'Okafor',
       adminEmail: 'ada@riverside.example',
       adminPassword: 'a genuinely long enough password',
+      captchaToken: 'mock-turnstile-token',
     });
     expect(await screen.findByText(/organization is ready/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Go to sign in' })).toBeInTheDocument();
@@ -112,5 +146,33 @@ describe('<SignupScreen>', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Go to sign in' }));
 
     expect(window.location.assign).toHaveBeenCalledWith('http://riverside-hotels.localhost:5173/');
+  });
+
+  it('disables Create organization until the CAPTCHA widget verifies', async () => {
+    mocks.turnstileAutoVerify.mockReturnValue(false);
+    render(<SignupScreen />);
+    await fillForm();
+
+    expect(screen.getByRole('button', { name: 'Create organization' })).toBeDisabled();
+
+    mocks.turnstileOnVerify('a-real-token-arriving-later');
+    expect(await screen.findByRole('button', { name: 'Create organization' })).toBeEnabled();
+  });
+
+  it('gets a fresh CAPTCHA widget (a real remount, not the same spent instance) after a failed submission', async () => {
+    mocks.signup.mockRejectedValue(new ApiError({ code: 'CONFLICT_DUPLICATE_ENTRY', message: 'A tenant with slug "riverside-hotels" already exists.' }));
+    render(<SignupScreen />);
+    await fillForm();
+    expect(mocks.turnstileMountCount).toBe(1);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create organization' }));
+    await screen.findByRole('alert');
+
+    // A Turnstile response token is single-use, consumed the instant the
+    // backend's own siteverify call succeeds — regardless of the later
+    // duplicate-slug rejection. `SignupScreen.jsx` forces a fresh widget
+    // via a changed `key`, provable here as a genuine second mount (the
+    // effect above re-running), not the same instance re-rendering.
+    expect(mocks.turnstileMountCount).toBe(2);
   });
 });
