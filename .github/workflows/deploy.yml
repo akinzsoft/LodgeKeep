@@ -1,0 +1,171 @@
+name: Deploy to production
+
+# Real production bug, user-reported: a manual deploy scoped `docker compose
+# ... up -d --build` to just the `backend` service, which silently skipped
+# two things a full-stack rebuild would have covered — `migrate` (a
+# one-shot service that only re-runs when the whole stack, or it by name,
+# is brought up) and `frontend` (never rebuilt at all) — leaving the deploy
+# half-applied with no error of any kind. This workflow exists to make that
+# class of mistake structurally impossible: it always runs the exact,
+# full, documented command from docker-compose.prod.yml's own header
+# comment, with no service-name restriction, and then actually verifies
+# the result rather than trusting exit codes alone.
+#
+# Deliberately a SEPARATE file from ci.yml, not a third job inside it —
+# ci.yml has been test+lint-only since Phase 0, and gating deploy on it via
+# `workflow_run` (below) needs no change to that file at all.
+#
+# ── Required GitHub Secrets (Settings → Secrets and variables → Actions) ──
+#   VPS_HOST          SSH host/IP of the production VPS.
+#   VPS_USERNAME       SSH username.
+#   VPS_SSH_KEY        Private half of a deploy keypair whose public half is
+#                      in that user's ~/.ssh/authorized_keys on the VPS.
+#                      Generate a KEY DEDICATED TO THIS — never reuse a
+#                      personal key. `ssh-keygen -t ed25519 -C
+#                      "lodgekeep-deploy" -f deploy_key -N ""`, add
+#                      deploy_key.pub to authorized_keys on the VPS, put the
+#                      contents of deploy_key (the PRIVATE half) in this
+#                      secret, then delete both local files.
+#   VPS_PORT           SSH port. Optional — defaults to 22 if unset.
+#   VPS_DEPLOY_PATH    Absolute path on the VPS to the existing LodgeKeep
+#                      checkout (the directory containing
+#                      docker-compose.prod.yml and .env.production).
+#
+# None of these are application secrets — .env.production itself is never
+# read, templated, or transmitted by this workflow. It already lives on
+# the VPS (gitignored, confirmed via `git check-ignore -v`) and stays
+# there; the deploy command's own `--env-file .env.production` flag reads
+# it from disk on the server, exactly as a human running the command by
+# hand already does.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    # workflow_run fires for every branch CI runs on — the real gate is
+    # here, not in the trigger's own (unreliable for this event type)
+    # `branches:` filter: only deploy a CI run that (a) was for `main` and
+    # (b) actually passed. A red build on main must never reach this job.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    # Serializes deploys rather than letting two overlapping runs interleave
+    # `docker compose up --build` calls on the same box — queues, never
+    # cancels a deploy that's already in flight partway through a rebuild.
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Deploy and verify
+        # Pinned by commit SHA, not a floating version tag — this repo's
+        # own established discipline for every third-party image
+        # (docker-compose.prod.yml's mysql/redis/caddy are all digest-
+        # pinned). Dependabot's existing `github-actions` ecosystem entry
+        # (.github/dependabot.yml, directory "/") already covers
+        # .github/workflows/*, so a version bump here arrives as an
+        # ordinary PR, gated on CI, like any other dependency bump.
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.VPS_DEPLOY_PATH }}"
+            # One definition, every call site below — the exact,
+            # documented invocation (docker-compose.prod.yml's own header:
+            # --env-file is required, its name isn't Compose's default;
+            # -f is required, this directory also has a dev
+            # docker-compose.yml). $COMPOSE is deliberately unquoted at
+            # every call site so it expands as separate words, not one
+            # (shellcheck SC2086 — checked, this is the intended case).
+            COMPOSE="docker compose --env-file .env.production -f docker-compose.prod.yml"
+
+            echo "::group::git pull"
+            # --ff-only, not a plain pull: if the VPS checkout ever has
+            # local/manual drift, this fails loudly and visibly rather
+            # than silently discarding it (or, worse, creating an
+            # unexpected merge commit on a box nobody is watching).
+            git pull --ff-only
+            echo "::endgroup::"
+
+            echo "::group::docker compose up --build (full stack — migrate and frontend included, never scoped to one service)"
+            $COMPOSE up -d --build
+            echo "::endgroup::"
+
+            echo "::group::Verify migrate actually completed"
+            # Exit code alone doesn't distinguish "ran the pending
+            # migrations" from "nothing was pending" — the real signal is
+            # knex's own "Batch N run: M migrations" log line, surfaced
+            # here for a human to read on any deploy, not just a failed one.
+            MIGRATE_EXIT="$(docker inspect --format='{{.State.ExitCode}}' lodgekeep-prod-migrate-1)"
+            $COMPOSE logs migrate --tail=30
+            if [ "$MIGRATE_EXIT" != "0" ]; then
+              echo "migrate exited with code $MIGRATE_EXIT"
+              exit 1
+            fi
+            echo "::endgroup::"
+
+            echo "::group::Wait for backend to report Docker-healthy"
+            # backend publishes no host port at all (the real security
+            # boundary for /internal/ask-tls) — Docker's own recorded
+            # health status, driven by the Dockerfile's HEALTHCHECK
+            # against GET /healthz (a real `SELECT 1` against MySQL, not
+            # just "the process is listening"), is what's actually
+            # checkable from here. start_period=30s/interval=15s in that
+            # HEALTHCHECK means "healthy" can take up to ~45s to appear
+            # after a fresh container start — this polls rather than
+            # checking once.
+            healthy=""
+            for attempt in $(seq 1 24); do
+              status="$(docker inspect -f '{{.State.Health.Status}}' lodgekeep-prod-backend-1 2>/dev/null || echo missing)"
+              echo "backend health: $status (attempt $attempt/24)"
+              if [ "$status" = "healthy" ]; then
+                healthy=1
+                break
+              fi
+              sleep 5
+            done
+            if [ -z "$healthy" ]; then
+              echo "backend did not report healthy within 120s"
+              $COMPOSE logs backend --tail=100
+              exit 1
+            fi
+            echo "::endgroup::"
+
+            echo "::group::Confirm GET /healthz directly, inside the Docker network"
+            # Belt-and-braces beyond Docker's own recorded status: proves
+            # the exact request/response path a real caller (Caddy's own
+            # upstream health probe) depends on, not merely that the
+            # container process is alive.
+            $COMPOSE exec -T backend \
+              node -e "require('http').get('http://127.0.0.1:3000/healthz', r => { let b=''; r.on('data', d => b += d); r.on('end', () => { console.log(r.statusCode, b); process.exit(r.statusCode === 200 ? 0 : 1); }); }).on('error', e => { console.error(e); process.exit(1); })"
+            echo "::endgroup::"
+
+            echo "::group::Confirm frontend/Caddy is serving"
+            # frontend has no Docker healthcheck of its own (nothing
+            # depends on one), and a genuine end-to-end HTTPS check through
+            # Caddy's real reverse proxy needs a real tenant hostname with
+            # DNS already pointed here — out of scope for a same-box,
+            # DNS-free check. Caddy's bare :80 block matches ANY Host
+            # header and unconditionally redirects to https, so this is a
+            # real, meaningful proof that Caddy itself started and its
+            # (version-sensitive — see the Caddyfile's own header) config
+            # loaded without a validation error, without needing DNS.
+            http_status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/)"
+            echo "Caddy :80 responded with $http_status"
+            if [ "$http_status" != "301" ] && [ "$http_status" != "308" ]; then
+              echo "Expected a redirect (301/308) from Caddy's :80 block, got $http_status"
+              $COMPOSE logs frontend --tail=100
+              exit 1
+            fi
+            echo "::endgroup::"
+
+            echo "Deploy verified: migrate ran clean, backend is healthy, frontend is serving."
