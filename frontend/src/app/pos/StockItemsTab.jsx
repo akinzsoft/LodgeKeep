@@ -28,6 +28,19 @@ const EMPTY_FORM = { outlet_id: '', name: '', unit: '', category: '', purchase_c
  * read-only instead, so editing here can never silently disagree with the
  * real cost basis a delivery just set.
  *
+ * `current_quantity` gets the identical treatment, for the identical
+ * reason: `stock/service.js`'s own `recomputeStockItemQuantity` is the
+ * ONE writer of that column, always re-derived from the real
+ * `stock_movements` ledger (goods received, a sale, a sale reversal,
+ * wastage, a stock-take variance) — a plain quantity input on this form
+ * would be a second, competing writer, silently breaking the audit trail
+ * and variance detection that ledger exists for. Confirmed with the user
+ * before building this hint, since the field's total absence from the
+ * edit form (present only as a read-only column in the list above) could
+ * otherwise read as a missing feature rather than a deliberate design —
+ * the hint below names the real path (Goods Received) explicitly, the
+ * same way the cost hint already does.
+ *
  * Bug fix (see `POSScreen`'s own header): the cost column used to hardcode
  * a literal NGN currency code — `stock_items` carries no currency column of
  * its own, so the real source of truth is the active property's
@@ -307,6 +320,9 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
           )}
           <p className={formStyles.hint}>
             Cost is <Money amount={editingItem.purchase_cost} currencyCode={activeProperty.base_currency} /> — set automatically by the most recent goods-received delivery, not editable here.
+          </p>
+          <p className={formStyles.hint}>
+            On hand is {formatQuantity(editingItem.current_quantity, editingItem.unit)} — quantity only changes through a recorded event, not a direct edit. Go to <strong>Goods received</strong> to log a delivery, or use Sales, Wastage, or a Stock take for the other ways it moves.
           </p>
           <form className={formStyles.row} onSubmit={handleEditSubmit}>
             <label className={formStyles.field}>
