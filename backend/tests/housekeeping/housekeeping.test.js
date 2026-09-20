@@ -471,6 +471,28 @@ describe('Housekeeping (PLAN.md Phase 3)', () => {
       expect(String(stillMine.attendant_user_id)).toBe(String(ctx.a.users[1].id));
     });
 
+    /**
+     * Gap closure (code-review finding): a housekeeper sending BOTH
+     * `attendant_user_id` and `status` in one request must be fully
+     * rejected — the reassignment check has to run BEFORE the status
+     * change is ever applied, or a housekeeper could smuggle a real status
+     * transition through alongside a rejected reassignment attempt.
+     */
+    it('a housekeeper sending BOTH attendant_user_id and status in one request is fully rejected — neither field applies', async () => {
+      const before = await t.trx('housekeeping_assignments').where({ id: myAssignmentId }).first();
+
+      const res = await t.request
+        .patch(`/api/v1/housekeeping/assignments/${myAssignmentId}`)
+        .set('Authorization', `Bearer ${housekeeperToken()}`)
+        .send({ attendant_user_id: String(ctx.a.users[1].id), status: 'completed' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+
+      const after = await t.trx('housekeeping_assignments').where({ id: myAssignmentId }).first();
+      expect(after.status).toBe(before.status);
+      expect(after.completed_at).toBeNull();
+    });
+
     it('a housekeeper CAN report status for a room assigned to them today', async () => {
       const res = await t.request
         .post(`/api/v1/housekeeping/rooms/${myRoomId}/status`)

@@ -37,9 +37,22 @@
  * softer "reduce scope" concept; the grant row for (housekeeping role,
  * housekeeping.manage) is deleted outright, tenant by tenant, the same
  * way `down()` below reverses a grant this migration itself adds. `down()`
- * restores the original state exactly: drops `housekeeping.operate`
- * (key and every grant of it) and re-grants `housekeeping.manage` back to
- * the `housekeeping` role.
+ * restores the original state for every tenant that existed when `up()`
+ * ran: drops `housekeeping.operate` (key and every grant of it) and
+ * re-grants `housekeeping.manage` back to the `housekeeping` role. Code
+ * review caught a real, narrow edge this claim overstated: a tenant that
+ * self-service-signs-up AFTER `up()` runs (via `default-rbac.js`'s
+ * now-narrower `housekeeping` array — no `.manage`) but BEFORE a
+ * hypothetical `down()`, gets `.manage` handed to it by `down()`'s own
+ * blanket re-grant, even though that tenant's `housekeeping` role never
+ * held it. This only matters for a genuine production rollback with real
+ * signups in the gap — an ordinary migrate-down-then-up round trip against
+ * a static/empty schema (the usual reversibility check) is unaffected,
+ * since there is no window for a new tenant to appear. Not fixed: doing so
+ * would need a snapshot of exactly which tenants held the grant before
+ * `up()`, a real schema/table addition for a rollback path this codebase
+ * expects to use rarely if ever — flagged here rather than silently
+ * over-claimed or over-engineered.
  */
 
 const NEW_PERMISSIONS = [

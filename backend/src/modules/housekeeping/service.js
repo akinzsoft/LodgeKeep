@@ -128,6 +128,20 @@ async function hasOwnAssignmentForRoomToday({ context, roomId, userId }) {
  * date (ARCHITECTURE.md §6), never wall-clock, matching every other
  * business-date-filtered board in this codebase (`listArrivals`/
  * `listDepartures`).
+ *
+ * Gap closure (code-review finding, confirmed deliberate rather than
+ * fixed): this read is NOT scoped to the caller's own assignments, even
+ * for a `housekeeping.operate`-only caller — every attendant's rows for
+ * the date are returned regardless of who holds the token. `.view` stays a
+ * read grant in the plain sense that key already has everywhere else in
+ * this codebase (e.g. `ar.view` shows a company's balance to front desk,
+ * not just charges that front-desk staff member personally posted); only
+ * the MUTATING actions were the reported problem and are the ones this
+ * pass narrowed (`updateAssignment`'s status path, `reportRoomStatus` —
+ * both ownership-checked above). `BoardTab.jsx`'s own default-to-"my
+ * rooms today" filter is a frontend presentation choice on top of this
+ * same broad read, not a second enforcement layer — a housekeeping-role
+ * account calling this endpoint directly still sees the whole board.
  */
 async function listBoard({ context, businessDate }) {
   const db = scopedDb().for(context);

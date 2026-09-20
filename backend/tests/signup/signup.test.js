@@ -121,6 +121,24 @@ describe('POST /api/v1/signup', () => {
     expect(Number(superAdminGrantCount[0].n)).toBeGreaterThan(0);
     expect(Number(frontDeskGrantCount[0].n)).toBeGreaterThan(0);
 
+    // Gap closure (code-review finding): nothing previously asserted the
+    // housekeeping role's EXACT grant set through the real signup path —
+    // only `tests/helpers/fixtures.js`'s own separate grant block was ever
+    // exercised. `default-rbac.js`'s own header says this array must match
+    // fixtures.js's; this proves it against `DEFAULT_ROLE_PERMISSIONS`
+    // itself, so a future accidental re-add of `housekeeping.manage` to
+    // that array (the exact class of over-grant this pass just closed)
+    // fails here even if fixtures.js were never touched.
+    const housekeepingRole = roles.find((r) => r.code === 'housekeeping');
+    const housekeepingGrants = await t
+      .trx('role_permissions')
+      .join('permissions', 'permissions.id', 'role_permissions.permission_id')
+      .where({ 'role_permissions.role_id': housekeepingRole.id })
+      .pluck('permissions.permission_key');
+    const { DEFAULT_ROLE_PERMISSIONS } = require('../../src/modules/tenancy/default-rbac');
+    expect(housekeepingGrants.sort()).toEqual([...DEFAULT_ROLE_PERMISSIONS.housekeeping].sort());
+    expect(housekeepingGrants).not.toContain('housekeeping.manage');
+
     const auditRow = await t.trx('audit_log').where({ entity_type: 'tenants', entity_id: tenant.id, action: 'create' }).first();
     expect(auditRow).toBeTruthy();
     expect(auditRow.source).toBe('api');
