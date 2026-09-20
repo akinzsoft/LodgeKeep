@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, DataTable, Button, StatusPill } from '../../shared/components/index.js';
-import { housekeepingApi, setupApi, ApiError } from '../../shared/api/index.js';
+import { housekeepingApi, ApiError } from '../../shared/api/index.js';
 import formStyles from './HousekeepingForm.module.css';
 
 function todayIso() {
@@ -35,6 +35,15 @@ const ASSIGNMENT_TONE = { assigned: 'neutral', in_progress: 'info', completed: '
  * fresh assignment submitted on this default is tagged to whatever date is
  * showing. Falls back to `todayIso()` only when the property genuinely has
  * no business date configured yet.
+ *
+ * Bug fix (user-reported): "wen house keeper login the room number to
+ * select is emfpty" — the room list used to come from `setupApi.listRooms()`
+ * (`setup.view`-gated), a permission the `housekeeping` role does not hold;
+ * the fetch 403'd for a housekeeper account and the failure was silently
+ * swallowed into an empty list, so the picker looked empty even with real
+ * dirty rooms on the property. Now sourced from `housekeepingApi.listRooms()`
+ * (`housekeeping.view`-gated — see that endpoint's own header), the same
+ * pattern already used for the attendant picker just above it.
  *
  * A second, more serious bug fix (user-reported "test Housekeeper," found by
  * live-testing the real flow end to end): "Mark complete" only ever called
@@ -81,7 +90,7 @@ export function BoardTab({ activeProperty, isOffline = false }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     reload();
-    setupApi.listRooms().then(setRooms).catch(() => setRooms([]));
+    housekeepingApi.listRooms().then(setRooms).catch(() => setRooms([]));
     housekeepingApi.listAttendants().then(setAttendants).catch(() => setAttendants([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only fetch, same pattern FrontDeskTab's own effect documents
   }, []);

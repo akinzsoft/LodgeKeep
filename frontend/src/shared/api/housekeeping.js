@@ -24,6 +24,17 @@ export function listAttendants() {
   return request('/housekeeping/attendants');
 }
 
+/**
+ * Gap closure (user-reported): "wen house keeper login the room number to
+ * select is emfpty" — `BoardTab` used to source its room list from
+ * `setupApi.listRooms()` (`setup.view`-gated, a permission the housekeeping
+ * role doesn't hold), so the fetch 403'd for a housekeeper account and the
+ * picker looked empty. This is the same room list, `housekeeping.view`-gated.
+ */
+export function listRooms() {
+  return request('/housekeeping/rooms');
+}
+
 /** @param {{roomId: string, attendantUserId: string, businessDate: string}} params */
 export function createAssignment({ roomId, attendantUserId, businessDate }) {
   return request('/housekeeping/assignments', {

@@ -81,6 +81,19 @@ async function listAttendants(req, res, next) {
   }
 }
 
+/**
+ * Gap closure (user-reported): "the room number to select is emfpty" — see
+ * `service.listRooms`'s own header for why this is a dedicated,
+ * `housekeeping.view`-gated read rather than reusing `GET /rooms`.
+ */
+async function listRooms(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listRooms({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 // ---------------------------------------------------------------------
 // Status reports & discrepancies
 // ---------------------------------------------------------------------
@@ -193,6 +206,7 @@ module.exports = {
   updateAssignment,
   listBoard,
   listAttendants,
+  listRooms,
   reportRoomStatus,
   listDiscrepancies,
   resolveDiscrepancy,

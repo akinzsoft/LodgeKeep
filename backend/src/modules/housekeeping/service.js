@@ -156,6 +156,28 @@ async function listAttendants({ context }) {
     .orderBy('users.first_name');
 }
 
+/**
+ * Gap closure (user-reported): "wen house keeper login the room number to
+ * select is emfpty" — `BoardTab.jsx`'s "Assign a dirty room" picker sourced
+ * its room list from `GET /rooms` (`setup.view`-gated), a permission the
+ * `housekeeping` role does not hold (Phase 1's own confirmed decision —
+ * manager gets `setup.view`, not every operational role). That fetch 403'd
+ * for a housekeeper account, and the frontend silently caught the failure
+ * to an empty array, so the picker looked genuinely empty even though real
+ * dirty rooms existed — the identical class of gap `listAttendants` above
+ * already closed for the attendant picker. A narrower, purpose-built read
+ * instead: every active room at the property, gated on `housekeeping.view`
+ * (the same permission this board's own read already requires).
+ */
+async function listRooms({ context }) {
+  const db = scopedDb().for(context);
+  return db
+    .table('rooms')
+    .whereNot({ status: 'archived' })
+    .select('id', 'room_number', 'floor', 'housekeeping_reported_status', 'front_desk_status', 'has_discrepancy')
+    .orderBy('room_number');
+}
+
 // ---------------------------------------------------------------------
 // Housekeeping status reports & discrepancy detection
 // (PRODUCT_REQUIREMENTS.md §3.6's own discrepancy requirement)
@@ -299,6 +321,7 @@ module.exports = {
   updateAssignment,
   getAssignment,
   listAttendants,
+  listRooms,
   listBoard,
   reportRoomStatus,
   listDiscrepancies,
