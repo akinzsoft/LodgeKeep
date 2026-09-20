@@ -66,8 +66,18 @@ const ASSIGNMENT_TONE = { assigned: 'neutral', in_progress: 'info', completed: '
  * the assignment can be retried on its own; the reverse order would have
  * silently reproduced this exact bug on that one failure path (an
  * assignment reading "completed" with the room's status never reported).
+ *
+ * Gap closure (user-reported): a housekeeping-role account saw the same
+ * undifferentiated board as a supervisor — every attendant's assignments,
+ * plus an "Assign a dirty room" panel that let them hand a room to ANY
+ * other housekeeper (a supervisor decision the backend now genuinely
+ * rejects, `housekeeping.manage`-gated — see the backend's own migration/
+ * controller headers). Without `canManage`, the board defaults to just
+ * this viewer's OWN assignments (`attendant_user_id === currentUserId`)
+ * and the Assign panel doesn't render at all — a `.manage` holder still
+ * sees the whole property's board, unfiltered, with the panel intact.
  */
-export function BoardTab({ activeProperty, isOffline = false }) {
+export function BoardTab({ activeProperty, isOffline = false, currentUserId = null, canManage = false }) {
   const [businessDate, setBusinessDate] = useState(activeProperty?.current_business_date ?? todayIso());
   const [board, setBoard] = useState(null);
   const [rooms, setRooms] = useState(null);
@@ -90,8 +100,13 @@ export function BoardTab({ activeProperty, isOffline = false }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     reload();
-    housekeepingApi.listRooms().then(setRooms).catch(() => setRooms([]));
     housekeepingApi.listAttendants().then(setAttendants).catch(() => setAttendants([]));
+    // Gap closure: the room/attendant pickers only ever feed the
+    // supervisor-only "Assign a dirty room" panel below — skip the fetch
+    // entirely for a viewer who can't reach that panel.
+    if (canManage) {
+      housekeepingApi.listRooms().then(setRooms).catch(() => setRooms([]));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only fetch, same pattern FrontDeskTab's own effect documents
   }, []);
 
@@ -103,6 +118,14 @@ export function BoardTab({ activeProperty, isOffline = false }) {
     const attendant = (attendants ?? []).find((a) => String(a.id) === String(userId));
     return attendant ? `${attendant.first_name} ${attendant.last_name}` : `Staff ${userId}`;
   };
+
+  // Gap closure: a housekeeper sees only their own assignments by default;
+  // a `.manage` holder (supervisor) still sees the whole property's board.
+  // `board === null` (still loading) is preserved either way — filtering
+  // it to `[]` would collapse the table's real loading state into its
+  // empty one.
+  const visibleBoard =
+    board === null ? null : canManage ? board : board.filter((row) => String(row.attendant_user_id) === String(currentUserId));
 
   async function handleCreate(event) {
     event.preventDefault();
@@ -174,9 +197,9 @@ export function BoardTab({ activeProperty, isOffline = false }) {
         />
       </label>
       <DataTable
-        title="Today's board"
-        state={board === null ? 'loading' : board.length === 0 ? 'empty' : 'success'}
-        emptyMessage="No rooms assigned for this date yet."
+        title={canManage ? "Today's board" : 'My rooms today'}
+        state={visibleBoard === null ? 'loading' : visibleBoard.length === 0 ? 'empty' : 'success'}
+        emptyMessage={canManage ? 'No rooms assigned for this date yet.' : 'No rooms assigned to you for this date yet.'}
         columns={[
           { key: 'room_number', label: 'Room' },
           { key: 'attendant_user_id', label: 'Attendant', render: (row) => attendantName(row.attendant_user_id) },
@@ -191,7 +214,7 @@ export function BoardTab({ activeProperty, isOffline = false }) {
             render: (row) => (row.has_discrepancy ? <StatusPill tone="danger" label="Open" /> : <StatusPill tone="neutral" label="None" />),
           },
         ]}
-        rows={board ?? []}
+        rows={visibleBoard ?? []}
         rowKey={(row) => row.id}
         errorMessage={error}
         actions={(row) => {
@@ -239,6 +262,7 @@ export function BoardTab({ activeProperty, isOffline = false }) {
         }}
       />
 
+      {canManage && (
       <Card title="Assign a dirty room">
         {error && (
           <p role="alert" className={formStyles.errorBanner}>
@@ -302,6 +326,7 @@ export function BoardTab({ activeProperty, isOffline = false }) {
           </div>
         </form>
       </Card>
+      )}
     </div>
   );
 }

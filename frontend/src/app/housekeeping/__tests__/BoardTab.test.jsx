@@ -46,7 +46,7 @@ describe('<BoardTab>', () => {
   });
 
   it('offers only dirty, unassigned rooms in the assignment picker', async () => {
-    render(<BoardTab />);
+    render(<BoardTab canManage />);
     await screen.findByText('103'); // board row loaded
 
     await userEvent.click(screen.getByLabelText('Dirty room'));
@@ -56,7 +56,7 @@ describe('<BoardTab>', () => {
   });
 
   it('offers a real housekeeper picker, no free-text field', async () => {
-    render(<BoardTab />);
+    render(<BoardTab canManage />);
     await screen.findByText('103');
 
     expect(screen.queryByPlaceholderText('e.g. 2')).not.toBeInTheDocument();
@@ -66,7 +66,7 @@ describe('<BoardTab>', () => {
 
   it('assigns a dirty room to a housekeeper with no typing', async () => {
     mocks.createAssignment.mockResolvedValue({ id: '51', status: 'assigned' });
-    render(<BoardTab />);
+    render(<BoardTab canManage />);
     await screen.findByText('103');
 
     await userEvent.selectOptions(screen.getByLabelText('Dirty room'), '2');
@@ -79,7 +79,7 @@ describe('<BoardTab>', () => {
   });
 
   it('resolves the attendant id on the board to a real name, not a bare id', async () => {
-    render(<BoardTab />);
+    render(<BoardTab canManage />);
     // "Ada Bello" legitimately also appears as an option in the housekeeper
     // picker below — scope to the board's own table cell.
     const cell = await screen.findByText('Ada Bello', { selector: 'td' });
@@ -87,7 +87,7 @@ describe('<BoardTab>', () => {
   });
 
   it("bug fix: defaults the board to the property's own business date, not the browser's wall-clock today", async () => {
-    render(<BoardTab activeProperty={{ current_business_date: '2026-09-10' }} />);
+    render(<BoardTab activeProperty={{ current_business_date: '2026-09-10' }} canManage />);
 
     expect(await screen.findByLabelText('Business date')).toHaveValue('2026-09-10');
     expect(mocks.getBoard).toHaveBeenCalledWith('2026-09-10');
@@ -95,7 +95,7 @@ describe('<BoardTab>', () => {
 
   it('falls back to wall-clock today when the property has no business date configured yet', async () => {
     const today = new Date().toISOString().slice(0, 10);
-    render(<BoardTab activeProperty={{ current_business_date: null }} />);
+    render(<BoardTab activeProperty={{ current_business_date: null }} canManage />);
 
     expect(await screen.findByLabelText('Business date')).toHaveValue(today);
   });
@@ -115,7 +115,7 @@ describe('<BoardTab>', () => {
     });
 
     it('asks a real vacant/occupied question instead of completing immediately', async () => {
-      render(<BoardTab />);
+      render(<BoardTab canManage />);
       await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }));
 
       expect(screen.getByText('Room vacant or occupied now?')).toBeInTheDocument();
@@ -128,7 +128,7 @@ describe('<BoardTab>', () => {
       mocks.reportRoomStatus.mockImplementation(async (...args) => calls.push(['reportRoomStatus', ...args]));
       mocks.updateAssignment.mockImplementation(async (...args) => calls.push(['updateAssignment', ...args]));
 
-      render(<BoardTab />);
+      render(<BoardTab canManage />);
       await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }));
       await userEvent.click(screen.getByRole('button', { name: 'Vacant' }));
 
@@ -138,7 +138,7 @@ describe('<BoardTab>', () => {
     });
 
     it('reports occupied when that is what the housekeeper actually observed', async () => {
-      render(<BoardTab />);
+      render(<BoardTab canManage />);
       await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }));
       await userEvent.click(screen.getByRole('button', { name: 'Occupied' }));
 
@@ -146,7 +146,7 @@ describe('<BoardTab>', () => {
     });
 
     it('backs out on Cancel without calling either endpoint', async () => {
-      render(<BoardTab />);
+      render(<BoardTab canManage />);
       await userEvent.click(await screen.findByRole('button', { name: 'Mark complete' }));
       await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
@@ -154,6 +154,49 @@ describe('<BoardTab>', () => {
       expect(mocks.reportRoomStatus).not.toHaveBeenCalled();
       expect(mocks.updateAssignment).not.toHaveBeenCalled();
       expect(screen.getByRole('button', { name: 'Mark complete' })).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * Gap closure (user-reported): a housekeeper saw the same undifferentiated
+   * board as a supervisor — every attendant's rooms, plus an "Assign a
+   * dirty room" panel that let them hand a room to ANY other housekeeper.
+   * Without `canManage`, the board defaults to just this viewer's own
+   * assignments and the Assign panel doesn't render at all.
+   */
+  describe('without canManage (a plain housekeeper)', () => {
+    beforeEach(() => {
+      mocks.getBoard.mockResolvedValue([
+        { id: '50', room_id: '3', room_number: '103', attendant_user_id: '9', status: 'assigned', has_discrepancy: false },
+        { id: '51', room_id: '4', room_number: '104', attendant_user_id: '99', status: 'assigned', has_discrepancy: false },
+      ]);
+    });
+
+    it('shows only the viewer\'s OWN rooms, not the whole board', async () => {
+      render(<BoardTab currentUserId="9" />);
+      expect(await screen.findByText('103')).toBeInTheDocument();
+      expect(screen.queryByText('104')).not.toBeInTheDocument();
+    });
+
+    it('does not render the "Assign a dirty room" panel at all', async () => {
+      render(<BoardTab currentUserId="9" />);
+      await screen.findByText('103');
+      expect(screen.queryByText('Assign a dirty room')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Dirty room')).not.toBeInTheDocument();
+    });
+
+    it('never fetches the room picker list at all', async () => {
+      render(<BoardTab currentUserId="9" />);
+      await screen.findByText('103');
+      expect(mocks.listRooms).not.toHaveBeenCalled();
+    });
+
+    it('shows a real empty state when the viewer has no rooms assigned today', async () => {
+      mocks.getBoard.mockResolvedValue([
+        { id: '51', room_id: '4', room_number: '104', attendant_user_id: '99', status: 'assigned', has_discrepancy: false },
+      ]);
+      render(<BoardTab currentUserId="9" />);
+      expect(await screen.findByText('No rooms assigned to you for this date yet.')).toBeInTheDocument();
     });
   });
 });

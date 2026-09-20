@@ -17,12 +17,19 @@ import formStyles from './HousekeepingForm.module.css';
  * `out_of_order_periods`' own range check uses to decide when a room
  * re-enters sellable inventory. Falls back to wall-clock only when the
  * property genuinely has no business date configured yet.
+ *
+ * Gap closure (user-reported): pulling a room out of/back into sellable
+ * inventory is a supervisor decision (`housekeeping.manage`-gated on the
+ * backend now — see that module's own migration/controller headers), so
+ * both the schedule form and "Close now" only render for a `canManage`
+ * viewer; reading the list stays unchanged for everyone who already had
+ * `housekeeping.view`.
  */
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function OutOfOrderTab({ activeProperty, isOffline = false }) {
+export function OutOfOrderTab({ activeProperty, isOffline = false, canManage = false }) {
   const [periods, setPeriods] = useState(null);
   const [rooms, setRooms] = useState(null);
   const [error, setError] = useState(null);
@@ -41,7 +48,12 @@ export function OutOfOrderTab({ activeProperty, isOffline = false }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     reload();
-    setupApi.listRooms().then(setRooms).catch(() => setRooms([]));
+    // The room picker only ever feeds the supervisor-only schedule form
+    // below — skip the fetch for a viewer who can't reach it.
+    if (canManage) {
+      setupApi.listRooms().then(setRooms).catch(() => setRooms([]));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only fetch, same pattern BoardTab's own effect documents
   }, []);
 
   async function handleCreate(event) {
@@ -90,13 +102,16 @@ export function OutOfOrderTab({ activeProperty, isOffline = false }) {
         rows={periods ?? []}
         rowKey={(row) => row.id}
         errorMessage={error}
-        actions={(row) => (
-          <Button variant="secondary" disabled={isOffline} onClick={() => handleCloseNow(row)}>
-            Close now
-          </Button>
-        )}
+        actions={(row) =>
+          canManage && (
+            <Button variant="secondary" disabled={isOffline} onClick={() => handleCloseNow(row)}>
+              Close now
+            </Button>
+          )
+        }
       />
 
+      {canManage && (
       <Card title="Schedule an out-of-order period">
         {error && (
           <p role="alert" className={formStyles.errorBanner}>
@@ -174,6 +189,7 @@ export function OutOfOrderTab({ activeProperty, isOffline = false }) {
           </div>
         </form>
       </Card>
+      )}
     </div>
   );
 }

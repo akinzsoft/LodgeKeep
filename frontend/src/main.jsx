@@ -296,7 +296,12 @@ function Demo() {
       ) : screenKey === 'booking' ? (
         <BookingScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} />
       ) : screenKey === 'housekeeping' ? (
-        <HousekeepingScreen activeProperty={activePropertyRecord} isOffline={!isOnline} />
+        <HousekeepingScreen
+          activeProperty={activePropertyRecord}
+          isOffline={!isOnline}
+          currentUserId={user.userId}
+          canManage={grantedPermissions.has('housekeeping.manage')}
+        />
       ) : screenKey === 'rooms' ? (
         <RoomsScreen activeProperty={activePropertyRecord} />
       ) : screenKey === 'reports' ? (

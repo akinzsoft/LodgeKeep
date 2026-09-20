@@ -32,8 +32,37 @@ class DiscrepancyAlreadyResolvedError extends AppError {
   }
 }
 
+/**
+ * Gap closure: a `housekeeping.operate`-only caller (no `.manage`) may
+ * change the STATUS of an assignment (start cleaning / mark complete) but
+ * only their own — `housekeeping.manage` is the one that can act on
+ * anyone's. A permission key alone can't express "only your own row"; this
+ * is the ownership check, not a role check, hence its own `FORBIDDEN_`
+ * code distinct from `FORBIDDEN_PERMISSION`.
+ */
+class AssignmentNotYoursError extends AppError {
+  constructor(id) {
+    super('FORBIDDEN_NOT_YOUR_ASSIGNMENT', `Assignment ${id} is not assigned to you.`, 403, { assignmentId: id });
+  }
+}
+
+/**
+ * Gap closure: the equivalent ownership check for `reportRoomStatus` —
+ * a `housekeeping.operate`-only caller may report a room's status only
+ * when a real, current assignment for that room names them as the
+ * attendant; `housekeeping.manage` bypasses this (a supervisor's own
+ * spot-check needs no assignment at all).
+ */
+class RoomNotAssignedToYouError extends AppError {
+  constructor(roomId) {
+    super('FORBIDDEN_ROOM_NOT_ASSIGNED_TO_YOU', `Room ${roomId} is not assigned to you today.`, 403, { roomId });
+  }
+}
+
 module.exports = {
   AssignmentAlreadyExistsError,
   InvalidAssignmentTransitionError,
   DiscrepancyAlreadyResolvedError,
+  AssignmentNotYoursError,
+  RoomNotAssignedToYouError,
 };

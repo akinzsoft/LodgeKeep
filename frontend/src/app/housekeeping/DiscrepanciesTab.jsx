@@ -8,8 +8,14 @@ import formStyles from './HousekeepingForm.module.css';
  * rooms where front-desk status ≠ housekeeper-reported status ... each row
  * showing both values side by side and a resolve action. This must be a
  * first-class screen, not buried in a report dropdown."
+ *
+ * Gap closure (user-reported): resolving a discrepancy is a supervisor
+ * decision (`housekeeping.manage`-gated on the backend now — see that
+ * module's own migration/controller headers), so the Resolve action only
+ * renders for a `canManage` viewer; reading this list stays unchanged for
+ * everyone who already had `housekeeping.view`.
  */
-export function DiscrepanciesTab({ isOffline = false }) {
+export function DiscrepanciesTab({ isOffline = false, canManage = false }) {
   const [filter, setFilter] = useState('open');
   const [discrepancies, setDiscrepancies] = useState(null);
   const [error, setError] = useState(null);
@@ -83,6 +89,7 @@ export function DiscrepanciesTab({ isOffline = false }) {
         rowKey={(row) => row.id}
         errorMessage={error}
         actions={(row) =>
+          canManage &&
           !row.resolved_at && (
             <Button disabled={isOffline} onClick={() => setResolving(row)}>
               Resolve

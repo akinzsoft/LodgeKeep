@@ -30,6 +30,21 @@ import styles from './HousekeepingScreen.module.css';
  * exclusion) uses to decide when a room re-enters sellable inventory.
  * `DiscrepanciesTab` needed no change — it only ever displays a business
  * date column, never computes or submits one.
+ *
+ * Gap closure (user-reported): a housekeeping-role account could assign
+ * rooms to OTHER attendants, resolve discrepancies, and manage
+ * out-of-order periods — all supervisor decisions, backed now by a real
+ * `housekeeping.manage` narrowing (see the backend's own migration/
+ * controller headers). `canManage` (from `main.jsx`'s already-resolved
+ * `grantedPermissions`) and `currentUserId` thread down to all three tabs
+ * so each can show the right thing for the right role — reads stay
+ * unchanged for everyone; only the supervisor-only ACTIONS (assign,
+ * resolve, out-of-order create/close) hide for a plain housekeeper. This
+ * is a deliberate exception to this app's usual "don't hide it, let the
+ * backend 403" convention: the backend 403 is still the real enforcement,
+ * but a housekeeper's own job here — clean the rooms assigned to them,
+ * report status — is different enough from a supervisor's that showing
+ * the same undifferentiated screen to both was the actual bug reported.
  */
 const TABS = [
   { key: 'board', label: 'Board' },
@@ -37,7 +52,7 @@ const TABS = [
   { key: 'out-of-order', label: 'Out of Order' },
 ];
 
-export function HousekeepingScreen({ activeProperty, isOffline = false }) {
+export function HousekeepingScreen({ activeProperty, isOffline = false, currentUserId = null, canManage = false }) {
   const [tab, setTab] = useState('board');
 
   return (
@@ -60,9 +75,13 @@ export function HousekeepingScreen({ activeProperty, isOffline = false }) {
       </div>
 
       <div className={styles.panel}>
-        {tab === 'board' && <BoardTab activeProperty={activeProperty} isOffline={isOffline} />}
-        {tab === 'discrepancies' && <DiscrepanciesTab isOffline={isOffline} />}
-        {tab === 'out-of-order' && <OutOfOrderTab activeProperty={activeProperty} isOffline={isOffline} />}
+        {tab === 'board' && (
+          <BoardTab activeProperty={activeProperty} isOffline={isOffline} currentUserId={currentUserId} canManage={canManage} />
+        )}
+        {tab === 'discrepancies' && <DiscrepanciesTab isOffline={isOffline} canManage={canManage} />}
+        {tab === 'out-of-order' && (
+          <OutOfOrderTab activeProperty={activeProperty} isOffline={isOffline} canManage={canManage} />
+        )}
       </div>
     </div>
   );

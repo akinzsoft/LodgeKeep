@@ -34,7 +34,7 @@ describe('<OutOfOrderTab>', () => {
   });
 
   it("bug fix: \"Close now\" uses the property's own business date, not the browser's wall-clock today", async () => {
-    render(<OutOfOrderTab activeProperty={{ current_business_date: '2026-09-10' }} />);
+    render(<OutOfOrderTab activeProperty={{ current_business_date: '2026-09-10' }} canManage />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Close now' }));
 
@@ -43,7 +43,7 @@ describe('<OutOfOrderTab>', () => {
 
   it('falls back to wall-clock today when the property has no business date configured yet', async () => {
     const today = new Date().toISOString().slice(0, 10);
-    render(<OutOfOrderTab activeProperty={{ current_business_date: null }} />);
+    render(<OutOfOrderTab activeProperty={{ current_business_date: null }} canManage />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Close now' }));
 
@@ -51,16 +51,32 @@ describe('<OutOfOrderTab>', () => {
   });
 
   it('lists real out-of-order periods', async () => {
-    render(<OutOfOrderTab activeProperty={{ current_business_date: '2026-09-10' }} />);
+    render(<OutOfOrderTab activeProperty={{ current_business_date: '2026-09-10' }} canManage />);
     expect(await screen.findByText('Leak')).toBeInTheDocument();
   });
 
   it('shows the real backend error on a failed close', async () => {
     mocks.closeOutOfOrderPeriod.mockRejectedValue(new Error('boom'));
-    render(<OutOfOrderTab activeProperty={{ current_business_date: '2026-09-10' }} />);
+    render(<OutOfOrderTab activeProperty={{ current_business_date: '2026-09-10' }} canManage />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Close now' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not close this period.');
+  });
+
+  /**
+   * Gap closure (user-reported): pulling a room out of/back into sellable
+   * inventory is a supervisor decision — without `canManage`, neither the
+   * schedule form nor "Close now" should render at all.
+   */
+  describe('without canManage (a plain housekeeper)', () => {
+    it('does not render "Close now", the schedule form, or fetch the room picker', async () => {
+      render(<OutOfOrderTab activeProperty={{ current_business_date: '2026-09-10' }} />);
+      await screen.findByText('Leak');
+
+      expect(screen.queryByRole('button', { name: 'Close now' })).not.toBeInTheDocument();
+      expect(screen.queryByText('Schedule an out-of-order period')).not.toBeInTheDocument();
+      expect(mocks.listRooms).not.toHaveBeenCalled();
+    });
   });
 });

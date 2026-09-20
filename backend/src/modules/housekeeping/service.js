@@ -100,6 +100,27 @@ async function getAssignment({ context, id }) {
 }
 
 /**
+ * Gap closure: the ownership check `reportRoomStatus` needs for a
+ * `housekeeping.operate`-only caller (no `.manage`) — is there a real
+ * assignment, for THIS room, on the property's own current business date
+ * (ARCHITECTURE.md §6, never wall-clock, matching `listBoard`'s own
+ * default), naming this user as the attendant? A `.manage` holder never
+ * calls this — their own controller-level check bypasses it entirely, the
+ * same shape `assertCanOverrideCreditLimit` already established in
+ * cashiering's controller for a field-conditional secondary permission.
+ */
+async function hasOwnAssignmentForRoomToday({ context, roomId, userId }) {
+  const db = scopedDb().for(context);
+  const property = await db.table('properties').where({ id: context.propertyId }).first();
+  if (!property?.current_business_date) return false;
+  const assignment = await db
+    .table('housekeeping_assignments')
+    .where({ room_id: roomId, attendant_user_id: userId, business_date: property.current_business_date })
+    .first('id');
+  return Boolean(assignment);
+}
+
+/**
  * The mobile status board (PRODUCT_REQUIREMENTS.md §3.6: "rooms grouped by
  * attendant assignment") — one row per assignment for a business date, with
  * enough room detail (`room_number`, `floor`) to render without a second
@@ -107,6 +128,20 @@ async function getAssignment({ context, id }) {
  * date (ARCHITECTURE.md §6), never wall-clock, matching every other
  * business-date-filtered board in this codebase (`listArrivals`/
  * `listDepartures`).
+ *
+ * Gap closure (code-review finding, confirmed deliberate rather than
+ * fixed): this read is NOT scoped to the caller's own assignments, even
+ * for a `housekeeping.operate`-only caller — every attendant's rows for
+ * the date are returned regardless of who holds the token. `.view` stays a
+ * read grant in the plain sense that key already has everywhere else in
+ * this codebase (e.g. `ar.view` shows a company's balance to front desk,
+ * not just charges that front-desk staff member personally posted); only
+ * the MUTATING actions were the reported problem and are the ones this
+ * pass narrowed (`updateAssignment`'s status path, `reportRoomStatus` —
+ * both ownership-checked above). `BoardTab.jsx`'s own default-to-"my
+ * rooms today" filter is a frontend presentation choice on top of this
+ * same broad read, not a second enforcement layer — a housekeeping-role
+ * account calling this endpoint directly still sees the whole board.
  */
 async function listBoard({ context, businessDate }) {
   const db = scopedDb().for(context);
@@ -320,6 +355,7 @@ module.exports = {
   createAssignment,
   updateAssignment,
   getAssignment,
+  hasOwnAssignmentForRoomToday,
   listAttendants,
   listRooms,
   listBoard,

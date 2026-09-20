@@ -6,9 +6,19 @@
  * `attachAudit()` are already applied router-wide, same as every other
  * business module.
  *
- * SECURITY.md §5's matrix row for Housekeeping: `housekeeping`/`manager`/
- * `admin`/`super_admin` get full access; `front_desk` gets Read only;
- * `cashier`/`pos_operator` get neither key.
+ * SECURITY.md §5's matrix row for Housekeeping (revised, gap closure —
+ * user-reported): `housekeeping` gets `Limited` (`.view` + `.operate` —
+ * report a room's status, progress their OWN assignment); `manager`/
+ * `admin`/`super_admin` get full access (`.view` + `.operate` + `.manage`
+ * — assign/reassign, resolve discrepancies, out-of-order); `front_desk`
+ * gets Read only; `cashier`/`pos_operator` get neither key.
+ *
+ * `updateAssignment` and `reportRoomStatus` are gated on `.operate` here,
+ * the BROADER-reaching of the two mixed actions' keys — the narrower
+ * ownership/reassignment checks (is this really your own assignment; are
+ * you allowed to hand it to someone else) live in the controller, since a
+ * route-level permission key alone can't express "only your own row." See
+ * `controller.js`'s own header for that split.
  */
 
 const { Router } = require('express');
@@ -26,9 +36,14 @@ function housekeepingRouter() {
   // rather than the `setup.view`-gated `GET /rooms` — see controller.listRooms.
   router.get('/housekeeping/rooms', requirePermission('housekeeping.view'), controller.listRooms);
   router.post('/housekeeping/assignments', requirePermission('housekeeping.manage'), controller.createAssignment);
-  router.patch('/housekeeping/assignments/:id', requirePermission('housekeeping.manage'), controller.updateAssignment);
+  // Gap closure: .operate at the route level — controller.updateAssignment
+  // itself requires .manage for a reassignment and ownership for a
+  // status-only change.
+  router.patch('/housekeeping/assignments/:id', requirePermission('housekeeping.operate'), controller.updateAssignment);
 
-  router.post('/housekeeping/rooms/:roomId/status', requirePermission('housekeeping.manage'), controller.reportRoomStatus);
+  // Gap closure: .operate — controller.reportRoomStatus itself requires
+  // either .manage or a real assignment naming the caller as attendant.
+  router.post('/housekeeping/rooms/:roomId/status', requirePermission('housekeeping.operate'), controller.reportRoomStatus);
 
   router.get('/housekeeping/discrepancies', requirePermission('housekeeping.view'), controller.listDiscrepancies);
   router.post('/housekeeping/discrepancies/:id/resolve', requirePermission('housekeeping.manage'), controller.resolveDiscrepancy);

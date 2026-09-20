@@ -8,7 +8,28 @@
 
 const { ok, notFound } = require('../../shared/response');
 const { ValidationError } = require('../../shared/errors');
+const { scopedDb } = require('../../db');
+const { hasPermission } = require('../../auth/rbac');
+const { PermissionDeniedError } = require('../../auth/errors');
+const { AssignmentNotYoursError, RoomNotAssignedToYouError } = require('./errors');
 const service = require('./service');
+
+/**
+ * Gap closure: `housekeeping.manage` (assignment create/reassign,
+ * discrepancy resolve, out-of-order) is checked at the route level
+ * (`routes.js`) wherever the whole action is supervisor-only. Two actions
+ * — `updateAssignment`'s status path and `reportRoomStatus` — are mixed:
+ * a `housekeeping.operate`-only caller may use them, but only on their OWN
+ * assignment; a `housekeeping.manage` holder may use them on anyone's. This
+ * one shared lookup answers "does this caller hold the broader key," the
+ * same `hasPermission` primitive `cashiering/controller.js`'s
+ * `assertCanOverrideCreditLimit` already established for a field-
+ * conditional secondary permission check.
+ */
+async function callerCanManageAny(req) {
+  const db = scopedDb().for(req.context);
+  return hasPermission(db, req.role, 'housekeeping.manage');
+}
 
 function require_(body, field) {
   const value = body?.[field];
@@ -46,12 +67,23 @@ async function updateAssignment(req, res, next) {
     const { id } = req.params;
     const before = await service.getAssignment({ context: req.context, id });
     if (!before) return notFound(res);
-    const assignment = await service.updateAssignment({
-      context: req.context,
-      id,
-      attendantUserId: req.body?.attendant_user_id,
-      status: req.body?.status,
-    });
+
+    const attendantUserId = req.body?.attendant_user_id;
+    const status = req.body?.status;
+    const canManageAny = await callerCanManageAny(req);
+
+    // Gap closure: reassigning to a different attendant is a
+    // housekeeping.manage action, regardless of whose assignment it is.
+    if (attendantUserId && !canManageAny) {
+      throw new PermissionDeniedError('housekeeping.manage', req.role);
+    }
+    // Gap closure: a housekeeping.operate-only caller may progress an
+    // assignment's own status, but only when it's actually theirs.
+    if (status && !canManageAny && String(before.attendant_user_id) !== String(req.context.userId)) {
+      throw new AssignmentNotYoursError(id);
+    }
+
+    const assignment = await service.updateAssignment({ context: req.context, id, attendantUserId, status });
     await req.audit({ entityType: 'housekeeping_assignments', entityId: id, action: 'update', beforeState: before, afterState: assignment });
     res.status(200).json(ok(assignment));
   } catch (error) {
@@ -103,6 +135,19 @@ async function reportRoomStatus(req, res, next) {
     const { roomId } = req.params;
     const cleanliness = require_(req.body, 'cleanliness');
     const occupancyObserved = require_(req.body, 'occupancy_observed');
+
+    // Gap closure: a housekeeping.operate-only caller may report a room's
+    // status only when a real assignment for it, today, names them as the
+    // attendant — a housekeeping.manage holder's own spot-check needs none.
+    if (!(await callerCanManageAny(req))) {
+      const hasOwnAssignment = await service.hasOwnAssignmentForRoomToday({
+        context: req.context,
+        roomId,
+        userId: req.context.userId,
+      });
+      if (!hasOwnAssignment) throw new RoomNotAssignedToYouError(roomId);
+    }
+
     const result = await service.reportRoomStatus({
       context: req.context,
       roomId,
