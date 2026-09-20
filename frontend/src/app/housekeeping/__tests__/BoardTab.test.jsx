@@ -22,8 +22,8 @@ vi.mock('../../../shared/api/index.js', async () => {
       createAssignment: mocks.createAssignment,
       updateAssignment: mocks.updateAssignment,
       reportRoomStatus: mocks.reportRoomStatus,
+      listRooms: mocks.listRooms,
     },
-    setupApi: { listRooms: mocks.listRooms },
   };
 });
 

@@ -164,6 +164,43 @@ describe('Housekeeping (PLAN.md Phase 3)', () => {
       expect(res.status).toBe(403);
       expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
     });
+
+    /**
+     * Bug fix (user-reported): "wen house keeper login the room number to
+     * select is emfpty" — `BoardTab.jsx`'s room picker used to call
+     * `GET /rooms` (`setup.view`-gated), which the `housekeeping` role does
+     * not hold, so it 403'd for a real housekeeper and the picker rendered
+     * empty. `GET /housekeeping/rooms` is the fix — same room data,
+     * `housekeeping.view`-gated instead, reachable by the housekeeping role
+     * that actually uses this screen.
+     */
+    it('lists active rooms via a housekeeping.view-gated read, reachable by the housekeeping role', async () => {
+      await t.trx('rooms').where({ id: roomId }).update({ housekeeping_reported_status: 'dirty' });
+
+      const housekeeperToken = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+      const res = await t.request.get('/api/v1/housekeeping/rooms').set('Authorization', `Bearer ${housekeeperToken}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.some((row) => String(row.id) === String(roomId) && row.housekeeping_reported_status === 'dirty')).toBe(
+        true
+      );
+    });
+
+    it('GET /housekeeping/rooms is gated on housekeeping.view — a role without it is refused', async () => {
+      const token = signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[1].id),
+      });
+      const res = await t.request.get('/api/v1/housekeeping/rooms').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
   });
 
   // ====================================================================

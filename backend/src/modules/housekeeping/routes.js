@@ -22,6 +22,9 @@ function housekeepingRouter() {
   // Gap closure (user-reported): every user holding the housekeeping role
   // at this property — see controller.listAttendants's own header.
   router.get('/housekeeping/attendants', requirePermission('housekeeping.view'), controller.listAttendants);
+  // Gap closure (user-reported): every active room, `housekeeping.view`-gated
+  // rather than the `setup.view`-gated `GET /rooms` — see controller.listRooms.
+  router.get('/housekeeping/rooms', requirePermission('housekeeping.view'), controller.listRooms);
   router.post('/housekeeping/assignments', requirePermission('housekeeping.manage'), controller.createAssignment);
   router.patch('/housekeeping/assignments/:id', requirePermission('housekeeping.manage'), controller.updateAssignment);
 
