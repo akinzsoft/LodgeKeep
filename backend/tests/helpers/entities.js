@@ -2874,6 +2874,7 @@ const ENTITIES = [
       amount: '50.00',
       currency: 'NGN',
       status: 'pending',
+      expires_at: new Date(Date.now() + 30 * 60 * 1000), // re-review fix — now NOT NULL
     }),
     duplicateRow: (ctx, t) => ({
       tenant_id: t.id,
@@ -2882,6 +2883,7 @@ const ENTITIES = [
       amount: '50.00',
       currency: 'NGN',
       status: 'pending',
+      expires_at: new Date(Date.now() + 30 * 60 * 1000),
     }),
   },
 

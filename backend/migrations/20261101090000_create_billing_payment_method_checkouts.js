@@ -36,6 +36,22 @@
  * Reached only through hand-written queries in
  * `src/modules/billing/service.js`, never the accessor's generic `table()`
  * path.
+ *
+ * `expires_at` — re-review finding (before this migration ever merged, so
+ * fixed here directly rather than as a follow-up ALTER, matching this
+ * codebase's own established convention): the original version of this
+ * table had no expiry at all — a `pending` checkout row, and the real
+ * Paystack reference it names, stayed completable indefinitely.
+ * `startAddPaymentMethodCheckout` sets this to
+ * `BILLING_CHECKOUT_EXPIRY_MINUTES` (default 30) minutes out;
+ * `completeAddPaymentMethod` rejects a completion attempt past it
+ * (`CheckoutExpiredError`) and folds the same condition into its atomic
+ * claim's own `WHERE` clause as a defense-in-depth guard against the
+ * narrow window between that read and the claim. No sweep transitions a
+ * row to the `expired` status value once it lapses — that value is read
+ * (checked against, not just written), so "enforced" here means
+ * "rejected past its own recorded deadline," not "actively relabeled";
+ * a future cleanup sweep can still use it for that, unbuilt.
  */
 
 const RESTRICT = { onDelete: 'RESTRICT', onUpdate: 'RESTRICT' };
@@ -67,6 +83,11 @@ exports.up = async function up(knex) {
       .notNullable()
       .defaultTo('pending')
       .comment('"consumed" claimed by a conditional UPDATE in completeAddPaymentMethod — the replay guard. Nothing transitions a row to "expired" yet; the value exists for a future cleanup sweep, matching this codebase\'s own precedent of naming a status before the job that sets it is built.');
+
+    table
+      .datetime('expires_at')
+      .notNullable()
+      .comment('Set at checkout-start time (BILLING_CHECKOUT_EXPIRY_MINUTES minutes out, default 30) — completeAddPaymentMethod rejects any completion attempt past this, and folds the same condition into its atomic claim UPDATE.');
 
     timestamps(knex, table);
 

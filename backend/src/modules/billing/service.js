@@ -79,10 +79,17 @@ const {
   InvoiceNotFoundError,
   CheckoutNotFoundError,
   CheckoutMismatchError,
+  CheckoutExpiredError,
 } = require('./errors');
 const gateway = require('./paystack-gateway');
 
 const CARD_VERIFICATION_AMOUNT = process.env.BILLING_CARD_VERIFICATION_AMOUNT || '50.00';
+/** Re-review finding — how long a `billing_payment_method_checkouts` row stays completable after `startAddPaymentMethodCheckout` creates it. */
+const CHECKOUT_EXPIRY_MINUTES = Number(process.env.BILLING_CHECKOUT_EXPIRY_MINUTES) || 30;
+
+function minutesFromNow(minutes) {
+  return new Date(Date.now() + minutes * 60 * 1000);
+}
 
 /** A staff-scoped read of the tenant's own row — `tenants` is TENANT_SCOPED with scopeRoot 'tenant', so this always resolves to exactly the caller's own tenant. */
 async function getOwnTenant({ context }) {
@@ -226,6 +233,8 @@ async function startAddPaymentMethodCheckout({ context, email, callbackUrl }) {
     email,
     amount,
     currency,
+    // Re-review finding — this row used to stay completable forever.
+    expires_at: minutesFromNow(CHECKOUT_EXPIRY_MINUTES),
   });
 
   const { authorizationUrl, accessCode } = await gateway.initializeTransaction({
@@ -252,25 +261,37 @@ async function startAddPaymentMethodCheckout({ context, email, callbackUrl }) {
  * matched what was expected. A `billing.manage` caller (any admin of any
  * tenant, trivially self-signed-up) could submit a reference for ANY
  * successful transaction on the platform's billing account, including a
- * stranger's, and silently capture that stranger's card. Fixed with three
- * checks, in order: (1) the reference must resolve to a `pending`
- * `billing_payment_method_checkouts` row belonging to THIS tenant — the
- * same 404-not-403 shape every other cross-tenant lookup here uses, and
- * checked BEFORE the gateway is even called, so an invalid reference never
- * reaches Paystack at all; (2) the gateway's own verified amount/currency
- * must match what was recorded when the checkout started; (3) the
- * `reusable` flag Paystack returns must genuinely be true — a one-off,
- * non-reusable authorization can never become a recurring-billing token.
- * The checkout row is then claimed with a conditional UPDATE
- * (`WHERE status = 'pending'`) inside the SAME transaction that applies
- * its effect, so the identical reference can never complete twice —
- * replay protection, not just ownership. `verifyTransaction` itself is
- * still naturally idempotent (Paystack's own `/verify` is), so this
- * deliberately carries no separate Idempotency-Key requirement, the same
- * "verification is naturally safe to repeat" reasoning
- * `cashiering/controller.js`'s own `verifyPayment` already established —
- * the checkout-claim step is what turns "safe to re-verify" into "not
- * safe to re-APPLY."
+ * stranger's, and silently capture that stranger's card. Fixed with four
+ * checks, in order: (1) the reference must resolve to a `pending`,
+ * unexpired `billing_payment_method_checkouts` row belonging to THIS
+ * tenant — the same 404-not-403 shape every other cross-tenant lookup here
+ * uses, and checked BEFORE the gateway is even called, so an invalid
+ * reference never reaches Paystack at all; (2) the gateway's own verified
+ * amount/currency must match what was recorded when the checkout started;
+ * (3) the `reusable` flag Paystack returns must genuinely be true — a
+ * one-off, non-reusable authorization can never become a recurring-billing
+ * token; (4) the checkout row is claimed with a conditional UPDATE
+ * (`WHERE status = 'pending'`) — replay protection, not just ownership.
+ *
+ * ── RE-REVIEW FIX: THE CLAIM MOVED BEFORE THE REFUND ─────────────────────
+ * The claim used to happen LAST, inside the subscription-write transaction
+ * — after `refundTransaction` had already been called. Two concurrent
+ * completions for the SAME reference could both pass every check above
+ * (verification is idempotent, so both see identical results) and both
+ * reach `refundTransaction` before either claimed the row; only one
+ * subscription update would ultimately win, but Paystack would already
+ * have received two real refund calls for the one charge — a genuine
+ * duplicate side effect a losing request's later rejection can't undo.
+ * `refundTransaction`, unlike `verifyTransaction`, is NOT safe to call
+ * twice. The claim is now a single, atomic, immediately-committed
+ * statement — no explicit transaction needed, since one `UPDATE` is
+ * already its own atomic unit — placed BEFORE the refund call so a losing
+ * request is rejected before it can trigger any external side effect at
+ * all, the same ordering discipline this codebase's AR payment-application
+ * and stock-control fixes already established for "claim before doing the
+ * thing that can't be undone by rejecting you afterward." The claim's own
+ * `WHERE` also re-checks `expires_at` — belt-and-braces against the narrow
+ * window between the read below and this statement.
  */
 async function completeAddPaymentMethod({ context, reference, requestId, ip, userAgent }) {
   const readDb = scopedDb().for(systemContext());
@@ -280,6 +301,7 @@ async function completeAddPaymentMethod({ context, reference, requestId, ip, use
     .where({ tenant_id: context.tenantId, reference, status: 'pending' })
     .first();
   if (!checkout) throw new CheckoutNotFoundError();
+  if (new Date(checkout.expires_at).getTime() <= Date.now()) throw new CheckoutExpiredError();
 
   const verification = await gateway.verifyTransaction({ reference });
   if (verification.status !== 'success' || !verification.authorization.authorizationCode || !verification.authorization.reusable) {
@@ -289,9 +311,25 @@ async function completeAddPaymentMethod({ context, reference, requestId, ip, use
     throw new CheckoutMismatchError();
   }
 
+  // The replay guard, moved ahead of the refund call — see this
+  // function's own header. A second concurrent (or later, reused) call
+  // for the SAME reference sees 0 affected rows here and is rejected
+  // BEFORE it can call `refundTransaction`, even though the read above
+  // already found the row `pending` — the actual exclusivity is this
+  // atomic, WHERE-guarded UPDATE, not that earlier read.
+  const claimed = await readDb
+    .platform()
+    .table('billing_payment_method_checkouts')
+    .where({ id: checkout.id, status: 'pending' })
+    .where('expires_at', '>', new Date())
+    .update({ status: 'consumed' });
+  if (claimed === 0) throw new CheckoutNotFoundError();
+
   // The verification charge itself was never a real subscription payment —
-  // reverse it now that the authorization is safely captured. Best-effort:
-  // a refund failure must not lose the captured card, so it is logged, not
+  // reverse it now that the authorization is safely captured AND this
+  // request has won the claim above, so it is the only caller that will
+  // ever reach this line for this reference. Best-effort: a refund
+  // failure must not lose the captured card, so it is logged, not
   // thrown — the tenant is out the small verification amount until support
   // can reconcile it manually, a far better failure mode than silently
   // losing the payment method that was the actual point of this call.
@@ -307,18 +345,6 @@ async function completeAddPaymentMethod({ context, reference, requestId, ip, use
   const plan = await resolvePlanFor(db, tenant);
 
   return db.transaction(async (trx) => {
-    // The replay guard: a second concurrent (or later, reused) call for
-    // the SAME reference sees 0 affected rows here and is rejected, even
-    // though the read above already found the row `pending` — the actual
-    // exclusivity is this atomic, WHERE-guarded UPDATE, not the earlier
-    // read.
-    const claimed = await trx
-      .platform()
-      .table('billing_payment_method_checkouts')
-      .where({ id: checkout.id, status: 'pending' })
-      .update({ status: 'consumed' });
-    if (claimed === 0) throw new CheckoutNotFoundError();
-
     const existing = await trx.platform().table('subscriptions').where({ tenant_id: context.tenantId }).forUpdate().first();
 
     const paymentMethodFields = {

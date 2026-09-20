@@ -185,6 +185,9 @@ describe('Billing (PLAN.md Phase 5)', () => {
       expect(checkoutRow).toBeTruthy();
       expect(checkoutRow.status).toBe('pending');
       expect(checkoutRow.amount).toBe('50.00');
+      // Re-review finding: this row used to stay completable forever.
+      expect(checkoutRow.expires_at).toBeTruthy();
+      expect(new Date(checkoutRow.expires_at).getTime()).toBeGreaterThan(Date.now());
     });
 
     it('rejects completion for a reference nobody ever started a checkout for', async () => {
@@ -195,6 +198,26 @@ describe('Billing (PLAN.md Phase 5)', () => {
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('BILLING_CHECKOUT_NOT_FOUND');
       expect(gateway.verifyTransaction).not.toHaveBeenCalled(); // rejected before the gateway is ever called
+    });
+
+    // Re-review finding: a `billing_payment_method_checkouts` row used to
+    // stay completable indefinitely — this checkout genuinely belongs to
+    // the caller and was never touched by anyone else, but it's still
+    // correctly rejected once its own recorded deadline has passed.
+    it('rejects completion once the checkout has expired, before the gateway is ever called', async () => {
+      const reference = await startRealCheckout();
+      await t.trx('billing_payment_method_checkouts').where({ tenant_id: ctx.b.id, reference }).update({ expires_at: new Date(Date.now() - 60 * 1000) });
+
+      const res = await t.request
+        .post('/api/v1/billing/payment-method/complete')
+        .set('Authorization', `Bearer ${adminToken(ctx.b)}`)
+        .send({ reference });
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('BILLING_CHECKOUT_EXPIRED');
+      expect(gateway.verifyTransaction).not.toHaveBeenCalled();
+
+      const checkoutRow = await t.trx('billing_payment_method_checkouts').where({ tenant_id: ctx.b.id, reference }).first();
+      expect(checkoutRow.status).toBe('pending'); // rejected, not silently consumed
     });
 
     // The next two tests both assert "no subscription exists yet for

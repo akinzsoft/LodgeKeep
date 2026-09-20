@@ -19,15 +19,29 @@
  *
  * `assertAllowedCallbackUrl` accepts a callback only when its origin
  * genuinely belongs to the CALLING tenant — its default
- * `{slug}.APP_DOMAIN` subdomain, or a domain it has actually claimed in
- * `tenant_domains` (the same table `src/auth/tenant-resolution.js` already
- * trusts for the identical "does this hostname belong to this tenant"
- * question, including an as-yet-`unverified` claim — see that migration's
- * own header for why that is already this codebase's accepted behaviour,
- * not a new gap introduced here). A missing/blank `callback_url` is left
- * alone — every one of these three call sites already treats it as
- * optional, and Paystack falls back to its own dashboard-configured
- * default when none is supplied.
+ * `{slug}.APP_DOMAIN` subdomain, or a `tenant_domains` row for it that has
+ * actually been DNS-verified (`verified_at IS NOT NULL`). A missing/blank
+ * `callback_url` is left alone — every one of these three call sites
+ * already treats it as optional, and Paystack falls back to its own
+ * dashboard-configured default when none is supplied.
+ *
+ * ── RE-REVIEW FIX: VERIFIED DOMAINS ONLY ─────────────────────────────────
+ * This originally also accepted an UNVERIFIED `tenant_domains` claim,
+ * reasoning (wrongly, for this specific check) that
+ * `src/auth/tenant-resolution.js` already trusts an unverified claim for
+ * the identical-SOUNDING "does this hostname belong to this tenant"
+ * question. The two checks are not actually identical: Host-header
+ * resolution is gated by DNS in practice — a browser only ever SENDS that
+ * Host header to this server if the hostname's own DNS already points
+ * here, so an attacker claiming a domain they don't control gains nothing
+ * (no real traffic for that hostname ever reaches this server to
+ * "resolve"). A client-supplied `callback_url` has no such gate — nothing
+ * stops a tenant from typing in a domain string it does not actually
+ * control (`tenant_domains.domain` accepts any string; verification is a
+ * real, separate DNS TXT challenge, still unbuilt) and having Paystack
+ * redirect a real browser there anyway, defeating the entire point of this
+ * check. Only a genuinely DNS-verified custom domain, or the tenant's own
+ * platform-issued default subdomain, is trusted now.
  *
  * Lives in `src/shared`, not any one module, since all three business
  * modules above need the identical check and none of them may depend on
@@ -69,7 +83,7 @@ async function assertAllowedCallbackUrl(db, { callbackUrl }) {
     if (tenant && hostname === `${tenant.slug}.${appDomain}`.toLowerCase()) return;
   }
 
-  const claimedDomain = await db.table('tenant_domains').where({ domain: hostname }).first('id');
+  const claimedDomain = await db.table('tenant_domains').where({ domain: hostname }).whereNotNull('verified_at').first('id');
   if (claimedDomain) return;
 
   throw invalidCallbackUrlError();

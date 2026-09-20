@@ -64,6 +64,27 @@ class CheckoutMismatchError extends AppError {
   }
 }
 
+/**
+ * Re-review finding — a `billing_payment_method_checkouts` row now carries
+ * a real `expires_at` (see that migration's own header). A completion
+ * attempt past it is rejected outright, distinct from
+ * `CheckoutNotFoundError` (which covers "no such row," "someone else's,"
+ * and "already completed") — an expired-but-still-`pending` row genuinely
+ * exists and was genuinely this caller's own, so telling them it expired
+ * (rather than the generic not-found message) is real, useful information,
+ * not a cross-tenant leak.
+ */
+class CheckoutExpiredError extends AppError {
+  constructor() {
+    // 422, matching this codebase's own established status for "the
+    // request is well-formed and the resource is real, but its current
+    // state no longer allows this action" (e.g. `NoPaymentMethodOnFileError`
+    // above) — no precedent anywhere in this codebase for 410 Gone, and
+    // introducing a brand-new status for one call site isn't worth it.
+    super('BILLING_CHECKOUT_EXPIRED', 'This checkout has expired. Start a new one.', 422);
+  }
+}
+
 module.exports = {
   NoActivePlanError,
   CardVerificationFailedError,
@@ -71,4 +92,5 @@ module.exports = {
   InvoiceNotFoundError,
   CheckoutNotFoundError,
   CheckoutMismatchError,
+  CheckoutExpiredError,
 };

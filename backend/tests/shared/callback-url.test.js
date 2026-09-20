@@ -71,15 +71,29 @@ describe('assertAllowedCallbackUrl', () => {
     });
   });
 
-  it("accepts a domain the tenant has genuinely claimed in tenant_domains — the same table tenant-resolution.js already trusts", async () => {
-    await t.trx('tenant_domains').insert({ tenant_id: ctx.a.id, domain: 'book.alpha-hotels-group.example' });
+  it('accepts a domain the tenant has genuinely claimed AND had DNS-verified in tenant_domains', async () => {
+    await t.trx('tenant_domains').insert({ tenant_id: ctx.a.id, domain: 'book.alpha-hotels-group.example', verified_at: new Date() });
     await expect(
       assertAllowedCallbackUrl(dbFor(ctx.a), { callbackUrl: 'https://book.alpha-hotels-group.example/confirm' })
     ).resolves.toBeUndefined();
   });
 
-  it("rejects a domain claimed by a DIFFERENT tenant — a claim never crosses tenant lines", async () => {
-    await t.trx('tenant_domains').insert({ tenant_id: ctx.b.id, domain: 'book.beta-resorts-group.example' });
+  // Re-review finding: an unverified claim used to be trusted, on the
+  // (wrong, for this check) reasoning that tenant-resolution.js already
+  // trusts one for Host-header resolution — see this file's own header
+  // for why that reasoning doesn't transfer to a client-supplied body
+  // field with no DNS-level gate. `tenant_domains.domain` accepts any
+  // string; a tenant claiming a domain it doesn't actually control must
+  // not be enough to legitimize it as a payment-redirect destination.
+  it('rejects a domain the tenant has claimed but NOT yet had DNS-verified — a naked claim proves nothing', async () => {
+    await t.trx('tenant_domains').insert({ tenant_id: ctx.a.id, domain: 'unverified.alpha-hotels-group.example', verified_at: null });
+    await expect(
+      assertAllowedCallbackUrl(dbFor(ctx.a), { callbackUrl: 'https://unverified.alpha-hotels-group.example/confirm' })
+    ).rejects.toMatchObject({ code: 'VALIDATION_INVALID_CALLBACK_URL' });
+  });
+
+  it("rejects a domain claimed by a DIFFERENT tenant, even if verified — a claim never crosses tenant lines", async () => {
+    await t.trx('tenant_domains').insert({ tenant_id: ctx.b.id, domain: 'book.beta-resorts-group.example', verified_at: new Date() });
     await expect(
       assertAllowedCallbackUrl(dbFor(ctx.a), { callbackUrl: 'https://book.beta-resorts-group.example/confirm' })
     ).rejects.toMatchObject({ code: 'VALIDATION_INVALID_CALLBACK_URL' });
