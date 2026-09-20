@@ -18,10 +18,10 @@ vi.mock('../../../shared/api/index.js', async () => {
     housekeepingApi: {
       getBoard: mocks.getBoard,
       listAttendants: mocks.listAttendants,
+      listRooms: mocks.listRooms,
       listDiscrepancies: mocks.listDiscrepancies,
       listOutOfOrderPeriods: mocks.listOutOfOrderPeriods,
     },
-    setupApi: { listRooms: mocks.listRooms },
   };
 });
 
