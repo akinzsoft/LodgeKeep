@@ -45,6 +45,7 @@ const PERMISSIONS = new Set([
   'front_desk.view',
   'front_desk.manage',
   'housekeeping.view',
+  'housekeeping.operate',
   'housekeeping.manage',
   'notifications.view',
   'notifications.manage',
@@ -118,7 +119,12 @@ export function ImpersonatedStaffView() {
       ) : activeItemKey === 'booking' ? (
         <BookingScreen activePropertyId={impersonation.propertyId} isOffline={isOffline} />
       ) : activeItemKey === 'housekeeping' ? (
-        <HousekeepingScreen isOffline={isOffline} />
+        // Gap closure: the Board's own canManage default (false) would
+        // otherwise filter to "rooms assigned to me" — meaningless for an
+        // impersonating platform admin, who is no one's assignee. Matches
+        // this file's own stated intent (above): show everything, let the
+        // backend 403 a genuine mutation.
+        <HousekeepingScreen isOffline={isOffline} canManage />
       ) : activeItemKey === 'rooms' ? (
         <RoomsScreen activeProperty={{ id: impersonation.propertyId }} />
       ) : activeItemKey === 'reports' ? (

@@ -1813,6 +1813,7 @@ async function seedTwoTenants(trx) {
     ['front_desk.view', 'front_desk'],
     ['front_desk.manage', 'front_desk'],
     ['housekeeping.view', 'housekeeping'],
+    ['housekeeping.operate', 'housekeeping'],
     ['housekeeping.manage', 'housekeeping'],
     ['notifications.view', 'notifications'],
     ['notifications.manage', 'notifications'],
@@ -1926,20 +1927,27 @@ async function seedTwoTenants(trx) {
     ]);
   }
 
-  // Housekeeping (PLAN.md Phase 3) — SECURITY.md §5's matrix: the
-  // `housekeeping` role gets full access, `front_desk` gets Read only,
-  // manager/admin/super_admin get full access, cashier/pos_operator get
-  // neither key.
+  // Housekeeping (PLAN.md Phase 3, revised by a gap closure — user-reported:
+  // a housekeeping-role account could assign/reassign other attendants,
+  // resolve discrepancies, and manage out-of-order periods, all supervisor
+  // decisions). SECURITY.md §5's matrix: `housekeeping` gets `Limited`
+  // (`.view` + `.operate` only — report a room's status, progress their
+  // OWN assignment); `front_desk` gets Read only; manager/admin/super_admin
+  // get full access (`.view` + `.operate` + `.manage`); cashier/pos_operator
+  // get neither key.
   for (const t of both) {
     await trx('role_permissions').insert([
       { tenant_id: t.id, role_id: t.roles.housekeeping, permission_id: permissions['housekeeping.view'] },
-      { tenant_id: t.id, role_id: t.roles.housekeeping, permission_id: permissions['housekeeping.manage'] },
+      { tenant_id: t.id, role_id: t.roles.housekeeping, permission_id: permissions['housekeeping.operate'] },
       { tenant_id: t.id, role_id: t.roles.front_desk, permission_id: permissions['housekeeping.view'] },
       { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['housekeeping.view'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['housekeeping.operate'] },
       { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['housekeeping.manage'] },
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['housekeeping.view'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['housekeeping.operate'] },
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['housekeeping.manage'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['housekeeping.view'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['housekeeping.operate'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['housekeeping.manage'] },
     ]);
   }

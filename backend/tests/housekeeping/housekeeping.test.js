@@ -371,6 +371,168 @@ describe('Housekeeping (PLAN.md Phase 3)', () => {
   });
 
   // ====================================================================
+  // Gap closure (user-reported): a housekeeping-role account could assign
+  // rooms to OTHER attendants, resolve discrepancies, and manage
+  // out-of-order periods — all supervisor decisions. `housekeeping.operate`
+  // (report a room's status; progress the status of THEIR OWN assignment)
+  // vs `housekeeping.manage` (create/reassign an assignment, resolve a
+  // discrepancy, out-of-order create/close) — manager holds both.
+  // ====================================================================
+  describe('the housekeeping role is scoped to its own job, not a supervisor\'s', () => {
+    let roomTypeId;
+    let myRoomId;
+    let othersRoomId;
+    let unassignedRoomId;
+    let myAssignmentId;
+    let othersAssignmentId;
+    let secondHousekeeperId;
+
+    beforeAll(async () => {
+      roomTypeId = await createRoomType(ctx.a, 'HKSPLITTYPE');
+      myRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'SPLIT-MINE' });
+      othersRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'SPLIT-OTHER' });
+      unassignedRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'SPLIT-NONE' });
+
+      [secondHousekeeperId] = await t.trx('users').insert({
+        tenant_id: ctx.a.id,
+        email: 'second-housekeeper@example.com',
+        first_name: 'Second',
+        last_name: 'Housekeeper',
+        password_hash: 'x',
+        status: 'active',
+      });
+      await t.trx('user_property_access').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        user_id: secondHousekeeperId,
+        role: 'housekeeping',
+      });
+
+      const mine = await t.request
+        .post('/api/v1/housekeeping/assignments')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .send({ room_id: String(myRoomId), attendant_user_id: String(ctx.a.users[1].id), business_date: '2027-01-10' });
+      myAssignmentId = mine.body.data.id;
+
+      const others = await t.request
+        .post('/api/v1/housekeeping/assignments')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .send({ room_id: String(othersRoomId), attendant_user_id: String(secondHousekeeperId), business_date: '2027-01-10' });
+      othersAssignmentId = others.body.data.id;
+    });
+
+    function housekeeperToken() {
+      return signAccessToken({
+        aud: 'staff',
+        sub: String(ctx.a.users[1].id),
+        tenant_id: String(ctx.a.id),
+        property_id: String(ctx.a.properties[0].id),
+      });
+    }
+
+    it('a housekeeper cannot create a new assignment — housekeeping.manage required', async () => {
+      const res = await t.request
+        .post('/api/v1/housekeeping/assignments')
+        .set('Authorization', `Bearer ${housekeeperToken()}`)
+        .send({ room_id: String(unassignedRoomId), attendant_user_id: String(ctx.a.users[1].id), business_date: '2027-01-10' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+      expect(res.body.error.details.permission).toBe('housekeeping.manage');
+    });
+
+    it('a housekeeper CAN progress the status of their OWN assignment', async () => {
+      const res = await t.request
+        .patch(`/api/v1/housekeeping/assignments/${myAssignmentId}`)
+        .set('Authorization', `Bearer ${housekeeperToken()}`)
+        .send({ status: 'in_progress' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('in_progress');
+    });
+
+    it('a housekeeper CANNOT progress the status of someone ELSE\'S assignment', async () => {
+      const res = await t.request
+        .patch(`/api/v1/housekeeping/assignments/${othersAssignmentId}`)
+        .set('Authorization', `Bearer ${housekeeperToken()}`)
+        .send({ status: 'in_progress' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_NOT_YOUR_ASSIGNMENT');
+    });
+
+    it('a housekeeper cannot reassign their OWN assignment to a different attendant', async () => {
+      const res = await t.request
+        .patch(`/api/v1/housekeeping/assignments/${myAssignmentId}`)
+        .set('Authorization', `Bearer ${housekeeperToken()}`)
+        .send({ attendant_user_id: String(secondHousekeeperId) });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+      expect(res.body.error.details.permission).toBe('housekeeping.manage');
+
+      const stillMine = await t.trx('housekeeping_assignments').where({ id: myAssignmentId }).first();
+      expect(String(stillMine.attendant_user_id)).toBe(String(ctx.a.users[1].id));
+    });
+
+    it('a housekeeper CAN report status for a room assigned to them today', async () => {
+      const res = await t.request
+        .post(`/api/v1/housekeeping/rooms/${myRoomId}/status`)
+        .set('Authorization', `Bearer ${housekeeperToken()}`)
+        .send({ cleanliness: 'clean', occupancy_observed: 'vacant' });
+      expect(res.status).toBe(200);
+    });
+
+    it('a housekeeper CANNOT report status for a room not assigned to them today', async () => {
+      const res = await t.request
+        .post(`/api/v1/housekeeping/rooms/${unassignedRoomId}/status`)
+        .set('Authorization', `Bearer ${housekeeperToken()}`)
+        .send({ cleanliness: 'clean', occupancy_observed: 'vacant' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_ROOM_NOT_ASSIGNED_TO_YOU');
+    });
+
+    it('a housekeeper cannot resolve a discrepancy', async () => {
+      const [discrepancyId] = await t.trx('housekeeping_discrepancies').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        room_id: unassignedRoomId,
+        business_date: '2027-01-10',
+        front_desk_status: 'vacant',
+        housekeeping_status: 'occupied',
+      });
+      const res = await t.request
+        .post(`/api/v1/housekeeping/discrepancies/${discrepancyId}/resolve`)
+        .set('Authorization', `Bearer ${housekeeperToken()}`)
+        .send({ resolution_note: 'attempted by a housekeeper' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+
+    it('a housekeeper cannot create an out-of-order period', async () => {
+      const res = await t.request
+        .post('/api/v1/housekeeping/out-of-order')
+        .set('Authorization', `Bearer ${housekeeperToken()}`)
+        .send({ room_id: String(unassignedRoomId), type: 'ooo', reason: 'Attempted by a housekeeper', start_date: '2027-06-01', end_date: '2027-06-02' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+
+    it('a manager (housekeeping.manage) CAN reassign an existing assignment to a different attendant', async () => {
+      const res = await t.request
+        .patch(`/api/v1/housekeeping/assignments/${othersAssignmentId}`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .send({ attendant_user_id: String(ctx.a.users[1].id) });
+      expect(res.status).toBe(200);
+      expect(String(res.body.data.attendant_user_id)).toBe(String(ctx.a.users[1].id));
+    });
+
+    it('a manager (housekeeping.manage) CAN report status for a room with no assignment to them at all', async () => {
+      const res = await t.request
+        .post(`/api/v1/housekeeping/rooms/${unassignedRoomId}/status`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .send({ cleanliness: 'clean', occupancy_observed: 'vacant' });
+      expect(res.status).toBe(200);
+    });
+  });
+
+  // ====================================================================
   // RBAC gating — SECURITY.md §5's Housekeeping row
   // ====================================================================
   describe('RBAC gating', () => {

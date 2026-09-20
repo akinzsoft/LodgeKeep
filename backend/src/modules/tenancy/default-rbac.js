@@ -38,6 +38,7 @@ const ALL_PERMISSION_KEYS = Object.freeze([
   'front_desk.view',
   'front_desk.manage',
   'housekeeping.view',
+  'housekeeping.operate',
   'housekeeping.manage',
   'notifications.view',
   'notifications.manage',
@@ -88,7 +89,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'group_blocks.view',
   ],
   housekeeping: [
-    'housekeeping.view', 'housekeeping.manage',
+    'housekeeping.view', 'housekeeping.operate',
   ],
   pos_operator: [
     'pos.operate',
@@ -98,7 +99,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'reservations.view', 'reservations.manage',
     'front_desk.view', 'front_desk.manage',
     'cashiering.post_charge', 'cashiering.void_line',
-    'housekeeping.view', 'housekeeping.manage',
+    'housekeeping.view', 'housekeeping.operate', 'housekeeping.manage',
     'pos.operate', 'pos.manage',
     'pos.stock_view', 'pos.stock_manage',
     'reports.view', 'reports.view_financial',
