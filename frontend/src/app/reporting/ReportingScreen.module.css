@@ -90,3 +90,14 @@
   font-size: var(--text-label-size);
   font-weight: var(--text-label-weight);
 }
+
+.summaryList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-body-size);
+  color: var(--text-primary);
+}

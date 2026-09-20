@@ -22,3 +22,4 @@ export * as offboardingApi from './offboarding.js';
 export * as migrationApi from './migration.js';
 export * as doorAccessApi from './door-access.js';
 export * as expensesApi from './expenses.js';
+export * as reconciliationApi from './reconciliation.js';

@@ -131,6 +131,48 @@ async function createAnonymousGuest({ trx, firstName, lastName, email, phone }) 
   return guestId;
 }
 
+const GUEST_PORTAL_BOOKING_SOURCE_CODE = 'GUEST_PORTAL';
+
+/**
+ * Gap closure for the payment reconciliation report
+ * (`src/modules/reconciliation`): before this, a portal booking's own
+ * `reservations.booking_source_id` was always left null, identical to a
+ * staff-entered booking — nothing distinguished "the guest booked this
+ * themselves" from "front desk took this over the phone." Resolves (or, on
+ * first use for this property, creates) a well-known "Guest Portal" row in
+ * `booking_sources` — the exact reference table `market_segment_id`/
+ * `cancellation_policy_id`'s siblings already established — so a portal
+ * booking's own payment shows up correctly labelled in that report rather
+ * than folded indistinguishably into "Room folio."
+ *
+ * Insert-if-missing inside the SAME trx, mirroring `ensurePrimaryFolio`'s
+ * own shape (`cashiering/service.js`) exactly. Unlike that function, a
+ * genuine two-connection race is plausible here — many portal bookings can
+ * arrive concurrently against a brand-new property's very first one — so a
+ * lost `ER_DUP_ENTRY` race is caught and resolved by re-reading, rather
+ * than surfaced as a failed booking a guest would see.
+ *
+ * This row is ordinary, admin-managed reference data once created — an
+ * admin can rename or archive it via Setup's Reference Data tab exactly
+ * like "Direct"/"OTA," the same as every other row in this table. No
+ * special protection is added for it, matching how this codebase treats
+ * every other reference table.
+ */
+async function resolveGuestPortalBookingSourceId({ trx }) {
+  const existing = await trx.table('booking_sources').where({ code: GUEST_PORTAL_BOOKING_SOURCE_CODE }).first('id');
+  if (existing) return existing.id;
+  try {
+    const [id] = await trx.table('booking_sources').insert({ code: GUEST_PORTAL_BOOKING_SOURCE_CODE, name: 'Guest Portal' });
+    return id;
+  } catch (error) {
+    if (error && error.code === 'ER_DUP_ENTRY') {
+      const raced = await trx.table('booking_sources').where({ code: GUEST_PORTAL_BOOKING_SOURCE_CODE }).first('id');
+      if (raced) return raced.id;
+    }
+    throw error;
+  }
+}
+
 /**
  * The booking+payment-intent creation itself — one transaction, called by
  * both the anonymous and account-linked controllers (the only difference
@@ -138,6 +180,7 @@ async function createAnonymousGuest({ trx, firstName, lastName, email, phone }) 
  * caller's own already-linked `guests` row there).
  */
 async function createBookingWithPayment({ trx, guestId, roomTypeId, rateCodeId, arrivalDate, departureDate, adults, children, idempotencyKey }) {
+  const bookingSourceId = await resolveGuestPortalBookingSourceId({ trx });
   const reservation = await reservationsService.createReservation({
     trx,
     guestId,
@@ -149,6 +192,7 @@ async function createBookingWithPayment({ trx, guestId, roomTypeId, rateCodeId, 
     children,
     asHold: true,
     allowWaitlist: false,
+    bookingSourceId,
   });
 
   await cashieringService.ensurePrimaryFolio({ trx, reservationId: reservation.id });

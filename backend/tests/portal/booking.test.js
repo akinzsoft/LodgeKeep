@@ -213,6 +213,37 @@ describe('Guest portal booking + payment (PLAN.md Phase 4)', () => {
       const finalFolio = await t.trx('folios').where({ id: folio.id }).first();
       expect(finalFolio.balance).toBe('0.00');
     });
+
+    it('gap closure: stamps a real "Guest Portal" booking_sources row, reusing it (not creating a duplicate) across bookings — the payment reconciliation report\'s own source label for a portal booking', async () => {
+      const roomTypeId = await createRoomType('PORTALSOURCE');
+      await createRoom(roomTypeId, 'PS1');
+      await createRoom(roomTypeId, 'PS2');
+      const rateCodeId = await createRateCode('PORTALSOURCERATE');
+      paystack.initializeTransaction.mockResolvedValue({ authorizationUrl: 'https://paystack.test/pay/src', accessCode: 'src', reference: 'will-be-overridden' });
+
+      const first = await publicRequest('post', '/api/v1/portal/bookings')
+        .set('Idempotency-Key', idemKey())
+        .send(bookingBody({ roomTypeId, rateCodeId, arrival: '2027-08-01', departure: '2027-08-02' }));
+      expect(first.status).toBe(201);
+      const firstReservation = await t.trx('reservations').where({ id: first.body.data.reservation.id }).first();
+      expect(firstReservation.booking_source_id).not.toBeNull();
+
+      const source = await t.trx('booking_sources').where({ id: firstReservation.booking_source_id }).first();
+      expect(source).toMatchObject({ code: 'GUEST_PORTAL', name: 'Guest Portal' });
+
+      const second = await publicRequest('post', '/api/v1/portal/bookings')
+        .set('Idempotency-Key', idemKey())
+        .send(bookingBody({ roomTypeId, rateCodeId, arrival: '2027-08-03', departure: '2027-08-04' }));
+      expect(second.status).toBe(201);
+      const secondReservation = await t.trx('reservations').where({ id: second.body.data.reservation.id }).first();
+      // The SAME row, not a second "Guest Portal" insert — proves the
+      // insert-if-missing resolver actually resolves on the second call
+      // rather than colliding on booking_sources' own UNIQUE(property_id, code).
+      expect(secondReservation.booking_source_id).toBe(firstReservation.booking_source_id);
+
+      const allGuestPortalRows = await t.trx('booking_sources').where({ property_id: ctx.a.properties[0].id, code: 'GUEST_PORTAL' });
+      expect(allGuestPortalRows).toHaveLength(1);
+    });
   });
 
   describe('overbooking — a failed local step is rejected cleanly', () => {

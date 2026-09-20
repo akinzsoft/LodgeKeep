@@ -65,6 +65,7 @@ const ALL_PERMISSION_KEYS = Object.freeze([
   'door_access.manage',
   'expenses.view',
   'expenses.manage',
+  'reconciliation.view',
 ]);
 
 /** Every catalogue key except `room_types.update`/`reports.view_chain` — `admin`'s own exact exclusions (SECURITY.md §5): the two places this matrix's Admin `✓` genuinely diverges from Super-admin's `✓` on a single action. */
@@ -110,6 +111,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'group_blocks.view', 'group_blocks.manage',
     'door_access.view', 'door_access.manage',
     'expenses.view', 'expenses.manage',
+    'reconciliation.view',
   ],
   admin: ADMIN_PERMISSION_KEYS,
   super_admin: ALL_PERMISSION_KEYS,

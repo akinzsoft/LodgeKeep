@@ -1838,6 +1838,7 @@ async function seedTwoTenants(trx) {
     ['door_access.manage', 'door_access'],
     ['expenses.view', 'expenses'],
     ['expenses.manage', 'expenses'],
+    ['reconciliation.view', 'reconciliation'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
     permissions[key] = existing
@@ -2053,6 +2054,19 @@ async function seedTwoTenants(trx) {
       for (const key of ['expenses.view', 'expenses.manage']) {
         rows.push({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions[key] });
       }
+    }
+    await trx('role_permissions').insert(rows);
+  }
+
+  // Payment reconciliation report (gap closure) — a single key,
+  // manager/admin/super_admin only, matching Offboarding's own single-key
+  // shape: nobody handling money at the point of sale needs to see the
+  // property-wide bank-reconciliation ledger. Front desk/cashier/
+  // housekeeping/pos_operator deliberately get neither.
+  for (const t of both) {
+    const rows = [];
+    for (const role of ['manager', 'admin', 'super_admin']) {
+      rows.push({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions['reconciliation.view'] });
     }
     await trx('role_permissions').insert(rows);
   }

@@ -41,6 +41,7 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
   let query = db
     .table('pos_order_settlements')
     .joinScoped('pos_orders', (join) => join.on('pos_orders.id', '=', 'pos_order_settlements.pos_order_id'))
+    .joinScoped('pos_outlets', (join) => join.on('pos_outlets.id', '=', 'pos_orders.outlet_id'), { type: 'left' })
     .joinScoped('users', (join) => join.on('users.id', '=', 'pos_order_settlements.settled_by_user_id'), { type: 'left' })
     .joinScoped('payments', (join) => join.on('payments.id', '=', 'pos_order_settlements.payment_id'), { type: 'left' })
     .whereNull('pos_order_settlements.voided_at')
@@ -57,13 +58,21 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
       'pos_order_settlements.tax_amount as tax_amount',
       'pos_order_settlements.tip_amount as tip_amount',
       'pos_order_settlements.service_charge as service_charge',
+      'pos_order_settlements.currency as currency',
       'pos_order_settlements.settled_at as settled_at',
       'pos_order_settlements.business_date as business_date',
       'pos_order_settlements.folio_id as folio_id',
+      'payments.id as payment_id',
+      'payments.provider as payment_provider',
+      'payments.provider_reference as provider_reference',
+      'payments.provider_payment_id as provider_payment_id',
       'payments.provider_channel as provider_channel',
+      'payments.subaccount_code as subaccount_code',
+      'payments.platform_fee_percentage as platform_fee_percentage',
       'pos_orders.table_label as table_label',
       'pos_orders.source as source',
       'pos_orders.outlet_id as outlet_id',
+      'pos_outlets.name as outlet_name',
       'users.first_name as cashier_first_name',
       'users.last_name as cashier_last_name'
     )
@@ -115,7 +124,15 @@ async function listUnsettledCardPayments({ db, outletId }) {
     // Register checkouts and guest QR-order card payments both fund a POS tab
     // with no folio; either can end up captured with no settlement using it.
     .whereIn('payments.settlement_target', ['pos_register', 'pos_order'])
-    .where({ 'payments.status': 'CAPTURED' });
+    .where({ 'payments.status': 'CAPTURED' })
+    // Excludes a refund's OWN payments row (real, if minor, correctness fix
+    // this pass found: a completed POS refund inherits settlement_target
+    // from its parent but is never itself referenced by any settlement's
+    // payment_id, so before this exclusion it would have shown up here as
+    // "still needs a refund" even though it IS the refund — the payment
+    // reconciliation report's own `listPosRefundLines` is where a refund
+    // belongs instead).
+    .whereNull('payments.parent_payment_id');
   if (outletId) query = query.where('pos_orders.outlet_id', outletId);
   const payments = await query
     .select(
@@ -125,8 +142,14 @@ async function listUnsettledCardPayments({ db, outletId }) {
       'payments.amount as amount',
       'payments.currency as currency',
       'payments.captured_at as captured_at',
+      'payments.provider_reference as provider_reference',
+      'payments.provider_payment_id as provider_payment_id',
+      'payments.provider_channel as provider_channel',
+      'payments.platform_fee_percentage as platform_fee_percentage',
       'pos_orders.table_label as table_label',
-      'pos_orders.status as order_status'
+      'pos_orders.status as order_status',
+      'pos_orders.outlet_id as outlet_id',
+      'pos_orders.source as source'
     )
     .orderBy('payments.captured_at', 'desc');
   if (payments.length === 0) return [];
@@ -144,10 +167,16 @@ async function listUnsettledCardPayments({ db, outletId }) {
       orderId: p.pos_order_id,
       tableLabel: p.table_label,
       orderStatus: p.order_status,
+      outletId: p.outlet_id,
+      source: p.source,
       tender: p.tender,
       amount: p.amount,
       currency: p.currency,
       capturedAt: p.captured_at,
+      providerReference: p.provider_reference,
+      providerPaymentId: p.provider_payment_id,
+      providerChannel: p.provider_channel,
+      platformFeePercentage: p.platform_fee_percentage,
     }));
 }
 
@@ -347,4 +376,17 @@ async function computeDailyPosRevenueTotals({ db, dateFrom, dateTo, outletId }) 
   return new Map([...amountsByDate.entries()].map(([date, amounts]) => [date, sumMoney(amounts)]));
 }
 
-module.exports = { computeSalesReport, computeMenuItemSalesTotals, computeDailyPosRevenueTotals, TENDERS };
+module.exports = {
+  computeSalesReport,
+  computeMenuItemSalesTotals,
+  computeDailyPosRevenueTotals,
+  TENDERS,
+  // `listStandingSettlements`/`listUnsettledCardPayments` are exported for
+  // `src/modules/reconciliation/service.js`'s own union of folio- and
+  // POS-settled payments — the identical "promote a one-off once a second
+  // caller needs it" pattern `postRoomChargesForStay`/`resolvePropertyBySlug`
+  // already established in this codebase, rather than re-deriving the same
+  // pos_order_settlements/pos_orders/pos_outlets/payments join a second time.
+  listStandingSettlements,
+  listUnsettledCardPayments,
+};

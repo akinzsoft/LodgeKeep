@@ -3,6 +3,7 @@ import { setupApi, ApiError } from '../../shared/api/index.js';
 import { OccupancyTab } from './OccupancyTab.jsx';
 import { RevenueTab } from './RevenueTab.jsx';
 import { HousekeepingSummaryTab } from './HousekeepingSummaryTab.jsx';
+import { PaymentReconciliationTab } from './PaymentReconciliationTab.jsx';
 import styles from './ReportingScreen.module.css';
 
 /**
@@ -29,6 +30,7 @@ const TABS = [
   { key: 'occupancy', label: 'Occupancy' },
   { key: 'revenue', label: 'Revenue' },
   { key: 'housekeeping', label: 'Housekeeping' },
+  { key: 'reconciliation', label: 'Payment reconciliation' },
 ];
 
 export function ReportingScreen({ activePropertyId }) {
@@ -85,6 +87,7 @@ export function ReportingScreen({ activePropertyId }) {
             {tab === 'occupancy' && <OccupancyTab />}
             {tab === 'revenue' && <RevenueTab activeProperty={activeProperty} />}
             {tab === 'housekeeping' && <HousekeepingSummaryTab />}
+            {tab === 'reconciliation' && <PaymentReconciliationTab />}
           </div>
         </>
       )}

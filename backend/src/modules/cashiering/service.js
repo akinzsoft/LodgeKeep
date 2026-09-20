@@ -673,7 +673,16 @@ async function startPaystackCheckout({ context, paymentId, guestEmail, callbackU
   await db
     .table('payments')
     .where({ id: paymentId })
-    .update({ status: 'PENDING', provider_access_code: init.accessCode ?? null, subaccount_code: subaccountRow.subaccount_code });
+    .update({
+      status: 'PENDING',
+      provider_access_code: init.accessCode ?? null,
+      subaccount_code: subaccountRow.subaccount_code,
+      // Snapshot, not a live join — see that column's own migration header
+      // (the payment reconciliation report's gap closure) for why this must
+      // be captured now rather than re-derived from the property's current,
+      // mutable config at report time.
+      platform_fee_percentage: subaccountRow.percentage_charge,
+    });
   const updated = await db.table('payments').where({ id: paymentId }).first();
   return { payment: updated, authorizationUrl: init.authorizationUrl, accessCode: init.accessCode };
 }
