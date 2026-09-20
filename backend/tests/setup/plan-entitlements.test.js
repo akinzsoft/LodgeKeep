@@ -13,17 +13,67 @@
  * isolation holds, and — for the real race this gate introduces — see the
  * dedicated `plan-entitlements-concurrency.test.js` instead (this file
  * uses the shared-transaction harness, which cannot prove a real lock).
+ *
+ * Security fix (2026-11-01): `POST /properties` used to carry no
+ * permission check at all past the genuine "tenant has zero properties
+ * yet" bootstrap case (`tests/setup/setup.test.js`'s own header has the
+ * full story) — every caller below that creates a SECOND (or later)
+ * property now needs a real `setup.manage` grant to even reach the
+ * entitlement check this file exists to prove, exactly like every other
+ * Setup mutation. `grantSetupManage`/`seedRbacCatalogue` below exist
+ * purely to give each such caller that grant, so what each test actually
+ * proves stays the entitlement gate, not this file accidentally
+ * re-testing the permission gate instead.
  */
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { SYSTEM_ROLES, DEFAULT_ROLE_PERMISSIONS } = require('../../src/modules/tenancy');
 
 describe('Plan entitlement gating (PLAN.md Phase 5)', () => {
   const t = useTestApp();
   let ctx;
   let basicPlanId;
   let freshTenant;
+
+  /**
+   * Security fix: a raw `t.trx('tenants').insert(...)` (this file's own
+   * established idiom for a synthetic, test-only tenant, e.g.
+   * `freshTenant` below) carries no `roles`/`role_permissions` catalogue —
+   * both TENANT_SCOPED, never created just by a bare `tenants` row —
+   * matching `tests/setup/setup.test.js`'s own identical `seedEmptyTenant`
+   * fix. Without this, granting a user `admin` at a property in such a
+   * tenant grants nothing real (`hasPermission` finds no matching
+   * `role_permissions` row), and `POST /properties`'s own `setup.manage`
+   * check rejects every caller regardless of entitlement.
+   */
+  async function seedRbacCatalogue(tenantId) {
+    const roleIdByCode = {};
+    for (const code of SYSTEM_ROLES) {
+      roleIdByCode[code] = await t.trx('roles').insert({ tenant_id: tenantId, code, name: code, is_system: true }).then(([id]) => id);
+    }
+    const permissionRows = await t.trx('permissions').select('id', 'permission_key');
+    const permissionIdByKey = new Map(permissionRows.map((row) => [row.permission_key, row.id]));
+    const grants = [];
+    for (const [code, keys] of Object.entries(DEFAULT_ROLE_PERMISSIONS)) {
+      for (const key of keys) {
+        const permissionId = permissionIdByKey.get(key);
+        if (permissionId) grants.push({ tenant_id: tenantId, role_id: roleIdByCode[code], permission_id: permissionId });
+      }
+    }
+    if (grants.length) await t.trx('role_permissions').insert(grants);
+  }
+
+  /** Update-or-insert, matching `tests/setup/setup.test.js`'s own established helper exactly. */
+  async function grantSetupManage({ tenantId, userId, propertyId }) {
+    const existing = await t.trx('user_property_access').where({ user_id: userId, property_id: propertyId }).first('id');
+    if (existing) {
+      await t.trx('user_property_access').where({ id: existing.id }).update({ role: 'admin' });
+      return;
+    }
+    await t.trx('user_property_access').insert({ tenant_id: tenantId, property_id: propertyId, user_id: userId, role: 'admin' });
+  }
 
   beforeAll(async () => {
     ctx = await seedTwoTenants(t.trx);
@@ -49,6 +99,16 @@ describe('Plan entitlement gating (PLAN.md Phase 5)', () => {
     // building a whole fresh tenant for it.
     await t.trx('tenants').where({ id: ctx.b.id }).update({ plan_id: basicPlanId });
 
+    // Security fix: `fixtureTokenFor` below always signs `users[0]` —
+    // fixtures.js's own grant plan gives that user `manager` at
+    // `properties[0]`, `setup.view` only. Every test in this file that
+    // creates a SECOND property needs real `setup.manage` to even reach
+    // the entitlement check this file exists to prove, so `users[0]` is
+    // elevated to `admin` here, once, for both fixture tenants — this
+    // file never tests a manager/admin distinction, only entitlement.
+    await grantSetupManage({ tenantId: ctx.a.id, userId: ctx.a.users[0].id, propertyId: ctx.a.properties[0].id });
+    await grantSetupManage({ tenantId: ctx.b.id, userId: ctx.b.users[0].id, propertyId: ctx.b.properties[0].id });
+
     // A brand-new tenant with ZERO properties, on the SAME non-entitled
     // plan — the only way to prove "property #1 is always allowed
     // regardless of plan," since both fixture tenants start with 2.
@@ -65,6 +125,7 @@ describe('Plan entitlement gating (PLAN.md Phase 5)', () => {
       first_name: 'Fresh',
       last_name: 'Tenant',
     });
+    await seedRbacCatalogue(tenantId);
     freshTenant = { id: tenantId, userId };
   });
 
@@ -95,9 +156,14 @@ describe('Plan entitlement gating (PLAN.md Phase 5)', () => {
       first_name: 'Explicit',
       last_name: 'Disable',
     });
-    await t.trx('properties').insert({ tenant_id: tenantId, slug: `${suffix}-first`, name: 'First', timezone: 'Africa/Lagos', base_currency: 'NGN' });
+    const [propertyId] = await t.trx('properties').insert({ tenant_id: tenantId, slug: `${suffix}-first`, name: 'First', timezone: 'Africa/Lagos', base_currency: 'NGN' });
+    await seedRbacCatalogue(tenantId);
+    // Security fix: creating a SECOND property is an ordinary setup.manage
+    // mutation — this caller needs the grant to even reach the entitlement
+    // check this test exists to prove.
+    await grantSetupManage({ tenantId, userId, propertyId });
 
-    const token = tokenFor({ tenantId, userId });
+    const token = tokenFor({ tenantId, userId, propertyId });
     const res = await t.request
       .post('/api/v1/properties')
       .set('Authorization', `Bearer ${token}`)
@@ -133,6 +199,9 @@ describe('Plan entitlement gating (PLAN.md Phase 5)', () => {
   });
 
   it("that same tenant's second property is rejected with FORBIDDEN_PLAN_ENTITLEMENT once its plan doesn't grant multi_property", async () => {
+    // Security fix: needs setup.manage at the first property to even reach
+    // the entitlement check below.
+    await grantSetupManage({ tenantId: freshTenant.id, userId: freshTenant.userId, propertyId: freshTenant.firstPropertyId });
     const token = tokenFor({ tenantId: freshTenant.id, userId: freshTenant.userId, propertyId: freshTenant.firstPropertyId });
     const res = await t.request
       .post('/api/v1/properties')

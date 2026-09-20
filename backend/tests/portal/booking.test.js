@@ -214,6 +214,30 @@ describe('Guest portal booking + payment (PLAN.md Phase 4)', () => {
       expect(finalFolio.balance).toBe('0.00');
     });
 
+    // Security fix: `callback_base_url` (this screen's own client-supplied
+    // base, combined server-side with the real confirmation number into
+    // the actual `callback_url` — see `portal/controller.js`'s
+    // `respondWithCheckout`) reaches Paystack through the SAME
+    // `cashieringService.startPaystackCheckout` cashiering/qr-ordering
+    // both call, so it gets the identical open-redirect fix for free
+    // (`src/shared/callback-url.js`). Proven here, not just asserted —
+    // this call site wasn't one of the three the original review named,
+    // but shares the exact same vulnerable shape.
+    it('security fix: rejects a forged callback_base_url — the booking itself still commits, only checkout fails', async () => {
+      const roomTypeId = await createRoomType('PORTALFORGED');
+      await createRoom(roomTypeId, 'PFRG1'); // distinct from 'PF1' (PORTALFULL's own room, below) — same property, room numbers are unique per property regardless of room type
+      const rateCodeId = await createRateCode('PORTALFORGEDRATE');
+
+      const create = await publicRequest('post', '/api/v1/portal/bookings')
+        .set('Idempotency-Key', idemKey())
+        .send({ ...bookingBody({ roomTypeId, rateCodeId, arrival: '2027-08-01', departure: '2027-08-03' }), callback_base_url: 'https://evil.example.com/confirm' });
+
+      expect(create.status).toBe(202);
+      expect(create.body.data.reservation.status).toBe('tentative');
+      expect(create.body.meta.checkoutError).toMatch(/does not belong to this organization/);
+      expect(paystack.initializeTransaction).not.toHaveBeenCalled();
+    });
+
     it('gap closure: stamps a real "Guest Portal" booking_sources row, reusing it (not creating a duplicate) across bookings — the payment reconciliation report\'s own source label for a portal booking', async () => {
       const roomTypeId = await createRoomType('PORTALSOURCE');
       await createRoom(roomTypeId, 'PS1');

@@ -5,23 +5,40 @@
  * `/api/v1` in `src/app.js`, after `authenticate('staff')` and
  * `attachAudit()` are already applied router-wide.
  *
- * ── PROPERTIES ARE THE ONE UNGATED EXCEPTION ────────────────────────────
+ * ── `POST /properties` IS THE ONE PARTIALLY-GATED EXCEPTION ─────────────
  *
- * Every route below except `/properties` itself is gated by
- * `requirePermission('setup.view'|'setup.manage')` — the normal SECURITY.md
- * §5 check, re-verified per request against the active property. The
- * `/properties` routes carry no such gate: creating a tenant's very first
- * property happens before any `user_property_access` grant exists to check
- * a role against, which `requirePermission` cannot express (it always
- * checks "at the active property," and there is none yet for a brand-new
- * tenant). See `service.js`'s `createProperty` for the full reasoning and
- * the flagged gap — real tenant/first-admin provisioning is Phase 5 (SaaS
- * platform) territory, not solved here.
+ * Every route below is gated by `requirePermission('setup.view'|
+ * 'setup.manage')` — the normal SECURITY.md §5 check, re-verified per
+ * request against the active property — with one exception: `POST
+ * /properties` carries no ROUTE-level gate, because creating a tenant's
+ * very first property can happen before any `user_property_access` grant
+ * exists to check a role against, which `requirePermission` cannot express
+ * (it always checks "at the active property," and there is none yet for a
+ * brand-new tenant). That does NOT mean it is ungated — `service.js`'s
+ * `createProperty` enforces the equivalent `setup.manage` check itself,
+ * conditionally, the moment the caller (or the tenant) is past the genuine
+ * bootstrap case; see that function's own header for the full reasoning,
+ * including the security fix that made this conditional in the first
+ * place (a fixed route-level gate would have made bootstrapping
+ * impossible, but leaving the whole route ungated let any staff member of
+ * an already-provisioned tenant create — or, via the sibling PATCH route,
+ * reconfigure — a property regardless of role).
+ *
+ * `GET /properties` (the list) is deliberately, permanently open to any
+ * authenticated staff member of the tenant — not a gap, a standing design
+ * choice: it returns every ACTIVE property's display fields only, is the
+ * one query the property switcher relies on BEFORE an active property is
+ * chosen (so it structurally cannot require one), and is reused as-is by
+ * the Multi-Property Roll-up (`reporting/service.js`'s `computeChainOverview`).
+ * `GET /properties/:id` and `PATCH /properties/:id` are ordinary
+ * `setup.view`/`setup.manage` routes, same as everything else here.
  *
  * `/setup/progress` (PLAN.md Phase 1 gap closure, the setup wizard) carries
- * the identical exception, for the identical reason: the wizard's own first
- * step is "no property exists yet," which is exactly the case
- * `requirePermission` cannot express either.
+ * the identical ROUTE-level exception as `POST /properties`, for the
+ * identical reason: the wizard's own first step is "no property exists
+ * yet," which is exactly the case `requirePermission` cannot express
+ * either. It is read-only and returns nothing beyond step-completion
+ * booleans, so no equivalent service-layer gate is needed there.
  */
 
 const { Router } = require('express');
@@ -34,8 +51,8 @@ function setupRouter() {
 
   router.post('/properties', controller.createProperty);
   router.get('/properties', controller.listProperties);
-  router.get('/properties/:id', controller.getProperty);
-  router.patch('/properties/:id', controller.updateProperty);
+  router.get('/properties/:id', requirePermission('setup.view'), controller.getProperty);
+  router.patch('/properties/:id', requirePermission('setup.manage'), controller.updateProperty);
   // The logo appears on receipts and every email — a Setup change like any
   // other, so `setup.manage`, unlike the bootstrap-only ungated routes above.
   router.post('/properties/:id/logo', requirePermission('setup.manage'), receiveImage, controller.uploadPropertyLogo);

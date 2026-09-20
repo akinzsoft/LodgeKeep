@@ -2857,6 +2857,35 @@ const ENTITIES = [
   },
 
   {
+    table: 'billing_payment_method_checkouts',
+    // Security fix (2026-11-01) — PLATFORM_SCOPED, mandatory tenant_id
+    // (unscopedColumns). The ownership/replay record
+    // `completeAddPaymentMethod` verifies a client-supplied Paystack
+    // reference against before trusting it — see that migration's own
+    // header. `UNIQUE(reference)` is global, not per-tenant (the same
+    // reason `subscription_webhook_events` above collides on a bare
+    // provider/event pair) — `duplicateRow` reuses `newRow`'s own
+    // reference exactly.
+    uniqueKeys: [['reference']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      reference: 'isolation-suite-checkout-new',
+      email: 'isolation-suite@example.com',
+      amount: '50.00',
+      currency: 'NGN',
+      status: 'pending',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      reference: 'isolation-suite-checkout-new', // matches newRow exactly — collides
+      email: 'isolation-suite@example.com',
+      amount: '50.00',
+      currency: 'NGN',
+      status: 'pending',
+    }),
+  },
+
+  {
     table: 'tenant_data_exports',
     // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns) — reached only
     // through hand-written queries in src/modules/offboarding/service.js

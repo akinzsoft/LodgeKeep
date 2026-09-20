@@ -131,39 +131,41 @@ async function resolveMyPermissions(context) {
   return { role, permissions: await listGrantedPermissions(db, role) };
 }
 
+/**
+ * The three checks `requirePermission`'s middleware runs, factored out so a
+ * caller that already holds `req`/`res`/`next` (the ordinary route-gating
+ * case) and a caller that needs the same answer as a plain boolean-or-throw
+ * inside business logic (`setup/service.js`'s `createProperty` — see that
+ * function's own header for why a fixed route-level gate can't express its
+ * "before any grant can exist" bootstrap case) share one implementation
+ * rather than drifting apart. Returns the resolved role on success; throws
+ * `NoActivePropertyError`/`PermissionDeniedError` exactly as documented on
+ * `requirePermission` below.
+ */
+async function assertPermission(context, permissionKey) {
+  // PLAN.md Phase 5 (Platform Foundation): an impersonating platform admin
+  // holds no `user_property_access` row in the impersonated tenant at all —
+  // see `requirePermission`'s own comment for the full reasoning.
+  if (context.isImpersonation) return 'platform_impersonation';
+
+  if (!context.propertyId) throw new NoActivePropertyError();
+
+  const db = scopedDb().for(context);
+  const role = await roleAtProperty(db, context, context.userId, context.propertyId);
+  // Not merely defensive: a grant can be revoked between login and this
+  // request, and SECURITY.md §3 requires that to bite immediately.
+  if (!role) throw new PermissionDeniedError(permissionKey, null);
+
+  const granted = await hasPermission(db, role, permissionKey);
+  if (!granted) throw new PermissionDeniedError(permissionKey, role);
+
+  return role;
+}
+
 function requirePermission(permissionKey) {
   return async function requirePermissionMiddleware(req, res, next) {
     try {
-      const context = req.context;
-
-      // PLAN.md Phase 5 (Platform Foundation): an impersonating platform
-      // admin holds no `user_property_access` row in the impersonated
-      // tenant at all — there is nothing for `roleAtProperty` to find, by
-      // design (SECURITY.md §2: never a real tenant grant). Every GET is
-      // allowed through unconditionally rather than 403ing on a lookup that
-      // can never succeed; every mutation is already rejected earlier, at
-      // the HTTP-method layer (`impersonation-guard.js`), before this
-      // middleware ever runs. Granting blanket read visibility here is a
-      // deliberate trade-off, not an oversight: it cannot mutate anything
-      // regardless, so which specific screen it can see is not a real
-      // security boundary in the way write access would be.
-      if (context.isImpersonation) {
-        req.role = 'platform_impersonation';
-        return next();
-      }
-
-      if (!context.propertyId) throw new NoActivePropertyError();
-
-      const db = scopedDb().for(context);
-      const role = await roleAtProperty(db, context, context.userId, context.propertyId);
-      // Not merely defensive: a grant can be revoked between login and this
-      // request, and SECURITY.md §3 requires that to bite immediately.
-      if (!role) throw new PermissionDeniedError(permissionKey, null);
-
-      const granted = await hasPermission(db, role, permissionKey);
-      if (!granted) throw new PermissionDeniedError(permissionKey, role);
-
-      req.role = role;
+      req.role = await assertPermission(req.context, permissionKey);
       next();
     } catch (error) {
       next(error);
@@ -171,4 +173,4 @@ function requirePermission(permissionKey) {
   };
 }
 
-module.exports = { requirePermission, hasPermission, listGrantedPermissions, resolveMyPermissions };
+module.exports = { requirePermission, assertPermission, hasPermission, listGrantedPermissions, resolveMyPermissions };

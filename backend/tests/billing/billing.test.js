@@ -17,6 +17,14 @@
  */
 
 jest.mock('../../src/modules/billing/paystack-gateway', () => ({
+  // `toSubunit` (and the two error classes) are real, pure utilities with
+  // no network call — kept real via `requireActual` rather than mocked,
+  // since `completeAddPaymentMethod`'s own checkout-mismatch check (a
+  // security fix — see `src/shared/callback-url.js`'s sibling migration,
+  // `billing_payment_method_checkouts`) now calls the real `toSubunit` to
+  // compare the gateway's verified amount against what was recorded at
+  // checkout-start time.
+  ...jest.requireActual('../../src/modules/billing/paystack-gateway'),
   initializeTransaction: jest.fn(),
   verifyTransaction: jest.fn(),
   refundTransaction: jest.fn(),
@@ -143,28 +151,64 @@ describe('Billing (PLAN.md Phase 5)', () => {
   // ------------------------------------------------------------------
 
   describe('POST /billing/payment-method/start + /complete', () => {
-    it('starts a small verification checkout, never the real plan price', async () => {
-      gateway.initializeTransaction.mockResolvedValue({ authorizationUrl: 'https://checkout.paystack.com/abc', accessCode: 'access_abc', reference: 'billing-card-abc' });
-
+    /**
+     * Security fix regression coverage: `completeAddPaymentMethod` used to
+     * trust a client-supplied `reference` outright — no record existed
+     * anywhere tying a reference to a tenant, an amount, or a currency, so
+     * a `billing.manage` caller of ANY tenant could submit a reference for
+     * ANY successful Paystack transaction on the platform's billing
+     * account (including a stranger's) and have that stranger's card
+     * silently attached to their own tenant. Every test below now calls
+     * the real `/start` endpoint first, exactly like a real client must,
+     * so a real `billing_payment_method_checkouts` row backs every
+     * `/complete` call — the ownership/replay/amount-match checks the fix
+     * adds are exercised through the real HTTP surface, not bypassed.
+     */
+    async function startRealCheckout({ tenant = ctx.b, email = 'admin@beta-resorts.example.com' } = {}) {
+      gateway.initializeTransaction.mockResolvedValueOnce({ authorizationUrl: 'https://checkout.paystack.com/abc', accessCode: 'access_abc', reference: 'ignored — the real generated reference always wins, see completeAddPaymentMethod\'s own header' });
       const res = await t.request
         .post('/api/v1/billing/payment-method/start')
-        .set('Authorization', `Bearer ${adminToken(ctx.b)}`)
-        .send({ email: 'admin@beta-resorts.example.com' });
-
+        .set('Authorization', `Bearer ${adminToken(tenant)}`)
+        .send({ email });
       expect(res.status).toBe(201);
-      expect(res.body.data.authorizationUrl).toBe('https://checkout.paystack.com/abc');
+      return res.body.data.reference;
+    }
+
+    it('starts a small verification checkout, never the real plan price', async () => {
+      const reference = await startRealCheckout();
+
+      expect(reference).toMatch(/^billing-card-/);
       expect(gateway.initializeTransaction).toHaveBeenCalledWith(
-        expect.objectContaining({ amount: '50.00' }) // BILLING_CARD_VERIFICATION_AMOUNT default — never the plan's real price
+        expect.objectContaining({ amount: '50.00', reference }) // BILLING_CARD_VERIFICATION_AMOUNT default — never the plan's real price
       );
+      const checkoutRow = await t.trx('billing_payment_method_checkouts').where({ tenant_id: ctx.b.id, reference }).first();
+      expect(checkoutRow).toBeTruthy();
+      expect(checkoutRow.status).toBe('pending');
+      expect(checkoutRow.amount).toBe('50.00');
     });
 
+    it('rejects completion for a reference nobody ever started a checkout for', async () => {
+      const res = await t.request
+        .post('/api/v1/billing/payment-method/complete')
+        .set('Authorization', `Bearer ${adminToken(ctx.b)}`)
+        .send({ reference: 'billing-card-never-started' });
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('BILLING_CHECKOUT_NOT_FOUND');
+      expect(gateway.verifyTransaction).not.toHaveBeenCalled(); // rejected before the gateway is ever called
+    });
+
+    // The next two tests both assert "no subscription exists yet for
+    // ctx.b" — deliberately ordered BEFORE the tests below that legitimately
+    // complete a real checkout for ctx.b (and so create one as a side
+    // effect, persisting for the rest of this file's shared transaction).
     it('a failed card verification is rejected, and no subscription is created (still ctx.b — no fixture subscription exists for it yet)', async () => {
+      const reference = await startRealCheckout();
       gateway.verifyTransaction.mockResolvedValue({ status: 'failed', authorization: {} });
 
       const res = await t.request
         .post('/api/v1/billing/payment-method/complete')
         .set('Authorization', `Bearer ${adminToken(ctx.b)}`)
-        .send({ reference: 'billing-card-bad' });
+        .send({ reference });
 
       expect(res.status).toBe(402);
       expect(res.body.error.code).toBe('BILLING_CARD_VERIFICATION_FAILED');
@@ -172,9 +216,101 @@ describe('Billing (PLAN.md Phase 5)', () => {
       expect(gateway.refundTransaction).not.toHaveBeenCalled();
     });
 
-    it('completing a successful verification creates the subscription, refunds the verification charge, and records an audit entry', async () => {
+    it('security fix: rejects a reference whose gateway-verified amount does not match what the checkout was started for', async () => {
+      const reference = await startRealCheckout();
       gateway.verifyTransaction.mockResolvedValue({
         status: 'success',
+        amountSubunit: 999900, // a real, much larger amount than the 5000 (50.00) checkout was started for
+        currency: 'NGN',
+        authorization: { authorizationCode: 'AUTH_mismatch', reusable: true, last4: '4242', brand: 'visa', expMonth: 12, expYear: 2031 },
+      });
+      const res = await t.request
+        .post('/api/v1/billing/payment-method/complete')
+        .set('Authorization', `Bearer ${adminToken(ctx.b)}`)
+        .send({ reference });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('BILLING_CHECKOUT_MISMATCH');
+      expect(gateway.refundTransaction).not.toHaveBeenCalled();
+      expect(await t.trx('subscriptions').where({ tenant_id: ctx.b.id }).first()).toBeUndefined();
+    });
+
+    it('security fix: rejects an authorization the gateway itself reports as non-reusable', async () => {
+      const reference = await startRealCheckout();
+      gateway.verifyTransaction.mockResolvedValue({
+        status: 'success',
+        amountSubunit: 5000,
+        currency: 'NGN',
+        authorization: { authorizationCode: 'AUTH_one_off', reusable: false, last4: '4242', brand: 'visa', expMonth: 12, expYear: 2031 },
+      });
+      const res = await t.request
+        .post('/api/v1/billing/payment-method/complete')
+        .set('Authorization', `Bearer ${adminToken(ctx.b)}`)
+        .send({ reference });
+      expect(res.status).toBe(402);
+      expect(res.body.error.code).toBe('BILLING_CARD_VERIFICATION_FAILED');
+    });
+
+    // The two tests below legitimately complete a real checkout for ctx.b —
+    // deliberately ordered AFTER the "no subscription yet" tests above, since
+    // both leave ctx.b with a real subscription row for the rest of this
+    // file's shared transaction.
+    it('security fix: rejects completion for a reference that belongs to a DIFFERENT tenant\'s checkout, never confirming it exists (404, not 403)', async () => {
+      const reference = await startRealCheckout({ tenant: ctx.b });
+
+      // ctx.a's own admin, attempting to claim ctx.b's checkout reference.
+      const res = await t.request
+        .post('/api/v1/billing/payment-method/complete')
+        .set('Authorization', `Bearer ${adminToken(ctx.a)}`)
+        .send({ reference });
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('BILLING_CHECKOUT_NOT_FOUND');
+      expect(gateway.verifyTransaction).not.toHaveBeenCalled();
+
+      // The real, legitimate owner (ctx.b) can still complete it.
+      gateway.verifyTransaction.mockResolvedValue({
+        status: 'success',
+        amountSubunit: 5000,
+        currency: 'NGN',
+        authorization: { authorizationCode: 'AUTH_owner', reusable: true, last4: '4242', brand: 'visa', expMonth: 12, expYear: 2031 },
+      });
+      gateway.refundTransaction.mockResolvedValue({ status: 'success' });
+      const ownerRes = await t.request
+        .post('/api/v1/billing/payment-method/complete')
+        .set('Authorization', `Bearer ${adminToken(ctx.b)}`)
+        .send({ reference });
+      expect(ownerRes.status).toBe(200);
+    });
+
+    it('security fix: the same reference cannot be completed twice — replay is rejected even though it genuinely belonged to this tenant', async () => {
+      const reference = await startRealCheckout();
+      gateway.verifyTransaction.mockResolvedValue({
+        status: 'success',
+        amountSubunit: 5000,
+        currency: 'NGN',
+        authorization: { authorizationCode: 'AUTH_replay', reusable: true, last4: '4242', brand: 'visa', expMonth: 12, expYear: 2031 },
+      });
+      gateway.refundTransaction.mockResolvedValue({ status: 'success' });
+
+      const first = await t.request
+        .post('/api/v1/billing/payment-method/complete')
+        .set('Authorization', `Bearer ${adminToken(ctx.b)}`)
+        .send({ reference });
+      expect(first.status).toBe(200);
+
+      const replay = await t.request
+        .post('/api/v1/billing/payment-method/complete')
+        .set('Authorization', `Bearer ${adminToken(ctx.b)}`)
+        .send({ reference });
+      expect(replay.status).toBe(404);
+      expect(replay.body.error.code).toBe('BILLING_CHECKOUT_NOT_FOUND');
+    });
+
+    it('completing a successful verification creates the subscription, refunds the verification charge, and records an audit entry', async () => {
+      const reference = await startRealCheckout();
+      gateway.verifyTransaction.mockResolvedValue({
+        status: 'success',
+        amountSubunit: 5000,
+        currency: 'NGN',
         authorization: { authorizationCode: 'AUTH_new_card', reusable: true, last4: '4242', brand: 'visa', expMonth: 12, expYear: 2031 },
       });
       gateway.refundTransaction.mockResolvedValue({ status: 'success' });
@@ -182,10 +318,10 @@ describe('Billing (PLAN.md Phase 5)', () => {
       const res = await t.request
         .post('/api/v1/billing/payment-method/complete')
         .set('Authorization', `Bearer ${adminToken(ctx.b)}`)
-        .send({ reference: 'billing-card-abc' });
+        .send({ reference });
 
       expect(res.status).toBe(200);
-      expect(gateway.refundTransaction).toHaveBeenCalledWith({ reference: 'billing-card-abc' });
+      expect(gateway.refundTransaction).toHaveBeenCalledWith({ reference });
 
       const subscription = await t.trx('subscriptions').where({ tenant_id: ctx.b.id }).first();
       expect(subscription).toBeTruthy();
@@ -203,8 +339,11 @@ describe('Billing (PLAN.md Phase 5)', () => {
     it('replacing an already-existing payment method updates it in place (still one row, UNIQUE(tenant_id)) and resets the failure counter', async () => {
       await t.trx('subscriptions').where({ tenant_id: ctx.b.id }).update({ consecutive_failed_attempts: 3, status: 'past_due' });
 
+      const reference = await startRealCheckout();
       gateway.verifyTransaction.mockResolvedValue({
         status: 'success',
+        amountSubunit: 5000,
+        currency: 'NGN',
         authorization: { authorizationCode: 'AUTH_replacement_card', reusable: true, last4: '1111', brand: 'mastercard', expMonth: 6, expYear: 2032 },
       });
       gateway.refundTransaction.mockResolvedValue({ status: 'success' });
@@ -212,7 +351,7 @@ describe('Billing (PLAN.md Phase 5)', () => {
       const res = await t.request
         .post('/api/v1/billing/payment-method/complete')
         .set('Authorization', `Bearer ${adminToken(ctx.b)}`)
-        .send({ reference: 'billing-card-replace' });
+        .send({ reference });
 
       expect(res.status).toBe(200);
       const rows = await t.trx('subscriptions').where({ tenant_id: ctx.b.id });

@@ -72,7 +72,14 @@ const { generateUlid } = require('../../shared/ulid');
 const { isDunningAttemptDue, isDunningExhausted, nextAttemptDate } = require('./dunning');
 const { writeOutboxEvent } = require('../../shared/outbox');
 const { enqueueOutboxDispatch } = require('../../jobs/outbox-dispatcher');
-const { NoActivePlanError, CardVerificationFailedError, InvoiceNotFoundError } = require('./errors');
+const { assertAllowedCallbackUrl } = require('../../shared/callback-url');
+const {
+  NoActivePlanError,
+  CardVerificationFailedError,
+  InvoiceNotFoundError,
+  CheckoutNotFoundError,
+  CheckoutMismatchError,
+} = require('./errors');
 const gateway = require('./paystack-gateway');
 
 const CARD_VERIFICATION_AMOUNT = process.env.BILLING_CARD_VERIFICATION_AMOUNT || '50.00';
@@ -80,6 +87,24 @@ const CARD_VERIFICATION_AMOUNT = process.env.BILLING_CARD_VERIFICATION_AMOUNT ||
 /** A staff-scoped read of the tenant's own row — `tenants` is TENANT_SCOPED with scopeRoot 'tenant', so this always resolves to exactly the caller's own tenant. */
 async function getOwnTenant({ context }) {
   return scopedDb().for(context).table('tenants').first();
+}
+
+/**
+ * `tenants` carries no `base_currency` column of its own (confirmed by
+ * reading its migration directly) — a pre-existing gap this pass found
+ * while adding the `billing_payment_method_checkouts.currency` NOT NULL
+ * column (see that migration's own header): the card-verification
+ * checkout's currency was silently `undefined` before this fix, never
+ * caught because nothing previously validated it. Resolved the same way
+ * `resolveBillingEmail` already resolves "the tenant's own billing
+ * contact" from its first active property, in the absence of a real
+ * tenant-level field — flagged here rather than silently masked, the same
+ * discipline that function's own header already uses.
+ */
+async function resolveTenantCurrency({ context }) {
+  const db = scopedDb().for(context);
+  const property = await db.table('properties').where({ status: 'active' }).orderBy('id').first('base_currency');
+  return property ? property.base_currency : 'NGN';
 }
 
 async function resolveDefaultPlan(db) {
@@ -172,14 +197,41 @@ async function listPaymentsForInvoice({ context, invoiceId }) {
  * to capture a reusable card authorization — never the real subscription
  * price. Refunded automatically once `completeAddPaymentMethod` verifies
  * it succeeded (see that function and `paystack-gateway.js`'s own header).
+ *
+ * Security fix: records a `billing_payment_method_checkouts` row BEFORE
+ * the gateway is ever called — ARCHITECTURE.md §7's exact "local intent
+ * row, committed, before the external call" shape every other real payment
+ * flow in this codebase already follows (`payments`/`subscription_payments`
+ * both do this). This is the ownership/replay record
+ * `completeAddPaymentMethod` verifies a client-supplied `reference`
+ * against, instead of trusting it outright — see that migration's own
+ * header for the vulnerability this closes.
  */
 async function startAddPaymentMethodCheckout({ context, email, callbackUrl }) {
-  const tenant = await getOwnTenant({ context });
+  // Security fix — `callback_url` used to reach Paystack unvalidated, a
+  // classic open redirect (see `src/shared/callback-url.js`'s own header).
+  // Checked against the caller's own STAFF-scoped accessor, not the
+  // SYSTEM-scoped one below — `tenants`/`tenant_domains` are both
+  // TENANT_SCOPED and need `context.tenantId` to resolve at all.
+  await assertAllowedCallbackUrl(scopedDb().for(context), { callbackUrl });
+
   const reference = `billing-card-${generateUlid()}`;
+  const amount = CARD_VERIFICATION_AMOUNT;
+  const currency = await resolveTenantCurrency({ context });
+
+  const db = scopedDb().for(systemContext());
+  await db.platform().table('billing_payment_method_checkouts').insert({
+    tenant_id: context.tenantId,
+    reference,
+    email,
+    amount,
+    currency,
+  });
+
   const { authorizationUrl, accessCode } = await gateway.initializeTransaction({
     email,
-    amount: CARD_VERIFICATION_AMOUNT,
-    currency: tenant.base_currency,
+    amount,
+    currency,
     reference,
     callbackUrl,
   });
@@ -189,18 +241,52 @@ async function startAddPaymentMethodCheckout({ context, email, callbackUrl }) {
 /**
  * Verifies the checkout above, captures the reusable authorization, and
  * upserts the tenant's ONE `subscriptions` row (see that table's own
- * migration header — one row per tenant, no history). Naturally idempotent
- * on repeat calls with the same `reference` — Paystack's own `/verify`
- * endpoint is itself idempotent, and re-applying the identical
- * authorization data to the same row changes nothing on a second call — so
- * this deliberately carries no Idempotency-Key requirement, the same
+ * migration header — one row per tenant, no history).
+ *
+ * ── SECURITY FIX ─────────────────────────────────────────────────────────
+ * This used to trust a client-supplied `reference` outright: as long as
+ * Paystack's own `/transaction/verify` reported `status: 'success'` with a
+ * reusable authorization, whatever card it returned was attached to the
+ * caller's tenant — with nothing checking the reference belonged to a
+ * checkout THIS tenant started, nor that the verified amount/currency
+ * matched what was expected. A `billing.manage` caller (any admin of any
+ * tenant, trivially self-signed-up) could submit a reference for ANY
+ * successful transaction on the platform's billing account, including a
+ * stranger's, and silently capture that stranger's card. Fixed with three
+ * checks, in order: (1) the reference must resolve to a `pending`
+ * `billing_payment_method_checkouts` row belonging to THIS tenant — the
+ * same 404-not-403 shape every other cross-tenant lookup here uses, and
+ * checked BEFORE the gateway is even called, so an invalid reference never
+ * reaches Paystack at all; (2) the gateway's own verified amount/currency
+ * must match what was recorded when the checkout started; (3) the
+ * `reusable` flag Paystack returns must genuinely be true — a one-off,
+ * non-reusable authorization can never become a recurring-billing token.
+ * The checkout row is then claimed with a conditional UPDATE
+ * (`WHERE status = 'pending'`) inside the SAME transaction that applies
+ * its effect, so the identical reference can never complete twice —
+ * replay protection, not just ownership. `verifyTransaction` itself is
+ * still naturally idempotent (Paystack's own `/verify` is), so this
+ * deliberately carries no separate Idempotency-Key requirement, the same
  * "verification is naturally safe to repeat" reasoning
- * `cashiering/controller.js`'s own `verifyPayment` already established.
+ * `cashiering/controller.js`'s own `verifyPayment` already established —
+ * the checkout-claim step is what turns "safe to re-verify" into "not
+ * safe to re-APPLY."
  */
 async function completeAddPaymentMethod({ context, reference, requestId, ip, userAgent }) {
+  const readDb = scopedDb().for(systemContext());
+  const checkout = await readDb
+    .platform()
+    .table('billing_payment_method_checkouts')
+    .where({ tenant_id: context.tenantId, reference, status: 'pending' })
+    .first();
+  if (!checkout) throw new CheckoutNotFoundError();
+
   const verification = await gateway.verifyTransaction({ reference });
-  if (verification.status !== 'success' || !verification.authorization.authorizationCode) {
+  if (verification.status !== 'success' || !verification.authorization.authorizationCode || !verification.authorization.reusable) {
     throw new CardVerificationFailedError(verification.status);
+  }
+  if (verification.amountSubunit !== gateway.toSubunit(checkout.amount) || verification.currency !== checkout.currency) {
+    throw new CheckoutMismatchError();
   }
 
   // The verification charge itself was never a real subscription payment —
@@ -221,6 +307,18 @@ async function completeAddPaymentMethod({ context, reference, requestId, ip, use
   const plan = await resolvePlanFor(db, tenant);
 
   return db.transaction(async (trx) => {
+    // The replay guard: a second concurrent (or later, reused) call for
+    // the SAME reference sees 0 affected rows here and is rejected, even
+    // though the read above already found the row `pending` — the actual
+    // exclusivity is this atomic, WHERE-guarded UPDATE, not the earlier
+    // read.
+    const claimed = await trx
+      .platform()
+      .table('billing_payment_method_checkouts')
+      .where({ id: checkout.id, status: 'pending' })
+      .update({ status: 'consumed' });
+    if (claimed === 0) throw new CheckoutNotFoundError();
+
     const existing = await trx.platform().table('subscriptions').where({ tenant_id: context.tenantId }).forUpdate().first();
 
     const paymentMethodFields = {

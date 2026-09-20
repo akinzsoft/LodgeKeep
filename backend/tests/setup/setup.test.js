@@ -15,6 +15,7 @@
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { SYSTEM_ROLES, DEFAULT_ROLE_PERMISSIONS } = require('../../src/modules/tenancy');
 
 describe('Setup module (PLAN.md Phase 1)', () => {
   const t = useTestApp();
@@ -62,18 +63,84 @@ describe('Setup module (PLAN.md Phase 1)', () => {
     });
   }
 
+  /**
+   * A genuinely fresh, empty tenant — zero properties, zero
+   * `user_property_access` grants for its one user — the real "before any
+   * grant can exist" bootstrap case `POST /properties`'s own permission
+   * exemption is scoped to. `ctx.a`/`ctx.b` (from `seedTwoTenants`) always
+   * already carry two properties each, so they can never stand in for this
+   * case; using them here is exactly the security gap a prior version of
+   * this test file's own "no active property required" test embodied
+   * (see `security fix` block below).
+   *
+   * Also seeds the real `roles`/`role_permissions` catalogue for this
+   * tenant (`SYSTEM_ROLES`/`DEFAULT_ROLE_PERMISSIONS`, the same matrix
+   * `src/modules/signup/service.js` seeds for a real self-service
+   * signup — TENANT_SCOPED, so a bare `tenants` row alone grants nothing)
+   * so a role assigned later in a test (e.g. `admin` on the freshly
+   * created property) actually grants real permissions rather than
+   * resolving every `hasPermission` check to false.
+   */
+  async function seedEmptyTenant() {
+    const tenantId = await t.trx('tenants').insert({ name: 'Fresh Bootstrap Tenant', slug: `bootstrap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, status: 'active' }).then(([id]) => id);
+    const userId = await t.trx('users')
+      .insert({ tenant_id: tenantId, email: `bootstrap-${Date.now()}@example.com`, first_name: 'Boot', last_name: 'Strap', password_hash: 'x', status: 'active' })
+      .then(([id]) => id);
+
+    const roleIdByCode = {};
+    for (const code of SYSTEM_ROLES) {
+      roleIdByCode[code] = await t.trx('roles').insert({ tenant_id: tenantId, code, name: code, is_system: true }).then(([id]) => id);
+    }
+    const permissionRows = await t.trx('permissions').select('id', 'permission_key');
+    const permissionIdByKey = new Map(permissionRows.map((row) => [row.permission_key, row.id]));
+    const grants = [];
+    for (const [code, keys] of Object.entries(DEFAULT_ROLE_PERMISSIONS)) {
+      for (const key of keys) {
+        const permissionId = permissionIdByKey.get(key);
+        if (permissionId) grants.push({ tenant_id: tenantId, role_id: roleIdByCode[code], permission_id: permissionId });
+      }
+    }
+    if (grants.length) await t.trx('role_permissions').insert(grants);
+
+    return { id: tenantId, users: [{ id: userId }] };
+  }
+
+  /**
+   * A property + an `admin` (`setup.manage`) grant on a NEW, dedicated
+   * property id — never `properties[0]`/`properties[1]`, so it can never
+   * collide with (or silently mutate) `ctx.a`/`ctx.b`'s own shared
+   * manager/front_desk/housekeeping grants other tests in this
+   * shared-transaction file depend on.
+   */
+  async function seedSetupManageCaller({ tenant, userIndex = 0 }) {
+    const propertyId = await t.trx('properties')
+      .insert({
+        tenant_id: tenant.id,
+        slug: `${tenant.slug}-setup-manage-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: 'Setup-manage test property',
+        timezone: 'Africa/Lagos',
+        base_currency: 'NGN',
+      })
+      .then(([id]) => id);
+    await t.trx('user_property_access').insert({ tenant_id: tenant.id, property_id: propertyId, user_id: tenant.users[userIndex].id, role: 'admin' });
+    return propertyId;
+  }
+
   // ====================================================================
-  // Properties — deliberately ungated by requirePermission (see routes.js)
+  // Properties — POST is gated on setup.manage EXCEPT the genuine
+  // "before any grant can exist" bootstrap case (see routes.js/service.js);
+  // GET/PATCH by id are ordinary setup.view/setup.manage routes.
   // ====================================================================
   describe('POST /api/v1/properties', () => {
-    it('creates a property with no active property required — the chicken-and-egg case this session flagged', async () => {
-      const token = tokenFor({ tenant: ctx.a, propertyId: null });
+    it('creates a property with no active property, for a genuinely empty tenant — the real chicken-and-egg case', async () => {
+      const emptyTenant = await seedEmptyTenant();
+      const token = signAccessToken({ aud: 'staff', sub: String(emptyTenant.users[0].id), tenant_id: String(emptyTenant.id) });
       const res = await t.request
         .post('/api/v1/properties')
         .set('Authorization', `Bearer ${token}`)
         .send({
           name: 'New Property',
-          slug: `${ctx.a.slug}-brand-new`,
+          slug: `bootstrap-brand-new-${Date.now()}`,
           timezone: 'Africa/Lagos',
           base_currency: 'NGN',
           business_date: '2026-09-01',
@@ -83,8 +150,51 @@ describe('Setup module (PLAN.md Phase 1)', () => {
       expect(res.body.data.current_business_date).toBe('2026-09-01');
     });
 
-    it('rejects a missing required field', async () => {
+    // Security fix: this file used to prove a tenant that ALREADY had
+    // properties (`ctx.a`) could still create more via a token that simply
+    // omitted the active-property claim — which is exactly the gap a
+    // security review found: any authenticated staff member, holding no
+    // setup grant at all, could create (and, via the sibling PATCH gap
+    // below, reconfigure) a property once one already existed. The
+    // bootstrap exemption is now checked against the tenant's REAL
+    // property count, not merely "does this token happen to omit
+    // property_id."
+    it('rejects property creation with no active property once the tenant already has one', async () => {
       const token = tokenFor({ tenant: ctx.a, propertyId: null });
+      const res = await t.request
+        .post('/api/v1/properties')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Should be refused', slug: `${ctx.a.slug}-should-not-exist`, timezone: 'Africa/Lagos', base_currency: 'NGN' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+      const created = await t.trx('properties').where({ slug: `${ctx.a.slug}-should-not-exist` }).first();
+      expect(created).toBeUndefined();
+    });
+
+    it('rejects property creation from an active property without setup.manage (manager only holds setup.view)', async () => {
+      const token = tokenFor({ tenant: ctx.a }); // users[0] is 'manager' at properties[0] — setup.view only
+      const res = await t.request
+        .post('/api/v1/properties')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Should be refused too', slug: `${ctx.a.slug}-manager-refused`, timezone: 'Africa/Lagos', base_currency: 'NGN' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+      expect(res.body.error.details.permission).toBe('setup.manage');
+    });
+
+    it('allows property creation from an active property WITH setup.manage', async () => {
+      const propertyId = await seedSetupManageCaller({ tenant: ctx.a });
+      const token = signAccessToken({ aud: 'staff', sub: String(ctx.a.users[0].id), tenant_id: String(ctx.a.id), property_id: String(propertyId) });
+      const res = await t.request
+        .post('/api/v1/properties')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Second property, real admin', slug: `${ctx.a.slug}-admin-allowed-${Date.now()}`, timezone: 'Africa/Lagos', base_currency: 'NGN' });
+      expect(res.status).toBe(201);
+    });
+
+    it('rejects a missing required field', async () => {
+      const emptyTenant = await seedEmptyTenant();
+      const token = signAccessToken({ aud: 'staff', sub: String(emptyTenant.users[0].id), tenant_id: String(emptyTenant.id) });
       const res = await t.request
         .post('/api/v1/properties')
         .set('Authorization', `Bearer ${token}`)
@@ -94,7 +204,8 @@ describe('Setup module (PLAN.md Phase 1)', () => {
     });
 
     it('rejects a duplicate slug within the tenant with a real 409, not a bare 500', async () => {
-      const token = tokenFor({ tenant: ctx.a, propertyId: null });
+      const propertyId = await seedSetupManageCaller({ tenant: ctx.a });
+      const token = signAccessToken({ aud: 'staff', sub: String(ctx.a.users[0].id), tenant_id: String(ctx.a.id), property_id: String(propertyId) });
       const res = await t.request
         .post('/api/v1/properties')
         .set('Authorization', `Bearer ${token}`)
@@ -111,6 +222,97 @@ describe('Setup module (PLAN.md Phase 1)', () => {
     it('requires authentication', async () => {
       const res = await t.request.post('/api/v1/properties').send({ name: 'x' });
       expect(res.status).toBe(401);
+    });
+  });
+
+  // ====================================================================
+  // GET/PATCH /api/v1/properties/:id — security fix: both used to carry no
+  // permission check at all (`authenticate('staff')` only), so ANY staff
+  // member of the tenant could read or rewrite ANY property's config,
+  // including `mfa_required_for_admin_roles` — a front-desk/housekeeping
+  // account could disable MFA for every admin/super_admin at the property.
+  // ====================================================================
+  describe('GET /api/v1/properties/:id', () => {
+    it('rejects a caller with no setup.view (front_desk)', async () => {
+      // users[0] is 'front_desk' at properties[1] in fixtures.js's own grant
+      // plan — no setup.* grant at all.
+      const token = tokenFor({ tenant: ctx.a, propertyId: ctx.a.properties[1].id });
+      const res = await t.request.get(`/api/v1/properties/${ctx.a.properties[0].id}`).set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+    });
+
+    it('allows a caller with setup.view (manager)', async () => {
+      const token = tokenFor({ tenant: ctx.a });
+      const res = await t.request.get(`/api/v1/properties/${ctx.a.properties[0].id}`).set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(String(res.body.data.id)).toBe(String(ctx.a.properties[0].id));
+    });
+
+    it('404s for a property belonging to a different tenant, not 403 — never confirms it exists', async () => {
+      const token = tokenFor({ tenant: ctx.a });
+      const res = await t.request.get(`/api/v1/properties/${ctx.b.properties[0].id}`).set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('PATCH /api/v1/properties/:id', () => {
+    it('rejects a caller with no setup.manage (manager, setup.view only) — the MFA-disable exploit this closes', async () => {
+      const before = await t.trx('properties').where({ id: ctx.a.properties[0].id }).first();
+      const token = tokenFor({ tenant: ctx.a });
+      const res = await t.request
+        .patch(`/api/v1/properties/${ctx.a.properties[0].id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ mfa_required_for_admin_roles: false });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PERMISSION');
+
+      const after = await t.trx('properties').where({ id: ctx.a.properties[0].id }).first();
+      expect(Boolean(after.mfa_required_for_admin_roles)).toBe(Boolean(before.mfa_required_for_admin_roles));
+    });
+
+    it('rejects a caller with no active property at all', async () => {
+      const token = tokenFor({ tenant: ctx.a, propertyId: null });
+      const res = await t.request
+        .patch(`/api/v1/properties/${ctx.a.properties[0].id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Nope' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_NO_ACTIVE_PROPERTY');
+    });
+
+    it('allows a caller with setup.manage (admin) to update the property, including the MFA toggle', async () => {
+      const propertyId = await seedSetupManageCaller({ tenant: ctx.a });
+      const token = signAccessToken({ aud: 'staff', sub: String(ctx.a.users[0].id), tenant_id: String(ctx.a.id), property_id: String(propertyId) });
+
+      const res = await t.request
+        .patch(`/api/v1/properties/${propertyId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ mfa_required_for_admin_roles: false, name: 'Renamed by admin' });
+      expect(res.status).toBe(200);
+      // The raw response carries MySQL's own TINYINT(1) representation
+      // (0/1), not a coerced JS boolean — matching how this column has
+      // always behaved (mysql2 returns a BOOLEAN column as a plain
+      // number), the same reason every other assertion against this
+      // field in this file wraps it in `Boolean(...)`.
+      expect(Boolean(res.body.data.mfa_required_for_admin_roles)).toBe(false);
+      expect(res.body.data.name).toBe('Renamed by admin');
+
+      const row = await t.trx('properties').where({ id: propertyId }).first();
+      expect(Boolean(row.mfa_required_for_admin_roles)).toBe(false);
+    });
+
+    it('404s for a property belonging to a different tenant, not 403 — a setup.manage caller cannot reconfigure it either', async () => {
+      const propertyId = await seedSetupManageCaller({ tenant: ctx.a });
+      const token = signAccessToken({ aud: 'staff', sub: String(ctx.a.users[0].id), tenant_id: String(ctx.a.id), property_id: String(propertyId) });
+      const res = await t.request
+        .patch(`/api/v1/properties/${ctx.b.properties[0].id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ mfa_required_for_admin_roles: false });
+      expect(res.status).toBe(404);
+
+      const untouched = await t.trx('properties').where({ id: ctx.b.properties[0].id }).first();
+      expect(Boolean(untouched.mfa_required_for_admin_roles)).toBe(true); // schema default, never touched
     });
   });
 
@@ -138,13 +340,19 @@ describe('Setup module (PLAN.md Phase 1)', () => {
     });
 
     it('resumes correctly from a partial state: a brand-new property is not operational until each required step has real data', async () => {
-      const bootstrapToken = tokenFor({ tenant: ctx.a, propertyId: null });
+      // A genuinely fresh, empty tenant — the real bootstrap case the
+      // grant-less `POST /properties` exemption is scoped to (see the
+      // security-fix block above): `ctx.a` already has two properties, so
+      // it can no longer stand in for "before any grant can exist."
+      const emptyTenant = await seedEmptyTenant();
+      const bootstrapToken = signAccessToken({ aud: 'staff', sub: String(emptyTenant.users[0].id), tenant_id: String(emptyTenant.id) });
       const created = await t.request
         .post('/api/v1/properties')
         .set('Authorization', `Bearer ${bootstrapToken}`)
-        .send({ name: 'Wizard Test Property', slug: `${ctx.a.slug}-wizard-test`, timezone: 'Africa/Lagos', base_currency: 'NGN' });
+        .send({ name: 'Wizard Test Property', slug: `wizard-test-${Date.now()}`, timezone: 'Africa/Lagos', base_currency: 'NGN' });
+      expect(created.status).toBe(201);
       const propertyId = created.body.data.id;
-      const token = tokenFor({ tenant: ctx.a, propertyId });
+      const token = signAccessToken({ aud: 'staff', sub: String(emptyTenant.users[0].id), tenant_id: String(emptyTenant.id), property_id: String(propertyId) });
 
       // A brand-new property (via the ungated bootstrap endpoint above)
       // grants the creator no access at all — the same real, already-
@@ -154,9 +362,9 @@ describe('Setup module (PLAN.md Phase 1)', () => {
       // provisioning step to do, so this test can reach the
       // setup.manage-gated room-type endpoint below.
       await t.trx('user_property_access').insert({
-        tenant_id: ctx.a.id,
+        tenant_id: emptyTenant.id,
         property_id: propertyId,
-        user_id: ctx.a.users[0].id,
+        user_id: emptyTenant.users[0].id,
         role: 'admin',
       });
 
