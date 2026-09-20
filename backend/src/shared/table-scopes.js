@@ -211,6 +211,15 @@ const TABLE_SCOPES = Object.freeze({
   // different guests, folios, and payments.
   payments: { scope: SCOPES.PROPERTY },
   folio_line_items: { scope: SCOPES.PROPERTY },
+  // Gap closure: guest card payments no longer settle into one shared
+  // platform Paystack account — 20261029090000_create_platform_payment_
+  // integrations.js through 20261029092000. `platform_payment_integrations`
+  // is GLOBAL_REFERENCE, mirroring `plans` exactly (a seeded,
+  // tenant-independent catalogue, one row per settlement currency).
+  // `property_payment_subaccounts` is PROPERTY_SCOPED, following
+  // `email_settings` (a per-property singleton config).
+  platform_payment_integrations: { scope: SCOPES.GLOBAL },
+  property_payment_subaccounts: { scope: SCOPES.PROPERTY },
   // PLATFORM_SCOPED with nullable tenant/property ATTRIBUTION, following
   // `auth_events`' own precedent exactly: a gateway webhook arrives with no
   // session and no tenant context to scope by — see that migration's own

@@ -50,6 +50,14 @@ function setupRouter() {
   router.put('/email-settings', requirePermission('setup.manage'), controller.upsertEmailSettings);
   router.post('/email-settings/test', requirePermission('setup.manage'), controller.sendTestEmail);
 
+  // Gap closure: guest card payments no longer settle into one shared
+  // platform Paystack account — a property configures its own payout bank
+  // account here, which creates a real Paystack Subaccount. `setup.view`/
+  // `setup.manage`, matching every other Setup screen.
+  router.get('/payment-subaccount', requirePermission('setup.view'), controller.getPaymentSubaccount);
+  router.post('/payment-subaccount/resolve-bank-account', requirePermission('setup.manage'), controller.resolvePaymentBankAccount);
+  router.put('/payment-subaccount', requirePermission('setup.manage'), controller.upsertPaymentSubaccount);
+
   router.get('/room-types', requirePermission('setup.view'), controller.listRoomTypes);
   router.post('/room-types', requirePermission('setup.manage'), controller.createRoomType);
   // Gap closure (user-reported): editing an existing room type (including

@@ -176,6 +176,56 @@ async function upsertEmailSettings(req, res, next) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Payment subaccount — gap closure: guest card payments no longer settle
+// into one shared platform Paystack account.
+// ---------------------------------------------------------------------
+
+async function getPaymentSubaccount(req, res, next) {
+  try {
+    const subaccount = await service.getPaymentSubaccount({ context: req.context });
+    // Not `notFound` — "no payout account configured yet" is a normal,
+    // real state for a property that has never completed this step, not a
+    // missing resource, matching `getEmailSettings`'s own precedent.
+    res.status(200).json(ok(subaccount));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function resolvePaymentBankAccount(req, res, next) {
+  try {
+    const resolved = await service.resolvePaymentBankAccount({
+      context: req.context,
+      bankCode: req.body?.bank_code,
+      accountNumber: req.body?.account_number,
+    });
+    res.status(200).json(ok(resolved));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function upsertPaymentSubaccount(req, res, next) {
+  try {
+    const subaccount = await service.upsertPaymentSubaccount({
+      context: req.context,
+      bankCode: req.body?.bank_code,
+      bankName: req.body?.bank_name,
+      accountNumber: req.body?.account_number,
+    });
+    await req.audit({
+      entityType: 'property_payment_subaccounts',
+      entityId: subaccount.id,
+      action: 'update',
+      afterState: { bankName: subaccount.bank_name, accountNumberLast4: subaccount.account_number_last4, subaccountCode: subaccount.subaccount_code },
+    });
+    res.status(200).json(ok(subaccount));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function sendTestEmail(req, res, next) {
   try {
     const to = require_(req.body, 'to');
@@ -728,6 +778,9 @@ module.exports = {
   getEmailSettings,
   upsertEmailSettings,
   sendTestEmail,
+  getPaymentSubaccount,
+  resolvePaymentBankAccount,
+  upsertPaymentSubaccount,
   createRoomType,
   updateRoomType,
   archiveRoomType,

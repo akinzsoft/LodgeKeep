@@ -58,6 +58,27 @@ export function sendTestEmail(to) {
 }
 
 // ---------------------------------------------------------------------
+// Payment subaccount — gap closure: guest card payments no longer settle
+// into one shared platform Paystack account. A property configures its
+// own payout bank account here, which creates a real Paystack Subaccount.
+// ---------------------------------------------------------------------
+
+/** @returns {Promise<null | {subaccount_code: string, bank_code: string, bank_name: string, account_number_last4: string, account_name: string, percentage_charge: string}>} `null` when the property has never configured this. */
+export function getPaymentSubaccount() {
+  return request('/payment-subaccount');
+}
+
+/** A real Paystack `/bank/resolve` call — no persistence. @returns {Promise<{accountName: string}>} */
+export function resolvePaymentBankAccount({ bankCode, accountNumber }) {
+  return request('/payment-subaccount/resolve-bank-account', { method: 'POST', body: { bank_code: bankCode, account_number: accountNumber } });
+}
+
+/** Creates a real Paystack Subaccount and stores the result. */
+export function savePaymentSubaccount({ bankCode, bankName, accountNumber }) {
+  return request('/payment-subaccount', { method: 'PUT', body: { bank_code: bankCode, bank_name: bankName, account_number: accountNumber } });
+}
+
+// ---------------------------------------------------------------------
 // Room types
 // ---------------------------------------------------------------------
 

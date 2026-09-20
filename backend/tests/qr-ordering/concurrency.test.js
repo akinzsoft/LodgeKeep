@@ -28,12 +28,32 @@
  *    fixed in `applyGatewayResult`, see `cashiering/service.js`).
  */
 
-jest.mock('../../src/modules/cashiering/paystack-adapter', () => ({
-  initializeTransaction: jest.fn(),
-  verifyTransaction: jest.fn(),
-  refundTransaction: jest.fn(),
-  verifyWebhookSignature: jest.fn(),
-}));
+// Gap closure: `paystack-adapter.js` is now a factory resolved per-currency
+// via `resolveAdapterForCurrency` (a real DB read of
+// `platform_payment_integrations` in production, seeded for NGN by
+// `tests/helpers/fixtures.js` regardless of real credentials). Mocking
+// THAT function to always return one fixed, fully-mocked adapter object —
+// rather than mocking the old flat exports directly — keeps every
+// `paystack.xxx.mockImplementation(...)` call below working unchanged,
+// while genuinely exercising `properties[0]`'s own real, fixture-seeded
+// `property_payment_subaccounts` row (mirrors
+// `tests/cashiering/cashiering.test.js`'s own identical fix).
+jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
+  const actual = jest.requireActual('../../src/modules/cashiering/paystack-adapter');
+  const mockAdapter = {
+    initializeTransaction: jest.fn(),
+    verifyTransaction: jest.fn(),
+    refundTransaction: jest.fn(),
+    verifyWebhookSignature: jest.fn(),
+    createSubaccount: jest.fn(),
+    resolveBankAccount: jest.fn(),
+  };
+  return {
+    ...actual,
+    __mockAdapter: mockAdapter,
+    resolveAdapterForCurrency: jest.fn(async () => ({ integration: { id: 1, currency: 'NGN' }, adapter: mockAdapter })),
+  };
+});
 
 const request = require('supertest');
 const { db } = require('../helpers/db');
@@ -41,7 +61,8 @@ const dbModule = require('../../src/db');
 const { createApp } = require('../../src/app');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { generateRawToken, hashToken, encryptToken } = require('../../src/modules/qr-ordering/tokens');
-const paystack = require('../../src/modules/cashiering/paystack-adapter');
+const { encrypt } = require('../../src/shared/encryption');
+const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
 
 describe('QR self-ordering races under real concurrent connections (PLAN.md Phase 6)', () => {
   let req;
@@ -80,6 +101,35 @@ describe('QR self-ordering races under real concurrent connections (PLAN.md Phas
       status: 'active',
     });
     await db()('user_property_access').insert({ tenant_id: tenantId, property_id: propertyId, user_id: userId, role: 'pos_operator' });
+
+    // Gap closure: guest card payments no longer settle into one shared
+    // platform Paystack account — a real `property_payment_subaccounts`
+    // row is required for `startPaystackCheckout` to proceed at all. This
+    // test builds its own tenant/property from scratch, so it needs its
+    // own integration row too — inserted if missing, the same
+    // insert-if-missing shape `tests/helpers/fixtures.js` uses, since the
+    // real migration only seeds one when a real PAYSTACK_SECRET_KEY was
+    // present at migration time.
+    let ngnIntegration = await db()('platform_payment_integrations').where({ currency: 'NGN' }).first('id');
+    if (!ngnIntegration) {
+      const [integrationId] = await db()('platform_payment_integrations').insert({
+        provider: 'paystack',
+        country: 'NG',
+        currency: 'NGN',
+        secret_key_encrypted: encrypt('sk_test_fixture_only_never_a_real_secret'),
+      });
+      ngnIntegration = { id: integrationId };
+    }
+    await db()('property_payment_subaccounts').insert({
+      tenant_id: tenantId,
+      property_id: propertyId,
+      platform_payment_integration_id: ngnIntegration.id,
+      subaccount_code: `ACCT_qr_race_${suffix}`,
+      bank_code: '057',
+      bank_name: 'Zenith Bank',
+      account_number_last4: '0000',
+      account_name: 'QR Race Property',
+    });
     // pos.operate is migration-seeded globally (20260912097000) — grant, don't create.
     const perms = await db()('permissions').where({ permission_key: 'pos.operate' }).select('id');
     await db()('role_permissions').insert(perms.map((p) => ({ tenant_id: tenantId, role_id: roleId, permission_id: p.id })));
@@ -145,6 +195,10 @@ describe('QR self-ordering races under real concurrent connections (PLAN.md Phas
     await db()('in_app_notifications').where({ tenant_id: tenantId }).delete();
     await db()('users').where({ tenant_id: tenantId }).delete();
     await db()('roles').where({ tenant_id: tenantId }).delete();
+    // Gap closure: this test's own real property_payment_subaccounts row
+    // must go before properties, the same FK-order-aware cleanup every
+    // other row above already follows.
+    await db()('property_payment_subaccounts').where({ tenant_id: tenantId }).delete();
     await db()('properties').where({ tenant_id: tenantId }).delete();
     await db()('tenants').where({ id: tenantId }).delete();
     dbModule.__resetForTesting();

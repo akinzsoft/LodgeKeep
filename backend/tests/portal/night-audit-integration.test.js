@@ -12,17 +12,37 @@
  * design would have done.
  */
 
-jest.mock('../../src/modules/cashiering/paystack-adapter', () => ({
-  initializeTransaction: jest.fn(),
-  verifyTransaction: jest.fn(),
-  refundTransaction: jest.fn(),
-  verifyWebhookSignature: jest.fn(),
-}));
+// Gap closure: `paystack-adapter.js` is now a factory resolved per-currency
+// via `resolveAdapterForCurrency` (a real DB read of
+// `platform_payment_integrations` in production, seeded for NGN by
+// `tests/helpers/fixtures.js` regardless of real credentials). Mocking
+// THAT function to always return one fixed, fully-mocked adapter object —
+// rather than mocking the old flat exports directly — keeps every
+// `paystack.xxx.mockImplementation(...)` call below working unchanged,
+// while genuinely exercising `properties[0]`'s own real, fixture-seeded
+// `property_payment_subaccounts` row (mirrors
+// `tests/cashiering/cashiering.test.js`'s own identical fix).
+jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
+  const actual = jest.requireActual('../../src/modules/cashiering/paystack-adapter');
+  const mockAdapter = {
+    initializeTransaction: jest.fn(),
+    verifyTransaction: jest.fn(),
+    refundTransaction: jest.fn(),
+    verifyWebhookSignature: jest.fn(),
+    createSubaccount: jest.fn(),
+    resolveBankAccount: jest.fn(),
+  };
+  return {
+    ...actual,
+    __mockAdapter: mockAdapter,
+    resolveAdapterForCurrency: jest.fn(async () => ({ integration: { id: 1, currency: 'NGN' }, adapter: mockAdapter })),
+  };
+});
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
-const paystack = require('../../src/modules/cashiering/paystack-adapter');
+const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
 
 describe('Portal booking + Night Audit non-collision (PLAN.md Phase 4)', () => {
   const t = useTestApp();
@@ -52,6 +72,23 @@ describe('Portal booking + Night Audit non-collision (PLAN.md Phase 4)', () => {
       current_business_date: '2019-03-01',
     });
     await t.trx('user_property_access').insert({ tenant_id: ctx.a.id, property_id: propertyId, user_id: ctx.a.users[0].id, role: 'manager' });
+
+    // Gap closure: guest card payments no longer settle into one shared
+    // platform Paystack account — a real `property_payment_subaccounts`
+    // row is required for `startPaystackCheckout` to proceed at all. This
+    // property is created ad hoc (not `seedTwoTenants`'s own
+    // `properties[0]`, which already has one), so it needs its own.
+    const ngnIntegration = await t.trx('platform_payment_integrations').where({ currency: 'NGN' }).first('id');
+    await t.trx('property_payment_subaccounts').insert({
+      tenant_id: ctx.a.id,
+      property_id: propertyId,
+      platform_payment_integration_id: ngnIntegration.id,
+      subaccount_code: `ACCT_na_portal_${suffix}`,
+      bank_code: '057',
+      bank_name: 'Zenith Bank',
+      account_number_last4: '0000',
+      account_name: 'NA Portal Property',
+    });
 
     const [roomTypeId] = await t.trx('room_types').insert({
       tenant_id: ctx.a.id,

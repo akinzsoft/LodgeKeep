@@ -1553,6 +1553,73 @@ const ENTITIES = [
   },
 
   {
+    table: 'platform_payment_integrations',
+    // GLOBAL_REFERENCE, following `plans` exactly — one catalogue, shared
+    // by both tenants. `duplicateRow` collides against the real seeded (or
+    // fixture-inserted, see fixtures.js) NGN row via the UNIQUE `currency`
+    // column.
+    uniqueKeys: [['currency']],
+    newRow: () => ({
+      provider: 'paystack',
+      country: 'GH',
+      currency: 'GHS', // varchar(3) — ISO 4217, not a free-text slug like most other GLOBAL_REFERENCE keys here
+      secret_key_encrypted: 'iv.tag.ciphertext',
+    }),
+    duplicateRow: () => ({
+      provider: 'paystack',
+      country: 'NG',
+      currency: 'NGN',
+      secret_key_encrypted: 'iv.tag.ciphertext',
+    }),
+  },
+
+  {
+    // Gap closure: guest card payments no longer settle into one shared
+    // platform Paystack account. `newRow`/`duplicateRow` target
+    // properties[1], not [0] — fixtures.js seeds a real
+    // property_payment_subaccounts row on properties[0] for both tenants
+    // (the same "[0] would collide here instead of proving a genuinely new
+    // row is accepted" reasoning `email_settings`' own entry above uses).
+    table: 'property_payment_subaccounts',
+    uniqueKeys: [['tenant_id', 'property_id']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[1].id,
+      platform_payment_integration_id: ctx.platformPaymentIntegrations.ngn,
+      subaccount_code: `ACCT_new_${t.slug}`,
+      bank_code: '057',
+      bank_name: 'Zenith Bank',
+      account_number_last4: '0000',
+      account_name: 'New Subaccount Ltd',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      platform_payment_integration_id: ctx.platformPaymentIntegrations.ngn,
+      subaccount_code: `ACCT_dup_${t.slug}`,
+      bank_code: '057',
+      bank_name: 'Zenith Bank',
+      account_number_last4: '1111',
+      account_name: 'Duplicate Subaccount Ltd',
+    }),
+    crossTenant: [
+      {
+        name: "creates a payout account for another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          platform_payment_integration_id: ctx.platformPaymentIntegrations.ngn,
+          subaccount_code: `ACCT_cross_${own.slug}`,
+          bank_code: '057',
+          bank_name: 'Zenith Bank',
+          account_number_last4: '2222',
+          account_name: 'Cross Tenant Ltd',
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'payment_webhook_events',
     // PLATFORM_SCOPED with nullable tenant_id/property_id attribution
     // (`auth_events`' own precedent) — no crossTenant shape applies here for

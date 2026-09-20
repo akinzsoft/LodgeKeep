@@ -29,17 +29,40 @@
  * tests/isolation's ISO-* suite via tests/helpers/entities.js.
  */
 
-jest.mock('../../src/modules/cashiering/paystack-adapter', () => ({
-  initializeTransaction: jest.fn(),
-  verifyTransaction: jest.fn(),
-  refundTransaction: jest.fn(),
-  verifyWebhookSignature: jest.fn(),
-}));
+// Gap closure: `paystack-adapter.js` is now a factory
+// (`buildAdapter(secretKey)`) resolved per-currency via
+// `resolveAdapterForCurrency` (a real DB read of
+// `platform_payment_integrations` in production). Mocking THAT function to
+// always return one fixed, fully-mocked adapter object — rather than
+// mocking the old flat `initializeTransaction`/etc. exports directly —
+// keeps every test below working exactly as before (`paystack.
+// initializeTransaction.mockImplementation(...)` still refers to the same
+// jest.fn()), while genuinely exercising `startPaystackCheckout`'s real,
+// unmocked `property_payment_subaccounts` lookup (seeded by
+// `tests/helpers/fixtures.js` for both tenants' properties[0]) and real
+// error classes (`GatewayNotConfiguredError`/`PropertyPayoutNotConfiguredError`
+// kept genuine via `jest.requireActual`, not re-mocked).
+jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
+  const actual = jest.requireActual('../../src/modules/cashiering/paystack-adapter');
+  const mockAdapter = {
+    initializeTransaction: jest.fn(),
+    verifyTransaction: jest.fn(),
+    refundTransaction: jest.fn(),
+    verifyWebhookSignature: jest.fn(),
+    createSubaccount: jest.fn(),
+    resolveBankAccount: jest.fn(),
+  };
+  return {
+    ...actual,
+    __mockAdapter: mockAdapter,
+    resolveAdapterForCurrency: jest.fn(async () => ({ integration: { id: 1, currency: 'NGN' }, adapter: mockAdapter })),
+  };
+});
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
-const paystack = require('../../src/modules/cashiering/paystack-adapter');
+const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
 
 describe('Cashiering (PLAN.md Phase 2.5)', () => {
   const t = useTestApp();
@@ -509,6 +532,81 @@ describe('Cashiering (PLAN.md Phase 2.5)', () => {
 
       const paymentLines = await t.trx('folio_line_items').where({ payment_id: initRes.body.data.id });
       expect(paymentLines).toHaveLength(1);
+    });
+
+    it('gap closure: refunding a subaccount-split payment records a real audit-trail entry naming the amount owed back by the property', async () => {
+      paystack.initializeTransaction.mockImplementation(async ({ reference }) => ({ authorizationUrl: 'https://paystack.test/pay/rf', accessCode: 'rf', reference }));
+
+      const folio = await openFolio();
+      await seedAdjustment(folio, '75.00');
+      const initRes = await t.request
+        .post(`/api/v1/cashiering/folios/${folio.id}/payments/paystack`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ amount: '75.00', currency: 'NGN', guest_email: 'guest@example.com' });
+      const paymentId = initRes.body.data.id;
+
+      // The payment genuinely used the property's own subaccount — confirmed
+      // live against the real sandbox before this shipped: a refund always
+      // debits the FULL amount from the platform's own balance, with
+      // nothing automatically clawed back from the subaccount's share.
+      const storedPayment = await t.trx('payments').where({ id: paymentId }).first();
+      expect(storedPayment.subaccount_code).toBe(`ACCT_fixture_${ctx.a.slug}`);
+
+      paystack.verifyTransaction.mockResolvedValue({
+        status: 'success',
+        reference: storedPayment.provider_reference,
+        providerPaymentId: '4242',
+        amountSubunit: 7500,
+        currency: 'NGN',
+      });
+      await t.request
+        .post(`/api/v1/cashiering/payments/${paymentId}/verify`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({});
+
+      paystack.refundTransaction.mockResolvedValue({ status: 'processed', reference: storedPayment.provider_reference });
+      const refundRes = await t.request
+        .post(`/api/v1/cashiering/payments/${paymentId}/refund`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ reason: 'Guest requested a refund' });
+      expect(refundRes.status).toBe(201);
+      expect(refundRes.body.data.status).toBe('CAPTURED');
+
+      const auditRow = await t.trx('audit_log').where({ action: 'refund_subaccount_shortfall', entity_id: refundRes.body.data.id }).first();
+      expect(auditRow).toBeDefined();
+      // `audit_log.after_state` is a native MySQL JSON column — mysql2
+      // already parses it into a plain object, not a string.
+      expect(auditRow.after_state).toMatchObject({
+        originalPaymentId: paymentId,
+        subaccountCode: `ACCT_fixture_${ctx.a.slug}`,
+        amountOwedBackByProperty: '75.00',
+        currency: 'NGN',
+      });
+      expect(auditRow.reason).toMatch(/not yet automatically recovered/i);
+    });
+
+    it('refunding a plain (pre-subaccount, cash) payment writes no shortfall audit entry — only a real subaccount-split payment does', async () => {
+      const folio = await openFolio();
+      await seedAdjustment(folio, '40.00');
+      const captureRes = await t.request
+        .post(`/api/v1/cashiering/folios/${folio.id}/payments/cash`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ amount: '40.00', currency: 'NGN' });
+      const paymentId = captureRes.body.data.id;
+
+      const refundRes = await t.request
+        .post(`/api/v1/cashiering/payments/${paymentId}/refund`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ reason: 'Guest requested a refund' });
+      expect(refundRes.status).toBe(201);
+
+      const auditRow = await t.trx('audit_log').where({ action: 'refund_subaccount_shortfall', entity_id: refundRes.body.data.id }).first();
+      expect(auditRow).toBeUndefined();
     });
 
     it('an unverified webhook is persisted but never applied', async () => {
