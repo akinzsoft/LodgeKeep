@@ -12,17 +12,38 @@
  * 7.5% service charge adds ₦1.50, and the check total is ₦23.00.
  */
 
-jest.mock('../../src/modules/cashiering/paystack-adapter', () => ({
-  initializeTransaction: jest.fn(),
-  verifyTransaction: jest.fn(),
-  refundTransaction: jest.fn(),
-  verifyWebhookSignature: jest.fn(),
-}));
+// Gap closure: `paystack-adapter.js` is now a factory resolved per-currency
+// via `resolveAdapterForCurrency` (a real DB read of
+// `platform_payment_integrations` in production, seeded for NGN by
+// `tests/helpers/fixtures.js` regardless of real credentials). Mocking
+// THAT function to always return one fixed, fully-mocked adapter object —
+// rather than mocking the old flat exports directly — keeps every
+// `paystack.xxx.mockImplementation(...)` call below working unchanged,
+// while genuinely exercising `properties[0]`'s own real, fixture-seeded
+// `property_payment_subaccounts` row (mirrors
+// `tests/cashiering/cashiering.test.js`'s own identical fix).
+jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
+  const actual = jest.requireActual('../../src/modules/cashiering/paystack-adapter');
+  const mockAdapter = {
+    initializeTransaction: jest.fn(),
+    verifyTransaction: jest.fn(),
+    refundTransaction: jest.fn(),
+    verifyWebhookSignature: jest.fn(),
+    createSubaccount: jest.fn(),
+    resolveBankAccount: jest.fn(),
+  };
+  return {
+    ...actual,
+    __mockAdapter: mockAdapter,
+    resolveAdapterForCurrency: jest.fn(async () => ({ integration: { id: 1, currency: 'NGN' }, adapter: mockAdapter })),
+  };
+});
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
-const paystack = require('../../src/modules/cashiering/paystack-adapter');
+const paystackAdapterModule = require('../../src/modules/cashiering/paystack-adapter');
+const paystack = paystackAdapterModule.__mockAdapter;
 const { scopedDb } = require('../../src/db');
 const { workerContext } = require('../../src/modules/tenancy/context');
 const cashieringService = require('../../src/modules/cashiering/service');
@@ -46,6 +67,11 @@ describe('POS Register — Paystack card/NQR checkout', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     paystack.initializeTransaction.mockResolvedValue({ authorizationUrl: 'https://paystack.test/pay/reg', accessCode: 'reg-access', reference: 'r' });
+    // `jest.resetAllMocks()` above wipes EVERY mock's implementation,
+    // including `resolveAdapterForCurrency`'s own fixed one set in the
+    // `jest.mock()` factory above — re-establish it here, every test,
+    // or `startPaystackCheckout`/`verifyPayment` destructure `undefined`.
+    paystackAdapterModule.resolveAdapterForCurrency.mockImplementation(async () => ({ integration: { id: 1, currency: 'NGN' }, adapter: paystack }));
   });
 
   function tokenFor(tenant, userId) {

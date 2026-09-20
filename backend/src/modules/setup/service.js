@@ -15,6 +15,7 @@ const { withDuplicateMapping, ValidationError } = require('../../shared/errors')
 const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError } = require('./errors');
 const { encrypt } = require('../../shared/encryption');
 const { resolveEmailAdapter } = require('../notifications/email-adapter');
+const paystackAdapter = require('../cashiering/paystack-adapter');
 const emailLayout = require('../notifications/email-layout');
 
 const { loadEmailBranding } = emailLayout;
@@ -262,6 +263,97 @@ async function sendTestEmail({ context, to }) {
   } catch (error) {
     throw new EmailTestSendFailedError(String(error?.message ?? error));
   }
+}
+
+// ---------------------------------------------------------------------
+// Payment subaccount — gap closure: guest card payments no longer settle
+// into one shared platform Paystack account. "Setup screen for hotels:
+// bank account number + bank name, which creates the Paystack subaccount
+// via our integration — no hotel-side Paystack account needed."
+// ---------------------------------------------------------------------
+
+/** Nothing sensitive is stored here (the full account number is discarded after creation) — unlike `getEmailSettings`, there is no secret to strip. */
+async function getPaymentSubaccount({ context }) {
+  const db = scopedDb().for(context);
+  return (await db.table('property_payment_subaccounts').first()) ?? null;
+}
+
+/**
+ * The Setup screen's own "confirm this is the right account before we
+ * commit anything" step (DESIGN_SYSTEM.md §2) — a real Paystack
+ * `/bank/resolve` call, but no persistence. Deliberately its own
+ * standalone action rather than folded into `upsertPaymentSubaccount`
+ * itself: a typo'd account number should be caught and corrected BEFORE a
+ * real (if freely re-creatable) Paystack Subaccount is created, not after.
+ */
+function requireBankFields({ bankCode, accountNumber }) {
+  const missing = [];
+  if (!bankCode) missing.push({ field: 'bank_code', issue: 'missing' });
+  if (!accountNumber) missing.push({ field: 'account_number', issue: 'missing' });
+  if (missing.length) throw new ValidationError('MISSING_FIELD', 'Both "bank_code" and "account_number" are required.', missing);
+}
+
+async function resolvePaymentBankAccount({ context, bankCode, accountNumber }) {
+  requireBankFields({ bankCode, accountNumber });
+  const db = scopedDb().for(context);
+  const property = await db.table('properties').where({ id: context.propertyId }).first();
+  const { adapter } = await paystackAdapter.resolveAdapterForCurrency(db, property.base_currency);
+  return adapter.resolveBankAccount({ bankCode, accountNumber });
+}
+
+/**
+ * Creates a real Paystack Subaccount for this property and stores the
+ * result. Insert-if-missing / replace-if-present — one row per property
+ * (the migration's own `UNIQUE(tenant_id, property_id)`), matching
+ * `upsertEmailSettings`'s own shape. Unlike that function, there is no
+ * "blank preserves the existing value" convenience: changing a hotel's
+ * bank account always creates a brand-new Paystack Subaccount (see the
+ * migration's own header for why re-using or mutating the old one is
+ * deliberately avoided) — a caller changing their bank details always
+ * resubmits the full bank code/account number.
+ *
+ * `percentageCharge` is not a caller-supplied parameter — 0% for every
+ * property, per this pass's own confirmed scope ("no pricing decision has
+ * been made... build the mechanism, don't invent a commercial number").
+ */
+const SUBACCOUNT_PERCENTAGE_CHARGE = 0;
+
+async function upsertPaymentSubaccount({ context, bankCode, bankName, accountNumber }) {
+  requireBankFields({ bankCode, accountNumber });
+  if (!bankName) throw new ValidationError('MISSING_FIELD', '"bank_name" is required.', [{ field: 'bank_name', issue: 'missing' }]);
+  const db = scopedDb().for(context);
+  const property = await db.table('properties').where({ id: context.propertyId }).first();
+  const { integration, adapter } = await paystackAdapter.resolveAdapterForCurrency(db, property.base_currency);
+
+  const created = await adapter.createSubaccount({
+    businessName: property.name,
+    bankCode,
+    accountNumber,
+    percentageCharge: SUBACCOUNT_PERCENTAGE_CHARGE,
+  });
+
+  const changes = {
+    platform_payment_integration_id: integration.id,
+    subaccount_code: created.subaccountCode,
+    bank_code: bankCode,
+    bank_name: bankName,
+    account_number_last4: String(accountNumber).slice(-4),
+    account_name: created.accountName,
+    percentage_charge: SUBACCOUNT_PERCENTAGE_CHARGE,
+    is_active: true,
+  };
+
+  const existing = await db.table('property_payment_subaccounts').first();
+  if (existing) {
+    await db.table('property_payment_subaccounts').where({ id: existing.id }).update(changes);
+  } else {
+    await withDuplicateMapping(
+      'property_payment_subaccounts',
+      'A payout account for this property was just created by another request — reload and try again.',
+      () => db.table('property_payment_subaccounts').insert(changes)
+    );
+  }
+  return getPaymentSubaccount({ context });
 }
 
 // ---------------------------------------------------------------------
@@ -789,6 +881,9 @@ module.exports = {
   getEmailSettings,
   upsertEmailSettings,
   sendTestEmail,
+  getPaymentSubaccount,
+  resolvePaymentBankAccount,
+  upsertPaymentSubaccount,
   createRoomType,
   updateRoomType,
   archiveRoomType,

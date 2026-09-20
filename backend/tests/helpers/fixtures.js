@@ -181,6 +181,7 @@ async function seedTwoTenants(trx) {
     accessAlertEvents: [],
     doorAccessStayReservations: [],
     doorAccessStayConfirmations: [],
+    paymentSubaccounts: [],
   });
 
   // Two symmetric example hotels, not one reference customer
@@ -224,6 +225,29 @@ async function seedTwoTenants(trx) {
         ordinal: i,
       });
     }
+  }
+
+  // Gap closure: guest card payments no longer settle into one shared
+  // platform Paystack account. `platform_payment_integrations` is
+  // GLOBAL_REFERENCE, the same insert-if-missing shape `plans` (below)
+  // uses — declared here, ahead of every per-tenant loop that references
+  // it (the property-setup section immediately below seeds a real
+  // `property_payment_subaccounts` row per tenant against it). The real
+  // migration only seeds this when a real `PAYSTACK_SECRET_KEY` was
+  // present at migration time, so a CI/contributor environment with no
+  // real credentials still gets a real, resolvable NGN row here for the
+  // mocked-adapter cashiering tests to use.
+  const platformPaymentIntegrations = {};
+  {
+    const existing = await trx('platform_payment_integrations').where({ currency: 'NGN' }).first('id');
+    platformPaymentIntegrations.ngn = existing
+      ? existing.id
+      : await insertReturningId(trx, 'platform_payment_integrations', {
+          provider: 'paystack',
+          country: 'NG',
+          currency: 'NGN',
+          secret_key_encrypted: encrypt('sk_test_fixture_only_never_a_real_secret'),
+        });
   }
 
   // ------------------------------------------------------------------
@@ -1464,6 +1488,25 @@ async function seedTwoTenants(trx) {
       property_id: property.id,
     });
 
+    // Gap closure: guest card payments no longer settle into one shared
+    // platform Paystack account. `properties[0]`'s base_currency is 'NGN'
+    // for both tenants (see this same section's own comment above) —
+    // exactly the currency `platformPaymentIntegrations.ngn` (above)
+    // resolves to.
+    t.paymentSubaccounts.push({
+      id: await insertReturningId(trx, 'property_payment_subaccounts', {
+        tenant_id: t.id,
+        property_id: property.id,
+        platform_payment_integration_id: platformPaymentIntegrations.ngn,
+        subaccount_code: `ACCT_fixture_${t.slug}`,
+        bank_code: '057',
+        bank_name: 'Zenith Bank',
+        account_number_last4: '1784',
+        account_name: 'Fixture Hotel Ltd',
+      }),
+      property_id: property.id,
+    });
+
     t.notificationLog.push({
       id: await insertReturningId(trx, 'notification_log', {
         tenant_id: t.id,
@@ -2203,7 +2246,7 @@ async function seedTwoTenants(trx) {
     });
   }
 
-  return { a, b, permissions, plans };
+  return { a, b, permissions, plans, platformPaymentIntegrations };
 }
 
 /**

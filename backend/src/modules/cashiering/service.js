@@ -38,6 +38,7 @@ const { generateUlid } = require('../../shared/ulid');
 const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('./tax-engine');
 const paystack = require('./paystack-adapter');
+const { recordAuditEntry } = require('../../audit');
 // PLAN.md Phase 6 (QR self-ordering gap closure) — a one-way dependency,
 // the same shape this file's own `ar/service.js` import already
 // establishes: cashiering calls into `pos-pricing`/`pos/errors` (both
@@ -629,6 +630,19 @@ async function initiatePosRegisterPaymentIntent({ trx, posOrderId, splitGroup, t
  * popup's own success callback is never trusted by itself (ARCHITECTURE.md
  * §7); the real state transition still only happens via the webhook or the
  * existing `POST /cashiering/payments/:id/verify`.
+ *
+ * Gap closure: guest card revenue must reach the property, not one shared
+ * platform account. Before ever calling Paystack, this resolves the
+ * property's own `property_payment_subaccounts` row and passes its
+ * `subaccount_code` to `initializeTransaction` — Paystack then auto-splits
+ * the charge at settlement per that subaccount's own `percentage_charge`.
+ * A property with none configured gets a real, actionable
+ * `PropertyPayoutNotConfiguredError` (422) rather than a silent fallback
+ * to the old shared-key behaviour, which would reintroduce the exact
+ * defect this pass exists to close. `subaccount_code` is stamped onto the
+ * `payments` row at the same time — a snapshot of what THIS payment
+ * actually used, never re-derived later (see that migration's own
+ * header).
  */
 async function startPaystackCheckout({ context, paymentId, guestEmail, callbackUrl, channels }) {
   const db = scopedDb().for(context);
@@ -642,16 +656,24 @@ async function startPaystackCheckout({ context, paymentId, guestEmail, callbackU
     return { payment, authorizationUrl: null, accessCode: resumable ?? null };
   }
 
-  const init = await paystack.initializeTransaction({
+  const { adapter } = await paystack.resolveAdapterForCurrency(db, payment.currency);
+  const subaccountRow = await db.table('property_payment_subaccounts').where({ property_id: payment.property_id, is_active: true }).first();
+  if (!subaccountRow) throw new paystack.PropertyPayoutNotConfiguredError(payment.property_id);
+
+  const init = await adapter.initializeTransaction({
     email: guestEmail,
     amount: payment.amount,
     currency: payment.currency,
     reference: payment.provider_reference,
     callbackUrl,
     channels,
+    subaccount: subaccountRow.subaccount_code,
   });
 
-  await db.table('payments').where({ id: paymentId }).update({ status: 'PENDING', provider_access_code: init.accessCode ?? null });
+  await db
+    .table('payments')
+    .where({ id: paymentId })
+    .update({ status: 'PENDING', provider_access_code: init.accessCode ?? null, subaccount_code: subaccountRow.subaccount_code });
   const updated = await db.table('payments').where({ id: paymentId }).first();
   return { payment: updated, authorizationUrl: init.authorizationUrl, accessCode: init.accessCode };
 }
@@ -866,7 +888,8 @@ async function verifyPayment({ context, paymentId, userId }) {
   }
   if (TERMINAL_PAYMENT_STATUSES.has(payment.status)) return payment;
 
-  const result = await paystack.verifyTransaction({ reference: payment.provider_reference });
+  const { adapter } = await paystack.resolveAdapterForCurrency(db, payment.currency);
+  const result = await adapter.verifyTransaction({ reference: payment.provider_reference });
   // A Register cashier verifies the moment the popup closes — often because
   // the guest closed it before paying ('abandoned') or is still mid-payment
   // ('ongoing'/'pending'). Only a definite gateway failure ends a Register
@@ -906,11 +929,31 @@ async function verifyPayment({ context, paymentId, userId }) {
  * found this way, everything else proceeds through the normal scoped
  * accessor via a real `workerContext({tenantId, propertyId})` — this raw
  * read is the one, deliberate exception, not a new escape hatch.
+ *
+ * ── MULTI-CURRENCY SIGNATURE VERIFICATION USES THE SAME "LOOK UP BY
+ * REFERENCE FIRST" PATTERN, EXTENDED ─────────────────────────────────────
+ *
+ * Verifying now needs to know WHICH secret key to check the signature
+ * against (one per settlement currency, `platform_payment_integrations`).
+ * That currency is resolved the exact same way the tenant already was
+ * ABOVE — by looking up the real `payments` row the payload's own
+ * (as-yet-unverified) `reference` names, and reading that row's own
+ * `currency` column. This never weakens the security guarantee: the
+ * signature is still verified in full, against the secret this specific
+ * transaction's currency actually resolves to, before ANYTHING from the
+ * payload is acted on. A reference that matches no real payment simply
+ * cannot be verified at all (there is no secret to check it against),
+ * which is the same outcome as today for any other unmatched webhook.
  */
 async function handlePaystackWebhook({ rawBody, signatureHeader, parsedBody }) {
   const platformDb = scopedDb().for(systemContext());
 
-  const verified = paystack.verifyWebhookSignature({ rawBody, signatureHeader });
+  const reference = parsedBody?.data?.reference;
+  const rawPayment = reference ? await knex()('payments').where({ provider: 'paystack', provider_reference: reference }).first() : null;
+
+  const verified = rawPayment
+    ? (await paystack.resolveAdapterForCurrency(knex(), rawPayment.currency).catch(() => null))?.adapter.verifyWebhookSignature({ rawBody, signatureHeader }) ?? false
+    : false;
   const providerEventId = String(parsedBody?.data?.id ?? parsedBody?.id ?? generateUlid());
 
   const existing = await platformDb.table('payment_webhook_events').where({ provider: 'paystack', provider_event_id: providerEventId }).first();
@@ -925,9 +968,7 @@ async function handlePaystackWebhook({ rawBody, signatureHeader, parsedBody }) {
 
   if (!verified) return { verified: false };
 
-  const reference = parsedBody?.data?.reference;
   const gatewayStatus = parsedBody?.data?.status === 'success' || parsedBody?.event === 'charge.success' ? 'success' : 'failed';
-  const rawPayment = reference ? await knex()('payments').where({ provider: 'paystack', provider_reference: reference }).first() : null;
 
   if (rawPayment) {
     const context = workerContext({ tenantId: rawPayment.tenant_id, propertyId: rawPayment.property_id });
@@ -1019,7 +1060,8 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
   }
 
   // Paystack — the real external call, outside a transaction (§6.4).
-  const gatewayResult = await paystack.refundTransaction({ reference: original.provider_reference, amount: amount ?? undefined });
+  const { adapter } = await paystack.resolveAdapterForCurrency(db, original.currency);
+  const gatewayResult = await adapter.refundTransaction({ reference: original.provider_reference, amount: amount ?? undefined });
   const processed = gatewayResult.status === 'processed' || gatewayResult.status === 'success';
   // A Register payment reverses the same way a guest QR order's does: void
   // the settlement it funded. Neither has a folio to post a refund line to.
@@ -1094,6 +1136,39 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
       }
       const fullyRefunded = compareMoney(sumMoney([alreadyRefunded, refundAmount]), original.amount) === 0;
       await trx.table('payments').where({ id: original.id }).update({ status: fullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED' });
+
+      // Gap closure — confirmed LIVE against the real sandbox before this
+      // shipped, not assumed: a Paystack refund debits the FULL original
+      // amount from the PLATFORM's own balance immediately, with nothing
+      // automatically clawed back from the subaccount's own share, even
+      // though that share may already have been paid to the hotel's bank.
+      // User-confirmed scope for this pass ("record and flag only"): no
+      // automatic recovery/netting mechanism is built here — this is a
+      // real, audited fact that the property now owes this amount back to
+      // the platform, surfaced for a future reconciliation pass to act on,
+      // not silently absorbed or silently hidden. `refundAmount` (not a
+      // percentage of it) is the property's own shortfall: every property
+      // subaccount is seeded at 0% platform fee today, so 100% of any
+      // split charge — and therefore 100% of any refund of it — was the
+      // property's own share.
+      if (original.subaccount_code) {
+        await recordAuditEntry(trx, {
+          entityType: 'payments',
+          entityId: refundPaymentId,
+          propertyId: original.property_id,
+          userId,
+          action: 'refund_subaccount_shortfall',
+          source: 'api',
+          afterState: {
+            originalPaymentId: original.id,
+            subaccountCode: original.subaccount_code,
+            amountOwedBackByProperty: refundAmount,
+            currency: original.currency,
+          },
+          reason:
+            'Paystack refunds a split payment from the platform\'s own balance only — this amount is not yet automatically recovered from the property.',
+        });
+      }
     }
 
     return trx.table('payments').where({ id: refundPaymentId }).first();

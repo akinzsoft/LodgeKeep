@@ -23,18 +23,38 @@
  * charges: a ₦20.00 item's tax is always ₦1.50.
  */
 
-jest.mock('../../src/modules/cashiering/paystack-adapter', () => ({
-  initializeTransaction: jest.fn(),
-  verifyTransaction: jest.fn(),
-  refundTransaction: jest.fn(),
-  verifyWebhookSignature: jest.fn(),
-}));
+// Gap closure: `paystack-adapter.js` is now a factory resolved per-currency
+// via `resolveAdapterForCurrency` (a real DB read of
+// `platform_payment_integrations` in production, seeded for NGN by
+// `tests/helpers/fixtures.js` regardless of real credentials). Mocking
+// THAT function to always return one fixed, fully-mocked adapter object —
+// rather than mocking the old flat exports directly — keeps every
+// `paystack.xxx.mockImplementation(...)` call below working unchanged,
+// while genuinely exercising `properties[0]`'s own real, fixture-seeded
+// `property_payment_subaccounts` row (mirrors
+// `tests/cashiering/cashiering.test.js`'s own identical fix).
+jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
+  const actual = jest.requireActual('../../src/modules/cashiering/paystack-adapter');
+  const mockAdapter = {
+    initializeTransaction: jest.fn(),
+    verifyTransaction: jest.fn(),
+    refundTransaction: jest.fn(),
+    verifyWebhookSignature: jest.fn(),
+    createSubaccount: jest.fn(),
+    resolveBankAccount: jest.fn(),
+  };
+  return {
+    ...actual,
+    __mockAdapter: mockAdapter,
+    resolveAdapterForCurrency: jest.fn(async () => ({ integration: { id: 1, currency: 'NGN' }, adapter: mockAdapter })),
+  };
+});
 
 const { useTestApp } = require('../helpers/app');
 const { sumMoney } = require('../../src/shared/money');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
-const paystack = require('../../src/modules/cashiering/paystack-adapter');
+const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
 const { rateLimitRedisConnection, destroyRateLimitRedisConnection } = require('../../src/shared/rate-limit-redis-connection');
 
 /**
