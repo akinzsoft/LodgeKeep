@@ -280,6 +280,15 @@ exports.seed = async function seed(knex) {
     await grantManagerKeys(tenantId, ['expenses.view', 'expenses.manage']);
   }
 
+  /**
+   * Payment reconciliation report (gap closure) — manager holds the one
+   * key (`reconciliation.view`, manager/admin/super_admin only; admin/
+   * super_admin get it via `ensureAdminSuperAdminFullAccess`).
+   */
+  async function ensureManagerReconciliationAccess(tenantId) {
+    await grantManagerKeys(tenantId, ['reconciliation.view']);
+  }
+
   async function grantManagerKeys(tenantId, keys) {
     const permissions = await knex('permissions').whereIn('permission_key', keys).select('id', 'permission_key');
     if (permissions.length !== keys.length) return; // migrations not yet run — nothing to grant
@@ -511,6 +520,7 @@ exports.seed = async function seed(knex) {
       await ensureManagerGroupBlocksAccess(existingTenant.id);
       await ensureManagerDoorAccessAccess(existingTenant.id);
       await ensureManagerExpensesAccess(existingTenant.id);
+      await ensureManagerReconciliationAccess(existingTenant.id);
       await ensurePosOperatorRoleAccess(existingTenant.id);
       // src/auth/mfa.js's dev-only bypass: backfill the admin account and
       // its full-access grant onto a pre-existing dev tenant too, same
@@ -609,6 +619,9 @@ exports.seed = async function seed(knex) {
 
     // Expense tracking (greenfield feature) — see `ensureManagerExpensesAccess`'s own header.
     await ensureManagerExpensesAccess(tenantId);
+
+    // Payment reconciliation report (gap closure) — see `ensureManagerReconciliationAccess`'s own header.
+    await ensureManagerReconciliationAccess(tenantId);
 
     // PLAN.md Phase 1 gap closure — see `ensureReferenceData`'s own header.
     await ensureReferenceData(tenantId, propertyId);

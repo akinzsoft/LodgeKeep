@@ -63,6 +63,7 @@ const { migrationRouter } = require('./modules/migration');
 const { accessMonitoringRouter } = require('./modules/access-monitoring');
 const { qrOrderPublicRouter, qrOrderStaffRouter } = require('./modules/qr-ordering');
 const { expensesRouter } = require('./modules/expenses');
+const { reconciliationRouter } = require('./modules/reconciliation');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -138,6 +139,10 @@ function buildStaffRouter() {
   // Expense tracking & reporting — greenfield feature, no phase/spec of its
   // own. No mounting-order dependency on any other router.
   router.use(expensesRouter());
+  // Payment reconciliation report — reads `payments`/`folio_line_items`/
+  // `pos_order_settlements`, mutates nothing. No mounting-order dependency
+  // on any other router.
+  router.use(reconciliationRouter());
   router.use((req, res) => notFound(res));
   return router;
 }
