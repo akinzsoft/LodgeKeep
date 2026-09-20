@@ -22,6 +22,23 @@
  * `GatewayNotConfiguredError`, exercising that path for real rather than
  * asserting it in the abstract.
  *
+ * The mocked `integration.id` is NOT a hardcoded literal — it is set from
+ * `seedTwoTenants`'s own real `platformPaymentIntegrations.ngn` return
+ * value once `beforeAll` resolves it (see below). A hardcoded `id: 1`
+ * only happens to be correct when the migration itself already seeded a
+ * permanent row (real `PAYSTACK_SECRET_KEY` present at migration time,
+ * e.g. this project's own local dev environment) — in any environment
+ * without one (CI, a fresh contributor checkout), `platform_payment_
+ * integrations` starts empty and `fixtures.js`'s own insert-if-missing
+ * row is created (and, since it lives inside this file's own rolled-back
+ * per-file transaction, re-created) fresh by whichever test file happens
+ * to seed it, landing on whatever the real, currently-incrementing
+ * AUTO_INCREMENT value is — never reliably `1`. A hardcoded `1` genuinely
+ * passed in this project's own dev environment while genuinely 500ing on
+ * a real, unrelated `platform_payment_integration_id` foreign-key
+ * violation in a fresh one, reproduced and root-caused directly against a
+ * CI-faithful fresh checkout before this fix.
+ *
  * Deliberately uses `properties[0]` (NGN) for the happy-path tests —
  * `fixtures.js` seeds a real `property_payment_subaccounts` row there for
  * both tenants (the generic `ISO-*` isolation suite's own "every table
@@ -44,17 +61,18 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
   return {
     ...actual,
     __mockAdapter: mockAdapter,
-    resolveAdapterForCurrency: jest.fn(async (db, currency) => {
-      if (currency !== 'NGN') throw new actual.GatewayNotConfiguredError('paystack');
-      return { integration: { id: 1, currency: 'NGN' }, adapter: mockAdapter };
-    }),
+    // No default implementation here — see beforeAll below for why the
+    // real (dynamic) NGN integration id can't be known at factory time.
+    resolveAdapterForCurrency: jest.fn(),
   };
 });
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
-const paystackMock = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
+const paystackAdapterModule = require('../../src/modules/cashiering/paystack-adapter');
+const paystackMock = paystackAdapterModule.__mockAdapter;
+const { GatewayNotConfiguredError } = jest.requireActual('../../src/modules/cashiering/paystack-adapter');
 
 describe('Payment subaccount (gap closure: no shared platform Paystack account for guest payments)', () => {
   const t = useTestApp();
@@ -62,6 +80,12 @@ describe('Payment subaccount (gap closure: no shared platform Paystack account f
 
   beforeAll(async () => {
     ctx = await seedTwoTenants(t.trx);
+    // The real integration id, not a hardcoded literal — see this file's
+    // own header for why `1` only happens to be right in some environments.
+    paystackAdapterModule.resolveAdapterForCurrency.mockImplementation(async (db, currency) => {
+      if (currency !== 'NGN') throw new GatewayNotConfiguredError('paystack');
+      return { integration: { id: ctx.platformPaymentIntegrations.ngn, currency: 'NGN' }, adapter: paystackMock };
+    });
   });
 
   function tokenFor({ tenant, userIndex = 0, propertyId }) {
