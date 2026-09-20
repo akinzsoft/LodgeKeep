@@ -485,6 +485,28 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       expect(payment.status).toBe('PENDING');
     });
 
+    // Security fix: `callback_url` used to reach Paystack unvalidated here
+    // too — the MOST directly exploitable of the three call sites this
+    // fix closes (`src/shared/callback-url.js`'s own header), since this
+    // whole route tree is fully public, no authentication of any kind.
+    // Reuses `cashieringService.startPaystackCheckout`'s own fix (this
+    // module's `startGuestOrderCheckout` calls it directly, no separate
+    // wiring needed) — proven here at the real, public HTTP surface, not
+    // just where the fix itself lives.
+    it('security fix: rejects a forged callback_url from a fully anonymous guest request, before the gateway is ever called', async () => {
+      const res = await guestPost(`/${tableRaw}/orders`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          payment_method: 'card',
+          guest_contact: 'attacker@example.com',
+          items: [{ menu_item_id: menuItemId, quantity: 1 }],
+          callback_url: 'https://evil.example.com/steal',
+        });
+      expect(res.status).toBe(202); // the local order still committed; only the checkout attempt failed
+      expect(res.body.meta.checkoutError).toMatch(/does not belong to this organization/);
+      expect(paystack.initializeTransaction).not.toHaveBeenCalled();
+    });
+
     it('surfaces an honest 202 with the real created order when the gateway call itself fails', async () => {
       paystack.initializeTransaction.mockRejectedValue(new Error('Paystack unreachable'));
 

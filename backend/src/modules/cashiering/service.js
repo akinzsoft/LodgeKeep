@@ -38,6 +38,7 @@ const { generateUlid } = require('../../shared/ulid');
 const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('./tax-engine');
 const paystack = require('./paystack-adapter');
+const { assertAllowedCallbackUrl } = require('../../shared/callback-url');
 const { recordAuditEntry } = require('../../audit');
 // PLAN.md Phase 6 (QR self-ordering gap closure) — a one-way dependency,
 // the same shape this file's own `ar/service.js` import already
@@ -655,6 +656,10 @@ async function startPaystackCheckout({ context, paymentId, guestEmail, callbackU
     const resumable = payment.settlement_target === 'pos_register' && payment.status === 'PENDING' ? payment.provider_access_code : null;
     return { payment, authorizationUrl: null, accessCode: resumable ?? null };
   }
+
+  // Security fix — `callback_url` used to reach Paystack unvalidated, a
+  // classic open redirect (see `src/shared/callback-url.js`'s own header).
+  await assertAllowedCallbackUrl(db, { callbackUrl });
 
   const { adapter } = await paystack.resolveAdapterForCurrency(db, payment.currency);
   const subaccountRow = await db.table('property_payment_subaccounts').where({ property_id: payment.property_id, is_active: true }).first();

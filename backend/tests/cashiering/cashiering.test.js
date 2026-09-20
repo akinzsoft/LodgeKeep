@@ -467,6 +467,43 @@ describe('Cashiering (PLAN.md Phase 2.5)', () => {
       expect(retryRes.body.meta.accessCode).toBe('retry-code');
     });
 
+    // Security fix: `callback_url` used to be passed to Paystack
+    // unvalidated — a classic open redirect, since Paystack redirects the
+    // browser there once checkout completes, appending the real
+    // transaction reference (see `src/shared/callback-url.js`'s own
+    // header). This module's own `startPaystackCheckout` is the one real
+    // chokepoint every guest-facing checkout call in this codebase routes
+    // through (cashiering direct, qr-ordering, the guest booking portal),
+    // so fixing it here closes all three.
+    it('security fix: rejects a callback_url that does not belong to this tenant, before the gateway is ever called', async () => {
+      const folio = await openFolio();
+      const res = await t.request
+        .post(`/api/v1/cashiering/folios/${folio.id}/payments/paystack`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ amount: '60.00', currency: 'NGN', guest_email: 'guest@example.com', callback_url: 'https://evil.example.com/steal' });
+      // The local payment intent still committed (it always does, before
+      // the gateway is ever reached) — only the checkout attempt itself
+      // failed, the same honest partial-success shape a real gateway
+      // outage already produces.
+      expect(res.status).toBe(202);
+      expect(res.body.meta.checkoutError).toMatch(/does not belong to this organization/);
+      expect(paystack.initializeTransaction).not.toHaveBeenCalled();
+    });
+
+    it("security fix: accepts a callback_url on the caller's own tenant subdomain", async () => {
+      paystack.initializeTransaction.mockImplementation(async ({ reference }) => ({ authorizationUrl: 'https://paystack.test/pay/own', accessCode: 'own', reference }));
+      const folio = await openFolio();
+      const callbackUrl = `http://${ctx.a.slug}.${process.env.APP_DOMAIN}/pay/done`;
+      const res = await t.request
+        .post(`/api/v1/cashiering/folios/${folio.id}/payments/paystack`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ amount: '60.00', currency: 'NGN', guest_email: 'guest@example.com', callback_url: callbackUrl });
+      expect(res.status).toBe(201);
+      expect(paystack.initializeTransaction).toHaveBeenCalledWith(expect.objectContaining({ callbackUrl }));
+    });
+
     it('a verify call after a successful gateway status applies CAPTURED and posts the folio effect', async () => {
       paystack.initializeTransaction.mockImplementation(async ({ reference }) => ({ authorizationUrl: 'https://paystack.test/pay/xyz', accessCode: 'xyz', reference }));
 

@@ -34,7 +34,7 @@
 
 const { staffAuthRouter, portalAuthRouter, platformAuthRouter } = require('./routes');
 const { authenticate } = require('./middleware');
-const { requirePermission } = require('./rbac');
+const { requirePermission, assertPermission } = require('./rbac');
 const { requireEntitlement } = require('./require-entitlement');
 const { requirePlatformRole } = require('./platform-rbac');
 const { writeAuthEvent } = require('./events');
@@ -51,6 +51,7 @@ module.exports = {
   platformAuthRouter,
   authenticate,
   requirePermission,
+  assertPermission,
   requireEntitlement,
   requirePlatformRole,
   writeAuthEvent,

@@ -336,6 +336,15 @@ const TABLE_SCOPES = Object.freeze({
   // `unscopedColumns` like its three siblings above.
   subscription_webhook_events: { scope: SCOPES.PLATFORM, attributionColumns: ['tenant_id'] },
 
+  // Security fix (2026-11-01) —
+  // 20261101090000_create_billing_payment_method_checkouts. PLATFORM_SCOPED
+  // with `tenant_id` an `unscopedColumns` mandatory business column,
+  // following `subscriptions`/`subscription_payments` exactly: the
+  // ownership/replay record `completeAddPaymentMethod` verifies a
+  // client-supplied gateway reference against before trusting it. Reached
+  // only through hand-written queries in `src/modules/billing/service.js`.
+  billing_payment_method_checkouts: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
+
   // Tenant offboarding — PLAN.md Phase 5, PRODUCT_REQUIREMENTS.md §3.22.
   // 20260925091000_create_tenant_data_exports. PLATFORM_SCOPED with
   // `tenant_id` an `unscopedColumns` mandatory business column — the same

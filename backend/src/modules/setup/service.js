@@ -22,7 +22,8 @@ const { loadEmailBranding } = emailLayout;
 const { hasEntitlement, resolveActivePlanId } = require('../../shared/entitlements');
 
 const LOGO_KIND = 'property-logos';
-const { PlanEntitlementDeniedError } = require('../../auth/errors');
+const { PlanEntitlementDeniedError, PermissionDeniedError } = require('../../auth/errors');
+const { assertPermission } = require('../../auth');
 
 /**
  * PLAN.md Phase 5's own final exit criterion: "a tenant on a lower plan
@@ -46,18 +47,33 @@ const MULTI_PROPERTY_FEATURE_KEY = 'multi_property';
  * Creates a property, including its opening business date — PLAN.md Phase 1:
  * "Property record, timezone, currency, business date initialisation."
  *
- * No `requirePermission` check gates this at the route layer (see
+ * No `requirePermission` check gates this at the ROUTE layer (see
  * `routes.js`'s own note) — creating a tenant's very first property happens
  * before any `user_property_access` grant can exist to check a role
  * against, which is exactly the case `requirePermission` cannot handle
  * (SECURITY.md §3's every check is "at the active property," and there is
  * none yet). Real tenant/first-admin provisioning is Phase 5 (SaaS platform)
- * territory; until it exists, any authenticated staff member of the tenant
- * may create a property, which is safe today only because Phase 0 has no
- * self-service signup — every `users` row so far comes from the dev seed
- * script or a fixture, not a stranger.
+ * territory, and self-service signup (also Phase 5) never calls this route
+ * at all — it provisions a tenant's first property atomically, through a
+ * separate SYSTEM-context service call — so the only legitimate caller of
+ * a genuinely grant-less create is a tenant that was provisioned some other
+ * way and truly has zero properties yet.
  *
- * The one real gate that DOES apply here, regardless of role: a tenant's
+ * ── SECURITY FIX ─────────────────────────────────────────────────────────
+ * This used to mean ANY authenticated staff member of the tenant — any
+ * role, at any (or no) property — could create a property, unconditionally,
+ * once one already existed. That was flagged as "safe today only because
+ * Phase 0 has no self-service signup"; self-service signup has since
+ * shipped, so real, uncurated tenants with low-privilege accounts
+ * (front_desk, housekeeping, pos_operator) exist now, and any of them could
+ * have created new properties in their own tenant at will. Fixed below: a
+ * caller with an active property goes through the ordinary `setup.manage`
+ * check, exactly like every other Setup mutation; the grant-less exemption
+ * applies ONLY while the tenant genuinely has zero active properties yet —
+ * checked against the SAME locked count the entitlement check already
+ * reads, so a concurrent request can't race the decision either.
+ *
+ * The one real gate that always applies, regardless of role: a tenant's
  * plan may cap it to a single property (PLAN.md Phase 5, above). This is
  * not a `requirePermission` check — see `MULTI_PROPERTY_FEATURE_KEY`'s own
  * header for why it's structurally different and lives inside this
@@ -65,6 +81,14 @@ const MULTI_PROPERTY_FEATURE_KEY = 'multi_property';
  */
 async function createProperty({ context, name, slug, timezone, baseCurrency, address, businessDate }) {
   const db = scopedDb().for(context);
+
+  // The caller already has an active property in this tenant — an ordinary
+  // "add another property" action, checked eagerly (before the tenant is
+  // even locked) exactly like every other Setup mutation.
+  if (context.propertyId) {
+    await assertPermission(context, 'setup.manage');
+  }
+
   return withDuplicateMapping(
     'properties',
     `A property with slug "${slug}" already exists for this tenant.`,
@@ -90,6 +114,16 @@ async function createProperty({ context, name, slug, timezone, baseCurrency, add
         // case here to special-case.
         const activeCount = await trx.acrossProperties().table('properties').where({ status: 'active' }).count();
 
+        // A caller with no active property (the one legitimate exemption
+        // from `setup.manage`, above) but a tenant that already has a
+        // property is exactly the gap the security fix above closes: no
+        // grant is "missing before it can exist" here, the caller simply
+        // never picked (or never held) one. Reject the same way the
+        // eager check above would have.
+        if (!context.propertyId && activeCount >= 1) {
+          throw new PermissionDeniedError('setup.manage', null);
+        }
+
         if (activeCount >= 1) {
           const granted = await hasEntitlement(trx, tenant, MULTI_PROPERTY_FEATURE_KEY);
           if (!granted) {
@@ -114,6 +148,14 @@ async function createProperty({ context, name, slug, timezone, baseCurrency, add
   );
 }
 
+/**
+ * Security fix: this route used to carry no permission check at all
+ * (`routes.js` gated it on `authenticate('staff')` only) — any staff
+ * member of the tenant, any role, could rewrite any property's config,
+ * including `mfa_required_for_admin_roles` (a front-desk account could
+ * disable MFA for every admin/super_admin at the property). `routes.js`
+ * now gates this on `setup.manage`, matching every other Setup mutation.
+ */
 async function updateProperty({ context, id, changes }) {
   const db = scopedDb().for(context);
   await db.table('properties').where({ id }).update(changes);

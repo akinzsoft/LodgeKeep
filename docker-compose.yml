@@ -8,6 +8,16 @@
 # 3306 and 3307, and adminer/phpmyadmin on 8082/8083, for other projects.
 # Change the left-hand side of any "ports" mapping if it collides on yours, and
 # update backend/.env to match.
+#
+# Security-review finding: every port below is bound to `127.0.0.1` only, not
+# published on all interfaces — these credentials are dev-only defaults
+# ("change-me"/"change-me-root", and Redis carries no password at all), so a
+# bare "HOST:CONTAINER" mapping would make MySQL/Redis/adminer/phpMyAdmin
+# reachable from any other machine on the same network this host is on, not
+# just this one. `backend/.env` (and `.env.example`) already connect via
+# `127.0.0.1`, so this changes nothing about how the app itself reaches them —
+# only who else can. The production stack (`docker-compose.prod.yml`) was
+# checked separately and never published these ports at all.
 
 services:
   mysql:
@@ -24,7 +34,7 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
     ports:
-      - "3310:3306"
+      - "127.0.0.1:3310:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       # Runs ONLY when the data volume is empty (MySQL's own entrypoint rule).
@@ -47,7 +57,7 @@ services:
     # (ARCHITECTURE.md §14) — this is developer convenience, not a data store.
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -60,7 +70,7 @@ services:
     image: adminer
     restart: unless-stopped
     ports:
-      - "8084:8080"
+      - "127.0.0.1:8084:8080"
     depends_on:
       mysql:
         condition: service_healthy
@@ -72,7 +82,7 @@ services:
       PMA_HOST: mysql
       PMA_PORT: 3306
     ports:
-      - "8085:80"
+      - "127.0.0.1:8085:80"
     depends_on:
       mysql:
         condition: service_healthy
