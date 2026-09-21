@@ -60,7 +60,11 @@ describe('<POSScreen>', () => {
 
     await userEvent.click(screen.getByRole('tab', { name: 'Stock' }));
     expect(await screen.findByRole('tab', { name: 'Stock items', selected: true })).toBeInTheDocument();
-    expect(await screen.findByText('New stock item')).toBeInTheDocument();
+    // The redesigned Stock items screen (gap closure) has no single global
+    // "New stock item" card any more — the permanent "Uncategorized"
+    // section is the one thing always present regardless of how many
+    // registered categories exist.
+    expect(await screen.findByRole('heading', { name: 'Uncategorized' })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Setup' }));
     expect(await screen.findByText('New outlet')).toBeInTheDocument();
