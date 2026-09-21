@@ -115,7 +115,7 @@ describe('<RegisterTab>', () => {
     await userEvent.click(checkoutButton);
     // Service is a fixed 7.5% of the real 20.00 subtotal = 1.50, computed
     // automatically — no cashier input exists to type it.
-    expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'cash', serviceCharge: '1.50' })]);
+    expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'cash', serviceCharge: '1.50' })], expect.objectContaining({}));
   });
 
   describe('after checkout (bug fix: checkout used to leave what looked like a blank page)', () => {
@@ -374,7 +374,7 @@ describe('<RegisterTab>', () => {
       expect(mocks.startPaystackCheckout).toHaveBeenCalledWith('9', { splitGroup: null, tender: 'card', customerEmail: 'guest@example.com' });
       expect(paystackMocks.openPaystackPopup).toHaveBeenCalledWith(expect.objectContaining({ accessCode: 'acc-1' }));
       expect(mocks.verifyPaystackPayment).toHaveBeenCalledWith('9', '70');
-      expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'card', paymentId: '70', serviceCharge: '1.50' })]);
+      expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'card', paymentId: '70', serviceCharge: '1.50' })], expect.objectContaining({}));
       expect(within(receipt).getByText('Paid by Card')).toBeInTheDocument();
     });
 
@@ -452,7 +452,7 @@ describe('<RegisterTab>', () => {
 
       await screen.findByRole('region', { name: 'Sale receipt' });
       expect(paystackMocks.openPaystackPopup).not.toHaveBeenCalled();
-      expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ paymentId: '70' })]);
+      expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ paymentId: '70' })], expect.objectContaining({}));
     });
 
     it('tells the cashier when a tab already holds a captured payment', async () => {
@@ -755,7 +755,8 @@ describe('<RegisterTab>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
     expect(mocks.settleOrder).toHaveBeenCalledWith(
       '9',
-      expect.arrayContaining([expect.objectContaining({ method: 'cash', serviceCharge: '1.50' })])
+      expect.arrayContaining([expect.objectContaining({ method: 'cash', serviceCharge: '1.50' })]),
+      expect.objectContaining({})
     );
   });
 
@@ -929,7 +930,8 @@ describe('<RegisterTab>', () => {
     await userEvent.click(within(modal).getByRole('button', { name: 'Confirm settlement' }));
     expect(mocks.settleOrder).toHaveBeenCalledWith(
       '9',
-      expect.arrayContaining([expect.objectContaining({ splitGroup: null }), expect.objectContaining({ splitGroup: 1 })])
+      expect.arrayContaining([expect.objectContaining({ splitGroup: null }), expect.objectContaining({ splitGroup: 1 })]),
+      expect.objectContaining({})
     );
 
     // The receipt lists one line per check, and the combined total.
@@ -997,5 +999,96 @@ describe('<RegisterTab>', () => {
     expect(await screen.findByText('This tab is split into 2 checks.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Send to Bar & Checkout' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Manage split & checkout' })).toBeInTheDocument();
+  });
+
+  describe('gap closure: the stock-out override guard', () => {
+    function stockRejection(items) {
+      return new ApiError({ code: 'BUSINESS_RULE_INSUFFICIENT_STOCK', message: 'Insufficient stock.', details: { items } });
+    }
+
+    it('adding an item that would deplete stock shows a dedicated prompt naming the item — not the generic error banner — then resubmits with the reason once confirmed', async () => {
+      const order = await openNewTab([]);
+      mocks.addItem.mockRejectedValueOnce(stockRejection([{ name: 'Garnish Lime', unit: 'ml', projectedQuantity: '0.000' }]));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add House Cocktail' }));
+
+      expect(await screen.findByText('Low stock')).toBeInTheDocument();
+      expect(screen.getByText(/Garnish Lime would run out/)).toBeInTheDocument();
+      // Never the generic error banner for this specific rejection.
+      expect(screen.queryByText('Insufficient stock.')).not.toBeInTheDocument();
+
+      mocks.addItem.mockResolvedValueOnce({});
+      mocks.getOrder.mockResolvedValueOnce({ order, items: [orderItem()], settlements: [] });
+      await userEvent.type(screen.getByLabelText('Reason'), 'Confirmed with the bar, count is off');
+      await userEvent.click(screen.getByRole('button', { name: 'Proceed anyway' }));
+
+      expect(mocks.addItem).toHaveBeenLastCalledWith(
+        '9',
+        expect.objectContaining({ menuItemId: '3', quantity: 1, stockOverrideReason: 'Confirmed with the bar, count is off' })
+      );
+      expect(screen.queryByText('Low stock')).not.toBeInTheDocument();
+    });
+
+    it('cancelling the low-stock prompt never resubmits the add', async () => {
+      await openNewTab([]);
+      mocks.addItem.mockRejectedValueOnce(stockRejection([{ name: 'Garnish Lime' }]));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add House Cocktail' }));
+      await screen.findByText('Low stock');
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(screen.queryByText('Low stock')).not.toBeInTheDocument();
+      expect(mocks.addItem).toHaveBeenCalledTimes(1);
+    });
+
+    it('settling a cash tab that would deplete stock shows the same prompt and resubmits settleOrder alone with the reason, once confirmed', async () => {
+      const order = await openNewTab([orderItem()]);
+      await screen.findByText('Subtotal');
+      mocks.settleOrder.mockRejectedValueOnce(stockRejection([{ name: 'House Cocktail\'s own garnish' }]));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+      expect(await screen.findByText('Low stock')).toBeInTheDocument();
+
+      mocks.settleOrder.mockResolvedValueOnce({ order: { ...order, status: 'settled' }, settlements: [settlementRow()] });
+      await userEvent.type(screen.getByLabelText('Reason'), 'Last of this batch');
+      await userEvent.click(screen.getByRole('button', { name: 'Proceed anyway' }));
+
+      expect(mocks.settleOrder).toHaveBeenLastCalledWith(
+        '9',
+        [expect.objectContaining({ method: 'cash' })],
+        expect.objectContaining({ stockOverrideReason: 'Last of this batch' })
+      );
+      await screen.findByRole('region', { name: 'Sale receipt' });
+    });
+
+    it('a card payment already captured before a stock rejection is never re-collected on the override retry', async () => {
+      const order = await openNewTab([orderItem()]);
+      await screen.findByText('Subtotal');
+      const PAYMENT = { id: '70', status: 'PENDING' };
+      mocks.startPaystackCheckout.mockResolvedValue({ payment: PAYMENT, accessCode: 'acc-1', checkoutError: null });
+      mocks.verifyPaystackPayment.mockResolvedValue({ id: '70', status: 'CAPTURED' });
+      paystackMocks.openPaystackPopup.mockImplementation(async ({ onClose }) => onClose());
+      mocks.settleOrder.mockRejectedValueOnce(stockRejection([{ name: 'Garnish Lime' }]));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Card' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+      expect(await screen.findByText('Low stock')).toBeInTheDocument();
+      // The Paystack popup ran exactly once — the retry below must not open it again.
+      expect(paystackMocks.openPaystackPopup).toHaveBeenCalledTimes(1);
+
+      mocks.settleOrder.mockResolvedValueOnce({ order: { ...order, status: 'settled' }, settlements: [settlementRow({ method: 'card', payment_id: '70' })] });
+      await userEvent.type(screen.getByLabelText('Reason'), 'Confirmed');
+      await userEvent.click(screen.getByRole('button', { name: 'Proceed anyway' }));
+
+      expect(paystackMocks.openPaystackPopup).toHaveBeenCalledTimes(1); // Still once — no second popup.
+      expect(mocks.settleOrder).toHaveBeenLastCalledWith(
+        '9',
+        [expect.objectContaining({ method: 'card', paymentId: '70' })],
+        expect.objectContaining({ stockOverrideReason: 'Confirmed' })
+      );
+      await screen.findByRole('region', { name: 'Sale receipt' });
+    });
   });
 });

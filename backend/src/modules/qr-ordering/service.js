@@ -66,6 +66,10 @@ const posService = require('../pos/service');
 const { OutletNotFoundError, MenuItemNotFoundError, OrderNotOpenError } = require('../pos/errors');
 const cashieringService = require('../cashiering/service');
 const reservationsService = require('../reservations/service');
+// Gap closure — the stock-out override guard. A new one-way edge only:
+// `stock/service.js`'s own header confirms it never requires this module
+// back, so no cycle is introduced.
+const stockService = require('../stock/service');
 
 const { generateRawToken, hashToken, encryptToken, decryptToken, renderTokenQrImage } = require('./tokens');
 const { generateOtpCode, hashOtpCode, OTP_TTL_MINUTES, OTP_MAX_ATTEMPTS } = require('./otp');
@@ -156,7 +160,7 @@ async function sumOpenUnpaidValueForToken({ trx, tokenId }) {
  * pass already established for locking `tenants` before its own
  * count-then-insert race.
  */
-async function createGuestOrder({ context, token, cart, paymentMethod, guestContact, guestName, idempotencyKey }) {
+async function createGuestOrder({ context, token, cart, paymentMethod, guestContact, guestName, idempotencyKey, acknowledgeLowStock }) {
   if (!Array.isArray(cart) || cart.length === 0) throw new EmptyCartError();
   if (paymentMethod !== 'card' && paymentMethod !== 'room_charge') {
     throw new ValidationError('INVALID_PAYMENT_METHOD', '"payment_method" must be "card" or "room_charge".', [{ field: 'payment_method', issue: 'invalid' }]);
@@ -196,6 +200,23 @@ async function createGuestOrder({ context, token, cart, paymentMethod, guestCont
         cartTotal = sumMoney([cartTotal, lineTotal]);
         resolvedItems.push({ menuItem, quantity, modifiers: line.modifiers ?? null });
       }
+
+      // Gap closure — the stock-out override guard, the SAME rule/error
+      // code the staff Register uses (decision: no channel gets different
+      // treatment). Checked across the WHOLE cart in one call, not
+      // per-line — two different items sharing one depleted garnish each
+      // "look fine" individually but the combined cart correctly trips it.
+      // A guest has no reason to type free text, so this is a plain yes/no
+      // acknowledgment (`acknowledgeLowStock`) rather than a reason field;
+      // the fixed reason actually recorded in the audit trail is this
+      // module's own constant, not anything the guest supplies.
+      await stockService.assertStockAvailableOrOverridden({
+        trx,
+        lines: resolvedItems.map(({ menuItem, quantity }) => ({ menuItemId: menuItem.id, quantity })),
+        overrideReason: acknowledgeLowStock ? stockService.AUTOMATIC_OVERRIDE_REASON_GUEST_ACKNOWLEDGED : null,
+        userId: null,
+        propertyId: context.propertyId,
+      });
 
       // A pre-tax guarding value, not the final charged total (tax is
       // resolved at settle time, per `pos/service.js`'s own "tax at
@@ -480,6 +501,12 @@ async function verifyRoomChargeOtpAndSettle({ context, guestOrder, code }) {
           },
         },
       ],
+      // Gap closure — always auto-overridden, never sourced from anywhere
+      // else: the OTP is already single-use-claimed above, so a stock
+      // rejection here would strand the guest with a consumed code and no
+      // way to retry. Auto-override is the only sane behavior, matching
+      // "settlement always completes."
+      stockOverrideReason: stockService.AUTOMATIC_OVERRIDE_REASON_ROOM_CHARGE_OTP,
     })
   );
 

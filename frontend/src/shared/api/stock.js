@@ -123,6 +123,23 @@ export function recordGoodsReceived({ outletId, reference, lines }) {
 }
 
 // ---------------------------------------------------------------------
+// Movement history — gap closure, backing Goods Received's own
+// "recent deliveries" (a real backend function, previously never routed).
+// ---------------------------------------------------------------------
+
+/** Either `stockItemId` or `outletId` is required. Newest first, capped at `limit` (default 50). */
+export function listStockMovements({ stockItemId, outletId, type, dateFrom, dateTo, limit } = {}) {
+  const params = new URLSearchParams();
+  if (stockItemId) params.set('stock_item_id', stockItemId);
+  if (outletId) params.set('outlet_id', outletId);
+  if (type) params.set('type', type);
+  if (dateFrom) params.set('date_from', dateFrom);
+  if (dateTo) params.set('date_to', dateTo);
+  if (limit) params.set('limit', limit);
+  return request(`/pos/stock/movements?${params}`);
+}
+
+// ---------------------------------------------------------------------
 // Stock takes — blind counting
 // ---------------------------------------------------------------------
 

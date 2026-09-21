@@ -756,6 +756,22 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
   });
   await trx.table('pos_orders').where({ id: order.id }).update({ status: 'settled', closed_at: new Date() });
 
+  // Gap closure — the stock-out override guard. No human is present at
+  // this call site (a Paystack webhook, or the guest's own confirm-payment
+  // callback) and money has already been captured by the gateway by the
+  // time this runs, so a rejection here would be strictly worse than
+  // proceeding — always auto-overridden, `source: 'integration'`, the
+  // correct one of the six fixed `audit_log.source` values for a
+  // webhook-originated mutation.
+  await stockService.assertStockAvailableOrOverridden({
+    trx,
+    lines: items.map((item) => ({ menuItemId: item.menu_item_id, quantity: item.quantity })),
+    overrideReason: stockService.AUTOMATIC_OVERRIDE_REASON_CARD_CAPTURE,
+    userId: userId ?? null,
+    propertyId: order.property_id,
+    source: 'integration',
+  });
+
   // PLAN.md Phase 6 (POS inventory & stock control) — this settlement
   // writer has no split-group concept (it always settles the WHOLE
   // order's unvoided `items`, already fetched above), so it deducts stock

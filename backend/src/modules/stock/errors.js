@@ -71,6 +71,27 @@ class StockCategoryInUseError extends AppError {
   }
 }
 
+/**
+ * Gap closure — the stock-out override guard. Adding/settling an item whose
+ * recipe would take (or has already taken) a linked stock component to <= 0
+ * is allowed, never blocked outright (this module's own "negative stock is
+ * allowed, never blocked" rule, above), but requires a caller-supplied
+ * override reason. A dedicated code (rather than a generic MISSING_FIELD)
+ * because every caller of this guard needs to reliably distinguish this one
+ * rejection, reactively, from any other validation failure.
+ */
+class InsufficientStockOverrideRequiredError extends AppError {
+  constructor(items) {
+    const names = items.map((item) => item.name).join(', ');
+    super(
+      'BUSINESS_RULE_INSUFFICIENT_STOCK',
+      `This would leave ${names} at zero or below — supply an override reason to proceed.`,
+      422,
+      { items },
+    );
+  }
+}
+
 module.exports = {
   StockItemNotFoundError,
   OutletNotFoundError,
@@ -82,4 +103,5 @@ module.exports = {
   StockTakeAlreadyCompletedError,
   StockTakeAlreadyCancelledError,
   StockCategoryInUseError,
+  InsufficientStockOverrideRequiredError,
 };

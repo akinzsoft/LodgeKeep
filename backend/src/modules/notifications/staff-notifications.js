@@ -105,6 +105,13 @@ const NOTIFICATION_EVENTS = Object.freeze([
     defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
   },
   {
+    eventType: 'pos.stock_override_applied',
+    group: 'Inventory',
+    label: 'Stock override applied',
+    description: 'An order was added to or settled despite a linked stock item running out, with an override reason recorded.',
+    defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
+  },
+  {
     eventType: 'reservation.created',
     group: 'Bookings & front desk',
     label: 'New booking',

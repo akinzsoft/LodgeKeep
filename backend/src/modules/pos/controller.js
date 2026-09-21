@@ -434,6 +434,7 @@ async function addItem(req, res, next) {
       menuItemId,
       quantity: req.body?.quantity,
       modifiers: req.body?.modifiers,
+      stockOverrideReason: req.body?.stock_override_reason,
     });
     await req.audit({ entityType: 'pos_orders', entityId: req.params.id, action: 'add_item', afterState: result });
     res.status(200).json(ok(result));
@@ -521,6 +522,7 @@ async function settleOrder(req, res, next) {
               ? { reservationId: s.room_charge.reservation_id, authMethod: s.room_charge.auth_method, authReference: s.room_charge.auth_reference }
               : undefined,
           })),
+          stockOverrideReason: req.body?.stock_override_reason,
         });
         return { status: 200, body: ok(result) };
       },

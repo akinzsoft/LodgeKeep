@@ -10,19 +10,30 @@
  * settlement writers this codebase has — `pos/service.js`'s `settleOrder`
  * and `cashiering/service.js`'s `finalizePosOrderCardCapture`), the
  * matching reversal on a post-settlement void, goods-received (last-cost
- * only), wastage (mandatory reason), the proactive stock-out guard
+ * only), wastage (mandatory reason), a REACTIVE availability flip
  * (`applyStockAvailabilityEffects` — a component hitting ≤ 0 auto-flips
  * its dependent menu item unavailable, reversibly, never fighting a human's
  * own manual toggle), a full blind stock-take lifecycle (open → count →
  * complete, revealing variance only at completion, exactly like
  * `pos_shifts`' own cash-up), and cost-of-sales/variance reporting.
  *
+ * Gap closure (user-reported: the Register let an item sell at zero stock
+ * with no PROACTIVE check at all — `applyStockAvailabilityEffects`, above,
+ * only ever reacts one settlement too late): `assertStockAvailableOrOverridden`
+ * is the real pre-write guard, checked at all FOUR real add/settle call
+ * sites (`pos/service.js`'s `addItem`/`settleOrder`, `qr-ordering/service.js`'s
+ * `createGuestOrder`/`verifyRoomChargeOtpAndSettle`, and
+ * `cashiering/service.js`'s `finalizePosOrderCardCapture`) — see
+ * `service.js`'s own header for the full rule.
+ *
  * ── FIVE CONFIRMED, DELIBERATE SCOPE REDUCTIONS ──────────────────────────
  *
- * 1. **Negative stock is allowed, never blocked.** Settlement/deduction
- *    always completes, even past zero — the guard is proactive only
- *    (prevents NEW orders once a component hits ≤ 0), never a hard stop
- *    on a sale already in flight.
+ * 1. **Negative stock is allowed, never blocked outright.** Settlement/
+ *    deduction always completes, even past zero — the gap-closure guard
+ *    above requires an override reason before an add/settle that would
+ *    take a component to ≤ 0 proceeds, but it never refuses the deduction
+ *    itself once a reason (human-typed, or one of this module's own fixed
+ *    system-supplied reasons) is supplied.
  * 2. **Modifiers do not affect recipe quantity.** A recipe deducts the
  *    same fixed quantity regardless of which JSON `modifiers` option an
  *    order line chose — a real, named gap, not an oversight (see
@@ -44,10 +55,10 @@
  *
  * ── ONE-WAY DEPENDENCY, LIKE EVERY OTHER MODULE PAIR IN THIS CODEBASE ────
  *
- * `pos/service.js` and `cashiering/service.js` each require this module
- * (for the settlement-side deduction/reversal hooks); this module never
- * requires either of them back, nor `qr-ordering/service.js` — see
- * `service.js`'s own header for the full reasoning.
+ * `pos/service.js`, `cashiering/service.js`, and (since the gap-closure
+ * guard above) `qr-ordering/service.js` each require this module; this
+ * module never requires any of them back — see `service.js`'s own header
+ * for the full reasoning.
  */
 
 const { stockRouter } = require('./routes');

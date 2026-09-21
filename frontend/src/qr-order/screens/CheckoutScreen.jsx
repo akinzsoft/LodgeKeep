@@ -48,6 +48,14 @@ import formStyles from '../QrOrderForm.module.css';
  * `BookingCheckoutScreen.jsx`'s own header already establishes for the
  * identical shape.
  */
+/** Names the affected item(s) in plain language for the low-stock prompt. */
+function describeLowStockItems(items) {
+  const names = (items ?? []).map((item) => item.name).filter(Boolean);
+  if (names.length === 0) return 'One or more items may be low in stock.';
+  if (names.length === 1) return `${names[0]} may be running low.`;
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} may be running low.`;
+}
+
 export function CheckoutScreen() {
   const { token } = useOutletContext();
   const navigate = useNavigate();
@@ -60,6 +68,12 @@ export function CheckoutScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [checkoutFailure, setCheckoutFailure] = useState(null);
+  // Gap closure — the stock-out override guard: `caught.details.items`
+  // from a `BUSINESS_RULE_INSUFFICIENT_STOCK` rejection, or `null` while
+  // no such prompt is showing. A guest has no reason to type free text, so
+  // this is a plain yes/no prompt — the fixed reason actually recorded in
+  // the audit trail is the backend's own constant, not anything sent here.
+  const [lowStockConfirm, setLowStockConfirm] = useState(null);
 
   if (!cart || cart.length === 0 || !initialPaymentMethod) {
     return (
@@ -77,23 +91,25 @@ export function CheckoutScreen() {
 
   const total = sumMoney(cart.map((line) => multiplyMoney(line.price, line.quantity)));
 
-  async function submitOrder() {
-    return qrOrderingApi.createOrder({
-      token,
-      items: cart.map((line) => ({ menu_item_id: line.menuItemId, quantity: line.quantity })),
-      paymentMethod: initialPaymentMethod,
-      guestContact,
-      guestName: guestName || undefined,
-    });
-  }
-
-  async function handleSubmit(event) {
-    event.preventDefault();
+  /**
+   * The actual order-creation call plus its outcome handling — shared by
+   * `handleSubmit` (the first attempt) and `handleConfirmLowStockOrder`
+   * (the retry once the guest says "order anyway"). `acknowledgeLowStock`
+   * is only ever `true` on that retry.
+   */
+  async function completeOrder(acknowledgeLowStock) {
     setSubmitting(true);
     setError(null);
     setCheckoutFailure(null);
     try {
-      const result = await submitOrder();
+      const result = await qrOrderingApi.createOrder({
+        token,
+        items: cart.map((line) => ({ menu_item_id: line.menuItemId, quantity: line.quantity })),
+        paymentMethod: initialPaymentMethod,
+        guestContact,
+        guestName: guestName || undefined,
+        acknowledgeLowStock,
+      });
       // The order exists now; the menu should start from an empty cart next time.
       clearCart(token);
 
@@ -116,10 +132,26 @@ export function CheckoutScreen() {
       // gateway call itself failed.
       setCheckoutFailure({ id: result.id, message: result.checkoutError ?? 'Could not start payment. Your order is on hold — try again below.' });
     } catch (caught) {
+      // Gap closure — the stock-out override guard: a dedicated yes/no
+      // prompt, never the generic error banner, for this one rejection.
+      if (!acknowledgeLowStock && caught instanceof ApiError && caught.code === 'BUSINESS_RULE_INSUFFICIENT_STOCK') {
+        setLowStockConfirm(caught.details?.items ?? []);
+        return;
+      }
       setError(caught instanceof ApiError ? caught.message : 'Could not place this order.');
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    await completeOrder(false);
+  }
+
+  async function handleConfirmLowStockOrder() {
+    setLowStockConfirm(null);
+    await completeOrder(true);
   }
 
   async function handleRetryCheckout() {
@@ -158,6 +190,30 @@ export function CheckoutScreen() {
             </Button>
             <Button variant="ghost" onClick={() => navigate(`../orders/${checkoutFailure.id}/status`, { relative: 'path' })}>
               View order status
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (lowStockConfirm) {
+    return (
+      <div className={styles.page}>
+        <h1 className={styles.title}>One moment</h1>
+        <Card>
+          {error && (
+            <p role="alert" className={formStyles.errorBanner}>
+              {error}
+            </p>
+          )}
+          <p className={formStyles.hint}>{describeLowStockItems(lowStockConfirm)} We can still take your order — order anyway?</p>
+          <div className={formStyles.actionsRow}>
+            <Button onClick={handleConfirmLowStockOrder} loading={submitting}>
+              Yes, order anyway
+            </Button>
+            <Button variant="ghost" onClick={() => setLowStockConfirm(null)} disabled={submitting}>
+              No, go back
             </Button>
           </div>
         </Card>

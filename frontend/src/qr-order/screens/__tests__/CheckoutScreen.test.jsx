@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CheckoutScreen } from '../CheckoutScreen.jsx';
+import { ApiError } from '../../../shared/api/index.js';
 import { renderQrOrderScreen, TOKEN } from './renderQrOrderScreen.jsx';
 
 const mocks = vi.hoisted(() => ({
@@ -122,5 +123,55 @@ describe('<CheckoutScreen>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Place order' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not place this order.');
+  });
+
+  describe('gap closure: the stock-out override guard', () => {
+    function stockRejection(items) {
+      return new ApiError({ code: 'BUSINESS_RULE_INSUFFICIENT_STOCK', message: 'Insufficient stock.', details: { items } });
+    }
+
+    it('shows a yes/no prompt naming the item — never a free-text field — instead of the generic error banner', async () => {
+      mocks.createOrder.mockRejectedValueOnce(stockRejection([{ name: 'Chapman mix' }]));
+      renderScreen();
+
+      await userEvent.type(await screen.findByLabelText(/Email/), 'guest@example.com');
+      await userEvent.click(screen.getByRole('button', { name: 'Place order' }));
+
+      expect(await screen.findByText(/Chapman mix may be running low/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Yes, order anyway' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'No, go back' })).toBeInTheDocument();
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument(); // no free-text reason field
+      expect(screen.queryByText('Insufficient stock.')).not.toBeInTheDocument();
+    });
+
+    it('"Yes, order anyway" resubmits with acknowledge_low_stock: true and proceeds normally on success', async () => {
+      mocks.createOrder.mockRejectedValueOnce(stockRejection([{ name: 'Chapman mix' }]));
+      mocks.createOrder.mockResolvedValueOnce({ id: '81', accessCode: 'ac_3' });
+      mocks.openPaystackPopup.mockImplementation(async ({ onClose }) => onClose());
+      renderScreen();
+
+      await userEvent.type(await screen.findByLabelText(/Email/), 'guest@example.com');
+      await userEvent.click(screen.getByRole('button', { name: 'Place order' }));
+      await screen.findByRole('button', { name: 'Yes, order anyway' });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Yes, order anyway' }));
+
+      expect(mocks.createOrder).toHaveBeenLastCalledWith(expect.objectContaining({ acknowledgeLowStock: true }));
+      await waitFor(() => expect(screen.getByText('status screen')).toBeInTheDocument());
+    });
+
+    it('"No, go back" returns to the order form unchanged, submitting nothing further', async () => {
+      mocks.createOrder.mockRejectedValueOnce(stockRejection([{ name: 'Chapman mix' }]));
+      renderScreen();
+
+      await userEvent.type(await screen.findByLabelText(/Email/), 'guest@example.com');
+      await userEvent.click(screen.getByRole('button', { name: 'Place order' }));
+      await screen.findByRole('button', { name: 'No, go back' });
+
+      await userEvent.click(screen.getByRole('button', { name: 'No, go back' }));
+
+      expect(screen.getByRole('button', { name: 'Place order' })).toBeInTheDocument();
+      expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    });
   });
 });

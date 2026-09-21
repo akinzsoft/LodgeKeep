@@ -182,6 +182,11 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const [settlementPreview, setSettlementPreview] = useState(null);
   const [previewError, setPreviewError] = useState(null);
   const [voidingRow, setVoidingRow] = useState(null);
+  // Gap closure — the stock-out override guard. `{ kind: 'addItem',
+  // menuItemId, items }` or `{ kind: 'settle', items, paymentIds }` while
+  // the "low stock, proceed anyway?" confirmation is open — see
+  // `confirmStockOverride`.
+  const [stockOverrideNeeded, setStockOverrideNeeded] = useState(null);
   // `{ order, itemCount }` while the "remove a tab that still has items"
   // confirmation is open; `removingTabId` disables that tab's ✕ while its
   // own check/void request is in flight.
@@ -413,8 +418,63 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       await posApi.addItem(activeOrderId, { menuItemId, quantity: 1 });
       await loadActiveOrder(activeOrderId);
     } catch (caught) {
+      // Gap closure — the stock-out override guard: a dedicated, reactive
+      // prompt (never the generic error banner) naming the affected
+      // item(s), matching this file's own existing ConfirmDialog pattern
+      // for void/remove-tab below.
+      if (caught instanceof ApiError && caught.code === 'BUSINESS_RULE_INSUFFICIENT_STOCK') {
+        setStockOverrideNeeded({ kind: 'addItem', menuItemId, items: caught.details?.items ?? [] });
+        return;
+      }
       setError(caught instanceof ApiError ? caught.message : 'Could not add this item.');
     }
+  }
+
+  /**
+   * Gap closure — the stock-out override guard. `pending.kind === 'settle'`
+   * reuses `pending.paymentIds`, built by `handleSubmitSettlement`'s own
+   * card/NQR collection loop — a card/NQR payment is already captured by
+   * the time settlement can reject for insufficient stock, so a retry here
+   * never re-opens the Paystack popup, only resubmits `settleOrder` with
+   * the reason attached.
+   */
+  async function confirmStockOverride(reason) {
+    const pending = stockOverrideNeeded;
+    setStockOverrideNeeded(null);
+    setError(null);
+
+    if (pending.kind === 'addItem') {
+      try {
+        await posApi.addItem(activeOrderId, { menuItemId: pending.menuItemId, quantity: 1, stockOverrideReason: reason });
+        await loadActiveOrder(activeOrderId);
+      } catch (caught) {
+        setError(caught instanceof ApiError ? caught.message : 'Could not add this item.');
+      }
+      return;
+    }
+
+    settlingRef.current = true;
+    setSettling(true);
+    try {
+      setPaymentStage('Settling…');
+      await performSettle(pending.paymentIds, reason);
+    } catch (caught) {
+      const readable = caught instanceof ApiError || caught instanceof PaymentNotCompletedError;
+      setError(readable ? caught.message : 'Could not settle this tab.');
+      if (settlementForms?.some((form) => form.method === 'card')) loadActiveOrder(activeOrderId);
+    } finally {
+      settlingRef.current = false;
+      setSettling(false);
+      setPaymentStage(null);
+    }
+  }
+
+  /** Names the affected item(s) in plain language for the override prompt. */
+  function describeStockOverrideItems(items) {
+    const names = (items ?? []).map((item) => item.name).filter(Boolean);
+    if (names.length === 0) return 'One or more items would run out.';
+    if (names.length === 1) return `${names[0]} would run out.`;
+    return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} would run out.`;
   }
 
   /** `voidingRow.ids` is always an array — one id for the "−" stepper (void the most-recently-added unit) or the trash icon on a ×1 line, every row's id for the trash icon on a ×N line (voids the whole line at once). */
@@ -491,6 +551,41 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   }
 
   /**
+   * The actual `settleOrder` call plus its success side effects, factored
+   * out of `handleSubmitSettlement` so the stock-out override guard's own
+   * retry (`confirmStockOverride`, above) can resubmit with a
+   * `stockOverrideReason` attached, reusing the SAME already-captured
+   * `paymentIds` rather than re-collecting payment — a card/NQR payment is
+   * already captured by the time settlement can reject for insufficient
+   * stock. Throws on failure; the caller decides how to surface it.
+   */
+  async function performSettle(paymentIds, stockOverrideReason) {
+    const result = await posApi.settleOrder(
+      activeOrderId,
+      settlementForms.map((form) => ({
+        splitGroup: form.splitGroup,
+        method: form.method,
+        paymentId: paymentIds.get(form.splitGroup),
+        serviceCharge: serviceAmountForGroup(form.splitGroup) ?? ZERO,
+        roomCharge:
+          form.method === 'room_charge'
+            ? { reservationId: form.roomChargeGuest?.reservationId, authMethod: form.authMethod, authReference: form.authReference }
+            : undefined,
+      })),
+      { stockOverrideReason }
+    );
+    // Built before anything below clears the order it reads from.
+    setSettleResult(buildReceipt(result));
+    setSplitModalOpen(false);
+    setSettlementForms(null);
+    setSettlementPreview(null);
+    setPreviewError(null);
+    setOpenOrders((prev) => prev.filter((o) => o.id !== activeOrderId));
+    setActiveOrderId(null);
+    setActiveOrder(null);
+  }
+
+  /**
    * Bug fix (user-reported: "click checkout, it opens a blank page"): a
    * successful settle used to replace the ENTIRE Register — header, tab
    * strip and panel — with a tiny "Tab settled." line and a faint ghost
@@ -510,39 +605,28 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     settlingRef.current = true;
     setSettling(true);
     setError(null);
+    // Declared outside the try so a stock-out rejection can hand the
+    // already-built map to `confirmStockOverride`'s own retry, below.
+    const paymentIds = new Map();
     try {
       // Card/NQR checks are paid through Paystack first, one at a time; the
       // tab only settles once every one of them has captured money.
-      const paymentIds = new Map();
       for (const form of settlementForms) {
         if (form.method !== 'card') continue;
         const payment = await collectPaystackPayment(form);
         paymentIds.set(form.splitGroup, payment.id);
       }
       setPaymentStage('Settling…');
-      const result = await posApi.settleOrder(
-        activeOrderId,
-        settlementForms.map((form) => ({
-          splitGroup: form.splitGroup,
-          method: form.method,
-          paymentId: paymentIds.get(form.splitGroup),
-          serviceCharge: serviceAmountForGroup(form.splitGroup) ?? ZERO,
-          roomCharge:
-            form.method === 'room_charge'
-              ? { reservationId: form.roomChargeGuest?.reservationId, authMethod: form.authMethod, authReference: form.authReference }
-              : undefined,
-        }))
-      );
-      // Built before anything below clears the order it reads from.
-      setSettleResult(buildReceipt(result));
-      setSplitModalOpen(false);
-      setSettlementForms(null);
-      setSettlementPreview(null);
-      setPreviewError(null);
-      setOpenOrders((prev) => prev.filter((o) => o.id !== activeOrderId));
-      setActiveOrderId(null);
-      setActiveOrder(null);
+      await performSettle(paymentIds);
     } catch (caught) {
+      // Gap closure — the stock-out override guard: a dedicated, reactive
+      // prompt, not the generic error banner. Any card/NQR payment already
+      // collected above stays captured — the retry resubmits settleOrder
+      // alone, never re-opening the Paystack popup.
+      if (caught instanceof ApiError && caught.code === 'BUSINESS_RULE_INSUFFICIENT_STOCK') {
+        setStockOverrideNeeded({ kind: 'settle', items: caught.details?.items ?? [], paymentIds });
+        return;
+      }
       const readable = caught instanceof ApiError || caught instanceof PaymentNotCompletedError;
       setError(readable ? caught.message : 'Could not settle this tab.');
       // A card/NQR payment may have been captured even though settling
@@ -1192,6 +1276,20 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
               confirmLabel="Void"
               onConfirm={confirmVoid}
               onCancel={() => setVoidingRow(null)}
+            />
+          )}
+
+          {/* Gap closure — the stock-out override guard. Allowed, never
+              blocked outright, but a reason is required to proceed —
+              matching this file's own void/remove-tab confirmations. */}
+          {stockOverrideNeeded && (
+            <ConfirmDialog
+              title="Low stock"
+              consequence={`${describeStockOverrideItems(stockOverrideNeeded.items)} You can still proceed — say why below.`}
+              requireReason
+              confirmLabel="Proceed anyway"
+              onConfirm={confirmStockOverride}
+              onCancel={() => setStockOverrideNeeded(null)}
             />
           )}
       </>
