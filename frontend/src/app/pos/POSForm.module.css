@@ -121,3 +121,22 @@
   font-size: var(--text-label-size);
   color: var(--text-secondary);
 }
+
+/* Gap closure (Stock items redesign): each category's own DataTable/Card,
+   plus its "Add item" toggle and any open Add/Edit/Receive panel, wrapped
+   in a plain <div> (not a <section>, so a test's own
+   `heading.closest('div')` reliably finds this wrapper rather than
+   DataTable's own internal <section>) so the whole group reads as one
+   visual unit with consistent spacing between sections. */
+.categorySection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* The low-stock/out-of-stock pill sits inline after the plain quantity
+   text in the "On hand" column — never colour alone (DESIGN_SYSTEM.md §1),
+   so the real number is always shown right next to it. */
+.stockPill {
+  margin-left: var(--space-2);
+}
