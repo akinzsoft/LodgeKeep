@@ -60,7 +60,11 @@ export function StockCategoriesCard({ categories, onChanged }) {
 
   return (
     <Card title="Stock categories">
-      <p className={formStyles.hint}>Categories are shared by every outlet. Stock items choose one of these, so the Stock Items list and the margin report show consistent names.</p>
+      {/* Bug fix: the margin report groups by a menu item's own category
+          (pos_menu_categories), never this one — this hint used to claim
+          otherwise, a copy-paste leftover from MenuCategoriesCard.jsx's own
+          (accurate, for that report) equivalent line. */}
+      <p className={formStyles.hint}>Categories are shared by every outlet. Stock items choose one of these, so the Stock Items list shows consistent names.</p>
       {error && (
         <p role="alert" className={formStyles.errorBanner}>
           {error}
