@@ -152,22 +152,22 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
     return res.body.data;
   }
 
-  async function addItem(token, orderId, { menuItemId, quantity = 1 }) {
+  async function addItem(token, orderId, { menuItemId, quantity = 1, stockOverrideReason, expectStatus = 200 } = {}) {
     const res = await t.request
       .post(`/api/v1/pos/orders/${orderId}/items`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ menu_item_id: menuItemId, quantity });
-    expect(res.status).toBe(200);
+      .send({ menu_item_id: menuItemId, quantity, stock_override_reason: stockOverrideReason });
+    expect(res.status).toBe(expectStatus);
     return res.body.data;
   }
 
-  async function settleCash(token, orderId) {
+  async function settleCash(token, orderId, { stockOverrideReason, expectStatus = 200 } = {}) {
     const res = await t.request
       .post(`/api/v1/pos/orders/${orderId}/settle`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', idemKey())
-      .send({ settlements: [{ method: 'cash' }] });
-    expect(res.status).toBe(200);
+      .send({ settlements: [{ method: 'cash' }], stock_override_reason: stockOverrideReason });
+    expect(res.status).toBe(expectStatus);
     return res.body.data;
   }
 
@@ -472,7 +472,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       expect(anyMovement).toBeUndefined();
     });
 
-    it('deduction is NEVER blocked once it takes a component negative — settlement always completes', async () => {
+    it('deduction is NEVER blocked once it takes a component negative — settlement always completes, once overridden', async () => {
       const { outletId, terminalId, menuItemId } = await freshOutletSetup();
       const stockItem = await createStockItem(managerToken(), { outletId });
       await linkComponent(managerToken(), { menuItemId, stockItemId: stockItem.id, quantity: '50.000' });
@@ -480,9 +480,13 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       await seedStockReceipt(ctx.a, stockItem, '10.000');
 
       const order = await openOrder(managerToken(), { outletId, terminalId });
-      await addItem(managerToken(), order.id, { menuItemId, quantity: 1 });
-      const settled = await settleCash(managerToken(), order.id);
-      expect(settled.order.status).toBe('settled'); // Never rejected for insufficient stock.
+      // The gap-closure guard requires a reason both here (add-time) and at
+      // settle-time below (would go to -40.000) — deduction itself is
+      // still never CLAMPED, which is what this test actually proves, once
+      // the reason is supplied at both checkpoints.
+      await addItem(managerToken(), order.id, { menuItemId, quantity: 1, stockOverrideReason: 'Known to still be in stock, count is off' });
+      const settled = await settleCash(managerToken(), order.id, { stockOverrideReason: 'Known to still be in stock, count is off' });
+      expect(settled.order.status).toBe('settled'); // Never rejected for insufficient stock once overridden.
 
       const item = await t.trx('stock_items').where({ id: stockItem.id }).first();
       expect(item.current_quantity).toBe('-40.000'); // Genuinely negative, not clamped to zero.
@@ -499,8 +503,11 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       await t.trx('stock_items').where({ id: stockItem.id }).update({ current_quantity: '50.000' });
 
       const order = await openOrder(managerToken(), { outletId, terminalId });
-      await addItem(managerToken(), order.id, { menuItemId, quantity: 1 });
-      await settleCash(managerToken(), order.id);
+      // Consumes it to EXACTLY zero — the guard's own "<= 0" rule requires
+      // an override reason for this too, not just a genuinely negative
+      // result (decision: "would take, or has already taken, to <= 0").
+      await addItem(managerToken(), order.id, { menuItemId, quantity: 1, stockOverrideReason: 'Last of this batch, confirmed by the bar' });
+      await settleCash(managerToken(), order.id, { stockOverrideReason: 'Last of this batch, confirmed by the bar' });
 
       const menuItem = await t.trx('pos_menu_items').where({ id: menuItemId }).first();
       expect(menuItem.is_available).toBe(0);
@@ -512,6 +519,199 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
         .send({ menu_item_id: menuItemId, quantity: 1 });
       expect(rejected.status).toBe(400);
       expect(rejected.body.error.code).toBe('VALIDATION_POS_ITEM_UNAVAILABLE');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Gap closure: the stock-out override guard (user-reported — the
+  // Register let an item sell at zero stock with no proactive check).
+  // Allowed, never blocked outright, but requires a caller-supplied
+  // override reason at BOTH add-time and settle-time.
+  // -----------------------------------------------------------------------
+
+  describe('stock-out override guard', () => {
+    it('addItem rejects with BUSINESS_RULE_INSUFFICIENT_STOCK naming the affected item when no reason is supplied', async () => {
+      const { outletId, terminalId, menuItemId } = await freshOutletSetup();
+      const stockItem = await createStockItem(managerToken(), { outletId, name: 'Garnish Lime' });
+      await linkComponent(managerToken(), { menuItemId, stockItemId: stockItem.id, quantity: '5.000' });
+      await seedStockReceipt(ctx.a, stockItem, '5.000'); // Exactly enough for one sale to hit zero.
+
+      const order = await openOrder(managerToken(), { outletId, terminalId });
+      const rejected = await t.request
+        .post(`/api/v1/pos/orders/${order.id}/items`)
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .send({ menu_item_id: menuItemId, quantity: 1 });
+      expect(rejected.status).toBe(422);
+      expect(rejected.body.error.code).toBe('BUSINESS_RULE_INSUFFICIENT_STOCK');
+      expect(rejected.body.error.details.items).toHaveLength(1);
+      expect(rejected.body.error.details.items[0].name).toBe('Garnish Lime');
+      expect(rejected.body.error.details.items[0].projectedQuantity).toBe('0.000');
+
+      // Nothing was written — a rejected add leaves no order-item row.
+      const items = await t.trx('pos_order_items').where({ pos_order_id: order.id });
+      expect(items).toHaveLength(0);
+    });
+
+    it('succeeds once a reason is supplied, and records a real audit_log row plus a staff notification', async () => {
+      const { outletId, terminalId, menuItemId } = await freshOutletSetup();
+      const stockItem = await createStockItem(managerToken(), { outletId });
+      await linkComponent(managerToken(), { menuItemId, stockItemId: stockItem.id, quantity: '5.000' });
+      await seedStockReceipt(ctx.a, stockItem, '5.000');
+
+      const order = await openOrder(managerToken(), { outletId, terminalId });
+      const accepted = await t.request
+        .post(`/api/v1/pos/orders/${order.id}/items`)
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .send({ menu_item_id: menuItemId, quantity: 1, stock_override_reason: 'Confirmed with the bar, count is off' });
+      expect(accepted.status).toBe(200);
+
+      const auditRow = await t.trx('audit_log').where({ entity_type: 'stock_items', entity_id: stockItem.id, action: 'stock_override_applied' }).first();
+      expect(auditRow).toBeDefined();
+      expect(auditRow.reason).toBe('Confirmed with the bar, count is off');
+      expect(auditRow.source).toBe('api');
+
+      const notification = await t.trx('in_app_notifications').where({ type: 'pos.stock_override_applied' }).first();
+      expect(notification).toBeDefined();
+    });
+
+    it('a leading/trailing-whitespace-only reason is treated as missing', async () => {
+      const { outletId, terminalId, menuItemId } = await freshOutletSetup();
+      const stockItem = await createStockItem(managerToken(), { outletId });
+      await linkComponent(managerToken(), { menuItemId, stockItemId: stockItem.id, quantity: '5.000' });
+      await seedStockReceipt(ctx.a, stockItem, '5.000');
+
+      const order = await openOrder(managerToken(), { outletId, terminalId });
+      const rejected = await t.request
+        .post(`/api/v1/pos/orders/${order.id}/items`)
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .send({ menu_item_id: menuItemId, quantity: 1, stock_override_reason: '   ' });
+      expect(rejected.status).toBe(422);
+      expect(rejected.body.error.code).toBe('BUSINESS_RULE_INSUFFICIENT_STOCK');
+    });
+
+    it('a menu item with no recipe never triggers the guard, reason or no reason', async () => {
+      const { outletId, terminalId, menuItemId } = await freshOutletSetup();
+      const order = await openOrder(managerToken(), { outletId, terminalId });
+      const res = await t.request
+        .post(`/api/v1/pos/orders/${order.id}/items`)
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .send({ menu_item_id: menuItemId, quantity: 1 });
+      expect(res.status).toBe(200);
+    });
+
+    it('a multi-component recipe where only ONE component is depleted still requires override, and names only that component', async () => {
+      const { outletId, terminalId, menuItemId } = await freshOutletSetup();
+      const plentiful = await createStockItem(managerToken(), { outletId, name: 'Plentiful Mixer' });
+      const scarce = await createStockItem(managerToken(), { outletId, name: 'Scarce Spirit' });
+      await t.request
+        .put(`/api/v1/pos/stock/menu-items/${menuItemId}/components`)
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .send({
+          components: [
+            { stock_item_id: plentiful.id, quantity: '10.000' },
+            { stock_item_id: scarce.id, quantity: '5.000' },
+          ],
+        });
+      await seedStockReceipt(ctx.a, plentiful, '1000.000');
+      await seedStockReceipt(ctx.a, scarce, '5.000'); // Exactly enough for one sale to hit zero.
+
+      const order = await openOrder(managerToken(), { outletId, terminalId });
+      const rejected = await t.request
+        .post(`/api/v1/pos/orders/${order.id}/items`)
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .send({ menu_item_id: menuItemId, quantity: 1 });
+      expect(rejected.status).toBe(422);
+      expect(rejected.body.error.details.items).toHaveLength(1);
+      expect(rejected.body.error.details.items[0].name).toBe('Scarce Spirit');
+    });
+
+    it('an item ALREADY sitting negative (a prior override already applied) still requires override on the NEXT add', async () => {
+      const { outletId, terminalId, menuItemId } = await freshOutletSetup();
+      const stockItem = await createStockItem(managerToken(), { outletId });
+      await linkComponent(managerToken(), { menuItemId, stockItemId: stockItem.id, quantity: '1.000' });
+      await t.trx('stock_items').where({ id: stockItem.id }).update({ current_quantity: '-3.000' });
+
+      const order = await openOrder(managerToken(), { outletId, terminalId });
+      const rejected = await t.request
+        .post(`/api/v1/pos/orders/${order.id}/items`)
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .send({ menu_item_id: menuItemId, quantity: 1 });
+      expect(rejected.status).toBe(422);
+      expect(rejected.body.error.details.items[0].projectedQuantity).toBe('-4.000');
+    });
+
+    it('settle-time re-checks defensively: an item add-time-approved with a reason still needs (or not) an override at settle depending on the LIVE quantity at that moment', async () => {
+      const { outletId, terminalId, menuItemId } = await freshOutletSetup();
+      const stockItem = await createStockItem(managerToken(), { outletId });
+      await linkComponent(managerToken(), { menuItemId, stockItemId: stockItem.id, quantity: '5.000' });
+      await seedStockReceipt(ctx.a, stockItem, '5.000');
+
+      const order = await openOrder(managerToken(), { outletId, terminalId });
+      await addItem(managerToken(), order.id, { menuItemId, quantity: 1, stockOverrideReason: 'Confirmed, selling anyway' });
+
+      // Restocked BETWEEN add and settle — the live quantity at settle
+      // time is now well above the deduction, so settle needs NO reason
+      // at all, even though add-time DID need one.
+      await t.request
+        .post('/api/v1/pos/stock/goods-received')
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ outlet_id: outletId, lines: [{ stock_item_id: stockItem.id, quantity: '100.000', unit_cost: '1.00' }] });
+
+      const settled = await settleCash(managerToken(), order.id);
+      expect(settled.order.status).toBe('settled');
+    });
+
+    it('one guard call covers a whole split-bill settle request — a reason supplied once is honored across every group', async () => {
+      const { outletId, terminalId, menuItemId } = await freshOutletSetup();
+      const stockItem = await createStockItem(managerToken(), { outletId });
+      await linkComponent(managerToken(), { menuItemId, stockItemId: stockItem.id, quantity: '5.000' });
+      await seedStockReceipt(ctx.a, stockItem, '5.000');
+
+      const order = await openOrder(managerToken(), { outletId, terminalId });
+      await addItem(managerToken(), order.id, { menuItemId, quantity: 1, stockOverrideReason: 'Confirmed, selling anyway' });
+      const items = await t.trx('pos_order_items').where({ pos_order_id: order.id });
+      await t.request
+        .post(`/api/v1/pos/orders/${order.id}/items/${items[0].id}/split-group`)
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .send({ split_group: 1 });
+
+      const settleRes = await t.request
+        .post(`/api/v1/pos/orders/${order.id}/settle`)
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ settlements: [{ method: 'cash', split_group: 1 }], stock_override_reason: 'Confirmed, selling anyway' });
+      expect(settleRes.status).toBe(200);
+
+      const item = await t.trx('stock_items').where({ id: stockItem.id }).first();
+      expect(item.current_quantity).toBe('0.000');
+    });
+
+    it('stamps the override reason onto only the AFFECTED stock item\'s own "sold" movement — an unaffected component in the same settlement stays reason: null', async () => {
+      const { outletId, terminalId, menuItemId } = await freshOutletSetup();
+      const plentiful = await createStockItem(managerToken(), { outletId, name: 'Plentiful Mixer 2' });
+      const scarce = await createStockItem(managerToken(), { outletId, name: 'Scarce Spirit 2' });
+      await t.request
+        .put(`/api/v1/pos/stock/menu-items/${menuItemId}/components`)
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .send({
+          components: [
+            { stock_item_id: plentiful.id, quantity: '10.000' },
+            { stock_item_id: scarce.id, quantity: '5.000' },
+          ],
+        });
+      await seedStockReceipt(ctx.a, plentiful, '1000.000');
+      await seedStockReceipt(ctx.a, scarce, '5.000');
+
+      const order = await openOrder(managerToken(), { outletId, terminalId });
+      await addItem(managerToken(), order.id, { menuItemId, quantity: 1, stockOverrideReason: 'Confirmed with the bar' });
+      const settled = await settleCash(managerToken(), order.id, { stockOverrideReason: 'Confirmed with the bar' });
+      const settlementId = settled.settlements[0].id;
+
+      const scarceMovement = await t.trx('stock_movements').where({ pos_order_settlement_id: settlementId, stock_item_id: scarce.id, type: 'sold' }).first();
+      const plentifulMovement = await t.trx('stock_movements').where({ pos_order_settlement_id: settlementId, stock_item_id: plentiful.id, type: 'sold' }).first();
+      expect(scarceMovement.reason).toBe('Confirmed with the bar');
+      expect(plentifulMovement.reason).toBeNull();
     });
   });
 
@@ -569,8 +769,10 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       await seedStockReceipt(ctx.a, stockItem, '10.000');
 
       const order = await openOrder(managerToken(), { outletId, terminalId });
-      await addItem(managerToken(), order.id, { menuItemId, quantity: 1 });
-      const settled = await settleCash(managerToken(), order.id);
+      // Consumes it to exactly zero — needs an override reason at both
+      // checkpoints, same as above.
+      await addItem(managerToken(), order.id, { menuItemId, quantity: 1, stockOverrideReason: 'Last of this batch' });
+      const settled = await settleCash(managerToken(), order.id, { stockOverrideReason: 'Last of this batch' });
       const settlementId = settled.settlements[0].id;
 
       expect((await t.trx('pos_menu_items').where({ id: menuItemId }).first()).is_available).toBe(0);

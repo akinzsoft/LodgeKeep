@@ -102,6 +102,7 @@ async function createOrder(req, res, next) {
       guestContact: req.body?.guest_contact,
       guestName: req.body?.guest_name,
       idempotencyKey: key,
+      acknowledgeLowStock: Boolean(req.body?.acknowledge_low_stock),
     });
     const guestOrder = outcome.body.data;
 

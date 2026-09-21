@@ -98,6 +98,7 @@
 const { scopedDb } = require('../../db');
 const { ValidationError, withDuplicateMapping } = require('../../shared/errors');
 const { notifyStaff } = require('../notifications/staff-notifications');
+const { recordAuditEntry } = require('../../audit');
 const { sumQuantity, negateQuantity, multiplyQuantityByInteger, compareQuantity, extendedCost } = require('../../shared/quantity');
 const {
   StockItemNotFoundError,
@@ -110,9 +111,22 @@ const {
   StockTakeAlreadyCompletedError,
   StockTakeAlreadyCancelledError,
   StockCategoryInUseError,
+  InsufficientStockOverrideRequiredError,
 } = require('./errors');
 
 const ZERO_QTY = '0.000';
+
+// ---------------------------------------------------------------------
+// Gap closure — the stock-out override guard's fixed, system-supplied
+// reasons for the three settlement writers that have no human present to
+// type one (a room-charge OTP already single-use-claimed, and a payment
+// already captured by a gateway webhook) plus the guest QR acknowledgment,
+// which is a yes/no prompt, not a free-text field. See
+// `assertStockAvailableOrOverridden`'s own header for how these are used.
+// ---------------------------------------------------------------------
+const AUTOMATIC_OVERRIDE_REASON_GUEST_ACKNOWLEDGED = 'Guest acknowledged a low-stock warning before placing the order.';
+const AUTOMATIC_OVERRIDE_REASON_ROOM_CHARGE_OTP = 'Automatically approved — a verified room-charge confirmation cannot be blocked; flagged for review.';
+const AUTOMATIC_OVERRIDE_REASON_CARD_CAPTURE = 'Automatically approved — payment was already captured by the gateway before settlement could be blocked; flagged for review.';
 
 // ---------------------------------------------------------------------
 // The shared lock-ordering helper
@@ -302,6 +316,113 @@ async function applyStockAvailabilityEffects({ trx, stockItemIds }) {
 // ---------------------------------------------------------------------
 
 /**
+ * Pure aggregation, shared by `deductStockForSettlement` and the stock-out
+ * override guard below, so the real deduction and the pre-write check that
+ * gates it are always computed from the identical recipe math and can never
+ * silently disagree. `lines`: `[{menuItemId, quantity}]` — a smaller, more
+ * general shape than a raw `pos_order_items` row, so a caller with only a
+ * cart of `{menuItemId, quantity}` pairs (add-time, before any order row
+ * exists) can call this too.
+ *
+ * @returns {Promise<Map<number, string>>} deduction quantity (a positive
+ *   decimal string — the amount that would be CONSUMED, not yet negated)
+ *   keyed by stock item id. Empty when none of `lines` has a recipe.
+ */
+async function computeStockDeductionsForLines({ trx, lines }) {
+  const orderedQtyByMenuItem = new Map();
+  for (const line of lines) {
+    const menuItemId = Number(line.menuItemId);
+    const existing = orderedQtyByMenuItem.get(menuItemId) ?? 0;
+    orderedQtyByMenuItem.set(menuItemId, existing + Number(line.quantity));
+  }
+  const menuItemIds = [...orderedQtyByMenuItem.keys()];
+  if (menuItemIds.length === 0) return new Map();
+
+  const components = await trx.table('pos_menu_item_components').whereIn('menu_item_id', menuItemIds).select('menu_item_id', 'stock_item_id', 'quantity');
+  if (components.length === 0) return new Map(); // No recipe anywhere in these lines — zero further overhead.
+
+  const deductionByStockItem = new Map();
+  for (const component of components) {
+    const orderedQty = orderedQtyByMenuItem.get(Number(component.menu_item_id)) ?? 0;
+    const deduction = multiplyQuantityByInteger(component.quantity, orderedQty);
+    const key = Number(component.stock_item_id);
+    deductionByStockItem.set(key, sumQuantity([deductionByStockItem.get(key) ?? ZERO_QTY, deduction]));
+  }
+  return deductionByStockItem;
+}
+
+/**
+ * Gap closure — the stock-out override guard (user-reported: the Register
+ * let an item sell at zero stock with no proactive check at all). A plain,
+ * NON-LOCKING read of each affected stock item's `current_quantity` — this
+ * is a check, not a mutation, and this module's own "negative stock is
+ * allowed, never blocked" rule (file header) still governs the real
+ * deduction regardless of what this function decides. Under this
+ * transaction's REPEATABLE READ isolation a plain read sees its own
+ * consistent-read snapshot (established at the transaction's first
+ * ordinary SELECT), not necessarily the true instantaneous value — a
+ * narrower version of the same tolerated race below, not a separate one.
+ * Two concurrent calls that both pass this check are accepted, not closed
+ * against, the same tolerated-race philosophy this module already applies
+ * to the analogous settlement-vs-availability-flip race — a
+ * reservation/pessimistic-lock mechanism was deliberately not introduced
+ * here.
+ *
+ * Confirmed decision: adding/settling an item that would take (or has
+ * already taken) a linked stock component to <= 0 is ALLOWED, never
+ * blocked outright, but requires a caller-supplied override reason —
+ * mirroring `ar/service.js`'s credit-limit override shape, with one real
+ * improvement: unlike that precedent (whose override reason is never
+ * durably persisted anywhere), every override here writes a real
+ * `audit_log` row, one per affected stock item.
+ *
+ * `overrideReason` may be a human-typed string (the staff Register's
+ * `ConfirmDialog`), or one of this file's own `AUTOMATIC_OVERRIDE_REASON_*`
+ * constants for a call site with no human present to ask (a guest's
+ * already-claimed room-charge OTP, a card payment the gateway already
+ * captured) — the SAME rule and the SAME error code apply to every channel;
+ * only how each frontend responds to the rejection differs.
+ *
+ * @returns {Promise<{affectedStockItemIds: number[]}>}
+ */
+async function assertStockAvailableOrOverridden({ trx, lines, overrideReason, userId, propertyId, source = 'api' }) {
+  const deductionByStockItem = await computeStockDeductionsForLines({ trx, lines });
+  if (deductionByStockItem.size === 0) return { affectedStockItemIds: [] };
+
+  const stockItemIds = [...deductionByStockItem.keys()];
+  const stockRows = await trx.table('stock_items').whereIn('id', stockItemIds).select('id', 'name', 'unit', 'current_quantity');
+
+  const affected = [];
+  for (const row of stockRows) {
+    const deduction = deductionByStockItem.get(Number(row.id));
+    const projectedQuantity = sumQuantity([row.current_quantity, negateQuantity(deduction)]);
+    if (compareQuantity(projectedQuantity, ZERO_QTY) <= 0) {
+      affected.push({ stockItemId: Number(row.id), name: row.name, unit: row.unit, projectedQuantity });
+    }
+  }
+  if (affected.length === 0) return { affectedStockItemIds: [] };
+
+  const reason = typeof overrideReason === 'string' ? overrideReason.trim() : '';
+  if (!reason) throw new InsufficientStockOverrideRequiredError(affected);
+
+  for (const item of affected) {
+    await recordAuditEntry(trx, {
+      entityType: 'stock_items',
+      entityId: item.stockItemId,
+      propertyId: propertyId ?? null,
+      userId: userId ?? null,
+      action: 'stock_override_applied',
+      source,
+      afterState: { projectedQuantity: item.projectedQuantity, unit: item.unit },
+      reason,
+    });
+  }
+  await notifyStaff({ trx, eventType: 'pos.stock_override_applied', payload: { items: affected, reason } });
+
+  return { affectedStockItemIds: affected.map((item) => item.stockItemId) };
+}
+
+/**
  * The real settlement-side deduction — called from BOTH real settlement
  * writers this codebase has (`pos/service.js`'s `settleOrder`, once per
  * settlement covering `items`; `cashiering/service.js`'s
@@ -311,29 +432,21 @@ async function applyStockAvailabilityEffects({ trx, stockItemIds }) {
  * covers — a menu item with no recipe at all costs nothing beyond one
  * cheap lookup (empty `pos_menu_item_components` result, immediate
  * return).
+ *
+ * `overrideReasonsByStockItemId` (optional `Map<number, string>`): when the
+ * caller's own `assertStockAvailableOrOverridden` call found this
+ * settlement's items required an override, the SAME reason is stamped onto
+ * the specific `sold` movement row(s) that triggered it — a display
+ * convenience for reading a stock item's raw movement history directly;
+ * `audit_log` remains the authoritative record regardless of whether a
+ * caller supplies this.
  */
-async function deductStockForSettlement({ trx, orderId, settlementId, items, businessDate, userId }) {
+async function deductStockForSettlement({ trx, orderId, settlementId, items, businessDate, userId, overrideReasonsByStockItemId }) {
   if (!items || items.length === 0) return;
 
-  const orderedQtyByMenuItem = new Map();
-  for (const item of items) {
-    const menuItemId = Number(item.menu_item_id);
-    const existing = orderedQtyByMenuItem.get(menuItemId) ?? 0;
-    orderedQtyByMenuItem.set(menuItemId, existing + Number(item.quantity));
-  }
-  const menuItemIds = [...orderedQtyByMenuItem.keys()];
-  if (menuItemIds.length === 0) return;
-
-  const components = await trx.table('pos_menu_item_components').whereIn('menu_item_id', menuItemIds).select('menu_item_id', 'stock_item_id', 'quantity');
-  if (components.length === 0) return; // No recipe anywhere in this settlement — zero further overhead.
-
-  const deductionByStockItem = new Map();
-  for (const component of components) {
-    const orderedQty = orderedQtyByMenuItem.get(Number(component.menu_item_id)) ?? 0;
-    const deduction = multiplyQuantityByInteger(component.quantity, orderedQty);
-    const key = Number(component.stock_item_id);
-    deductionByStockItem.set(key, sumQuantity([deductionByStockItem.get(key) ?? ZERO_QTY, deduction]));
-  }
+  const lines = items.map((item) => ({ menuItemId: item.menu_item_id, quantity: item.quantity }));
+  const deductionByStockItem = await computeStockDeductionsForLines({ trx, lines });
+  if (deductionByStockItem.size === 0) return;
 
   const stockItemIds = [...deductionByStockItem.keys()];
   const lockClosure = await resolveLockClosure({ trx, stockItemIds });
@@ -356,6 +469,7 @@ async function deductStockForSettlement({ trx, orderId, settlementId, items, bus
       pos_order_id: orderId,
       pos_order_settlement_id: settlementId,
       user_id: userId ?? null,
+      reason: overrideReasonsByStockItemId?.get(stockItemId) ?? null,
     });
     await recomputeStockItemQuantity({ trx, stockItemId });
   }
@@ -849,13 +963,32 @@ async function cancelStockTake({ context, stockTakeId, reason, userId }) {
 // Movement history
 // ---------------------------------------------------------------------
 
-async function listStockMovements({ context, stockItemId, type, dateFrom, dateTo }) {
+/**
+ * Gap closure — this function already existed but was never routed
+ * anywhere (Goods Received's own tab had no way to show what it had just
+ * recorded). Widened from "one stock item's history" to also accept
+ * `outletId` alone, for a per-outlet delivery/movement feed; at least one
+ * of the two is required, so a caller can never accidentally list every
+ * movement at the property with no scope at all. Joined to `stock_items`
+ * for `name`/`unit` — a plain movement row only carries `stock_item_id`,
+ * and a since-archived item's name would otherwise be unresolvable from
+ * the frontend's own currently-active-items lookup.
+ */
+async function listStockMovements({ context, stockItemId, outletId, type, dateFrom, dateTo, limit = 50 }) {
+  if (!stockItemId && !outletId) {
+    throw new ValidationError('MISSING_FIELD', 'Either "stock_item_id" or "outlet_id" is required.', [{ field: 'stock_item_id', issue: 'missing' }]);
+  }
   const db = scopedDb().for(context);
-  let query = db.table('stock_movements').where({ stock_item_id: stockItemId });
-  if (type) query = query.where({ type });
-  if (dateFrom) query = query.where('business_date', '>=', dateFrom);
-  if (dateTo) query = query.where('business_date', '<=', dateTo);
-  return query.orderBy('id', 'desc');
+  let query = db.table('stock_movements').joinScoped('stock_items', (join) => join.on('stock_items.id', '=', 'stock_movements.stock_item_id'));
+  if (stockItemId) query = query.where({ 'stock_movements.stock_item_id': stockItemId });
+  if (outletId) query = query.where({ 'stock_movements.outlet_id': outletId });
+  if (type) query = query.where({ 'stock_movements.type': type });
+  if (dateFrom) query = query.where('stock_movements.business_date', '>=', dateFrom);
+  if (dateTo) query = query.where('stock_movements.business_date', '<=', dateTo);
+  return query
+    .select('stock_movements.*', 'stock_items.name as stock_item_name', 'stock_items.unit as stock_item_unit')
+    .orderBy('stock_movements.id', 'desc')
+    .limit(limit);
 }
 
 module.exports = {
@@ -863,6 +996,10 @@ module.exports = {
   resolveLockClosure,
   recomputeStockItemQuantity,
   applyStockAvailabilityEffects,
+  assertStockAvailableOrOverridden,
+  AUTOMATIC_OVERRIDE_REASON_GUEST_ACKNOWLEDGED,
+  AUTOMATIC_OVERRIDE_REASON_ROOM_CHARGE_OTP,
+  AUTOMATIC_OVERRIDE_REASON_CARD_CAPTURE,
   deductStockForSettlement,
   reverseStockForSettlement,
   listStockItemCategories,

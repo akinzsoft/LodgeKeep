@@ -35,6 +35,10 @@ function stockRouter() {
   router.put('/pos/stock/menu-items/:menuItemId/components', requirePermission('pos.stock_manage'), controller.upsertMenuItemComponents);
 
   router.post('/pos/stock/goods-received', requirePermission('pos.stock_manage'), controller.recordGoodsReceived);
+  // Gated the same as the reporting endpoints below, not the plainer
+  // pos.stock_view: a movement row carries unit_cost/total_cost, real cost
+  // data — gap closure, backing Goods Received's own "recent deliveries".
+  router.get('/pos/stock/movements', requirePermission('pos.stock_manage'), controller.listStockMovements);
 
   router.get('/pos/stock/takes', requirePermission('pos.stock_manage'), controller.listStockTakes);
   router.get('/pos/stock/takes/:id', requirePermission('pos.stock_manage'), controller.getStockTake);

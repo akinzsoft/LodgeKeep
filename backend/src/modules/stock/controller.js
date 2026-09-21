@@ -340,6 +340,34 @@ async function cancelStockTake(req, res, next) {
 }
 
 // ---------------------------------------------------------------------
+// Movement history — gap closure, Goods Received's own "recent deliveries"
+// ---------------------------------------------------------------------
+
+async function listStockMovements(req, res, next) {
+  try {
+    // A malformed `?limit=` (non-numeric, zero, negative) falls back to the
+    // service's own default rather than reaching the query as `NaN`.
+    const rawLimit = req.query.limit !== undefined ? Number(req.query.limit) : undefined;
+    const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
+    res.status(200).json(
+      ok(
+        await service.listStockMovements({
+          context: req.context,
+          stockItemId: req.query.stock_item_id,
+          outletId: req.query.outlet_id,
+          type: req.query.type,
+          dateFrom: req.query.date_from,
+          dateTo: req.query.date_to,
+          limit,
+        })
+      )
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ---------------------------------------------------------------------
 // Reporting
 // ---------------------------------------------------------------------
 
@@ -392,6 +420,7 @@ module.exports = {
   recordStockTakeCount,
   completeStockTake,
   cancelStockTake,
+  listStockMovements,
   costOfSales,
   stockVariance,
   costOfSalesMargin,

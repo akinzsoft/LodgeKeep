@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
   listStockItems: vi.fn(),
   recordGoodsReceived: vi.fn(),
+  listStockMovements: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -15,7 +16,7 @@ vi.mock('../../../shared/api/index.js', async () => {
   return {
     ...actual,
     posApi: { listOutlets: mocks.listOutlets },
-    stockApi: { listStockItems: mocks.listStockItems, recordGoodsReceived: mocks.recordGoodsReceived },
+    stockApi: { listStockItems: mocks.listStockItems, recordGoodsReceived: mocks.recordGoodsReceived, listStockMovements: mocks.listStockMovements },
   };
 });
 
@@ -36,6 +37,7 @@ describe('<StockGoodsReceivedTab>', () => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listOutlets.mockResolvedValue([OUTLET]);
     mocks.listStockItems.mockResolvedValue(STOCK_ITEMS);
+    mocks.listStockMovements.mockResolvedValue([]);
   });
 
   it('shows the delivery form with the real outlet stock items once an outlet is selected', async () => {
@@ -138,5 +140,64 @@ describe('<StockGoodsReceivedTab>', () => {
     // here (unlike a pure read-side filter) — disabled outright, so there
     // is nothing left to expose a half-working form for.
     expect(screen.getByLabelText('Outlet')).toBeDisabled();
+  });
+
+  describe('gap closure: the form no longer hides itself until an outlet is picked', () => {
+    it('the delivery form is visible with no outlet selected — only the Stock item select is disabled', async () => {
+      render(<StockGoodsReceivedTab activeProperty={{ base_currency: 'NGN' }} />);
+      await screen.findByText('New delivery');
+
+      expect(screen.getByLabelText('Stock item')).toBeDisabled();
+      expect(screen.getByLabelText('Quantity')).toBeEnabled();
+      expect(screen.getByLabelText('Unit cost')).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Record delivery' })).toBeDisabled();
+      // No "Recent deliveries" table until an outlet is chosen — there is
+      // nothing yet to scope it to.
+      expect(screen.queryByText('Recent deliveries')).not.toBeInTheDocument();
+    });
+
+    it('picking an outlet enables the Stock item select and loads its real recent deliveries', async () => {
+      mocks.listStockMovements.mockResolvedValue([
+        { id: '1', business_date: '2027-01-05', stock_item_name: 'Vodka', stock_item_unit: 'ml', quantity: '10.000', unit_cost: '6.50', reference: 'DN-1' },
+      ]);
+      await selectOutlet();
+
+      expect(screen.getByLabelText('Stock item')).toBeEnabled();
+      expect(mocks.listStockMovements).toHaveBeenCalledWith({ outletId: '1', type: 'received', limit: 20 });
+      expect(await screen.findByText('Recent deliveries')).toBeInTheDocument();
+      expect(screen.getByText('Vodka')).toBeInTheDocument();
+      expect(screen.getByText('DN-1')).toBeInTheDocument();
+    });
+
+    it('an outlet with no prior deliveries shows an honest empty state, not a broken table', async () => {
+      mocks.listStockMovements.mockResolvedValue([]);
+      await selectOutlet();
+
+      expect(await screen.findByText('No deliveries recorded yet for this outlet.')).toBeInTheDocument();
+    });
+
+    it('recording a delivery refreshes the recent-deliveries list so a submission never just vanishes', async () => {
+      mocks.listStockMovements.mockResolvedValueOnce([]);
+      mocks.recordGoodsReceived.mockResolvedValue({
+        outletId: '1',
+        reference: 'DN-2',
+        count: 1,
+        items: [{ id: '20', name: 'Vodka', unit: 'ml', current_quantity: '110.000', purchase_cost: '6.50' }],
+      });
+      await selectOutlet();
+      await screen.findByText('No deliveries recorded yet for this outlet.');
+
+      mocks.listStockMovements.mockResolvedValueOnce([
+        { id: '2', business_date: '2027-01-06', stock_item_name: 'Vodka', stock_item_unit: 'ml', quantity: '10.000', unit_cost: '6.50', reference: 'DN-2' },
+      ]);
+      await selectWhenLoaded('Stock item', '20');
+      await userEvent.type(screen.getByLabelText('Quantity'), '10');
+      await userEvent.type(screen.getByLabelText('Unit cost'), '6.50');
+      await userEvent.click(screen.getByRole('button', { name: 'Record delivery' }));
+
+      await screen.findByText(/reference "DN-2"/);
+      expect(mocks.listStockMovements).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText('No deliveries recorded yet for this outlet.')).not.toBeInTheDocument();
+    });
   });
 });

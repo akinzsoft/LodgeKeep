@@ -143,8 +143,14 @@ export function openOrder({ outletId, terminalId, tableLabel }) {
   return request('/pos/orders', { method: 'POST', body: { outlet_id: outletId, terminal_id: terminalId, table_label: tableLabel } });
 }
 
-export function addItem(orderId, { menuItemId, quantity, modifiers }) {
-  return request(`/pos/orders/${orderId}/items`, { method: 'POST', body: { menu_item_id: menuItemId, quantity, modifiers } });
+/**
+ * @param {{menuItemId, quantity, modifiers, stockOverrideReason?: string}} params
+ *   `stockOverrideReason` is only required when a prior attempt was
+ *   rejected with `BUSINESS_RULE_INSUFFICIENT_STOCK` — see
+ *   `RegisterTab.jsx`'s own confirm-then-retry handling.
+ */
+export function addItem(orderId, { menuItemId, quantity, modifiers, stockOverrideReason }) {
+  return request(`/pos/orders/${orderId}/items`, { method: 'POST', body: { menu_item_id: menuItemId, quantity, modifiers, stock_override_reason: stockOverrideReason } });
 }
 
 export function voidOrderItem(orderId, itemId, reason) {
@@ -196,8 +202,14 @@ export function verifyPaystackPayment(orderId, paymentId) {
   return request(`/pos/orders/${orderId}/paystack-checkout/${paymentId}/verify`, { method: 'POST' });
 }
 
-/** @param {Array<{splitGroup?: number|null, method: 'cash'|'card'|'room_charge', paymentId?: string, tipAmount?: string, serviceCharge?: string, roomCharge?: {reservationId: string, authMethod: string, authReference: string}}>} settlements */
-export function settleOrder(orderId, settlements) {
+/**
+ * @param {Array<{splitGroup?: number|null, method: 'cash'|'card'|'room_charge', paymentId?: string, tipAmount?: string, serviceCharge?: string, roomCharge?: {reservationId: string, authMethod: string, authReference: string}}>} settlements
+ * @param {{stockOverrideReason?: string}} [options] `stockOverrideReason`
+ *   covers the WHOLE settle request (every split group in one call), only
+ *   required after a prior attempt was rejected with
+ *   `BUSINESS_RULE_INSUFFICIENT_STOCK`.
+ */
+export function settleOrder(orderId, settlements, { stockOverrideReason } = {}) {
   return request(`/pos/orders/${orderId}/settle`, {
     method: 'POST',
     headers: { 'Idempotency-Key': idempotencyKey() },
@@ -212,6 +224,7 @@ export function settleOrder(orderId, settlements) {
           ? { reservation_id: s.roomCharge.reservationId, auth_method: s.roomCharge.authMethod, auth_reference: s.roomCharge.authReference }
           : undefined,
       })),
+      stock_override_reason: stockOverrideReason,
     },
   });
 }

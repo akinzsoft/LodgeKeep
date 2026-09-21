@@ -180,8 +180,12 @@ describe('POS inventory & stock: real concurrency', () => {
     return orderCounterValue;
   }
 
-  function settleCash(orderId) {
-    return req.post(`/api/v1/pos/orders/${orderId}/settle`).set('Authorization', `Bearer ${token}`).set('Idempotency-Key', idemKey('settle')).send({ settlements: [{ method: 'cash' }] });
+  function settleCash(orderId, { stockOverrideReason } = {}) {
+    return req
+      .post(`/api/v1/pos/orders/${orderId}/settle`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', idemKey('settle'))
+      .send({ settlements: [{ method: 'cash' }], stock_override_reason: stockOverrideReason });
   }
 
   // -----------------------------------------------------------------------
@@ -197,7 +201,12 @@ describe('POS inventory & stock: real concurrency', () => {
     const orderA = await openOrderWithItem(menuItemId);
     const orderB = await openOrderWithItem(menuItemId);
 
-    const [resA, resB] = await Promise.all([settleCash(orderA), settleCash(orderB)]);
+    // Both settlements would take this item to exactly 0 (the gap-closure
+    // guard's own "<= 0" rule, given a plain, non-locking pre-check that
+    // deliberately does not reserve against a concurrent tab) — both
+    // requests supply the override reason the guard requires either way.
+    const reason = 'Only one left, confirmed by the bar';
+    const [resA, resB] = await Promise.all([settleCash(orderA, { stockOverrideReason: reason }), settleCash(orderB, { stockOverrideReason: reason })]);
     // Deduction is never blocked (this session's confirmed decision) —
     // BOTH settlements succeed regardless of the resulting balance.
     expect(resA.status).toBe(200);
@@ -362,7 +371,10 @@ describe('POS inventory & stock: real concurrency', () => {
         .set('Idempotency-Key', idemKey('waste5'))
         .send({ quantity: '1.000', reason: 'Concurrency test spill' });
 
-    const [settleRes, wasteRes] = await Promise.all([settleCash(soloOrderId), wasteB()]);
+    const [settleRes, wasteRes] = await Promise.all([
+      settleCash(soloOrderId, { stockOverrideReason: 'Last of this batch, confirmed by the bar' }),
+      wasteB(),
+    ]);
     expect(settleRes.status).toBe(200);
     expect(wasteRes.status).toBe(200);
 
@@ -431,5 +443,49 @@ describe('POS inventory & stock: real concurrency', () => {
     const menuItem = await db()('pos_menu_items').where({ id: menuItemId }).first();
     expect(menuItem.is_available).toBe(1);
     expect(menuItem.stock_auto_unavailable).toBe(0);
+  });
+
+  // -----------------------------------------------------------------------
+  // CONC-STOCK-7 — gap closure: the stock-out override guard's own
+  // plain, non-locking pre-check must never introduce a NEW deadlock class
+  // against the existing lock-closure machinery it sits in front of.
+  // -----------------------------------------------------------------------
+
+  it('CONC-STOCK-7: a settlement (guard + locked deduction) racing a goods-received delivery on the SAME stock item never deadlocks, and the final quantity is self-consistent regardless of interleaving', async () => {
+    const stockItemId = await createStockItem({ name: 'Race Item 7' });
+    await seedReceipt(stockItemId, '5.000');
+    const menuItemId = await createMenuItem({ name: 'Race Menu 7' });
+    await linkComponent(menuItemId, stockItemId, '5.000');
+    const orderId = await openOrderWithItem(menuItemId);
+
+    const goodsReceived = () =>
+      req
+        .post('/api/v1/pos/stock/goods-received')
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', idemKey('goods7'))
+        .send({ outlet_id: outletId, lines: [{ stock_item_id: stockItemId, quantity: '10.000', unit_cost: '1.00' }] });
+
+    // Supplied unconditionally: whichever side's plain, non-locking guard
+    // read happens to run first may or may not find the item already
+    // restocked — the reason is harmless (unused) if the guard finds
+    // nothing affected, and required if it does.
+    const [settleRes, goodsRes] = await Promise.all([
+      settleCash(orderId, { stockOverrideReason: 'Confirmed with the bar, restock incoming' }),
+      goodsReceived(),
+    ]);
+    expect(settleRes.status).toBe(200);
+    expect(goodsRes.status).toBe(201);
+
+    // Both mutations always fully re-derive current_quantity from every
+    // committed stock_movements row (never an in-place increment) — the
+    // final total is deterministically 5 - 5 (sold) + 10 (received) = 10,
+    // regardless of which side's lock was granted first.
+    const item = await db()('stock_items').where({ id: stockItemId }).first();
+    expect(item.current_quantity).toBe('10.000');
+
+    const soldCount = await db()('stock_movements').where({ stock_item_id: stockItemId, type: 'sold' }).count({ n: '*' }).first();
+    const receivedCount = await db()('stock_movements').where({ stock_item_id: stockItemId, type: 'received' }).count({ n: '*' }).first();
+    expect(Number(soldCount.n)).toBe(1);
+    expect(Number(receivedCount.n)).toBe(2); // The seed receipt + this test's own delivery.
   });
 });

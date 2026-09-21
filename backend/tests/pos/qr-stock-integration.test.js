@@ -245,6 +245,83 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
       const item = await t.trx('stock_items').where({ id: stockItemId }).first();
       expect(item.current_quantity).toBe('900.000'); // 1000 - 100.
     });
+
+    // Gap closure — the stock-out override guard. No human is present at
+    // this call site (the OTP is already single-use-claimed by the time
+    // `settleOrder` runs) — this proves it is ALWAYS auto-overridden, never
+    // rejected, with the fixed AUTOMATIC_OVERRIDE_REASON_ROOM_CHARGE_OTP
+    // reason genuinely recorded.
+    it('a room-charge settlement that would deplete stock is auto-overridden, never rejected — the guest\'s already-claimed OTP cannot be stranded', async () => {
+      const [scarceId] = await t.trx('stock_items').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        outlet_id: outletId,
+        name: 'QR Scarce Room-Charge Spirit',
+        unit: 'ml',
+        purchase_cost: '2.00',
+        current_quantity: '0.000',
+      });
+      // A real backing "received" movement, not just the raw column — see
+      // this file's own outer beforeAll comment ("current_quantity is
+      // never independently maintained").
+      await t.trx('stock_movements').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        outlet_id: outletId,
+        stock_item_id: scarceId,
+        type: 'received',
+        quantity: '10.000',
+        unit_cost: '2.00',
+        total_cost: '20.00',
+        business_date: '2027-08-01',
+        reference: 'QR scarce room-charge seed',
+      });
+      await t.trx('stock_items').where({ id: scarceId }).update({ current_quantity: '10.000' });
+      const [scarceMenuId] = await t.trx('pos_menu_items').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        outlet_id: outletId,
+        name: 'Scarce Room-Charge Cocktail',
+        category: 'Drinks',
+        price: '20.00',
+      });
+      await t.trx('pos_menu_item_components').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        menu_item_id: scarceMenuId,
+        stock_item_id: scarceId,
+        quantity: '10.000', // Exactly enough for one sale to hit zero.
+      });
+
+      // acknowledge_low_stock is required here too — add-time enforcement
+      // applies to guest ordering identically (same rule, every channel);
+      // it is the SETTLE-time (OTP verify) side this test actually proves
+      // is unconditionally auto-overridden.
+      const created = await guestPost(`/${roomRaw}/orders`)
+        .set('Idempotency-Key', idemKey())
+        .send({ payment_method: 'room_charge', items: [{ menu_item_id: scarceMenuId, quantity: 1 }], acknowledge_low_stock: true });
+      expect(created.status).toBe(201);
+
+      const otpRes = await guestPost(`/${roomRaw}/orders/${created.body.data.id}/room-charge/request-otp`).send({});
+      const code = otpRes.body.data.devOnlyCode;
+
+      const verify = await guestPost(`/${roomRaw}/orders/${created.body.data.id}/room-charge/verify`).send({ code });
+      expect(verify.status).toBe(200); // Never rejected for insufficient stock.
+      expect(verify.body.data.guestOrder.payment_status).toBe('charged_to_room');
+
+      const item = await t.trx('stock_items').where({ id: scarceId }).first();
+      expect(item.current_quantity).toBe('0.000');
+
+      // TWO overrides were genuinely applied here — add-time (the guest's
+      // own acknowledgment, at order creation) and settle-time (the OTP
+      // verify's own unconditional auto-override) — each its own audit
+      // row, oldest first.
+      const auditRows = await t.trx('audit_log').where({ entity_type: 'stock_items', entity_id: scarceId, action: 'stock_override_applied' }).orderBy('id', 'asc');
+      expect(auditRows).toHaveLength(2);
+      expect(auditRows[0].reason).toBe('Guest acknowledged a low-stock warning before placing the order.');
+      expect(auditRows[1].reason).toBe('Automatically approved — a verified room-charge confirmation cannot be blocked; flagged for review.');
+      expect(auditRows[1].source).toBe('api');
+    });
   });
 
   // -----------------------------------------------------------------
@@ -285,6 +362,160 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
       const item = await t.trx('stock_items').where({ id: stockItemId }).first();
       // 1000 (seed) - 100 (room-charge test above) - 50 (this card sale) = 850.
       expect(item.current_quantity).toBe('850.000');
+    });
+
+    // Gap closure — the stock-out override guard. No human is present at
+    // this call site either (a Paystack webhook, or the guest's own
+    // confirm-payment callback) and money has already been captured by the
+    // time this runs — proves it is ALWAYS auto-overridden, `source:
+    // 'integration'`, with the fixed AUTOMATIC_OVERRIDE_REASON_CARD_CAPTURE
+    // reason genuinely recorded.
+    it('a card settlement that would deplete stock is auto-overridden, never rejected — payment was already captured', async () => {
+      const [scarceId] = await t.trx('stock_items').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        outlet_id: outletId,
+        name: 'QR Scarce Card Spirit',
+        unit: 'ml',
+        purchase_cost: '2.00',
+        current_quantity: '0.000',
+      });
+      await t.trx('stock_movements').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        outlet_id: outletId,
+        stock_item_id: scarceId,
+        type: 'received',
+        quantity: '10.000',
+        unit_cost: '2.00',
+        total_cost: '20.00',
+        business_date: '2027-08-01',
+        reference: 'QR scarce card seed',
+      });
+      await t.trx('stock_items').where({ id: scarceId }).update({ current_quantity: '10.000' });
+      const [scarceMenuId] = await t.trx('pos_menu_items').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        outlet_id: outletId,
+        name: 'Scarce Card Cocktail',
+        category: 'Drinks',
+        price: '20.00',
+      });
+      await t.trx('pos_menu_item_components').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        menu_item_id: scarceMenuId,
+        stock_item_id: scarceId,
+        quantity: '10.000',
+      });
+
+      paystack.initializeTransaction.mockResolvedValue({ authorizationUrl: 'https://paystack.test/pay/qr-stock-2', accessCode: 'qrstk2', reference: 'qrstk-ref-2' });
+      const created = await guestPost(`/${tableRaw}/orders`)
+        .set('Idempotency-Key', idemKey())
+        .send({ payment_method: 'card', guest_contact: 'qrstock2@example.com', items: [{ menu_item_id: scarceMenuId, quantity: 1 }], acknowledge_low_stock: true });
+      expect(created.status).toBe(201);
+      const posOrderId = created.body.data.pos_order_id;
+
+      paystack.verifyTransaction.mockResolvedValue({ status: 'success', reference: 'qrstk-ref-2', providerPaymentId: 'ps_qrstk_2', amountSubunit: 2150, currency: 'NGN' });
+      const confirmed = await guestPost(`/${tableRaw}/orders/${created.body.data.id}/confirm-payment`).send({});
+      expect(confirmed.status).toBe(200); // Never rejected for insufficient stock.
+      expect(confirmed.body.data.payment.status).toBe('CAPTURED');
+
+      const order = await t.trx('pos_orders').where({ id: posOrderId }).first();
+      expect(order.status).toBe('settled');
+
+      const item = await t.trx('stock_items').where({ id: scarceId }).first();
+      expect(item.current_quantity).toBe('0.000');
+
+      // TWO overrides were genuinely applied — add-time (the guest's own
+      // acknowledgment) and settle-time (the card-capture webhook's own
+      // unconditional auto-override, `source: 'integration'`).
+      const auditRows = await t.trx('audit_log').where({ entity_type: 'stock_items', entity_id: scarceId, action: 'stock_override_applied' }).orderBy('id', 'asc');
+      expect(auditRows).toHaveLength(2);
+      expect(auditRows[0].reason).toBe('Guest acknowledged a low-stock warning before placing the order.');
+      expect(auditRows[1].reason).toBe('Automatically approved — payment was already captured by the gateway before settlement could be blocked; flagged for review.');
+      expect(auditRows[1].source).toBe('integration');
+    });
+  });
+
+  // -----------------------------------------------------------------
+  // Path 3 — add-time (createGuestOrder), the whole-cart check
+  // -----------------------------------------------------------------
+
+  describe('add-time guard (createGuestOrder) — a guest gets the SAME rule, no free-text reason', () => {
+    let cartTableRaw;
+    let garnishId;
+    let menuA;
+    let menuB;
+
+    beforeAll(async () => {
+      // Deterministic regardless of any other describe block's own mock
+      // state or test execution order — every test in this block pays by
+      // card and needs a real successful checkout initiation to reach 201.
+      paystack.initializeTransaction.mockResolvedValue({ authorizationUrl: 'https://paystack.test/pay/cart-guard', accessCode: 'cartguard', reference: 'cartguard-ref' });
+
+      const created = await createStaffToken({ type: 'table' });
+      cartTableRaw = created.body.meta.rawToken;
+
+      const [id] = await t.trx('stock_items').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        outlet_id: outletId,
+        name: 'Shared Garnish',
+        unit: 'ml',
+        purchase_cost: '1.00',
+        current_quantity: '8.000',
+      });
+      garnishId = id;
+
+      const [menuAId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, outlet_id: outletId, name: 'Cocktail A', category: 'Drinks', price: '15.00' });
+      const [menuBId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, outlet_id: outletId, name: 'Cocktail B', category: 'Drinks', price: '15.00' });
+      menuA = menuAId;
+      menuB = menuBId;
+      await t.trx('pos_menu_item_components').insert([
+        { tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, menu_item_id: menuAId, stock_item_id: garnishId, quantity: '5.000' },
+        { tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, menu_item_id: menuBId, stock_item_id: garnishId, quantity: '5.000' },
+      ]);
+    });
+
+    it('rejects a COMBINED cart that would deplete a shared garnish, even though each item alone would not', async () => {
+      // 1x A (5.000) + 1x B (5.000) = 10.000 against an 8.000 balance —
+      // a per-line check would miss this entirely (5 < 8, 5 < 8), but the
+      // whole-cart aggregation correctly catches it.
+      const res = await guestPost(`/${cartTableRaw}/orders`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          payment_method: 'card',
+          guest_contact: 'cart-guard@example.com',
+          items: [
+            { menu_item_id: menuA, quantity: 1 },
+            { menu_item_id: menuB, quantity: 1 },
+          ],
+        });
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('BUSINESS_RULE_INSUFFICIENT_STOCK');
+      expect(res.body.error.details.items).toHaveLength(1);
+      expect(res.body.error.details.items[0].name).toBe('Shared Garnish');
+    });
+
+    it('succeeds once acknowledge_low_stock is true — a yes/no prompt, never a free-text reason — and records the fixed guest reason', async () => {
+      const res = await guestPost(`/${cartTableRaw}/orders`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          payment_method: 'card',
+          guest_contact: 'cart-guard-2@example.com',
+          items: [
+            { menu_item_id: menuA, quantity: 1 },
+            { menu_item_id: menuB, quantity: 1 },
+          ],
+          acknowledge_low_stock: true,
+        });
+      expect(res.status).toBe(201);
+
+      const auditRow = await t.trx('audit_log').where({ entity_type: 'stock_items', entity_id: garnishId, action: 'stock_override_applied' }).first();
+      expect(auditRow).toBeDefined();
+      expect(auditRow.reason).toBe('Guest acknowledged a low-stock warning before placing the order.');
+      expect(auditRow.user_id).toBeNull(); // No staff user present at this call site.
     });
   });
 });

@@ -57,13 +57,18 @@ export function getBranding(token) {
  * `Idempotency-Key` (ARCHITECTURE.md §7) is generated here, not by the
  * caller — a flaky mobile connection retrying this call must not
  * double-order.
+ *
+ * `acknowledgeLowStock` (gap closure): only needed on a retry after this
+ * call was rejected with `BUSINESS_RULE_INSUFFICIENT_STOCK` — a guest has
+ * no reason to type free text, so this is a plain yes/no acknowledgment,
+ * not a reason field (see `CheckoutScreen.jsx`'s own low-stock prompt).
  */
-export async function createOrder({ token, items, paymentMethod, guestContact, guestName }) {
+export async function createOrder({ token, items, paymentMethod, guestContact, guestName, acknowledgeLowStock }) {
   const { data, meta } = await requestWithMeta(`/qr-order/${token}/orders`, {
     method: 'POST',
     auth: false,
     headers: { 'Idempotency-Key': idempotencyKey() },
-    body: { items, payment_method: paymentMethod, guest_contact: guestContact, guest_name: guestName },
+    body: { items, payment_method: paymentMethod, guest_contact: guestContact, guest_name: guestName, acknowledge_low_stock: acknowledgeLowStock },
   });
   return { ...data, ...meta };
 }

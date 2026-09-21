@@ -548,7 +548,7 @@ async function openOrder({ context, outletId, terminalId = null, openedByUserId 
   return getOrder({ context, id });
 }
 
-async function addItem({ context, orderId, menuItemId, quantity, modifiers }) {
+async function addItem({ context, orderId, menuItemId, quantity, modifiers, stockOverrideReason }) {
   const db = scopedDb().for(context);
   return db.transaction(async (trx) => {
     const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
@@ -562,6 +562,19 @@ async function addItem({ context, orderId, menuItemId, quantity, modifiers }) {
     if (!menuItem.is_available) {
       throw new ValidationError('POS_ITEM_UNAVAILABLE', `"${menuItem.name}" is currently marked unavailable.`);
     }
+
+    // Gap closure — the stock-out override guard (user-reported: the
+    // Register let an item sell at zero stock with no proactive check at
+    // all). Add-time enforcement: a recipe-less item costs one cheap,
+    // empty lookup; see `stockService.assertStockAvailableOrOverridden`'s
+    // own header for the full rule.
+    await stockService.assertStockAvailableOrOverridden({
+      trx,
+      lines: [{ menuItemId, quantity: quantity ?? 1 }],
+      overrideReason: stockOverrideReason,
+      userId: context.userId,
+      propertyId: order.property_id,
+    });
 
     await trx.table('pos_order_items').insert({
       pos_order_id: orderId,
@@ -768,7 +781,7 @@ async function previewSettlement({ context, orderId }) {
  * `postAdjustment` line on the same folio; `cash`/`card` compute tax
  * directly and record the settlement with no folio involved at all.
  */
-async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
+async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOverrideReason }) {
   if (!Array.isArray(settlements) || settlements.length === 0) {
     throw new ValidationError('MISSING_FIELD', 'At least one settlement is required.', [{ field: 'settlements', issue: 'missing' }]);
   }
@@ -793,6 +806,24 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
   if (!sameGroups) {
     throw new SettlementGroupsMismatchError('uncovered', { present: [...groupsPresent], requested: requestedKeys });
   }
+
+  // Gap closure — the stock-out override guard's settle-time, defensive
+  // check (add-time already checked this at `addItem`, but stock can
+  // change between add and settle). One guard call covers every item
+  // across every split-group in this ONE settle-order request — a throw
+  // here aborts before any group's settlement row is even inserted, so the
+  // whole request is retried with the reason attached, never a partial
+  // settle. See `stockService.assertStockAvailableOrOverridden`'s header.
+  const stockGuardResult = await stockService.assertStockAvailableOrOverridden({
+    trx,
+    lines: items.map((item) => ({ menuItemId: item.menu_item_id, quantity: item.quantity })),
+    overrideReason: stockOverrideReason,
+    userId: settledByUserId,
+    propertyId: order.property_id,
+  });
+  const overrideReasonsByStockItemId = stockOverrideReason?.trim()
+    ? new Map(stockGuardResult.affectedStockItemIds.map((id) => [id, stockOverrideReason.trim()]))
+    : undefined;
 
   const property = await trx.table('properties').where({ id: order.property_id }).first('current_business_date', 'base_currency');
   const businessDate = property?.current_business_date;
@@ -946,6 +977,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements }) {
       items: groupItems,
       businessDate,
       userId: settledByUserId,
+      overrideReasonsByStockItemId,
     });
   }
 
