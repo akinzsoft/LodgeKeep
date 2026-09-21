@@ -96,7 +96,8 @@
  */
 
 const { scopedDb } = require('../../db');
-const { ValidationError, withDuplicateMapping } = require('../../shared/errors');
+const { ValidationError } = require('../../shared/errors');
+const { createCategoryCatalogue } = require('../../shared/category-catalogue');
 const { notifyStaff } = require('../notifications/staff-notifications');
 const { recordAuditEntry } = require('../../audit');
 const { sumQuantity, negateQuantity, multiplyQuantityByInteger, compareQuantity, extendedCost } = require('../../shared/quantity');
@@ -530,98 +531,31 @@ async function reverseStockForSettlement({ trx, settlementId, userId }) {
 // holding the category name, so every reader is unchanged.
 // ---------------------------------------------------------------------
 
-function cleanStockCategoryName(name) {
-  const trimmed = typeof name === 'string' ? name.trim() : '';
-  // 60 = stock_items.category's width, which the name is copied into.
-  if (!trimmed || trimmed.length > 60) {
-    throw new ValidationError('INVALID_CATEGORY_NAME', 'A category name is required, up to 60 characters.', [{ field: 'name', issue: trimmed ? 'too_long' : 'missing' }]);
-  }
-  return trimmed;
-}
+// Gap closure — extracted into a shared factory once a third domain
+// (expense categories) needed the identical "registered catalogue" shape;
+// see `shared/category-catalogue.js`'s own header for the full reasoning
+// and which real divergences (stock's category being OPTIONAL, chief among
+// them) the factory expresses via config rather than flattening away.
+const stockCategoryCatalogue = createCategoryCatalogue({
+  table: 'stock_item_categories',
+  resolveMode: 'name',
+  optional: true,
+  cascadeRename: { table: 'stock_items', matchColumn: 'category' },
+  inUseChecks: [{ table: 'stock_items', matchColumn: 'category', matchBy: 'name', filter: (q) => q.where({ status: 'active' }) }],
+  errors: {
+    categoryNotFound: () =>
+      new ValidationError('CATEGORY_NOT_FOUND', 'Choose a category from the list — register new categories first.', [{ field: 'category', issue: 'not_registered' }]),
+    categoryInUse: (name, itemCount) => new StockCategoryInUseError(name, itemCount),
+  },
+});
 
-/** Active categories in display order; `includeArchived` for the setup list. */
-async function listStockItemCategories({ context, includeArchived = false }) {
-  const db = scopedDb().for(context);
-  const query = db.table('stock_item_categories');
-  const rows = await (includeArchived ? query : query.where({ status: 'active' })).orderBy('sort_order').orderBy('name');
-  if (rows.length === 0) return rows;
-  const items = await db.table('stock_items').where({ status: 'active' }).select('category');
-  const countByName = new Map();
-  for (const { category } of items) {
-    if (!category) continue;
-    const key = String(category).trim().toLowerCase();
-    countByName.set(key, (countByName.get(key) ?? 0) + 1);
-  }
-  return rows.map((row) => ({ ...row, item_count: countByName.get(row.name.toLowerCase()) ?? 0 }));
-}
-
-async function getStockItemCategory({ context, id }) {
-  const db = scopedDb().for(context);
-  return db.table('stock_item_categories').where({ id }).first();
-}
-
-async function createStockItemCategory({ context, name, sortOrder }) {
-  const db = scopedDb().for(context);
-  const clean = cleanStockCategoryName(name);
-  return withDuplicateMapping('stock_item_categories', `A category named "${clean}" already exists.`, async () => {
-    if (sortOrder !== undefined && !Number.isInteger(sortOrder)) {
-      throw new ValidationError('INVALID_SORT_ORDER', '"sort_order" must be a whole number.', [{ field: 'sort_order', issue: 'invalid' }]);
-    }
-    const [id] = await db.table('stock_item_categories').insert({ name: clean, sort_order: sortOrder ?? 0 });
-    return getStockItemCategory({ context, id });
-  });
-}
-
-/**
- * Renames and/or reorders a category. A rename is applied to every stock
- * item using the old name in the same transaction, so items never end up
- * pointing at a name that no longer exists.
- */
-async function updateStockItemCategory({ context, id, name, sortOrder }) {
-  const db = scopedDb().for(context);
-  return withDuplicateMapping('stock_item_categories', `A category named "${typeof name === 'string' ? name.trim() : ''}" already exists.`, () =>
-    db.transaction(async (trx) => {
-      const category = await trx.table('stock_item_categories').where({ id }).forUpdate().first();
-      if (!category) return null;
-      const changes = {};
-      if (name !== undefined) changes.name = cleanStockCategoryName(name);
-      if (sortOrder !== undefined) {
-        if (!Number.isInteger(sortOrder)) throw new ValidationError('INVALID_SORT_ORDER', '"sort_order" must be a whole number.', [{ field: 'sort_order', issue: 'invalid' }]);
-        changes.sort_order = sortOrder;
-      }
-      if (Object.keys(changes).length === 0) return category;
-      await trx.table('stock_item_categories').where({ id }).update(changes);
-      if (changes.name && changes.name !== category.name) {
-        await trx.table('stock_items').where({ category: category.name }).update({ category: changes.name });
-      }
-      return trx.table('stock_item_categories').where({ id }).first();
-    })
-  );
-}
-
-/** Archives a category no active stock item still uses; refuses (409) otherwise, naming how many items to move first. */
-async function archiveStockItemCategory({ context, id }) {
-  const db = scopedDb().for(context);
-  return db.transaction(async (trx) => {
-    const category = await trx.table('stock_item_categories').where({ id }).forUpdate().first();
-    if (!category) return null;
-    const inUse = await trx.table('stock_items').where({ category: category.name, status: 'active' }).count();
-    if (inUse > 0) throw new StockCategoryInUseError(category.name, inUse);
-    await trx.table('stock_item_categories').where({ id }).update({ status: 'archived' });
-    return trx.table('stock_item_categories').where({ id }).first();
-  });
-}
-
-/** The registered, active category matching `name` (case-insensitively) — its canonical spelling is what the stock item stores. `null`/empty stays null: category is optional (migration header). */
-async function resolveStockCategoryName({ db, name }) {
-  const trimmed = typeof name === 'string' ? name.trim() : '';
-  if (!trimmed) return null;
-  const category = await db.table('stock_item_categories').where({ name: trimmed, status: 'active' }).first();
-  if (!category) {
-    throw new ValidationError('CATEGORY_NOT_FOUND', 'Choose a category from the list — register new categories first.', [{ field: 'category', issue: 'not_registered' }]);
-  }
-  return category.name;
-}
+const listStockItemCategories = stockCategoryCatalogue.listCategories;
+const getStockItemCategory = stockCategoryCatalogue.getCategory;
+const createStockItemCategory = stockCategoryCatalogue.createCategory;
+const updateStockItemCategory = stockCategoryCatalogue.updateCategory;
+const archiveStockItemCategory = stockCategoryCatalogue.archiveCategory;
+/** `null`/empty stays null: category is optional (migration header). */
+const resolveStockCategoryName = stockCategoryCatalogue.resolveByName;
 
 // ---------------------------------------------------------------------
 // Stock items — CRUD

@@ -55,8 +55,17 @@ export function archiveTerminal(id) {
 
 // Menu categories — a registered list shared by every outlet.
 
-export function listMenuCategories() {
-  return request('/pos/menu-categories');
+/**
+ * Bug fix: this wrapper had no `includeArchived` param at all, even though
+ * the backend endpoint has always supported `?include_archived=true` (the
+ * same param `listStockItemCategories`/`listExpenseCategories` both already
+ * expose) — a real, previously-unflagged gap, not a deliberate omission.
+ */
+export function listMenuCategories({ includeArchived } = {}) {
+  const params = new URLSearchParams();
+  if (includeArchived) params.set('include_archived', 'true');
+  const query = params.toString();
+  return request(`/pos/menu-categories${query ? `?${query}` : ''}`);
 }
 
 export function createMenuCategory({ name, sortOrder }) {

@@ -22,7 +22,8 @@
  */
 
 const { scopedDb } = require('../../db');
-const { ValidationError, withDuplicateMapping } = require('../../shared/errors');
+const { ValidationError } = require('../../shared/errors');
+const { createCategoryCatalogue } = require('../../shared/category-catalogue');
 const {
   ExpenseCategoryNotFoundError,
   ExpenseCategoryInUseError,
@@ -40,99 +41,47 @@ const AMOUNT_PATTERN = /^\d+(\.\d{1,2})?$/;
 // Expense categories
 // ---------------------------------------------------------------------
 
-function cleanExpenseCategoryName(name) {
-  const trimmed = typeof name === 'string' ? name.trim() : '';
-  if (!trimmed || trimmed.length > 60) {
-    throw new ValidationError('INVALID_CATEGORY_NAME', 'A category name is required, up to 60 characters.', [{ field: 'name', issue: trimmed ? 'too_long' : 'missing' }]);
-  }
-  return trimmed;
-}
+// Gap closure — extracted into a shared factory alongside menu/stock
+// categories once this became the third near-identical "registered
+// catalogue" implementation; see `shared/category-catalogue.js`'s own
+// header for the full reasoning. The live-FK shape (vs. menu/stock's
+// copied-name-string one) is expressed via `resolveMode: 'id'` and
+// `cascadeRename: null`; the two-table in-use check via a 2-entry
+// `inUseChecks` array, positionally matching `ExpenseCategoryInUseError`'s
+// own `(name, expenseCount, scheduleCount)` constructor.
+const expenseCategoryCatalogue = createCategoryCatalogue({
+  table: 'expense_categories',
+  resolveMode: 'id',
+  cascadeRename: null,
+  inUseChecks: [
+    { table: 'expenses', matchColumn: 'expense_category_id', matchBy: 'id', filter: (q) => q.whereNull('voided_at') },
+    { table: 'recurring_expense_schedules', matchColumn: 'expense_category_id', matchBy: 'id', filter: (q) => q.where({ status: 'active' }) },
+  ],
+  // Matches the original's own `.whereIn('expense_category_id', rows.map(r => r.id))` —
+  // the live-FK shape makes pre-filtering the list-count query to just the
+  // rows being listed simpler than menu/stock's own unrestricted scan.
+  restrictListCountToRows: true,
+  errors: {
+    categoryNotFound: () => new ExpenseCategoryNotFoundError(),
+    categoryInUse: (name, expenseCount, scheduleCount) => new ExpenseCategoryInUseError(name, expenseCount, scheduleCount),
+  },
+});
 
-/** Active categories in display order, each carrying its own real non-voided-expense count (a single grouped query, not per-row lookups — the live-FK shape makes this simpler than stock's own name-string matching). */
-async function listExpenseCategories({ context, includeArchived = false }) {
-  const db = scopedDb().for(context);
-  const query = db.table('expense_categories');
-  const rows = await (includeArchived ? query : query.where({ status: 'active' })).orderBy('sort_order').orderBy('name');
-  if (rows.length === 0) return rows;
+const listExpenseCategories = expenseCategoryCatalogue.listCategories;
+const getExpenseCategory = expenseCategoryCatalogue.getCategory;
+const createExpenseCategory = expenseCategoryCatalogue.createCategory;
+const updateExpenseCategory = expenseCategoryCatalogue.updateCategory;
+const archiveExpenseCategory = expenseCategoryCatalogue.archiveCategory;
 
-  // The scoped accessor's own `count()` executes immediately and returns a
-  // plain number — it is not chainable with `.groupBy()` the way raw knex's
-  // is (confirmed against `scoped-db.js` directly). Counted in JS instead,
-  // the same shape `stock/service.js`'s `listStockItemCategories` already
-  // uses for its own per-category count.
-  const expenseRows = await db
-    .table('expenses')
-    .whereIn('expense_category_id', rows.map((row) => row.id))
-    .whereNull('voided_at')
-    .select('expense_category_id');
-  const countByCategoryId = new Map();
-  for (const { expense_category_id: categoryId } of expenseRows) {
-    const key = String(categoryId);
-    countByCategoryId.set(key, (countByCategoryId.get(key) ?? 0) + 1);
-  }
-  return rows.map((row) => ({ ...row, item_count: countByCategoryId.get(String(row.id)) ?? 0 }));
-}
-
-async function getExpenseCategory({ context, id }) {
-  const db = scopedDb().for(context);
-  return db.table('expense_categories').where({ id }).first();
-}
-
-async function createExpenseCategory({ context, name, sortOrder }) {
-  const db = scopedDb().for(context);
-  const clean = cleanExpenseCategoryName(name);
-  return withDuplicateMapping('expense_categories', `A category named "${clean}" already exists.`, async () => {
-    if (sortOrder !== undefined && !Number.isInteger(sortOrder)) {
-      throw new ValidationError('INVALID_SORT_ORDER', '"sort_order" must be a whole number.', [{ field: 'sort_order', issue: 'invalid' }]);
-    }
-    const [id] = await db.table('expense_categories').insert({ name: clean, sort_order: sortOrder ?? 0 });
-    return getExpenseCategory({ context, id });
-  });
-}
-
-/** No cascade needed on rename — expenses/schedules hold a live FK, resolved fresh on every read. */
-async function updateExpenseCategory({ context, id, name, sortOrder }) {
-  const db = scopedDb().for(context);
-  return withDuplicateMapping('expense_categories', `A category named "${typeof name === 'string' ? name.trim() : ''}" already exists.`, () =>
-    db.transaction(async (trx) => {
-      const category = await trx.table('expense_categories').where({ id }).forUpdate().first();
-      if (!category) return null;
-      const changes = {};
-      if (name !== undefined) changes.name = cleanExpenseCategoryName(name);
-      if (sortOrder !== undefined) {
-        if (!Number.isInteger(sortOrder)) throw new ValidationError('INVALID_SORT_ORDER', '"sort_order" must be a whole number.', [{ field: 'sort_order', issue: 'invalid' }]);
-        changes.sort_order = sortOrder;
-      }
-      if (Object.keys(changes).length === 0) return category;
-      await trx.table('expense_categories').where({ id }).update(changes);
-      return trx.table('expense_categories').where({ id }).first();
-    })
-  );
-}
-
-/** Archives a category no non-voided expense AND no active recurring schedule still uses; refuses (409) otherwise, naming both counts. */
-async function archiveExpenseCategory({ context, id }) {
-  const db = scopedDb().for(context);
-  return db.transaction(async (trx) => {
-    const category = await trx.table('expense_categories').where({ id }).forUpdate().first();
-    if (!category) return null;
-    // The scoped accessor's own `count()` resolves directly to a number
-    // (confirmed precedent: `stock/service.js`'s `archiveStockItemCategory`
-    // uses the identical `const inUse = await trx.table(...).count();`
-    // shape) — never a chained `.first()`, which throws against it.
-    const expenseCount = await trx.table('expenses').where({ expense_category_id: id }).whereNull('voided_at').count();
-    const scheduleCount = await trx.table('recurring_expense_schedules').where({ expense_category_id: id, status: 'active' }).count();
-    if (expenseCount > 0 || scheduleCount > 0) throw new ExpenseCategoryInUseError(category.name, expenseCount, scheduleCount);
-    await trx.table('expense_categories').where({ id }).update({ status: 'archived' });
-    return trx.table('expense_categories').where({ id }).first();
-  });
-}
-
-/** Always required — throws if missing, wrong-tenant, or archived. Mirrors `resolveMenuCategoryName`'s "still requires one" shape, not stock's optional/nullable one. */
+/**
+ * Preserves the exact external signature `{db, expenseCategoryId}` every
+ * one of this file's own call sites already uses (recordExpense,
+ * createRecurringExpenseSchedule, updateRecurringExpenseSchedule) — none of
+ * them need to change. Always required — throws if missing, wrong-tenant,
+ * or archived, never stock's optional/nullable shape.
+ */
 async function resolveExpenseCategoryId({ db, expenseCategoryId }) {
-  const category = await db.table('expense_categories').where({ id: expenseCategoryId, status: 'active' }).first();
-  if (!category) throw new ExpenseCategoryNotFoundError();
-  return category;
+  return expenseCategoryCatalogue.resolveById({ db, id: expenseCategoryId });
 }
 
 // ---------------------------------------------------------------------

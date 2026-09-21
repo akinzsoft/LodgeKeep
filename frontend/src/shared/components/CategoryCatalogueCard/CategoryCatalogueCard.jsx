@@ -1,0 +1,156 @@
+import { useState } from 'react';
+import { Card } from '../Card/Card.jsx';
+import { DataTable } from '../DataTable/DataTable.jsx';
+import { Button } from '../Button/Button.jsx';
+import { ConfirmDialog } from '../ConfirmDialog/ConfirmDialog.jsx';
+import { ApiError } from '../../api/index.js';
+import styles from './CategoryCatalogueCard.module.css';
+
+/**
+ * The shared shape behind Menu categories, Stock categories, and Expense
+ * categories — three independently-built, near-identical "registered
+ * catalogue" cards (register/rename/reorder/archive a small property-scoped
+ * list a sibling entity picks from a dropdown instead of typing free text).
+ * Every string/behavior that differs between the three real call sites is
+ * an explicit prop — this component knows nothing about POS/stock/expenses.
+ * `categories`/`onChanged` stay the caller's own responsibility
+ * (list-fetching and refresh), matching every existing call site exactly.
+ *
+ * `renameHint`: `null` omits the rename-cascade paragraph entirely (used by
+ * expense categories, whose `expense_category_id` is a live FK — no
+ * cascade update happens on rename, so there is nothing to explain).
+ */
+export function CategoryCatalogueCard({
+  title,
+  hint,
+  namePlaceholder,
+  countColumnLabel,
+  renameHint = null,
+  archiveConsequence,
+  categories,
+  onChanged,
+  api, // { create({name, sortOrder}), update(id, {name, sortOrder}), archive(id) }
+}) {
+  const [form, setForm] = useState({ name: '', sort_order: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [archiving, setArchiving] = useState(null);
+
+  async function handleCreate(event) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await api.create({ name: form.name, sortOrder: form.sort_order === '' ? undefined : Number(form.sort_order) });
+      setForm({ name: '', sort_order: '' });
+      await onChanged();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not add this category.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleSaveEdit(event) {
+    event.preventDefault();
+    setError(null);
+    try {
+      await api.update(editing.id, { name: editing.name, sortOrder: editing.sort_order === '' ? undefined : Number(editing.sort_order) });
+      setEditing(null);
+      await onChanged();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not save this category.');
+    }
+  }
+
+  async function confirmArchive() {
+    const category = archiving;
+    setArchiving(null);
+    setError(null);
+    try {
+      await api.archive(category.id);
+      await onChanged();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not archive this category.');
+    }
+  }
+
+  return (
+    <Card title={title}>
+      <p className={styles.hint}>{hint}</p>
+      {error && (
+        <p role="alert" className={styles.errorBanner}>
+          {error}
+        </p>
+      )}
+      <form className={styles.row} onSubmit={handleCreate}>
+        <label className={styles.field}>
+          <span className={styles.label}>Category name</span>
+          <input className={styles.input} value={form.name} maxLength={60} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={namePlaceholder} required />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.label}>Display order</span>
+          <input className={styles.input} type="number" step="1" value={form.sort_order} onChange={(e) => setForm({ ...form, sort_order: e.target.value })} placeholder="0" />
+        </label>
+        <div className={styles.actionsRow}>
+          <Button type="submit" loading={submitting}>
+            Add category
+          </Button>
+        </div>
+      </form>
+
+      <DataTable
+        state={categories === null ? 'loading' : categories.length === 0 ? 'empty' : 'success'}
+        emptyMessage="No categories yet — add the first one above."
+        columns={[
+          { key: 'name', label: 'Category' },
+          { key: 'sort_order', label: 'Order', align: 'right' },
+          { key: 'item_count', label: countColumnLabel, align: 'right' },
+        ]}
+        rows={categories ?? []}
+        rowKey={(row) => row.id}
+        actions={(row) => (
+          <>
+            <Button size="compact" variant="ghost" onClick={() => setEditing({ id: row.id, name: row.name, sort_order: String(row.sort_order ?? 0) })}>
+              Edit
+            </Button>
+            <Button size="compact" variant="ghost" onClick={() => setArchiving(row)}>
+              Archive
+            </Button>
+          </>
+        )}
+      />
+
+      {editing && (
+        <form className={styles.row} onSubmit={handleSaveEdit} aria-label="Edit category">
+          <label className={styles.field}>
+            <span className={styles.label}>Rename category</span>
+            <input className={styles.input} value={editing.name} maxLength={60} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.label}>New display order</span>
+            <input className={styles.input} type="number" step="1" value={editing.sort_order} onChange={(e) => setEditing({ ...editing, sort_order: e.target.value })} />
+          </label>
+          <div className={styles.actionsRow}>
+            <Button type="submit">Save category</Button>
+            <Button type="button" variant="ghost" onClick={() => setEditing(null)}>
+              Cancel
+            </Button>
+          </div>
+          {renameHint && <p className={styles.hint}>{renameHint}</p>}
+        </form>
+      )}
+
+      {archiving && (
+        <ConfirmDialog
+          title="Archive category"
+          consequence={`"${archiving.name}" ${archiveConsequence}`}
+          confirmLabel="Archive"
+          onConfirm={confirmArchive}
+          onCancel={() => setArchiving(null)}
+        />
+      )}
+    </Card>
+  );
+}
