@@ -19,6 +19,18 @@ import styles from './CategoryCatalogueCard.module.css';
  * `renameHint`: `null` omits the rename-cascade paragraph entirely (used by
  * expense categories, whose `expense_category_id` is a live FK — no
  * cascade update happens on rename, so there is nothing to explain).
+ *
+ * `extraRows`/`selectedRowKey`/`onSelectRow` are an opt-in row-selection
+ * mode, added for Stock items' own single-category view — every other
+ * call site (Menu categories, Expense categories) omits all three and
+ * renders exactly as before: a plain, non-clickable name cell, no
+ * highlighted row, no extra rows appended. When `onSelectRow` IS supplied,
+ * each row's name becomes a clickable selector and `extraRows` (rows this
+ * card doesn't own or manage — e.g. an "Uncategorized" bucket, or a
+ * category that's since been archived but still has items pointing at
+ * it) are appended after the real, manageable categories, each keyed by
+ * its own `key` rather than a real `id` and rendered with no Edit/Archive
+ * actions at all.
  */
 export function CategoryCatalogueCard({
   title,
@@ -30,6 +42,9 @@ export function CategoryCatalogueCard({
   categories,
   onChanged,
   api, // { create({name, sortOrder}), update(id, {name, sortOrder}), archive(id) }
+  extraRows = [], // [{ key, name, item_count }] — selectable, not manageable
+  selectedRowKey = null,
+  onSelectRow = null, // (row) => void
 }) {
   const [form, setForm] = useState({ name: '', sort_order: '' });
   const [submitting, setSubmitting] = useState(false);
@@ -101,25 +116,42 @@ export function CategoryCatalogueCard({
       </form>
 
       <DataTable
-        state={categories === null ? 'loading' : categories.length === 0 ? 'empty' : 'success'}
+        state={categories === null ? 'loading' : categories.length === 0 && extraRows.length === 0 ? 'empty' : 'success'}
         emptyMessage="No categories yet — add the first one above."
         columns={[
-          { key: 'name', label: 'Category' },
-          { key: 'sort_order', label: 'Order', align: 'right' },
+          {
+            key: 'name',
+            label: 'Category',
+            render: (row) =>
+              onSelectRow ? (
+                <button type="button" className={styles.rowSelectButton} onClick={() => onSelectRow(row)}>
+                  {row.name}
+                </button>
+              ) : (
+                row.name
+              ),
+          },
+          { key: 'sort_order', label: 'Order', align: 'right', render: (row) => row.sort_order ?? '—' },
           { key: 'item_count', label: countColumnLabel, align: 'right' },
         ]}
-        rows={categories ?? []}
-        rowKey={(row) => row.id}
-        actions={(row) => (
-          <>
-            <Button size="compact" variant="ghost" onClick={() => setEditing({ id: row.id, name: row.name, sort_order: String(row.sort_order ?? 0) })}>
-              Edit
-            </Button>
-            <Button size="compact" variant="ghost" onClick={() => setArchiving(row)}>
-              Archive
-            </Button>
-          </>
-        )}
+        rows={[...(categories ?? []), ...extraRows]}
+        rowKey={(row) => row.id ?? row.key}
+        rowClassName={onSelectRow ? (row) => ((row.id ?? row.key) === selectedRowKey ? styles.selectedRow : undefined) : undefined}
+        actions={(row) =>
+          // extraRows (Uncategorized, an archived-but-still-referenced
+          // category) carry no `id` — they aren't real rows in this
+          // table, so there's nothing here to edit or archive.
+          row.id === undefined ? null : (
+            <>
+              <Button size="compact" variant="ghost" onClick={() => setEditing({ id: row.id, name: row.name, sort_order: String(row.sort_order ?? 0) })}>
+                Edit
+              </Button>
+              <Button size="compact" variant="ghost" onClick={() => setArchiving(row)}>
+                Archive
+              </Button>
+            </>
+          )
+        }
       />
 
       {editing && (
