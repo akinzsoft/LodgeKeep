@@ -372,6 +372,21 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                 title={section.title}
                 state={section.items.length === 0 ? 'empty' : 'success'}
                 emptyMessage="No items yet — add the first one below."
+                // Rendered inside this SAME bordered card, whether empty or
+                // not — never as a sibling element floating in the gap
+                // before the next category's own card, which is the exact
+                // visual ambiguity a user reported mistaking for a routing
+                // bug (the button was always correctly wired to its own
+                // section — see `openAdd`/`handleAddSubmit` — the confusion
+                // was purely about which category's box it visually sat
+                // inside).
+                footer={
+                  section.canAddItem && !addOpenHere ? (
+                    <Button type="button" variant="secondary" size="compact" disabled={isOffline} onClick={() => openAdd(section)}>
+                      Add item
+                    </Button>
+                  ) : null
+                }
                 columns={[
                   { key: 'name', label: 'Name' },
                   { key: 'unit', label: 'Unit' },
@@ -409,14 +424,6 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                   </>
                 )}
               />
-
-              {section.canAddItem && !addOpenHere && (
-                <div className={formStyles.actionsRow}>
-                  <Button type="button" variant="secondary" size="compact" disabled={isOffline} onClick={() => openAdd(section)}>
-                    Add item
-                  </Button>
-                </div>
-              )}
 
               {addOpenHere && (
                 <Card title={`Add item — ${section.title}`}>

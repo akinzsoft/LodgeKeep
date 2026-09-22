@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { DataTable } from '../DataTable.jsx';
 import { StatusPill } from '../../StatusPill/StatusPill.jsx';
 import { Money, formatMoney } from '../../../format/money.jsx';
@@ -79,5 +79,34 @@ describe('<DataTable>', () => {
     render(<DataTable columns={columns} rows={rows} rowKey={(r) => r.id} />);
     const cell = screen.getByText('Ada Bello');
     expect(cell).toHaveAttribute('data-label', 'Guest');
+  });
+
+  describe('footer — an action that must render INSIDE this table\'s own card, not as a sibling element after it', () => {
+    it('renders footer inside the same card as the table when there are rows', () => {
+      render(<DataTable columns={columns} rows={rows} rowKey={(r) => r.id} footer={<button>Add a row</button>} />);
+      const card = screen.getByText('Ada Bello').closest('section');
+      expect(within(card).getByRole('button', { name: 'Add a row' })).toBeInTheDocument();
+    });
+
+    it('doubles as the empty-state action, still inside the same card, when no explicit emptyAction is given', () => {
+      render(<DataTable columns={columns} rows={[]} rowKey={(r) => r.id} emptyMessage="Nothing yet." footer={<button>Add a row</button>} />);
+      const card = screen.getByText('Nothing yet.').closest('section');
+      expect(within(card).getByRole('button', { name: 'Add a row' })).toBeInTheDocument();
+    });
+
+    it('an explicit emptyAction still wins over footer for the empty state specifically', () => {
+      render(
+        <DataTable
+          columns={columns}
+          rows={[]}
+          rowKey={(r) => r.id}
+          emptyMessage="Nothing yet."
+          emptyAction={<button>Open settings</button>}
+          footer={<button>Add a row</button>}
+        />
+      );
+      expect(screen.getByRole('button', { name: 'Open settings' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Add a row' })).not.toBeInTheDocument();
+    });
   });
 });
