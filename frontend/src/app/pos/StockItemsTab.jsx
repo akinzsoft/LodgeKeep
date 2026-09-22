@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Card, DataTable, Button, ConfirmDialog, StatusPill } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { formatQuantity } from './stockFormat.js';
@@ -21,6 +21,14 @@ const EMPTY_RECEIVE_FORM = { quantity: '', unit_cost: '', reference: '' };
  * since an archived category can no longer be chosen for one. A final
  * "Uncategorized" section, always present, covers items with no category
  * at all (stock category is optional, unlike a menu item's).
+ *
+ * Every section also carries a `selectId` — a real category's own numeric
+ * `id` for a real category section, or the section's own string `key` for
+ * the two kinds of section that aren't a real, manageable category row
+ * (archived-but-referenced, Uncategorized). This is the one value the
+ * single-category selector below and the categories card's own row keys
+ * (`row.id ?? row.key`) both agree on, so "which section is selected" and
+ * "which category row is highlighted" can never drift apart.
  */
 function computeSections(categories, items) {
   const sortedCategories = (categories ?? [])
@@ -41,6 +49,7 @@ function computeSections(categories, items) {
 
   const sections = sortedCategories.map((category) => ({
     key: `category-${category.id}`,
+    selectId: category.id,
     title: category.name,
     categoryName: category.name,
     canAddItem: true,
@@ -49,11 +58,12 @@ function computeSections(categories, items) {
 
   for (const [name, categoryItems] of itemsByCategoryName) {
     if (!activeNames.has(name)) {
-      sections.push({ key: `archived-category-${name}`, title: `${name} (archived category)`, categoryName: name, canAddItem: false, items: categoryItems });
+      const key = `archived-category-${name}`;
+      sections.push({ key, selectId: key, title: `${name} (archived category)`, categoryName: name, canAddItem: false, items: categoryItems });
     }
   }
 
-  sections.push({ key: 'uncategorized', title: 'Uncategorized', categoryName: null, canAddItem: true, items: uncategorizedItems });
+  sections.push({ key: 'uncategorized', selectId: 'uncategorized', title: 'Uncategorized', categoryName: null, canAddItem: true, items: uncategorizedItems });
   return sections;
 }
 
@@ -110,6 +120,12 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   // Registered stock categories (shared by every outlet) — one section per row.
   const [categories, setCategories] = useState(null);
 
+  // Which single section (a real category, "Uncategorized", or an
+  // archived-but-still-referenced category) the items card below shows —
+  // see `computeSections`' own `selectId` for what this value means for
+  // each kind of section.
+  const [selectedRowKey, setSelectedRowKey] = useState(null);
+
   // Only one of Add/Edit/Receive is ever open at a time — opening any one
   // implicitly closes whichever else was open, the same single-open-panel
   // discipline the old edit-only version of this screen already used.
@@ -158,6 +174,48 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
     if (current && !names.includes(current)) names.push(current);
     return names;
   }
+
+  // Memoized so the reconciling effect below only re-runs when the
+  // underlying data actually changes, not on every unrelated re-render
+  // (e.g. typing into the Add/Edit form) — `computeSections` otherwise
+  // returns a fresh array/object identity every single call.
+  const sections = useMemo(() => (items === null || categories === null ? null : computeSections(categories, items)), [items, categories]);
+  const currentSection = sections ? (sections.find((section) => section.selectId === selectedRowKey) ?? null) : null;
+
+  /**
+   * Keeps `selectedRowKey` always pointing at a section that genuinely
+   * exists: picks the first section the moment data first loads (the
+   * confirmed "auto-select the first category" default — `selectedRowKey`
+   * starts `null`, which matches nothing), and re-picks it whenever the
+   * previously-selected section disappears out from under it — e.g. an
+   * archived category with zero items drops out of `sections` entirely
+   * the moment its last item is moved elsewhere. Selecting a different,
+   * still-present section (an ordinary click) is untouched by this
+   * effect; only an invalid selection is ever corrected.
+   */
+  useEffect(() => {
+    if (!sections || sections.length === 0) return;
+    if (sections.some((section) => section.selectId === selectedRowKey)) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate: this effect's whole job IS correcting `selectedRowKey` once `sections` resolves or changes shape underneath it; there's no external system to synchronize with instead
+    setSelectedRowKey(sections[0].selectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to `sections` changing only; including `selectedRowKey` would fight a deliberate click by re-running right after it changes
+  }, [sections]);
+
+  /** The categories card's clicked row — a real category (`.id`) or one of `extraRows` below (`.key`). Also closes whatever Add/Edit/Receive panel was open for the previously-selected section, matching `handleFilterChange`'s own "never leave a control pointing at something no longer shown" rule. */
+  function selectSection(row) {
+    setActivePanel(null);
+    setSelectedRowKey(row.id ?? row.key);
+  }
+
+  // The two kinds of section the categories card doesn't itself manage —
+  // appended after the real categories in that same card's row list, per
+  // the confirmed "Uncategorized (and an archived-but-referenced category)
+  // as a row in the same list" decision.
+  const extraRows = sections
+    ? sections
+        .filter((section) => section.key === 'uncategorized' || section.key.startsWith('archived-category-'))
+        .map((section) => ({ key: section.key, name: section.title, item_count: section.items.length }))
+    : [];
 
   useEffect(() => {
     posApi
@@ -306,8 +364,6 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
     }
   }
 
-  const sections = items === null || categories === null ? null : computeSections(categories, items);
-
   return (
     <div className={formStyles.form}>
       {error && (
@@ -344,12 +400,13 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
         </label>
       </div>
 
-      <StockCategoriesCard categories={categories} onChanged={handleCategoriesChanged} />
+      <StockCategoriesCard categories={categories} onChanged={handleCategoriesChanged} extraRows={extraRows} selectedRowKey={selectedRowKey} onSelectRow={selectSection} />
 
-      {sections === null ? (
+      {currentSection === null ? (
         <DataTable state="loading" columns={[]} rows={[]} rowKey={(row) => row.id} />
       ) : (
-        sections.map((section) => {
+        (() => {
+          const section = currentSection;
           const addOpenHere = activePanel?.type === 'add' && activePanel.sectionKey === section.key;
           // Code-review fix: once the item is found in this section's own
           // (freshly reloaded) list, show THAT row rather than the frozen
@@ -624,7 +681,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
               )}
             </div>
           );
-        })
+        })()
       )}
 
       {archiving && (

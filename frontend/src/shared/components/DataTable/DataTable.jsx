@@ -33,6 +33,7 @@ import styles from './DataTable.module.css';
  * @param {import('react').ReactNode} [footer]                      Rendered inside the SAME bordered card as the table, below it — in both the empty and non-empty states, unlike `emptyAction`/`toolbar`. Used for an action (e.g. "add the first/next row") that must stay visually contained within this table's own card rather than sitting as a sibling element after it, where it could be mistaken for belonging to whatever renders next. Doubles as the empty-state action when `emptyAction` isn't given.
  * @param {string} [errorMessage]
  * @param {string} [title]
+ * @param {(row: object) => string} [rowClassName]                  Optional extra class for a row's own `<tr>` — e.g. a caller-defined "selected" look. Purely a passthrough: this component defines no selection styling of its own, per its own "presentation only" governance — the class and its rule live in the caller's own CSS module.
  */
 export function DataTable({
   columns,
@@ -46,6 +47,7 @@ export function DataTable({
   footer,
   errorMessage,
   title,
+  rowClassName,
 }) {
   return (
     <Card
@@ -74,7 +76,7 @@ export function DataTable({
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={rowKey(row)}>
+              <tr key={rowKey(row)} className={rowClassName ? rowClassName(row) : undefined}>
                 {columns.map((column) => (
                   <td key={column.key} data-label={column.label} className={column.align === 'right' ? styles.right : ''}>
                     {column.render ? column.render(row) : row[column.key]}

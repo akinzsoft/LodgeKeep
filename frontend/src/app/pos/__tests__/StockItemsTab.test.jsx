@@ -62,11 +62,25 @@ function item(overrides) {
  * open Add/Edit/Receive panel for it, which render as siblings after it
  * inside the same wrapping <div> (see `StockItemsTab.jsx`'s own
  * `.categorySection` comment for why a <div>, not a <section>, is the
- * right scoping target). Async — sections only exist once BOTH the
- * categories and items fetches (two independent async effects) resolve.
+ * right scoping target). Async — the block only exists once BOTH the
+ * categories and items fetches (two independent async effects) resolve
+ * AND `name` is the currently-selected category (the screen shows exactly
+ * one section's own block at a time — see `selectCategory` below).
  */
 async function categoryBlock(name) {
   return (await screen.findByRole('heading', { name })).closest('div');
+}
+
+/**
+ * Clicks a category's own row in the "Stock categories" list at the top of
+ * the screen — its name is a real clickable button once row-selection is
+ * on (always, on this screen) — to make it the one section shown below.
+ * Works identically for a real category, "Uncategorized", or an
+ * archived-but-still-referenced category's own pseudo-row, since all three
+ * render as an identically-named button in that same list.
+ */
+async function selectCategory(name) {
+  await userEvent.click(await screen.findByRole('button', { name }));
 }
 
 describe('<StockItemsTab>', () => {
@@ -75,6 +89,63 @@ describe('<StockItemsTab>', () => {
     mocks.listOutlets.mockResolvedValue([outlet()]);
     mocks.listStockItemCategories.mockResolvedValue([{ id: '1', name: 'Beverages', sort_order: 0, item_count: 0 }]);
     mocks.listStockItems.mockResolvedValue([]);
+  });
+
+  describe('single-category selection', () => {
+    it('auto-selects the first category on load, with no click needed', async () => {
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      expect(await screen.findByRole('heading', { name: 'Beverages' })).toBeInTheDocument();
+      // Only the selected section's own items card is shown — no other
+      // category's card exists in the document at the same time.
+      expect(screen.queryByRole('heading', { name: 'Uncategorized' })).not.toBeInTheDocument();
+    });
+
+    it('clicking a different category in the list swaps which section shows below it', async () => {
+      mocks.listStockItemCategories.mockResolvedValue([
+        { id: '1', name: 'Beverages', sort_order: 0, item_count: 0 },
+        { id: '2', name: 'Cleaning supplies', sort_order: 1, item_count: 0 },
+      ]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await screen.findByRole('heading', { name: 'Beverages' });
+
+      await selectCategory('Cleaning supplies');
+
+      expect(screen.getByRole('heading', { name: 'Cleaning supplies' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Beverages' })).not.toBeInTheDocument();
+    });
+
+    it('the selected category row is visibly highlighted in the list, and only that one', async () => {
+      mocks.listStockItemCategories.mockResolvedValue([
+        { id: '1', name: 'Beverages', sort_order: 0, item_count: 0 },
+        { id: '2', name: 'Cleaning supplies', sort_order: 1, item_count: 0 },
+      ]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      const beveragesRow = (await screen.findByRole('button', { name: 'Beverages' })).closest('tr');
+      const cleaningRow = screen.getByRole('button', { name: 'Cleaning supplies' }).closest('tr');
+      // The default-selection effect applies the class in a re-render
+      // AFTER the row itself first appears — poll rather than assert
+      // immediately.
+      await waitFor(() => expect(beveragesRow.className).toMatch(/selectedRow/));
+      expect(cleaningRow.className).not.toMatch(/selectedRow/);
+
+      await selectCategory('Cleaning supplies');
+
+      await waitFor(() => expect(cleaningRow.className).toMatch(/selectedRow/));
+      expect(beveragesRow.className).not.toMatch(/selectedRow/);
+    });
+
+    it('"Uncategorized" is a selectable row in the very same categories list, right alongside the real categories', async () => {
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      const card = (await screen.findByRole('heading', { name: 'Stock categories' })).closest('section');
+      // Present as a row from the very first render — never conditional on
+      // whether it currently holds any items.
+      const uncategorizedButton = within(card).getByRole('button', { name: 'Uncategorized' });
+      // Unlike a real category's row, it carries no Edit/Archive of its own.
+      expect(uncategorizedButton.closest('tr').textContent).not.toMatch(/Edit|Archive/);
+
+      await userEvent.click(uncategorizedButton);
+      expect(await screen.findByRole('heading', { name: 'Uncategorized' })).toBeInTheDocument();
+    });
   });
 
   it('lists real stock items grouped under their own category section, with quantity+unit and cost, never running quantity through the money formatter', async () => {
@@ -106,15 +177,17 @@ describe('<StockItemsTab>', () => {
     expect(await screen.findByText('Could not load stock items.')).toBeInTheDocument();
   });
 
-  it('the outlet filter, low-stock toggle, and every category\'s own "Add item" action stay reachable even when the list is genuinely empty — never hidden inside a state-gated table', async () => {
+  it('the outlet filter, low-stock toggle, and the selected category\'s own "Add item" action stay reachable even when the list is genuinely empty — never hidden inside a state-gated table', async () => {
     render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
 
-    await screen.findAllByText('No items yet — add the first one below.');
+    await screen.findByText('No items yet — add the first one below.');
     expect(screen.getByLabelText('Filter by outlet')).toBeInTheDocument();
     expect(screen.getByLabelText('Low stock only')).toBeInTheDocument();
-    // Two sections always exist even with zero items anywhere: the one
-    // registered category, and the permanent "Uncategorized" section.
+    // The default-selected category (Beverages) has it...
     expect(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' })).toBeInTheDocument();
+    // ...and switching to the other always-empty section (Uncategorized)
+    // still has it too, even though it held nothing on the previous click.
+    await selectCategory('Uncategorized');
     expect(within(await categoryBlock('Uncategorized')).getByRole('button', { name: 'Add item' })).toBeInTheDocument();
   });
 
@@ -149,6 +222,7 @@ describe('<StockItemsTab>', () => {
     it('adding from the Uncategorized section creates the item with no category at all — still no dropdown', async () => {
       mocks.createStockItem.mockResolvedValue(item({ category: null }));
       render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await selectCategory('Uncategorized');
 
       await userEvent.click(within(await categoryBlock('Uncategorized')).getByRole('button', { name: 'Add item' }));
       const addCard = screen.getByRole('heading', { name: 'Add item — Uncategorized' }).closest('section');
@@ -198,6 +272,7 @@ describe('<StockItemsTab>', () => {
       ]);
       mocks.createStockItem.mockResolvedValue(item({ category: 'SOUP' }));
       render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await selectCategory('SOUP');
 
       await userEvent.click(within(await categoryBlock('SOUP')).getByRole('button', { name: 'Add item' }));
       const addCard = screen.getByRole('heading', { name: 'Add item — SOUP' }).closest('section');
@@ -218,6 +293,7 @@ describe('<StockItemsTab>', () => {
       ]);
       mocks.createStockItem.mockResolvedValue(item({ category: 'DRINKS' }));
       render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await selectCategory('DRINKS');
 
       await userEvent.click(within(await categoryBlock('DRINKS')).getByRole('button', { name: 'Add item' }));
       const addCard = screen.getByRole('heading', { name: 'Add item — DRINKS' }).closest('section');
@@ -230,7 +306,7 @@ describe('<StockItemsTab>', () => {
       expect(mocks.createStockItem).toHaveBeenCalledWith(expect.objectContaining({ category: 'DRINKS' }));
     });
 
-    it("each category's own \"Add item\" trigger renders INSIDE that category's own bordered card (as DataTable's `footer`), never as a sibling element in the gap before the next category's card", async () => {
+    it("the selected category's own \"Add item\" trigger renders INSIDE that category's own bordered card (as DataTable's `footer`), whether it currently holds items or not — the original bug this locks in was the button landing in the wrong category entirely, which single-section selection now makes structurally impossible (only one category's card exists at a time)", async () => {
       mocks.listStockItemCategories.mockResolvedValue([
         { id: '1', name: 'FRUITS', sort_order: 0, item_count: 0 },
         { id: '2', name: 'SOUP', sort_order: 1, item_count: 0 },
@@ -238,13 +314,16 @@ describe('<StockItemsTab>', () => {
       mocks.listStockItems.mockResolvedValue([item({ category: 'FRUITS' })]); // FRUITS non-empty, SOUP empty
       render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
 
-      // FRUITS: non-empty (success state) — the button sits inside the
-      // same <section> (Card) as the table, via DataTable's `footer` slot.
+      // FRUITS (default-selected, non-empty/success state) — the button
+      // sits inside the same <section> (Card) as the table, via
+      // DataTable's `footer` slot.
       const fruitsCard = (await screen.findByRole('heading', { name: 'FRUITS' })).closest('section');
       expect(within(fruitsCard).getByRole('button', { name: 'Add item' })).toBeInTheDocument();
 
-      // SOUP: empty state — the same button, now via `emptyAction`, still
-      // inside the same <section>, directly under "add the first one below".
+      // SOUP (empty state, once selected) — the same button, now via
+      // `emptyAction`, still inside the same <section>, directly under
+      // "add the first one below".
+      await selectCategory('SOUP');
       const soupCard = screen.getByRole('heading', { name: 'SOUP' }).closest('section');
       expect(within(soupCard).getByText('No items yet — add the first one below.')).toBeInTheDocument();
       expect(within(soupCard).getByRole('button', { name: 'Add item' })).toBeInTheDocument();
@@ -258,6 +337,7 @@ describe('<StockItemsTab>', () => {
         { id: '2', name: 'Cleaning supplies', sort_order: 1, item_count: 0 },
       ]);
       render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await selectCategory('Cleaning supplies');
 
       const section = await categoryBlock('Cleaning supplies');
       expect(within(section).getByText('No items yet — add the first one below.')).toBeInTheDocument();
@@ -266,19 +346,23 @@ describe('<StockItemsTab>', () => {
   });
 
   describe('items with no category', () => {
-    it('render under a permanent "Uncategorized" section, which exists even with nothing in it', async () => {
+    it('render under a permanent "Uncategorized" section, reachable even though the default-selected category renders correctly empty first', async () => {
       mocks.listStockItems.mockResolvedValue([item({ id: '10', name: 'Ice', category: null })]);
       render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
 
-      expect(within(await categoryBlock('Uncategorized')).getByText('Ice')).toBeInTheDocument();
-      // The registered category still renders too, correctly empty.
+      // Beverages (default-selected) correctly renders empty — the one
+      // stock item that exists is Uncategorized, not in it.
       expect(within(await categoryBlock('Beverages')).getByText('No items yet — add the first one below.')).toBeInTheDocument();
+
+      await selectCategory('Uncategorized');
+      expect(within(await categoryBlock('Uncategorized')).getByText('Ice')).toBeInTheDocument();
     });
 
-    it('the Uncategorized section itself never disappears, even with zero uncategorized items', async () => {
+    it('the "Uncategorized" row itself never disappears from the categories list, even with zero uncategorized items', async () => {
       mocks.listStockItems.mockResolvedValue([item()]); // categorized item only
       render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
-      expect(await screen.findByRole('heading', { name: 'Uncategorized' })).toBeInTheDocument();
+      const card = (await screen.findByRole('heading', { name: 'Stock categories' })).closest('section');
+      expect(within(card).getByRole('button', { name: 'Uncategorized' })).toBeInTheDocument();
     });
   });
 
@@ -286,6 +370,7 @@ describe('<StockItemsTab>', () => {
     mocks.listStockItemCategories.mockResolvedValue([{ id: '1', name: 'Beverages', sort_order: 0, item_count: 0 }]);
     mocks.listStockItems.mockResolvedValue([item({ category: 'Discontinued Line' })]);
     render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+    await selectCategory('Discontinued Line (archived category)');
 
     const section = await categoryBlock('Discontinued Line (archived category)');
     expect(within(section).getByText('Vodka')).toBeInTheDocument();
@@ -556,7 +641,7 @@ describe('<StockItemsTab>', () => {
   // SetupTab.jsx's own Menu categories mechanism) — unchanged component,
   // just relocated to the top of the redesigned screen.
   describe('categories (gap closure)', () => {
-    it('registers a new category from the Stock categories card, and it immediately appears as its own new, empty section', async () => {
+    it('registers a new category from the Stock categories card, and selecting its new row shows it as its own new, empty section', async () => {
       mocks.createStockItemCategory.mockResolvedValue({ id: '3', name: 'Wine' });
       render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
       const card = (await screen.findByRole('heading', { name: 'Stock categories' })).closest('section');
@@ -570,8 +655,10 @@ describe('<StockItemsTab>', () => {
 
       expect(mocks.createStockItemCategory).toHaveBeenCalledWith({ name: 'Wine', sortOrder: undefined });
       expect(await within(card).findByText('Wine')).toBeInTheDocument();
-      // The real payoff of "create a category, and see categories as
-      // groups": a brand-new section appears with nothing built for it.
+      // Creating it doesn't itself switch the selection away from
+      // Beverages — clicking its new row is the real payoff: "create a
+      // category, then see it as its own section with nothing built for it".
+      await selectCategory('Wine');
       const wineSection = await screen.findByRole('heading', { name: 'Wine' });
       expect(within(wineSection.closest('div')).getByText('No items yet — add the first one below.')).toBeInTheDocument();
       expect(within(wineSection.closest('div')).getByRole('button', { name: 'Add item' })).toBeInTheDocument();
