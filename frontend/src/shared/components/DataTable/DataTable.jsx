@@ -29,7 +29,8 @@ import styles from './DataTable.module.css';
  * @param {import('react').ReactNode} [toolbar]                     Filter/search controls, rendered at the top of the card.
  * @param {'loading'|'empty'|'error'|'success'} [state]
  * @param {string} [emptyMessage]
- * @param {import('react').ReactNode} [emptyAction]
+ * @param {import('react').ReactNode} [emptyAction]                 Shown only while empty, inside the card. See `footer` for an action that should stay visible regardless of row count.
+ * @param {import('react').ReactNode} [footer]                      Rendered inside the SAME bordered card as the table, below it — in both the empty and non-empty states, unlike `emptyAction`/`toolbar`. Used for an action (e.g. "add the first/next row") that must stay visually contained within this table's own card rather than sitting as a sibling element after it, where it could be mistaken for belonging to whatever renders next. Doubles as the empty-state action when `emptyAction` isn't given.
  * @param {string} [errorMessage]
  * @param {string} [title]
  */
@@ -42,6 +43,7 @@ export function DataTable({
   state = 'success',
   emptyMessage,
   emptyAction,
+  footer,
   errorMessage,
   title,
 }) {
@@ -50,7 +52,7 @@ export function DataTable({
       title={title}
       state={state === 'success' && rows.length === 0 ? 'empty' : state}
       emptyMessage={emptyMessage ?? 'Nothing here yet.'}
-      emptyAction={emptyAction}
+      emptyAction={emptyAction ?? footer}
       errorMessage={errorMessage}
     >
       {toolbar && <div className={styles.toolbar}>{toolbar}</div>}
@@ -88,6 +90,7 @@ export function DataTable({
           </tbody>
         </table>
       </div>
+      {footer && <div className={styles.footer}>{footer}</div>}
     </Card>
   );
 }

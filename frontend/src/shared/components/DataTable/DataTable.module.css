@@ -5,6 +5,14 @@
   margin-bottom: var(--space-4);
 }
 
+.footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
 .scroll {
   max-height: 480px;
   overflow: auto;

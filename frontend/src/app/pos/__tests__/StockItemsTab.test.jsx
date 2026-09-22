@@ -172,6 +172,83 @@ describe('<StockItemsTab>', () => {
       expect(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' })).toBeInTheDocument();
       expect(mocks.createStockItem).not.toHaveBeenCalled();
     });
+
+    /**
+     * Bug fix, user-reported: with three real categories present, an item
+     * added from the second or third category's own "+ Add item" button
+     * silently landed in the first one instead — a symptom no earlier test
+     * here could have caught, since every prior test in this describe block
+     * only ever registered exactly one real category. Each button was
+     * always correctly wired to its own section (`openAdd(section)` closes
+     * over that iteration's own `section`, and `handleAddSubmit` re-reads
+     * the category from the CURRENT section matching `activePanel.sectionKey`
+     * — never a stale/shared reference), so the actual defect was the CSS
+     * fix below this block: with no visual boundary around a category's own
+     * block, the trigger button for one category sat in the same
+     * undifferentiated gap as the boundary before the next category's own
+     * card, making it easy to click the wrong one. These tests lock in the
+     * correct ROUTING regardless; the containment test right after locks in
+     * the visual fix.
+     */
+    it('adding from the second of three categories sends that category, not the first', async () => {
+      mocks.listStockItemCategories.mockResolvedValue([
+        { id: '1', name: 'FRUITS', sort_order: 0, item_count: 0 },
+        { id: '2', name: 'SOUP', sort_order: 1, item_count: 0 },
+        { id: '3', name: 'DRINKS', sort_order: 2, item_count: 0 },
+      ]);
+      mocks.createStockItem.mockResolvedValue(item({ category: 'SOUP' }));
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(within(await categoryBlock('SOUP')).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — SOUP' }).closest('section');
+
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Chicken Broth');
+      await userEvent.type(within(addCard).getByLabelText('Unit'), 'l');
+      await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
+
+      expect(mocks.createStockItem).toHaveBeenCalledWith(expect.objectContaining({ category: 'SOUP' }));
+    });
+
+    it('adding from the third of three categories sends that category, not the first', async () => {
+      mocks.listStockItemCategories.mockResolvedValue([
+        { id: '1', name: 'FRUITS', sort_order: 0, item_count: 0 },
+        { id: '2', name: 'SOUP', sort_order: 1, item_count: 0 },
+        { id: '3', name: 'DRINKS', sort_order: 2, item_count: 0 },
+      ]);
+      mocks.createStockItem.mockResolvedValue(item({ category: 'DRINKS' }));
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(within(await categoryBlock('DRINKS')).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — DRINKS' }).closest('section');
+
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Cola');
+      await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
+      await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
+
+      expect(mocks.createStockItem).toHaveBeenCalledWith(expect.objectContaining({ category: 'DRINKS' }));
+    });
+
+    it("each category's own \"Add item\" trigger renders INSIDE that category's own bordered card (as DataTable's `footer`), never as a sibling element in the gap before the next category's card", async () => {
+      mocks.listStockItemCategories.mockResolvedValue([
+        { id: '1', name: 'FRUITS', sort_order: 0, item_count: 0 },
+        { id: '2', name: 'SOUP', sort_order: 1, item_count: 0 },
+      ]);
+      mocks.listStockItems.mockResolvedValue([item({ category: 'FRUITS' })]); // FRUITS non-empty, SOUP empty
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      // FRUITS: non-empty (success state) — the button sits inside the
+      // same <section> (Card) as the table, via DataTable's `footer` slot.
+      const fruitsCard = (await screen.findByRole('heading', { name: 'FRUITS' })).closest('section');
+      expect(within(fruitsCard).getByRole('button', { name: 'Add item' })).toBeInTheDocument();
+
+      // SOUP: empty state — the same button, now via `emptyAction`, still
+      // inside the same <section>, directly under "add the first one below".
+      const soupCard = screen.getByRole('heading', { name: 'SOUP' }).closest('section');
+      expect(within(soupCard).getByText('No items yet — add the first one below.')).toBeInTheDocument();
+      expect(within(soupCard).getByRole('button', { name: 'Add item' })).toBeInTheDocument();
+    });
   });
 
   describe('a category with zero items', () => {
