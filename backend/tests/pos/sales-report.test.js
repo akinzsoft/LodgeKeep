@@ -191,9 +191,11 @@ describe('POS sales report', () => {
   });
 
   it('ranks top sellers by quantity, counting only items on checks that still stand', () => {
+    // These fixture items have no recipe or cost price, so their cost and profit are unknown (null) —
+    // `tests/pos/sales-profit.test.js` covers the profit figures themselves.
     expect(report.topItems).toEqual([
-      { menuItemId: String(outlet.beerId), name: 'Beer', quantity: 3, sales: '60.00' },
-      { menuItemId: String(outlet.wineId), name: 'Wine, red', quantity: 1, sales: '40.00' },
+      { menuItemId: String(outlet.beerId), name: 'Beer', quantity: 3, sales: '60.00', cost: null, profit: null, marginPct: null },
+      { menuItemId: String(outlet.wineId), name: 'Wine, red', quantity: 1, sales: '40.00', cost: null, profit: null, marginPct: null },
     ]);
   });
 
@@ -266,10 +268,10 @@ describe('POS sales report', () => {
     expect(items.status).toBe(200);
     expect(items.headers['content-type']).toMatch(/text\/csv/);
     expect(items.headers['content-disposition']).toContain('pos-sales-items-2027-03-01-to-2027-03-01.csv');
-    expect(items.text).toBe('name,quantity,sales\nBeer,3,60.00\n"Wine, red",1,40.00');
+    expect(items.text).toBe('name,quantity,sales,cost,profit\nBeer,3,60.00,,\n"Wine, red",1,40.00,,');
 
     const tabs = await getReport({ date_from: BUSINESS_DATE, date_to: BUSINESS_DATE, format: 'csv' });
-    expect(tabs.text.split('\n')[0]).toBe('orderId,businessDate,settledAt,tableLabel,source,tenders,itemCount,cashier,total');
+    expect(tabs.text.split('\n')[0]).toBe('orderId,businessDate,settledAt,tableLabel,source,tenders,itemCount,cashier,total,profit');
     expect(tabs.text.split('\n')).toHaveLength(4);
   });
 

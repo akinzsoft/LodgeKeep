@@ -20,6 +20,7 @@ const { withIdempotency } = require('../../shared/idempotency');
 const { scopedDb } = require('../../db');
 const service = require('./service');
 const { computeSalesReport } = require('./sales-report');
+const { computeCostOfSalesMargin } = require('../stock/reporting');
 const { toCsv } = require('../reporting/service');
 
 function require_(body, field) {
@@ -608,10 +609,10 @@ function describeSettlementPayment(payment) {
 
 const SALES_CSV_SECTIONS = {
   tabs: {
-    columns: ['orderId', 'businessDate', 'settledAt', 'tableLabel', 'source', 'tenders', 'itemCount', 'cashier', 'total'],
+    columns: ['orderId', 'businessDate', 'settledAt', 'tableLabel', 'source', 'tenders', 'itemCount', 'cashier', 'total', 'profit'],
     rows: (report) => report.tabs.map((tab) => ({ ...tab, settledAt: new Date(tab.settledAt).toISOString(), tenders: tab.payments.map(describeSettlementPayment).join(' + ') })),
   },
-  items: { columns: ['name', 'quantity', 'sales'], rows: (report) => report.topItems },
+  items: { columns: ['name', 'quantity', 'sales', 'cost', 'profit'], rows: (report) => report.topItems },
   tenders: { columns: ['tender', 'checks', 'total'], rows: (report) => report.byTender },
 };
 
@@ -631,7 +632,11 @@ async function salesReport(req, res, next) {
     if (dateFrom > dateTo) {
       throw new ValidationError('INVALID_DATE_RANGE', '"date_from" must not be after "date_to".', [{ field: 'date_from', issue: 'after_date_to' }]);
     }
-    const report = await computeSalesReport({ context: req.context, dateFrom, dateTo, outletId: req.query?.outlet_id || undefined });
+    const outletId = req.query?.outlet_id || undefined;
+    // Each menu item's unit cost (recipe, else cost price) from the stock margin report — profit = what an item sold for minus that.
+    const margin = await computeCostOfSalesMargin({ context: req.context, dateFrom, dateTo, outletId });
+    const unitCostByMenuItem = new Map(margin.byMenuItem.map((row) => [String(row.menuItemId), row.unitCost]));
+    const report = await computeSalesReport({ context: req.context, dateFrom, dateTo, outletId, unitCostByMenuItem });
 
     if (req.query?.format === 'csv') {
       const section = SALES_CSV_SECTIONS[req.query?.section ?? 'tabs'];

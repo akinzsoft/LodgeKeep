@@ -22,7 +22,7 @@
  */
 
 const { scopedDb } = require('../../db');
-const { sumMoney, compareMoney } = require('../../shared/money');
+const { sumMoney, negateMoney, compareMoney, toCents, fromCents } = require('../../shared/money');
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
 
 const TENDERS = ['cash', 'card', 'nqr', 'room_charge'];
@@ -30,6 +30,16 @@ const TOP_ITEMS_LIMIT = 20;
 
 function groupKey(splitGroup) {
   return splitGroup === null || splitGroup === undefined ? 'null' : String(splitGroup);
+}
+
+/** Exact `unit cost × whole quantity` — money never goes through a float. */
+function multiplyMoneyByCount(moneyStr, count) {
+  return fromCents(toCents(moneyStr) * BigInt(count));
+}
+
+/** `profit / revenue` as a percentage for display only, or null when there is no revenue to divide by. */
+function marginPercent(profit, revenue) {
+  return revenue === '0.00' ? null : (Number(profit) / Number(revenue)) * 100;
 }
 
 function cashierName(row) {
@@ -180,7 +190,12 @@ async function listUnsettledCardPayments({ db, outletId }) {
     }));
 }
 
-async function computeSalesReport({ context, dateFrom, dateTo, outletId }) {
+async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCostByMenuItem }) {
+  // Profit is only computed when the caller supplies each menu item's unit
+  // cost (the controller takes it from the stock margin report — this file
+  // cannot require `stock/reporting.js` itself, which already requires this
+  // one). Without it the report is exactly what it was before profit existed.
+  const withProfit = unitCostByMenuItem instanceof Map;
   const db = scopedDb().for(context);
   const property = await db.table('properties').where({ id: context.propertyId }).first('base_currency');
   const settlements = await listStandingSettlements({ db, dateFrom, dateTo, outletId });
@@ -253,16 +268,60 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId }) {
     if (!tab.groups.has(groupKey(item.split_group))) continue; // that check was voided
     tab.itemCount = (tab.itemCount ?? 0) + item.quantity;
     const key = String(item.menu_item_id);
-    if (!itemTotals.has(key)) itemTotals.set(key, { menuItemId: item.menu_item_id, name: item.name ?? `#${item.menu_item_id}`, quantity: 0, amounts: [] });
+    if (!itemTotals.has(key)) itemTotals.set(key, { menuItemId: item.menu_item_id, name: item.name ?? `#${item.menu_item_id}`, quantity: 0, amounts: [], costs: [], costKnown: true });
     const entry = itemTotals.get(key);
     entry.quantity += item.quantity;
-    entry.amounts.push(computeItemLineTotal(item));
+    const lineTotal = computeItemLineTotal(item);
+    entry.amounts.push(lineTotal);
+
+    if (withProfit) {
+      const unitCost = unitCostByMenuItem.get(key) ?? null;
+      tab.knownRevenue = tab.knownRevenue ?? [];
+      tab.costs = tab.costs ?? [];
+      if (unitCost === null) {
+        // No recipe and no cost price — an unknown cost is never treated as free.
+        entry.costKnown = false;
+        tab.unknownCostLines = (tab.unknownCostLines ?? 0) + 1;
+      } else {
+        const lineCost = multiplyMoneyByCount(unitCost, item.quantity);
+        entry.costs.push(lineCost);
+        tab.knownRevenue.push(lineTotal);
+        tab.costs.push(lineCost);
+      }
+    }
   }
 
-  const topItems = [...itemTotals.values()]
-    .map(({ menuItemId, name, quantity, amounts }) => ({ menuItemId, name, quantity, sales: sumMoney(amounts) }))
+  const itemRows = [...itemTotals.values()].map(({ menuItemId, name, quantity, amounts, costs, costKnown }) => {
+    const sales = sumMoney(amounts);
+    const row = { menuItemId, name, quantity, sales };
+    if (withProfit) {
+      const cost = costKnown ? sumMoney(costs) : null;
+      const profit = cost === null ? null : sumMoney([sales, negateMoney(cost)]);
+      Object.assign(row, { cost, profit, marginPct: profit === null ? null : marginPercent(profit, sales) });
+    }
+    return row;
+  });
+
+  const topItems = itemRows
+    .slice()
     .sort((a, b) => b.quantity - a.quantity || compareMoney(b.sales, a.sales) || a.name.localeCompare(b.name))
     .slice(0, TOP_ITEMS_LIMIT);
+
+  // Profit over EVERY item sold (not just the top-N shown), counting only
+  // items whose cost is known so an unpriced item can't inflate it.
+  let profitSummary = null;
+  if (withProfit) {
+    const known = itemRows.filter((row) => row.cost !== null);
+    if (known.length === 0 && itemRows.length > 0) {
+      // Everything that sold has an unknown cost — profit is unknown, not a false zero.
+      profitSummary = { revenue: null, cost: null, profit: null, marginPct: null, itemsWithUnknownCost: itemRows.length };
+    } else {
+      const revenue = sumMoney(known.map((row) => row.sales));
+      const cost = sumMoney(known.map((row) => row.cost));
+      const profit = sumMoney([revenue, negateMoney(cost)]);
+      profitSummary = { revenue, cost, profit, marginPct: marginPercent(profit, revenue), itemsWithUnknownCost: itemRows.length - known.length };
+    }
+  }
 
   const tenderRows = [...byTender.values()].map(({ tender, checks, amounts }) => ({ tender, checks, total: sumMoney(amounts) }));
 
@@ -279,10 +338,21 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId }) {
       serviceCharge: sumMoney(settlements.map((row) => row.service_charge)),
       tips: sumMoney(settlements.map((row) => row.tip_amount)),
       total: sumMoney(tenderRows.map((row) => row.total)),
+      ...(withProfit ? { profit: profitSummary } : {}),
     },
     byTender: tenderRows,
     topItems,
-    tabs: [...tabs.values()].map(({ amounts, groups, itemCount, ...tab }) => ({ ...tab, itemCount: itemCount ?? 0, total: sumMoney(amounts) })),
+    tabs: [...tabs.values()].map(({ amounts, groups, itemCount, knownRevenue, costs, unknownCostLines, ...tab }) => {
+      const row = { ...tab, itemCount: itemCount ?? 0, total: sumMoney(amounts) };
+      if (withProfit) {
+        // Profit on the items whose cost is known; `costComplete` says whether that was every item on the tab.
+        // A tab with NO priced item has an unknown profit (null), not a false zero.
+        const anyKnown = (costs ?? []).length > 0;
+        const cost = anyKnown ? sumMoney(costs) : null;
+        Object.assign(row, { cost, profit: anyKnown ? sumMoney([sumMoney(knownRevenue), negateMoney(cost)]) : null, costComplete: (unknownCostLines ?? 0) === 0 });
+      }
+      return row;
+    }),
     unsettledCardPayments: await listUnsettledCardPayments({ db, outletId }),
   };
 }
