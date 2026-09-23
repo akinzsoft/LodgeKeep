@@ -11,3 +11,22 @@ export function formatQuantity(quantity, unit) {
   if (quantity == null) return '—';
   return unit ? `${quantity} ${unit}` : String(quantity);
 }
+
+/**
+ * A purely visual threshold for an "On hand" column's pill — never written
+ * back anywhere, so a plain `Number()` comparison is fine here even though
+ * this codebase's own "quantity is exact, always" rule (mirroring
+ * ARCHITECTURE.md §1/§12 for money) governs every real WRITE to a quantity
+ * value. Matches the "Low stock only" filter's own definition
+ * (`current_quantity <= reorder_level`) exactly for the warning tier, and
+ * adds a distinct, more urgent tier once it's actually at or below zero.
+ *
+ * Shared by `StockItemsTab.jsx` and `MenuItemsTab.jsx` — the latter shows
+ * this for a menu item's own linked stock item, the identical signal.
+ */
+export function stockLevelTone(currentQuantity, reorderLevel) {
+  const quantity = Number(currentQuantity);
+  if (quantity <= 0) return { tone: 'danger', label: 'Out of stock' };
+  if (quantity <= Number(reorderLevel)) return { tone: 'warning', label: 'Low stock' };
+  return null;
+}

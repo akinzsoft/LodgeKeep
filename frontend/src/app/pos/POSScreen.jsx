@@ -98,7 +98,7 @@ export function POSScreen({ activeProperty, isOffline = false, currentUserLabel 
             {tab === 'sales' && <SalesTab activeProperty={activeProperty} isOffline={isOffline} />}
             {tab === 'qr_codes' && <QrTokensTab />}
             {tab === 'stock' && <StockTab activeProperty={activeProperty} isOffline={isOffline} />}
-            {tab === 'setup' && <SetupTab activeProperty={activeProperty} />}
+            {tab === 'setup' && <SetupTab activeProperty={activeProperty} isOffline={isOffline} />}
           </div>
         </>
       )}
