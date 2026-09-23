@@ -625,6 +625,45 @@ async function listMenuItemComponents({ context, menuItemId }) {
   return db.table('pos_menu_item_components').where({ menu_item_id: menuItemId }).orderBy('id');
 }
 
+/**
+ * Which active Register menu items use which stock items — one row per
+ * recipe component, so the Stock items screen can tell a stock item sold
+ * directly (a menu item whose whole recipe is that one item) from one that
+ * is only an ingredient, or not sold at all. Reads run sequentially and are
+ * joined in JS, the same convention `stock/reporting.js` follows. `outletId`
+ * is optional (omitted = every outlet at the property).
+ */
+async function listMenuItemLinks({ context, outletId }) {
+  const db = scopedDb().for(context);
+  const menuQuery = db.table('pos_menu_items').where({ status: 'active' });
+  if (outletId) menuQuery.where({ outlet_id: outletId });
+  const menuItems = await menuQuery.select('id', 'name', 'category', 'outlet_id', 'is_available');
+  if (menuItems.length === 0) return [];
+
+  const menuById = new Map(menuItems.map((row) => [String(row.id), row]));
+  const components = await db.table('pos_menu_item_components').select('menu_item_id', 'stock_item_id', 'quantity');
+
+  const linked = components.filter((row) => menuById.has(String(row.menu_item_id)));
+  const countByMenuItem = new Map();
+  for (const row of linked) {
+    const key = String(row.menu_item_id);
+    countByMenuItem.set(key, (countByMenuItem.get(key) ?? 0) + 1);
+  }
+
+  return linked.map((row) => {
+    const menuItem = menuById.get(String(row.menu_item_id));
+    return {
+      menu_item_id: row.menu_item_id,
+      menu_item_name: menuItem.name,
+      menu_item_category: menuItem.category,
+      menu_item_available: Boolean(menuItem.is_available),
+      stock_item_id: row.stock_item_id,
+      quantity: row.quantity,
+      component_count: countByMenuItem.get(String(row.menu_item_id)),
+    };
+  });
+}
+
 /** Full replace-all upsert for one menu item's recipe — plain config, no history to preserve (see `pos_menu_item_components`' own migration header). */
 async function upsertMenuItemComponents({ context, menuItemId, components }) {
   const db = scopedDb().for(context);
@@ -920,7 +959,7 @@ async function listStockMovements({ context, stockItemId, outletId, type, dateFr
   if (dateFrom) query = query.where('stock_movements.business_date', '>=', dateFrom);
   if (dateTo) query = query.where('stock_movements.business_date', '<=', dateTo);
   return query
-    .select('stock_movements.*', 'stock_items.name as stock_item_name', 'stock_items.unit as stock_item_unit')
+    .select('stock_movements.*', 'stock_items.name as stock_item_name', 'stock_items.unit as stock_item_unit', 'stock_items.category as stock_item_category')
     .orderBy('stock_movements.id', 'desc')
     .limit(limit);
 }
@@ -947,6 +986,7 @@ module.exports = {
   updateStockItem,
   archiveStockItem,
   listMenuItemComponents,
+  listMenuItemLinks,
   upsertMenuItemComponents,
   recordGoodsReceived,
   recordWastage,

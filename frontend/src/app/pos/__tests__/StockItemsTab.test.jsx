@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { render, screen, within, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StockItemsTab } from '../StockItemsTab.jsx';
 import { ApiError } from '../../../shared/api/index.js';
@@ -16,13 +16,27 @@ const mocks = vi.hoisted(() => ({
   createStockItemCategory: vi.fn(),
   updateStockItemCategory: vi.fn(),
   archiveStockItemCategory: vi.fn(),
+  listMenuItemLinks: vi.fn(),
+  upsertMenuItemComponents: vi.fn(),
+  listMenuCategories: vi.fn(),
+  createMenuCategory: vi.fn(),
+  createMenuItem: vi.fn(),
+  listMenuItems: vi.fn(),
+  uploadMenuItemImage: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return {
     ...actual,
-    posApi: { listOutlets: mocks.listOutlets },
+    posApi: {
+      listOutlets: mocks.listOutlets,
+      listMenuCategories: mocks.listMenuCategories,
+      createMenuCategory: mocks.createMenuCategory,
+      createMenuItem: mocks.createMenuItem,
+      listMenuItems: mocks.listMenuItems,
+      uploadMenuItemImage: mocks.uploadMenuItemImage,
+    },
     stockApi: {
       listStockItems: mocks.listStockItems,
       createStockItem: mocks.createStockItem,
@@ -33,6 +47,8 @@ vi.mock('../../../shared/api/index.js', async () => {
       createStockItemCategory: mocks.createStockItemCategory,
       updateStockItemCategory: mocks.updateStockItemCategory,
       archiveStockItemCategory: mocks.archiveStockItemCategory,
+      listMenuItemLinks: mocks.listMenuItemLinks,
+      upsertMenuItemComponents: mocks.upsertMenuItemComponents,
     },
   };
 });
@@ -83,12 +99,23 @@ async function selectCategory(name) {
   await userEvent.click(await screen.findByRole('button', { name }));
 }
 
+/** Sets a controlled number input's value in one event — typing "1.999" char by char through a number input is browser-normalised, so the exact string under test is set directly. */
+function fireInput(element, value) {
+  fireEvent.change(element, { target: { value } });
+}
+
 describe('<StockItemsTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listOutlets.mockResolvedValue([outlet()]);
     mocks.listStockItemCategories.mockResolvedValue([{ id: '1', name: 'Beverages', sort_order: 0, item_count: 0 }]);
     mocks.listStockItems.mockResolvedValue([]);
+    // By default the caller can't read recipe links (a stock_view-only role) —
+    // the Register column/button stay away, so every pre-existing test is
+    // unaffected. The "Sell in Register" block below opts in.
+    mocks.listMenuItemLinks.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'No.', status: 403 }));
+    mocks.listMenuCategories.mockResolvedValue([]);
+    mocks.listMenuItems.mockResolvedValue([]);
   });
 
   describe('single-category selection', () => {
@@ -638,7 +665,7 @@ describe('<StockItemsTab>', () => {
   });
 
   // Gap closure: registered stock categories (StockCategoriesCard, mirroring
-  // SetupTab.jsx's own Menu categories mechanism) — unchanged component,
+  // MenuItemsTab.jsx's own Menu categories mechanism) — unchanged component,
   // just relocated to the top of the redesigned screen.
   describe('categories (gap closure)', () => {
     it('registers a new category from the Stock categories card, and selecting its new row shows it as its own new, empty section', async () => {
@@ -676,6 +703,428 @@ describe('<StockItemsTab>', () => {
       await userEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
 
       expect(await within(card).findByText(/still used by 1 stock item/)).toBeInTheDocument();
+    });
+  });
+  describe('Sell in Register — stock items become sellable in the POS Register', () => {
+    const link = (overrides) => ({ menu_item_id: '50', menu_item_name: 'Vodka shot', menu_item_category: 'Beverages', menu_item_available: true, stock_item_id: '9', quantity: '1.000', component_count: 1, ...overrides });
+
+    async function renderWithItem(stockItem = item(), links = []) {
+      mocks.listStockItems.mockResolvedValue([stockItem]);
+      mocks.listMenuItemLinks.mockResolvedValue(links);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      return (await screen.findByText(stockItem.name)).closest('tr');
+    }
+
+    it('shows whether each stock item is sold, an ingredient only, or not sold, plus a hint about unsold items', async () => {
+      mocks.listStockItems.mockResolvedValue([
+        item({ id: '9', name: 'Vodka' }),
+        item({ id: '10', name: 'Tonic' }),
+        item({ id: '11', name: 'Lime' }),
+      ]);
+      mocks.listMenuItemLinks.mockResolvedValue([
+        link({ stock_item_id: '9' }),
+        link({ menu_item_id: '51', menu_item_name: 'Gin & tonic', stock_item_id: '10', component_count: 2 }),
+        link({ menu_item_id: '51', menu_item_name: 'Gin & tonic', stock_item_id: '12', component_count: 2 }),
+      ]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      const vodka = (await screen.findByText('Vodka')).closest('tr');
+      expect(within(vodka).getByText('In Register — Vodka shot')).toBeInTheDocument();
+      expect(within((await screen.findByText('Tonic')).closest('tr')).getByText('Ingredient only')).toBeInTheDocument();
+      expect(within((await screen.findByText('Lime')).closest('tr')).getByText('Not sold')).toBeInTheDocument();
+      expect(screen.getByText(/don.t appear in the POS Register until you use Sell in Register/)).toBeInTheDocument();
+      // A directly-sold item has nothing left to offer.
+      expect(within(vodka).queryByRole('button', { name: 'Sell in Register' })).not.toBeInTheDocument();
+    });
+
+    it('hides the Register column and button, with no error banner, when the caller cannot read recipe links', async () => {
+      mocks.listStockItems.mockResolvedValue([item()]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      const row = (await screen.findByText('Vodka')).closest('tr');
+      await waitFor(() => expect(mocks.listMenuItemLinks).toHaveBeenCalled());
+
+      expect(within(row).queryByRole('button', { name: 'Sell in Register' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('columnheader', { name: 'Register' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('sells an item under the matching existing Register category: creates the menu item, then links it with the entered quantity per sale', async () => {
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'beverages' }]); // Different case — must still match.
+      mocks.createMenuItem.mockResolvedValue({ id: '60' });
+      mocks.upsertMenuItemComponents.mockResolvedValue([]);
+      const row = await renderWithItem();
+
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
+      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('beverages'));
+
+      await userEvent.type(within(card).getByLabelText('Selling price'), '15');
+      await userEvent.clear(within(card).getByLabelText('Used per sale (ml)'));
+      await userEvent.type(within(card).getByLabelText('Used per sale (ml)'), '50');
+      await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
+
+      await waitFor(() => expect(mocks.upsertMenuItemComponents).toHaveBeenCalledWith('60', [{ stockItemId: '9', quantity: '50' }]));
+      expect(mocks.createMenuCategory).not.toHaveBeenCalled();
+      expect(mocks.createMenuItem).toHaveBeenCalledWith({ outletId: '1', name: 'Vodka', category: 'beverages', price: '15' });
+      await waitFor(() => expect(screen.queryByRole('heading', { name: 'Sell in Register — Vodka' })).not.toBeInTheDocument());
+    });
+
+    it('offers to create a Register category named after the stock category when none matches, and creates it first', async () => {
+      mocks.createMenuCategory.mockResolvedValue({ id: '8', name: 'Beverages' });
+      mocks.createMenuItem.mockResolvedValue({ id: '61' });
+      mocks.upsertMenuItemComponents.mockResolvedValue([]);
+      const row = await renderWithItem();
+
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
+      await waitFor(() => expect(within(card).getByRole('option', { name: 'Create "Beverages"' })).toBeInTheDocument());
+      expect(within(card).getByLabelText('Register category')).toHaveValue('__create__');
+
+      await userEvent.type(within(card).getByLabelText('Selling price'), '15');
+      await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
+
+      await waitFor(() => expect(mocks.upsertMenuItemComponents).toHaveBeenCalled());
+      expect(mocks.createMenuCategory).toHaveBeenCalledWith({ name: 'Beverages' });
+      expect(mocks.createMenuItem).toHaveBeenCalledWith(expect.objectContaining({ category: 'Beverages' }));
+    });
+
+    it('makes an uncategorized item pick its Register category — nothing is invented for it', async () => {
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Snacks' }]);
+      mocks.listStockItems.mockResolvedValue([item({ category: null })]);
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await selectCategory('Uncategorized');
+      const row = (await screen.findByText('Vodka')).closest('tr');
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
+
+      await waitFor(() => expect(within(card).getByRole('option', { name: 'Snacks' })).toBeInTheDocument());
+      expect(within(card).getByLabelText('Register category')).toHaveValue('');
+      await userEvent.type(within(card).getByLabelText('Selling price'), '5');
+      await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
+
+      // The category select is `required`, so the browser itself refuses to submit until one is chosen.
+      expect(mocks.createMenuItem).not.toHaveBeenCalled();
+      expect(mocks.createStockItem).not.toHaveBeenCalled();
+      await userEvent.selectOptions(within(card).getByLabelText('Register category'), 'Snacks');
+      mocks.createMenuItem.mockResolvedValue({ id: '80' });
+      mocks.upsertMenuItemComponents.mockResolvedValue([]);
+      await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
+      await waitFor(() => expect(mocks.createMenuItem).toHaveBeenCalledWith(expect.objectContaining({ category: 'Snacks' })));
+    });
+
+    it('rejects a zero quantity per sale before anything is created (the browser already blocks a malformed price; this is the check it lets through)', async () => {
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      const row = await renderWithItem();
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
+      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+
+      fireInput(within(card).getByLabelText('Selling price'), '10');
+      fireInput(within(card).getByLabelText('Used per sale (ml)'), '0');
+      await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
+      expect(await within(card).findByText(/more than zero/)).toBeInTheDocument();
+      expect(mocks.createMenuItem).not.toHaveBeenCalled();
+    });
+
+    it('warns — without blocking — when an active Register item already has that name at the outlet', async () => {
+      mocks.listMenuItems.mockResolvedValue([{ id: '3', name: 'Vodka' }]);
+      const row = await renderWithItem();
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      expect(await screen.findByText(/already exists at this outlet/)).toBeInTheDocument();
+    });
+
+    it('when only the stock link fails, keeps the panel open, says the Register item exists, and retries the link WITHOUT creating the menu item again', async () => {
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      mocks.createMenuItem.mockResolvedValue({ id: '62' });
+      mocks.upsertMenuItemComponents.mockRejectedValueOnce(new ApiError({ code: 'INTERNAL_ERROR', message: 'Link broke.', status: 500 })).mockResolvedValueOnce([]);
+      const row = await renderWithItem();
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
+      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await userEvent.type(within(card).getByLabelText('Selling price'), '15');
+      await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
+
+      expect(await within(card).findByRole('alert')).toHaveTextContent(/was added to the Register, but its stock link failed \(Link broke\.\)/);
+
+      await userEvent.click(within(card).getByRole('button', { name: 'Retry linking' }));
+      await waitFor(() => expect(mocks.upsertMenuItemComponents).toHaveBeenCalledTimes(2));
+      expect(mocks.createMenuItem).toHaveBeenCalledTimes(1);
+      expect(mocks.upsertMenuItemComponents).toHaveBeenLastCalledWith('62', [{ stockItemId: '9', quantity: '1' }]);
+      await waitFor(() => expect(screen.queryByRole('heading', { name: 'Sell in Register — Vodka' })).not.toBeInTheDocument());
+    });
+
+    it('a failed menu-item create surfaces the real message and leaves nothing to retry-link', async () => {
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      mocks.createMenuItem.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'You lack permission.', status: 403 }));
+      const row = await renderWithItem();
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
+      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await userEvent.type(within(card).getByLabelText('Selling price'), '15');
+      await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
+
+      expect(await within(card).findByText('You lack permission.')).toBeInTheDocument();
+      expect(within(card).getByRole('button', { name: 'Sell in Register' })).toBeInTheDocument();
+      expect(mocks.upsertMenuItemComponents).not.toHaveBeenCalled();
+    });
+
+    it('disables the button while offline', async () => {
+      mocks.listStockItems.mockResolvedValue([item()]);
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} isOffline />);
+      const row = (await screen.findByText('Vodka')).closest('tr');
+      expect(await within(row).findByRole('button', { name: 'Sell in Register' })).toBeDisabled();
+    });
+
+    it('"Also sell in Register" on the Add form creates the stock item, then the Register item and its link', async () => {
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      mocks.createStockItem.mockResolvedValue(item({ id: '20', name: 'Gin' }));
+      mocks.createMenuItem.mockResolvedValue({ id: '70' });
+      mocks.upsertMenuItemComponents.mockResolvedValue([]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — Beverages' }).closest('section');
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
+      await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
+      await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      // The Register name defaults to the stock item's own name.
+      expect(within(addCard).getByLabelText('Name in Register')).toHaveValue('Gin');
+      await userEvent.type(within(addCard).getByLabelText('Selling price'), '12');
+      await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
+
+      await waitFor(() => expect(mocks.upsertMenuItemComponents).toHaveBeenCalledWith('70', [{ stockItemId: '20', quantity: '1' }]));
+      expect(mocks.createStockItem).toHaveBeenCalledTimes(1);
+      expect(mocks.createMenuItem).toHaveBeenCalledWith({ outletId: '1', name: 'Gin', category: 'Beverages', price: '12' });
+    });
+
+    it('the Add form checks the Register fields before creating the stock item, so a bad quantity leaves nothing half-done', async () => {
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — Beverages' }).closest('section');
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
+      await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
+      await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      fireInput(within(addCard).getByLabelText('Selling price'), '12');
+      fireInput(within(addCard).getByLabelText('Used per sale (bottle)'), '0');
+      await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
+
+      expect(await within(addCard).findByText(/more than zero/)).toBeInTheDocument();
+      expect(mocks.createStockItem).not.toHaveBeenCalled();
+    });
+
+    it('if the stock item is created but selling it fails, says so and points at the row action', async () => {
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      mocks.createStockItem.mockResolvedValue(item({ id: '20', name: 'Gin' }));
+      mocks.createMenuItem.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'You lack permission.', status: 403 }));
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — Beverages' }).closest('section');
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
+      await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
+      await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await userEvent.type(within(addCard).getByLabelText('Selling price'), '12');
+      await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
+
+      expect(await within(addCard).findByRole('alert')).toHaveTextContent(/"Gin" was added to stock, but it could not be put in the Register \(You lack permission\.\)/);
+      expect(mocks.createStockItem).toHaveBeenCalledTimes(1);
+    });
+
+    it('a stock-item create failure sells nothing', async () => {
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      mocks.createStockItem.mockRejectedValue(new ApiError({ code: 'CONFLICT', message: 'Duplicate.', status: 409 }));
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — Beverages' }).closest('section');
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
+      await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
+      await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await userEvent.type(within(addCard).getByLabelText('Selling price'), '12');
+      await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
+
+      expect(await within(addCard).findByText('Duplicate.')).toBeInTheDocument();
+      expect(mocks.createMenuItem).not.toHaveBeenCalled();
+      expect(mocks.upsertMenuItemComponents).not.toHaveBeenCalled();
+    });
+
+    it('after a link failure, closing and reopening the panel still only re-links — the Register item is never created twice', async () => {
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      mocks.createMenuItem.mockResolvedValue({ id: '63' });
+      mocks.upsertMenuItemComponents.mockRejectedValueOnce(new ApiError({ code: 'INTERNAL_ERROR', message: 'Link broke.', status: 500 })).mockResolvedValueOnce([]);
+      const row = await renderWithItem();
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      let card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
+      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await userEvent.type(within(card).getByLabelText('Selling price'), '15');
+      await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
+      await within(card).findByRole('alert');
+
+      await userEvent.click(within(card).getByRole('button', { name: 'Cancel' }));
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
+      await userEvent.click(within(card).getByRole('button', { name: 'Retry linking' }));
+
+      await waitFor(() => expect(mocks.upsertMenuItemComponents).toHaveBeenCalledTimes(2));
+      expect(mocks.createMenuItem).toHaveBeenCalledTimes(1);
+      expect(mocks.upsertMenuItemComponents).toHaveBeenLastCalledWith('63', [{ stockItemId: '9', quantity: '1' }]);
+    });
+
+    it('when the Add form\'s "Also sell in Register" fails only at the link, the row\'s Sell in Register retries just the link', async () => {
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      mocks.createStockItem.mockResolvedValue(item({ id: '20', name: 'Gin' }));
+      mocks.createMenuItem.mockResolvedValue({ id: '71' });
+      mocks.upsertMenuItemComponents.mockRejectedValueOnce(new ApiError({ code: 'INTERNAL_ERROR', message: 'Link broke.', status: 500 })).mockResolvedValueOnce([]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — Beverages' }).closest('section');
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
+      await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
+      await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await userEvent.type(within(addCard).getByLabelText('Selling price'), '12');
+      mocks.listStockItems.mockResolvedValue([item({ id: '20', name: 'Gin' })]);
+      await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
+      expect(await within(addCard).findByRole('alert')).toHaveTextContent(/added to stock and to the Register, but its stock link failed/);
+
+      const row = (await screen.findByText('Gin')).closest('tr');
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      const sellCard = screen.getByRole('heading', { name: 'Sell in Register — Gin' }).closest('section');
+      await userEvent.click(within(sellCard).getByRole('button', { name: 'Retry linking' }));
+
+      await waitFor(() => expect(mocks.upsertMenuItemComponents).toHaveBeenCalledTimes(2));
+      expect(mocks.createMenuItem).toHaveBeenCalledTimes(1);
+      expect(mocks.upsertMenuItemComponents).toHaveBeenLastCalledWith('71', [{ stockItemId: '20', quantity: '1' }]);
+    });
+
+    it('the Add form\'s Register name follows the stock Name until it is edited separately', async () => {
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await userEvent.click(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — Beverages' }).closest('section');
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
+      await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await userEvent.type(within(addCard).getByLabelText('Selling price'), '12');
+
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'x');
+      expect(within(addCard).getByLabelText('Name in Register')).toHaveValue('Ginx');
+    });
+
+    it('uploads a chosen item image to the new Register item, so it shows on the Register tile', async () => {
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      mocks.createMenuItem.mockResolvedValue({ id: '90' });
+      mocks.upsertMenuItemComponents.mockResolvedValue([]);
+      mocks.uploadMenuItemImage.mockResolvedValue({ id: '90' });
+      const row = await renderWithItem();
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
+      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await userEvent.type(within(card).getByLabelText('Selling price'), '15');
+      const photo = new File(['img'], 'vodka.png', { type: 'image/png' });
+      await userEvent.upload(within(card).getByLabelText('Item image (optional)'), photo);
+      await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
+
+      await waitFor(() => expect(mocks.uploadMenuItemImage).toHaveBeenCalledWith('90', photo));
+      await waitFor(() => expect(mocks.upsertMenuItemComponents).toHaveBeenCalledWith('90', [{ stockItemId: '9', quantity: '1' }]));
+    });
+
+    it('a photo that fails to upload leaves the item in the Register and says how to add it later', async () => {
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      mocks.createMenuItem.mockResolvedValue({ id: '91' });
+      mocks.upsertMenuItemComponents.mockResolvedValue([]);
+      mocks.uploadMenuItemImage.mockRejectedValue(new ApiError({ code: 'VALIDATION', message: 'Image too large.', status: 400 }));
+      const row = await renderWithItem();
+      await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
+      const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
+      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await userEvent.type(within(card).getByLabelText('Selling price'), '15');
+      await userEvent.upload(within(card).getByLabelText('Item image (optional)'), new File(['img'], 'v.png', { type: 'image/png' }));
+      await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/now in the Register\. Its photo was not saved \(Image too large\.\)/);
+      expect(mocks.upsertMenuItemComponents).toHaveBeenCalledWith('91', [{ stockItemId: '9', quantity: '1' }]);
+    });
+
+    it('the Add form always shows an Item image field; choosing a photo turns selling on and the photo is uploaded to the new Register item', async () => {
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      mocks.createStockItem.mockResolvedValue(item({ id: '21', name: 'Rum' }));
+      mocks.createMenuItem.mockResolvedValue({ id: '92' });
+      mocks.upsertMenuItemComponents.mockResolvedValue([]);
+      mocks.uploadMenuItemImage.mockResolvedValue({ id: '92' });
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — Beverages' }).closest('section');
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Rum');
+      await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
+
+      // Visible without ticking anything, and exactly one such field (the sell section does not repeat it).
+      expect(within(addCard).getByLabelText('Also sell in Register')).not.toBeChecked();
+      const photo = new File(['img'], 'rum.webp', { type: 'image/webp' });
+      await userEvent.upload(within(addCard).getAllByLabelText('Item image (optional)')[0], photo);
+      expect(within(addCard).getAllByLabelText('Item image (optional)')).toHaveLength(1);
+
+      expect(within(addCard).getByLabelText('Also sell in Register')).toBeChecked();
+      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await userEvent.type(within(addCard).getByLabelText('Selling price'), '9');
+      await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
+
+      await waitFor(() => expect(mocks.uploadMenuItemImage).toHaveBeenCalledWith('92', photo));
+      expect(mocks.createMenuItem).toHaveBeenCalledWith(expect.objectContaining({ name: 'Rum', category: 'Beverages' }));
+    });
+
+    it('unticking "Also sell in Register" drops a chosen photo instead of silently ignoring it', async () => {
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'Beverages' }]);
+      mocks.createStockItem.mockResolvedValue(item({ id: '22', name: 'Cola' }));
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — Beverages' }).closest('section');
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Cola');
+      await userEvent.type(within(addCard).getByLabelText('Unit'), 'can');
+      await userEvent.upload(within(addCard).getByLabelText('Item image (optional)'), new File(['img'], 'c.png', { type: 'image/png' }));
+      await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
+
+      expect(within(addCard).getByLabelText('Item image (optional)').files).toHaveLength(0);
+      await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
+      await waitFor(() => expect(mocks.createStockItem).toHaveBeenCalled());
+      expect(mocks.uploadMenuItemImage).not.toHaveBeenCalled();
+      expect(mocks.createMenuItem).not.toHaveBeenCalled();
+    });
+
+    it('the Edit panel says where a directly-sold item is managed, and archiving warns that Register recipes use it', async () => {
+      const row = await renderWithItem(item(), [link()]);
+      await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+      expect(screen.getByText(/Sold in the Register as "Vodka shot"/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      await userEvent.click(within(row).getByRole('button', { name: 'Archive' }));
+      expect(await screen.findByRole('alertdialog')).toHaveTextContent(/part of the recipe of 1 Register menu item/);
     });
   });
 });

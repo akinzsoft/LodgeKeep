@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Card, DataTable, Button, StatusPill, ConfirmDialog } from '../../shared/components/index.js';
 import { formatQuantity } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
+import { sortStockItemsByCategory, UNCATEGORIZED_LABEL } from './stockItemOptions.jsx';
 import formStyles from './POSForm.module.css';
 
 const STATUS_TONE = { open: 'info', completed: 'success', cancelled: 'neutral' };
@@ -238,6 +239,7 @@ export function StockTakesTab({ isOffline = false }) {
                 state={(outletStockItems ?? []).length === 0 ? (outletStockItems === null ? 'loading' : 'empty') : 'success'}
                 emptyMessage="This outlet has no stock items yet."
                 columns={[
+                  { key: 'category', label: 'Category', render: (row) => row.category?.trim() || UNCATEGORIZED_LABEL },
                   { key: 'name', label: 'Stock item' },
                   { key: 'unit', label: 'Unit' },
                   {
@@ -258,7 +260,7 @@ export function StockTakesTab({ isOffline = false }) {
                     ),
                   },
                 ]}
-                rows={outletStockItems ?? []}
+                rows={sortStockItemsByCategory(outletStockItems)}
                 rowKey={(row) => row.id}
                 actions={(row) => (
                   <Button size="compact" loading={countSubmittingId === row.id} disabled={isOffline || countInputs[row.id] === ''} onClick={() => handleSubmitCount(row.id)}>
@@ -289,6 +291,7 @@ export function StockTakesTab({ isOffline = false }) {
               state={detail.lines.length === 0 ? 'empty' : 'success'}
               emptyMessage="No items were counted before this take was completed."
               columns={[
+                { key: 'category', label: 'Category', render: (row) => stockItemsById.get(String(row.stock_item_id))?.category?.trim() || UNCATEGORIZED_LABEL },
                 { key: 'stock_item', label: 'Stock item', render: (row) => stockItemsById.get(String(row.stock_item_id))?.name ?? `#${row.stock_item_id}` },
                 { key: 'counted_quantity', label: 'Counted', align: 'right', render: (row) => formatQuantity(row.counted_quantity, stockItemsById.get(String(row.stock_item_id))?.unit) },
                 {

@@ -31,6 +31,7 @@ function stockRouter() {
   router.post('/pos/stock/items/:id/archive', requirePermission('pos.stock_manage'), controller.archiveStockItem);
   router.post('/pos/stock/items/:id/wastage', requirePermission('pos.stock_view'), controller.recordWastage);
 
+  router.get('/pos/stock/menu-links', requirePermission('pos.stock_manage'), controller.listMenuItemLinks);
   router.get('/pos/stock/menu-items/:menuItemId/components', requirePermission('pos.stock_manage'), controller.listMenuItemComponents);
   router.put('/pos/stock/menu-items/:menuItemId/components', requirePermission('pos.stock_manage'), controller.upsertMenuItemComponents);
 
@@ -50,6 +51,7 @@ function stockRouter() {
   router.get('/pos/stock/reports/cost-of-sales', requirePermission('pos.stock_manage'), controller.costOfSales);
   router.get('/pos/stock/reports/variance', requirePermission('pos.stock_manage'), controller.stockVariance);
   router.get('/pos/stock/reports/margin', requirePermission('pos.stock_manage'), controller.costOfSalesMargin);
+  router.get('/pos/stock/reports/overview', requirePermission('pos.stock_manage'), controller.stockOverview);
 
   return router;
 }

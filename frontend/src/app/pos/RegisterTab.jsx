@@ -158,6 +158,11 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
+  // Registered Register (menu) categories — so a category the manager just
+  // created shows in the rail even before it holds an item (user-reported:
+  // a new category looked like it had vanished).
+  const [registeredCategories, setRegisteredCategories] = useState([]);
+  const [refreshingMenu, setRefreshingMenu] = useState(false);
   const [outletId, setOutletId] = useState('');
   const [terminalId, setTerminalId] = useState('');
 
@@ -245,16 +250,30 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
 
   async function loadOutletContext(id) {
     try {
-      const [terminalList, menuList, orders] = await Promise.all([
+      const [terminalList, menuList, orders, categoryList] = await Promise.all([
         posApi.listTerminals(id),
         posApi.listMenuItems(id),
         posApi.listOrders({ outletId: id, status: 'open' }),
+        // Best-effort: the rail falls back to the categories of the loaded items if this fails.
+        posApi.listMenuCategories().catch(() => []),
       ]);
       setTerminals(terminalList);
       setMenuItems(menuList);
       setOpenOrders(orders);
+      setRegisteredCategories(categoryList);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not load this outlet.');
+    }
+  }
+
+  /** Re-reads the outlet's menu (items, categories, terminals, open tabs) — for a menu changed elsewhere (Setup, Stock) while this screen stayed open. Leaves the open tab and cart untouched. */
+  async function handleRefreshMenu() {
+    if (!outletId || refreshingMenu) return;
+    setRefreshingMenu(true);
+    try {
+      await loadOutletContext(outletId);
+    } finally {
+      setRefreshingMenu(false);
     }
   }
 
@@ -865,7 +884,10 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     return menuItems.find((m) => m.id === id)?.name ?? `#${id}`;
   }
 
-  const categories = [...new Set(menuItems.map((item) => item.category))].sort();
+  // Every registered category, plus any category an item still carries that
+  // is no longer registered (archived) — sorted as before.
+  const categories = [...new Set([...registeredCategories.map((category) => category.name), ...menuItems.map((item) => item.category)])].sort();
+  const categoriesWithItems = new Set(menuItems.map((item) => item.category));
   const filteredMenuItems = menuItems.filter(
     (item) =>
       (categoryFilter === '' || item.category === categoryFilter) &&
@@ -956,6 +978,11 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                 </button>
               </div>
             )}
+            {outletId && (
+              <button type="button" className={styles.tabChip} onClick={handleRefreshMenu} disabled={refreshingMenu || settling} title="Reload this outlet's menu">
+                {refreshingMenu ? 'Refreshing…' : 'Refresh menu'}
+              </button>
+            )}
           </div>
 
           {settleResult ? (
@@ -981,7 +1008,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                   <button
                     key={category}
                     type="button"
-                    className={`${styles.railItem} ${categoryFilter === category ? styles.railItemActive : ''}`.trim()}
+                    className={`${styles.railItem} ${categoryFilter === category ? styles.railItemActive : ''} ${categoriesWithItems.has(category) ? '' : styles.railItemEmpty}`.trim()}
                     onClick={() => setCategoryFilter(category)}
                   >
                     <CategoryIcon category={category} />
@@ -1035,7 +1062,15 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                       </div>
                     </div>
                   ))}
-                  {filteredMenuItems.length === 0 && <p className={formStyles.disabledNotice}>No menu items match this search.</p>}
+                  {filteredMenuItems.length === 0 && (
+                    <p className={formStyles.disabledNotice}>
+                      {menuItems.length === 0
+                        ? 'This outlet has no menu items yet — add them under Stock → Stock items (Sell in Register) or POS → Setup → Menu items, then press Refresh menu.'
+                        : searchQuery.trim() === '' && categoryFilter !== '' && !categoriesWithItems.has(categoryFilter)
+                          ? 'No items in this category yet.'
+                          : 'No menu items match this search.'}
+                    </p>
+                  )}
                 </div>
               </div>
 

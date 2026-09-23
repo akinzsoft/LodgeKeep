@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Card, Button } from '../../shared/components/index.js';
 import { formatQuantity } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
+import { StockItemOptions } from './stockItemOptions.jsx';
 import formStyles from './POSForm.module.css';
 
 /**
@@ -113,11 +114,7 @@ export function StockWastageTab({ isOffline = false }) {
                 <option value="" disabled>
                   Select a stock item
                 </option>
-                {(stockItems ?? []).map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} ({item.unit})
-                  </option>
-                ))}
+                <StockItemOptions items={stockItems} />
               </select>
             </label>
           </div>

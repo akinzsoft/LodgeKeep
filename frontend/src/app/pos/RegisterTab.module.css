@@ -956,3 +956,8 @@
   opacity: 0.5;
   cursor: default;
 }
+
+/* A registered category that holds no menu item yet — still shown so it never looks like it vanished, just visibly quieter. */
+.railItemEmpty:not(.railItemActive) {
+  opacity: 0.6;
+}

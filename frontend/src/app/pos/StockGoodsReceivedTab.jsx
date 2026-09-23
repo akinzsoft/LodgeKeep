@@ -3,6 +3,7 @@ import { Card, DataTable, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { formatQuantity } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
+import { StockItemOptions } from './stockItemOptions.jsx';
 import formStyles from './POSForm.module.css';
 
 function emptyLine() {
@@ -154,11 +155,7 @@ export function StockGoodsReceivedTab({ activeProperty, isOffline = false }) {
                   disabled={isOffline || !selectedOutletId}
                 >
                   <option value="">{selectedOutletId ? 'Select a stock item' : 'Select an outlet first'}</option>
-                  {(stockItems ?? []).map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name} ({item.unit})
-                    </option>
-                  ))}
+                  <StockItemOptions items={stockItems} />
                 </select>
               </label>
               <label className={formStyles.field}>

@@ -97,6 +97,12 @@ export function listMenuItemComponents(menuItemId) {
   return request(`/pos/stock/menu-items/${menuItemId}/components`);
 }
 
+/** Every active menu item's recipe components, flattened — which stock items are sold in the Register. `outletId` optional. */
+export function listMenuItemLinks({ outletId } = {}) {
+  const query = outletId ? `?outlet_id=${encodeURIComponent(outletId)}` : '';
+  return request(`/pos/stock/menu-links${query}`);
+}
+
 /** Full replace-all upsert — `components`: `[{stockItemId, quantity}]`. */
 export function upsertMenuItemComponents(menuItemId, components) {
   return request(`/pos/stock/menu-items/${menuItemId}/components`, {
@@ -188,6 +194,13 @@ export function getStockVariance({ dateFrom, dateTo, outletId }) {
   const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
   if (outletId) params.set('outlet_id', outletId);
   return request(`/pos/stock/reports/variance?${params}`);
+}
+
+/** Every active stock item and registered category, with the period's sold/received/wastage/adjustment figures — includes items with no movement. */
+export function getStockOverview({ dateFrom, dateTo, outletId }) {
+  const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+  if (outletId) params.set('outlet_id', outletId);
+  return request(`/pos/stock/reports/overview?${params}`);
 }
 
 /** Gap closure: revenue, cost, and margin per menu item (and rolled up by category), grouped over the same date/outlet range. */
