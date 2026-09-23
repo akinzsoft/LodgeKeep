@@ -180,4 +180,74 @@ describe('<SalesTab>', () => {
       expect(within((await screen.findByText('#12 · Table 5')).closest('tr')).getByRole('button', { name: 'Refund' })).toBeDisabled();
     });
   });
+  describe('profit', () => {
+    const PROFIT_REPORT = {
+      ...REPORT,
+      summary: { ...REPORT.summary, profit: { revenue: '100.00', cost: '46.00', profit: '54.00', marginPct: 54, itemsWithUnknownCost: 1 } },
+      topItems: [
+        { menuItemId: '1', name: 'Beer', quantity: 3, sales: '60.00', cost: '36.00', profit: '24.00', marginPct: 40 },
+        { menuItemId: '2', name: 'Mystery snack', quantity: 1, sales: '10.00', cost: null, profit: null, marginPct: null },
+      ],
+      tabs: [
+        { ...REPORT.tabs[0], cost: '34.00', profit: '46.00', costComplete: true },
+        { ...REPORT.tabs[1], cost: '12.00', profit: '8.00', costComplete: false },
+        { ...REPORT.tabs[2], cost: null, profit: null, costComplete: false },
+      ],
+    };
+
+    async function runWith(report) {
+      mocks.getSalesReport.mockResolvedValue(report);
+      render(<SalesTab activeProperty={PROPERTY} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Run report' }));
+      await screen.findByRole('region', { name: 'Sales summary' });
+    }
+
+    it('shows total profit and margin in the summary, and explains how it is worked out', async () => {
+      await runWith(PROFIT_REPORT);
+      const summary = screen.getByRole('region', { name: 'Sales summary' });
+      expect(within(summary).getByText('Profit')).toBeInTheDocument();
+      expect(summary).toHaveTextContent(/54\.00/);
+      expect(summary).toHaveTextContent('54.0% margin');
+      expect(screen.getByText(/Profit is item sales before tax/)).toBeInTheDocument();
+      expect(screen.getByText(/1 item has no recipe or cost price set, so it is left out of profit/)).toBeInTheDocument();
+    });
+
+    it('gives each top item its cost, profit and margin — an item with no cost says Unknown, never zero', async () => {
+      await runWith(PROFIT_REPORT);
+      const table = screen.getByRole('heading', { name: 'Top-selling items' }).closest('section');
+      const beer = within(table).getByText('Beer').closest('tr');
+      expect(beer).toHaveTextContent(/36\.00/);
+      expect(beer).toHaveTextContent(/24\.00/);
+      expect(beer).toHaveTextContent('40.0%');
+      const mystery = within(table).getByText('Mystery snack').closest('tr');
+      expect(within(mystery).getAllByText('Unknown')).toHaveLength(2);
+    });
+
+    it('gives each settled tab its profit, flagging one where some items had no cost', async () => {
+      await runWith(PROFIT_REPORT);
+      const table = screen.getByRole('heading', { name: 'Settled tabs' }).closest('section');
+      const rows = within(table).getAllByRole('row');
+      expect(rows.some((row) => row.textContent.includes('46.00') && !row.textContent.includes('priced items only'))).toBe(true);
+      expect(rows.some((row) => row.textContent.includes('8.00') && row.textContent.includes('priced items only'))).toBe(true);
+      // A tab with no priced item at all says Unknown — never a false zero, and no "priced items only" note.
+      const unknownRow = rows.find((row) => row.textContent.includes('#11'));
+      expect(unknownRow).toHaveTextContent('Unknown');
+      expect(unknownRow).not.toHaveTextContent('priced items only');
+    });
+
+    it('says Unknown, not a zero profit, when nothing sold has a known cost', async () => {
+      await runWith({ ...PROFIT_REPORT, summary: { ...REPORT.summary, profit: { revenue: null, cost: null, profit: null, marginPct: null, itemsWithUnknownCost: 2 } } });
+      const summary = screen.getByRole('region', { name: 'Sales summary' });
+      expect(summary).toHaveTextContent('Unknown');
+      expect(summary).toHaveTextContent('No margin yet');
+      expect(screen.getByText(/2 items have no recipe or cost price set, so they are left out of profit/)).toBeInTheDocument();
+      expect(screen.queryByText(/Cost of these sales/)).not.toBeInTheDocument();
+    });
+
+    it('shows no profit columns or note when the report carries no profit figures', async () => {
+      await runWith(REPORT);
+      expect(screen.queryByText(/Profit is item sales before tax/)).not.toBeInTheDocument();
+      expect(screen.queryByRole('columnheader', { name: 'Profit' })).not.toBeInTheDocument();
+    });
+  });
 });

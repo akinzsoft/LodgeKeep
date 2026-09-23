@@ -68,6 +68,7 @@ function posRouter() {
   router.post('/pos/orders/:id/settlements/:settlementId/void', requirePermission('pos.manage'), controller.voidSettlement);
 
   // A reconciliation report, not a till action — manager tier, like the other POS overrides.
+  // Profit on this report uses recipe/cost data that is otherwise `pos.stock_manage`-only. Today every role holding `pos.manage` also holds `pos.stock_manage`; if that ever changes, gate the profit fields separately.
   router.get('/pos/reports/sales', requirePermission('pos.manage'), controller.salesReport);
 
   router.get('/pos/shifts', requirePermission('pos.operate'), controller.listShifts);

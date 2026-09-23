@@ -30,6 +30,15 @@ function tabName(row) {
   return row.tableLabel ? `#${row.orderId} · ${row.tableLabel}` : `#${row.orderId}`;
 }
 
+/** `null` is a genuinely unknown cost — never shown as a false zero. */
+function moneyOrUnknown(amount, currencyCode) {
+  return amount === null || amount === undefined ? 'Unknown' : <Money amount={amount} currencyCode={currencyCode} />;
+}
+
+function formatPercent(value) {
+  return value === null || value === undefined ? '—' : `${value.toFixed(1)}%`;
+}
+
 function formatTime(iso) {
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
@@ -117,6 +126,8 @@ export function SalesTab({ activeProperty, isOffline = false }) {
   const tableState = (rows) => (loading ? 'loading' : report === null || rows.length === 0 ? 'empty' : 'success');
   const emptyMessage = report === null ? 'Choose a date range and run the report.' : 'No sales in this range.';
   const exportDisabled = (rows) => report === null || rows.length === 0 || exporting !== null;
+  // Older/other responses without profit figures simply show no profit columns.
+  const profit = report?.summary?.profit ?? null;
 
   return (
     <div className={formStyles.form}>
@@ -164,6 +175,13 @@ export function SalesTab({ activeProperty, isOffline = false }) {
               <Money amount={report.summary.total} currencyCode={currencyCode} />
             </span>
           </div>
+          {profit && (
+            <div className={styles.stat}>
+              <span className={styles.statLabel}>Profit</span>
+              <span className={styles.statValue}>{moneyOrUnknown(profit.profit, currencyCode)}</span>
+              <span className={styles.statLabel}>{profit.marginPct === null ? 'No margin yet' : `${formatPercent(profit.marginPct)} margin`}</span>
+            </div>
+          )}
           <div className={styles.stat}>
             <span className={styles.statLabel}>Tabs settled</span>
             <span className={styles.statValue}>{report.summary.tabs}</span>
@@ -181,6 +199,20 @@ export function SalesTab({ activeProperty, isOffline = false }) {
             </span>
           </div>
         </section>
+      )}
+
+      {profit && (
+        <p className={formStyles.hint}>
+          Profit is item sales before tax, tip and service charge, minus what those items cost (their recipe, else their cost price).
+          {profit.cost !== null && (
+            <>
+              {' '}
+              Cost of these sales: <Money amount={profit.cost} currencyCode={currencyCode} />.
+            </>
+          )}
+          {profit.itemsWithUnknownCost > 0 &&
+            ` ${profit.itemsWithUnknownCost} item${profit.itemsWithUnknownCost === 1 ? ' has' : 's have'} no recipe or cost price set, so ${profit.itemsWithUnknownCost === 1 ? 'it is' : 'they are'} left out of profit.`}
+        </p>
       )}
 
       <DataTable
@@ -214,6 +246,13 @@ export function SalesTab({ activeProperty, isOffline = false }) {
           { key: 'name', label: 'Item' },
           { key: 'quantity', label: 'Qty sold', align: 'right' },
           { key: 'sales', label: 'Sales (before tax)', align: 'right', render: (row) => <Money amount={row.sales} currencyCode={currencyCode} /> },
+          ...(profit
+            ? [
+                { key: 'cost', label: 'Cost', align: 'right', render: (row) => moneyOrUnknown(row.cost, currencyCode) },
+                { key: 'profit', label: 'Profit', align: 'right', render: (row) => moneyOrUnknown(row.profit, currencyCode) },
+                { key: 'marginPct', label: 'Margin %', align: 'right', render: (row) => formatPercent(row.marginPct) },
+              ]
+            : []),
         ]}
         rows={report?.topItems ?? []}
         rowKey={(row) => row.menuItemId}
@@ -235,6 +274,22 @@ export function SalesTab({ activeProperty, isOffline = false }) {
           { key: 'itemCount', label: 'Items', align: 'right' },
           { key: 'cashier', label: 'Cashier', render: (row) => row.cashier ?? (row.source === 'guest' ? 'Guest order' : '—') },
           { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={currencyCode} /> },
+          ...(profit
+            ? [
+                {
+                  key: 'profit',
+                  label: 'Profit',
+                  align: 'right',
+                  // A tab with an item whose cost isn't set shows profit on the priced items only — said so, not hidden.
+                  render: (row) => (
+                    <>
+                      {moneyOrUnknown(row.profit, currencyCode)}
+                      {row.costComplete === false && row.profit !== null && <span className={formStyles.hint}> (priced items only)</span>}
+                    </>
+                  ),
+                },
+              ]
+            : []),
         ]}
         rows={report?.tabs ?? []}
         rowKey={(row) => row.orderId}

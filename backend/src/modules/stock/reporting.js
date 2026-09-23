@@ -193,6 +193,8 @@ async function computeCostOfSalesMargin({ context, dateFrom, dateTo, outletId })
       menuItemId: row.menuItemId,
       name: row.name,
       category: menuItem?.category ?? null,
+      // Cost of ONE unit (null when unknown) — the POS Sales report reuses this to price each line and tab.
+      unitCost,
       quantity: row.quantity,
       revenue: row.revenue,
       cost,
