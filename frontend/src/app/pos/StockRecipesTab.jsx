@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Card, DataTable, Button } from '../../shared/components/index.js';
 import { formatQuantity } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
+import { StockItemOptions } from './stockItemOptions.jsx';
 import formStyles from './POSForm.module.css';
 
 /**
@@ -177,11 +178,7 @@ export function StockRecipesTab({ isOffline = false }) {
               <span className={formStyles.label}>Add stock item</span>
               <select className={formStyles.select} value={newStockItemId} onChange={(event) => setNewStockItemId(event.target.value)} disabled={isOffline}>
                 <option value="">Select a stock item</option>
-                {availableStockItems.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} ({item.unit})
-                  </option>
-                ))}
+                <StockItemOptions items={availableStockItems} />
               </select>
             </label>
             <label className={formStyles.field}>

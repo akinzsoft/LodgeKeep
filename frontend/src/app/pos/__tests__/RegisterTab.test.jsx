@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
   listTerminals: vi.fn(),
   listMenuItems: vi.fn(),
+  listMenuCategories: vi.fn(),
   listOrders: vi.fn(),
   openOrder: vi.fn(),
   getOrder: vi.fn(),
@@ -82,6 +83,7 @@ describe('<RegisterTab>', () => {
     mocks.listOutlets.mockResolvedValue([OUTLET]);
     mocks.listTerminals.mockResolvedValue([TERMINAL]);
     mocks.listMenuItems.mockResolvedValue([MENU_ITEM]);
+    mocks.listMenuCategories.mockResolvedValue([]);
     mocks.listOrders.mockResolvedValue([]);
     // The redesign fetches a real preview reactively as soon as the order
     // has items — not only behind an explicit "Settle" click, which no
@@ -1089,6 +1091,64 @@ describe('<RegisterTab>', () => {
         expect.objectContaining({ stockOverrideReason: 'Confirmed' })
       );
       await screen.findByRole('region', { name: 'Sale receipt' });
+    });
+  });
+  describe('menu categories and refresh (stock items sold in the Register)', () => {
+    it('shows a registered category with no items in the rail, and says so when it is selected', async () => {
+      mocks.listMenuCategories.mockResolvedValue([
+        { id: '1', name: 'Drinks' },
+        { id: '2', name: 'Beer' },
+      ]);
+      await openNewTab();
+      const rail = screen.getByRole('navigation', { name: 'Menu categories' });
+      expect(within(rail).getByRole('button', { name: /Beer/ })).toBeInTheDocument();
+      expect(within(rail).getByRole('button', { name: /Drinks/ })).toBeInTheDocument();
+
+      await userEvent.click(within(rail).getByRole('button', { name: /Beer/ }));
+      expect(screen.getByText('No items in this category yet.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Add House Cocktail' })).not.toBeInTheDocument();
+    });
+
+    it('still lists a category an item carries even when it is not registered, and does not duplicate one that is', async () => {
+      mocks.listMenuCategories.mockResolvedValue([{ id: '1', name: 'Drinks' }]);
+      mocks.listMenuItems.mockResolvedValue([MENU_ITEM, SOLD_OUT_ITEM]); // Drinks + Mains (unregistered)
+      await openNewTab();
+      const rail = screen.getByRole('navigation', { name: 'Menu categories' });
+      expect(within(rail).getAllByRole('button', { name: /Drinks/ })).toHaveLength(1);
+      expect(within(rail).getByRole('button', { name: /Mains/ })).toBeInTheDocument();
+    });
+
+    it('falls back to the items\' own categories when the category list cannot be loaded', async () => {
+      mocks.listMenuCategories.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'No.', status: 403 }));
+      await openNewTab();
+      const rail = screen.getByRole('navigation', { name: 'Menu categories' });
+      expect(within(rail).getByRole('button', { name: /Drinks/ })).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('tells the cashier where to add items when the outlet has no menu at all', async () => {
+      mocks.listMenuItems.mockResolvedValue([]);
+      await openNewTab();
+      expect(screen.getByText(/This outlet has no menu items yet/)).toBeInTheDocument();
+    });
+
+    it('"Refresh menu" re-reads the menu so an item added elsewhere appears without switching outlet, keeping the open tab', async () => {
+      await openNewTab();
+      expect(screen.queryByRole('button', { name: 'Add Lager' })).not.toBeInTheDocument();
+
+      mocks.listMenuItems.mockResolvedValue([MENU_ITEM, { id: '8', name: 'Lager', price: '5.00', is_available: true, category: 'Beer' }]);
+      const callsBefore = mocks.listMenuItems.mock.calls.length;
+      await userEvent.click(screen.getByRole('button', { name: 'Refresh menu' }));
+
+      expect(await screen.findByRole('button', { name: 'Add Lager' })).toBeInTheDocument();
+      expect(mocks.listMenuItems.mock.calls.length).toBe(callsBefore + 1);
+      expect(screen.getByText('Order Ticket')).toBeInTheDocument(); // The open tab survived.
+    });
+
+    it('offers "Refresh menu" only once an outlet is chosen', async () => {
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
+      await screen.findByRole('option', { name: 'Main Bar' });
+      expect(screen.queryByRole('button', { name: 'Refresh menu' })).not.toBeInTheDocument();
     });
   });
 });

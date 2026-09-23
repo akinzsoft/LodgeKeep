@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   getCostOfSales: vi.fn(),
   getStockVariance: vi.fn(),
   getCostOfSalesMargin: vi.fn(),
+  getStockOverview: vi.fn(),
+  listStockMovements: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -22,10 +24,13 @@ vi.mock('../../../shared/api/index.js', async () => {
       getCostOfSales: mocks.getCostOfSales,
       getStockVariance: mocks.getStockVariance,
       getCostOfSalesMargin: mocks.getCostOfSalesMargin,
+      getStockOverview: mocks.getStockOverview,
+      listStockMovements: mocks.listStockMovements,
     },
   };
 });
 
+const EMPTY_OVERVIEW = { totals: { itemCount: 0, soldCost: '0.00', wastageCost: '0.00' }, byCategory: [], items: [] };
 const EMPTY_MARGIN = { byMenuItem: [], byCategory: [], totals: { revenue: '0.00', cost: '0.00', margin: '0.00', itemsWithUnknownCost: 0 } };
 
 describe('<StockReportsTab>', () => {
@@ -34,6 +39,8 @@ describe('<StockReportsTab>', () => {
     mocks.listOutlets.mockResolvedValue([{ id: '1', name: 'Main Bar' }]);
     mocks.listStockItems.mockResolvedValue([{ id: '20', name: 'Vodka (bottle)' }]);
     mocks.getCostOfSalesMargin.mockResolvedValue(EMPTY_MARGIN);
+    mocks.getStockOverview.mockResolvedValue(EMPTY_OVERVIEW);
+    mocks.listStockMovements.mockResolvedValue([]);
   });
 
   it('the date-range/outlet toolbar stays reachable before any report has ever run — never hidden inside a state-gated table', async () => {
@@ -170,6 +177,79 @@ describe('<StockReportsTab>', () => {
       render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
       await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
       expect(await screen.findAllByText('Choose a date range and run the reports.')).not.toHaveLength(0);
+    });
+  });
+  describe('every category and item, and the movement history (gap closure)', () => {
+    const OVERVIEW = {
+      totals: { itemCount: 3, soldCost: '60.00', wastageCost: '10.00' },
+      byCategory: [
+        { category: 'Spirits', registered: true, itemCount: 2, lowStockCount: 1, soldCost: '60.00', wastageCost: '10.00' },
+        { category: 'Empty shelf', registered: true, itemCount: 0, lowStockCount: 0, soldCost: '0.00', wastageCost: '0.00' },
+        { category: null, registered: null, itemCount: 1, lowStockCount: 0, soldCost: '0.00', wastageCost: '0.00' },
+      ],
+      items: [
+        { stockItemId: '20', name: 'Gin', unit: 'ml', category: 'Spirits', currentQuantity: '80.000', soldQty: '20.000', soldCost: '40.00', receivedQty: '100.000', wastageQty: '5.000', wastageCost: '10.00', adjustmentQty: '0.000' },
+        { stockItemId: '21', name: 'Rum', unit: 'ml', category: 'Spirits', currentQuantity: '50.000', soldQty: '10.000', soldCost: '20.00', receivedQty: '0.000', wastageQty: '0.000', wastageCost: '0.00', adjustmentQty: '0.000' },
+        { stockItemId: '22', name: 'Never sold ice', unit: 'kg', category: null, currentQuantity: '4.000', soldQty: '0.000', soldCost: '0.00', receivedQty: '0.000', wastageQty: '0.000', wastageCost: '0.00', adjustmentQty: '0.000' },
+      ],
+    };
+
+    beforeEach(() => {
+      mocks.getCostOfSales.mockResolvedValue({ totalCost: '0.00', byDay: [], byItem: [] });
+      mocks.getStockVariance.mockResolvedValue({ lines: [], summaryByItem: [] });
+      mocks.getStockOverview.mockResolvedValue(OVERVIEW);
+    });
+
+    it('shows every category (even an empty one and Uncategorized) and every item — including one that never sold', async () => {
+      render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+
+      const byCategory = (await screen.findByRole('heading', { name: 'Stock by category' })).closest('section');
+      expect(within(byCategory).getByText('Spirits')).toBeInTheDocument();
+      expect(within(byCategory).getByText('Empty shelf')).toBeInTheDocument();
+      expect(within(byCategory).getByText('Uncategorized')).toBeInTheDocument();
+
+      const items = screen.getByRole('heading', { name: 'Every stock item — by category' }).closest('section');
+      expect(within(items).getByText('Gin')).toBeInTheDocument();
+      expect(within(items).getByText('Never sold ice')).toBeInTheDocument();
+      expect(screen.getByText(/3 active stock items — cost of sales/)).toBeInTheDocument();
+      expect(mocks.getStockOverview).toHaveBeenCalledWith({ dateFrom: expect.any(String), dateTo: expect.any(String), outletId: undefined });
+    });
+
+    it('with an outlet chosen, lists its movement history — a Register sale is labelled as one', async () => {
+      mocks.listStockMovements.mockResolvedValue([
+        { id: '5', business_date: '2027-06-01', type: 'sold', quantity: '-1.000', stock_item_name: 'Gin', stock_item_unit: 'ml', stock_item_category: 'Spirits' },
+        { id: '4', business_date: '2027-06-01', type: 'received', quantity: '100.000', stock_item_name: 'Gin', stock_item_unit: 'ml', stock_item_category: null },
+      ]);
+      render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+
+      const table = (await screen.findByRole('heading', { name: 'Stock movements — including Register sales' })).closest('section');
+      expect(within(table).getByText('Register sale')).toBeInTheDocument();
+      expect(within(table).getByText('Received')).toBeInTheDocument();
+      expect(within(table).getByText('Spirits')).toBeInTheDocument();
+      expect(within(table).getByText('Uncategorized')).toBeInTheDocument();
+      expect(mocks.listStockMovements).toHaveBeenCalledWith(expect.objectContaining({ outletId: '1' }));
+    });
+
+    it('without an outlet, asks for one instead of showing (or fetching) movement history', async () => {
+      render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+
+      expect(await screen.findByText(/Choose an outlet and run the reports to also see its stock movement history/)).toBeInTheDocument();
+      expect(mocks.listStockMovements).not.toHaveBeenCalled();
+      expect(screen.queryByRole('heading', { name: 'Stock movements — including Register sales' })).not.toBeInTheDocument();
+    });
+
+    it('the existing cost-of-sales and variance tables now show each item\'s category', async () => {
+      mocks.listStockItems.mockResolvedValue([{ id: '20', name: 'Gin', category: 'Spirits' }]);
+      mocks.getCostOfSales.mockResolvedValue({ totalCost: '5.00', byDay: [], byItem: [{ stockItemId: '20', cost: '5.00' }] });
+      render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+
+      const table = (await screen.findByRole('heading', { name: 'Cost of sales — by stock item' })).closest('section');
+      expect(await within(table).findByText('Spirits')).toBeInTheDocument();
     });
   });
 });

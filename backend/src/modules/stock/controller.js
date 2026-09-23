@@ -210,6 +210,14 @@ async function listMenuItemComponents(req, res, next) {
   }
 }
 
+async function listMenuItemLinks(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listMenuItemLinks({ context: req.context, outletId: req.query.outlet_id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function upsertMenuItemComponents(req, res, next) {
   try {
     const components = (req.body?.components ?? []).map((row) => ({ stockItemId: row.stock_item_id, quantity: row.quantity }));
@@ -401,6 +409,16 @@ async function costOfSalesMargin(req, res, next) {
   }
 }
 
+async function stockOverview(req, res, next) {
+  try {
+    const dateFrom = require_(req.query, 'date_from');
+    const dateTo = require_(req.query, 'date_to');
+    res.status(200).json(ok(await reporting.computeStockOverview({ context: req.context, dateFrom, dateTo, outletId: req.query.outlet_id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   listStockItemCategories,
   createStockItemCategory,
@@ -412,6 +430,7 @@ module.exports = {
   archiveStockItem,
   recordWastage,
   listMenuItemComponents,
+  listMenuItemLinks,
   upsertMenuItemComponents,
   recordGoodsReceived,
   listStockTakes,
@@ -424,4 +443,5 @@ module.exports = {
   costOfSales,
   stockVariance,
   costOfSalesMargin,
+  stockOverview,
 };

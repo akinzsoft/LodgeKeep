@@ -9,7 +9,7 @@
 
 const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, toCents, fromCents } = require('../../shared/money');
-const { sumQuantity, extendedCost } = require('../../shared/quantity');
+const { sumQuantity, negateQuantity, extendedCost } = require('../../shared/quantity');
 const { computeMenuItemSalesTotals } = require('../pos/sales-report');
 
 /**
@@ -245,4 +245,117 @@ async function computeCostOfSalesMargin({ context, dateFrom, dateTo, outletId })
   };
 }
 
-module.exports = { computeCostOfSales, computeStockVariance, computeCostOfSalesMargin };
+/**
+ * Stock overview by category — every ACTIVE stock item and every registered
+ * stock category, whether or not anything moved in the range. The other
+ * reports here are ledger-driven (they only show what has a movement row),
+ * so an item just created, never sold, or an empty category was simply
+ * absent from them (user-reported: "ensure all in stock — categories and
+ * items — report in stock"). This report starts from the items and
+ * categories themselves and folds the period's movements onto them, so
+ * nothing is left out, and adds each item's own category — which no other
+ * report carried.
+ *
+ * Per item (all quantities in the item's own unit, all exact decimals):
+ * `soldQty`/`soldCost` (net of reversals — this is what Register sales did
+ * to stock), `receivedQty`, `wastageQty`/`wastageCost`, and the signed
+ * stock-take `adjustmentQty`, plus its current on-hand and reorder level.
+ * Per category: how many items, how many are at/below reorder level, and
+ * the period's sold/wastage cost (cost only — quantities in different
+ * units are never summed). Uncategorized items, and an item whose category
+ * is no longer registered (archived), get their own rows so nothing is
+ * hidden. `stock_movements.quantity`/`total_cost` are signed (a sale
+ * decreases stock), so sold and wastage figures are negated to read as
+ * positive amounts, the same convention `computeCostOfSales` uses.
+ */
+async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
+  const db = scopedDb().for(context);
+
+  // Sequential reads, joined in JS (this codebase never runs parallel queries on one accessor).
+  const categories = await db.table('stock_item_categories').where({ status: 'active' }).orderBy('sort_order').orderBy('name').select('name');
+  let itemQuery = db.table('stock_items').where({ status: 'active' });
+  if (outletId) itemQuery = itemQuery.where({ outlet_id: outletId });
+  const items = await itemQuery.select('id', 'outlet_id', 'name', 'unit', 'category', 'current_quantity', 'reorder_level', 'purchase_cost');
+
+  let movementQuery = db.table('stock_movements').whereBetween('business_date', [dateFrom, dateTo]);
+  if (outletId) movementQuery = movementQuery.where({ outlet_id: outletId });
+  const movements = await movementQuery.select('stock_item_id', 'type', 'quantity', 'total_cost');
+
+  const totals = new Map();
+  const bucket = (id) => {
+    const key = String(id);
+    if (!totals.has(key)) totals.set(key, { sold: [], soldCost: [], received: [], wastage: [], wastageCost: [], adjustment: [] });
+    return totals.get(key);
+  };
+  for (const row of movements) {
+    const entry = bucket(row.stock_item_id);
+    const quantity = row.quantity ?? '0.000';
+    const cost = row.total_cost ?? '0.00';
+    if (row.type === 'sold' || row.type === 'sale_reversal') {
+      entry.sold.push(quantity);
+      entry.soldCost.push(cost);
+    } else if (row.type === 'received') {
+      entry.received.push(quantity);
+    } else if (row.type === 'wastage') {
+      entry.wastage.push(quantity);
+      entry.wastageCost.push(cost);
+    } else if (row.type === 'count_adjustment') {
+      entry.adjustment.push(quantity);
+    }
+  }
+
+  const itemRows = items.map((item) => {
+    const entry = totals.get(String(item.id)) ?? bucket(item.id);
+    const currentQuantity = item.current_quantity ?? '0.000';
+    const reorderLevel = item.reorder_level ?? '0.000';
+    return {
+      stockItemId: String(item.id),
+      outletId: String(item.outlet_id),
+      name: item.name,
+      unit: item.unit,
+      category: item.category ?? null,
+      currentQuantity,
+      reorderLevel,
+      purchaseCost: item.purchase_cost,
+      atOrBelowReorder: Number(reorderLevel) > 0 && Number(currentQuantity) <= Number(reorderLevel),
+      soldQty: negateQuantity(sumQuantity(entry.sold)),
+      soldCost: negateMoney(sumMoney(entry.soldCost)),
+      receivedQty: sumQuantity(entry.received),
+      wastageQty: negateQuantity(sumQuantity(entry.wastage)),
+      wastageCost: negateMoney(sumMoney(entry.wastageCost)),
+      adjustmentQty: sumQuantity(entry.adjustment),
+    };
+  });
+
+  // One row per registered category (display order), then Uncategorized, then any category an item still names that is no longer registered.
+  const registered = categories.map((row) => row.name);
+  const registeredSet = new Set(registered);
+  const unregistered = [...new Set(itemRows.map((row) => row.category).filter((name) => name !== null && !registeredSet.has(name)))].sort();
+  const categoryOrder = [...registered, null, ...unregistered];
+  const orderOf = new Map(categoryOrder.map((name, index) => [name, index]));
+
+  const byCategory = categoryOrder.map((name) => {
+    const rows = itemRows.filter((row) => row.category === name);
+    return {
+      category: name,
+      registered: name === null ? null : registeredSet.has(name),
+      itemCount: rows.length,
+      lowStockCount: rows.filter((row) => row.atOrBelowReorder).length,
+      soldCost: sumMoney(rows.map((row) => row.soldCost)),
+      wastageCost: sumMoney(rows.map((row) => row.wastageCost)),
+    };
+  });
+
+  itemRows.sort((a, b) => orderOf.get(a.category) - orderOf.get(b.category) || a.name.localeCompare(b.name));
+
+  return {
+    dateFrom,
+    dateTo,
+    outletId: outletId ?? null,
+    totals: { itemCount: itemRows.length, soldCost: sumMoney(itemRows.map((row) => row.soldCost)), wastageCost: sumMoney(itemRows.map((row) => row.wastageCost)) },
+    byCategory,
+    items: itemRows,
+  };
+}
+
+module.exports = { computeCostOfSales, computeStockVariance, computeCostOfSalesMargin, computeStockOverview };

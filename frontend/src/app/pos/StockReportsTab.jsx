@@ -2,7 +2,21 @@ import { useEffect, useState } from 'react';
 import { DataTable, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
+import { formatQuantity } from './stockFormat.js';
+import { UNCATEGORIZED_LABEL } from './stockItemOptions.jsx';
 import formStyles from './POSForm.module.css';
+
+const MOVEMENT_LIMIT = 200;
+
+/** Plain-language names for `stock_movements.type` — a Register sale is what most people are looking for here. */
+const MOVEMENT_LABEL = {
+  sold: 'Register sale',
+  sale_reversal: 'Sale reversed',
+  received: 'Received',
+  wastage: 'Wastage',
+  count_adjustment: 'Stock-take adjustment',
+  transfer: 'Transfer',
+};
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -53,6 +67,9 @@ export function StockReportsTab({ activeProperty }) {
   const [costOfSales, setCostOfSales] = useState(null);
   const [variance, setVariance] = useState(null);
   const [margin, setMargin] = useState(null);
+  // Every stock item/category with the period's movements folded on (see `stock/reporting.js`'s `computeStockOverview`), and — once an outlet is chosen — its raw movement history, including Register sales.
+  const [overview, setOverview] = useState(null);
+  const [movements, setMovements] = useState(null);
   const [error, setError] = useState(null);
   const [stockItemsById, setStockItemsById] = useState({});
 
@@ -71,22 +88,34 @@ export function StockReportsTab({ activeProperty }) {
     return stockItemsById[String(stockItemId)]?.name ?? `#${stockItemId}`;
   }
 
+  function stockItemCategory(stockItemId) {
+    const item = stockItemsById[String(stockItemId)];
+    return item ? item.category?.trim() || UNCATEGORIZED_LABEL : '—';
+  }
+
   async function runReports(event) {
     event?.preventDefault();
     setError(null);
     try {
-      const [cos, varianceResult, marginResult] = await Promise.all([
+      const [cos, varianceResult, marginResult, overviewResult, movementList] = await Promise.all([
         stockApi.getCostOfSales({ dateFrom, dateTo, outletId: outletId || undefined }),
         stockApi.getStockVariance({ dateFrom, dateTo, outletId: outletId || undefined }),
         stockApi.getCostOfSalesMargin({ dateFrom, dateTo, outletId: outletId || undefined }),
+        stockApi.getStockOverview({ dateFrom, dateTo, outletId: outletId || undefined }),
+        // The movement list needs an outlet (its endpoint requires one or a stock item).
+        outletId ? stockApi.listStockMovements({ outletId, dateFrom, dateTo, limit: MOVEMENT_LIMIT }) : Promise.resolve(null),
       ]);
       setCostOfSales(cos);
       setVariance(varianceResult);
       setMargin(marginResult);
+      setOverview(overviewResult);
+      setMovements(movementList);
     } catch (caught) {
       setCostOfSales(null);
       setVariance(null);
       setMargin(null);
+      setOverview(null);
+      setMovements(null);
       setError(caught instanceof ApiError ? caught.message : 'Could not load these reports.');
     }
   }
@@ -133,6 +162,68 @@ export function StockReportsTab({ activeProperty }) {
         </div>
       </form>
 
+      {overview && (
+        <p className={formStyles.hint}>
+          {overview.totals.itemCount} active stock item{overview.totals.itemCount === 1 ? '' : 's'} — cost of sales <Money amount={overview.totals.soldCost} currencyCode={activeProperty.base_currency} />, wastage{' '}
+          <Money amount={overview.totals.wastageCost} currencyCode={activeProperty.base_currency} />
+        </p>
+      )}
+
+      <DataTable
+        title="Stock by category"
+        state={overview === null || overview.byCategory.length === 0 ? 'empty' : 'success'}
+        emptyMessage={overview === null ? 'Choose a date range and run the reports.' : 'No stock categories or items yet.'}
+        columns={[
+          { key: 'category', label: 'Category', render: (row) => row.category ?? UNCATEGORIZED_LABEL },
+          { key: 'itemCount', label: 'Items', align: 'right' },
+          { key: 'lowStockCount', label: 'Low / out of stock', align: 'right' },
+          { key: 'soldCost', label: 'Cost of sales', align: 'right', render: (row) => <Money amount={row.soldCost} currencyCode={activeProperty.base_currency} /> },
+          { key: 'wastageCost', label: 'Wastage', align: 'right', render: (row) => <Money amount={row.wastageCost} currencyCode={activeProperty.base_currency} /> },
+        ]}
+        rows={overview?.byCategory ?? []}
+        rowKey={(row) => row.category ?? '__none__'}
+      />
+
+      <DataTable
+        title="Every stock item — by category"
+        state={overview === null || overview.items.length === 0 ? 'empty' : 'success'}
+        emptyMessage={overview === null ? 'Choose a date range and run the reports.' : 'No stock items yet.'}
+        columns={[
+          { key: 'category', label: 'Category', render: (row) => row.category ?? UNCATEGORIZED_LABEL },
+          { key: 'name', label: 'Stock item' },
+          { key: 'currentQuantity', label: 'On hand', align: 'right', render: (row) => formatQuantity(row.currentQuantity, row.unit) },
+          { key: 'soldQty', label: 'Sold', align: 'right', render: (row) => formatQuantity(row.soldQty, row.unit) },
+          { key: 'soldCost', label: 'Cost of sales', align: 'right', render: (row) => <Money amount={row.soldCost} currencyCode={activeProperty.base_currency} /> },
+          { key: 'receivedQty', label: 'Received', align: 'right', render: (row) => formatQuantity(row.receivedQty, row.unit) },
+          { key: 'wastageQty', label: 'Wasted', align: 'right', render: (row) => formatQuantity(row.wastageQty, row.unit) },
+          { key: 'adjustmentQty', label: 'Count adjustment', align: 'right', render: (row) => formatQuantity(row.adjustmentQty, row.unit) },
+        ]}
+        rows={overview?.items ?? []}
+        rowKey={(row) => row.stockItemId}
+      />
+
+      {/* Outside the table's own state slot, deliberately — a persistent hint must not vanish with an empty result. */}
+      {overview && movements === null && <p className={formStyles.hint}>Choose an outlet and run the reports to also see its stock movement history, including Register sales.</p>}
+      {movements !== null && movements.length >= MOVEMENT_LIMIT && (
+        <p className={formStyles.hint}>Showing the latest {MOVEMENT_LIMIT} movements — narrow the date range to see earlier ones.</p>
+      )}
+      {movements !== null && (
+        <DataTable
+          title="Stock movements — including Register sales"
+          state={movements.length === 0 ? 'empty' : 'success'}
+          emptyMessage="No stock movements in this range for this outlet."
+          columns={[
+            { key: 'business_date', label: 'Date' },
+            { key: 'category', label: 'Category', render: (row) => row.stock_item_category?.trim() || UNCATEGORIZED_LABEL },
+            { key: 'stock_item_name', label: 'Stock item' },
+            { key: 'type', label: 'Type', render: (row) => MOVEMENT_LABEL[row.type] ?? row.type },
+            { key: 'quantity', label: 'Quantity', align: 'right', render: (row) => formatQuantity(row.quantity, row.stock_item_unit) },
+          ]}
+          rows={movements}
+          rowKey={(row) => row.id}
+        />
+      )}
+
       {costOfSales && (
         <p className={formStyles.hint}>
           Total cost of sales: <Money amount={costOfSales.totalCost} currencyCode={activeProperty.base_currency} />
@@ -156,6 +247,7 @@ export function StockReportsTab({ activeProperty }) {
         state={costOfSales === null || costOfSales.byItem.length === 0 ? 'empty' : 'success'}
         emptyMessage="Choose a date range and run the reports."
         columns={[
+          { key: 'category', label: 'Category', render: (row) => stockItemCategory(row.stockItemId) },
           { key: 'stockItemId', label: 'Stock item', render: (row) => stockItemName(row.stockItemId) },
           { key: 'cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.cost} currencyCode={activeProperty.base_currency} /> },
         ]}
@@ -168,6 +260,7 @@ export function StockReportsTab({ activeProperty }) {
         state={variance === null || variance.summaryByItem.length === 0 ? 'empty' : 'success'}
         emptyMessage="Choose a date range and run the reports."
         columns={[
+          { key: 'category', label: 'Category', render: (row) => stockItemCategory(row.stockItemId) },
           { key: 'stockItemId', label: 'Stock item', render: (row) => stockItemName(row.stockItemId) },
           { key: 'totalVariance', label: 'Total variance', align: 'right' },
         ]}

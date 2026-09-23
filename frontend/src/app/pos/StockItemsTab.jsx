@@ -1,88 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, DataTable, Button, ConfirmDialog, StatusPill } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
-import { formatQuantity } from './stockFormat.js';
+import { formatQuantity, stockLevelTone } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
 import { StockCategoriesCard } from './StockCategoriesCard.jsx';
+import { computeCategorySections } from './categorySections.js';
+import { SellInRegisterFields } from './SellInRegisterFields.jsx';
+import { choiceFromSelection, classifyStockItem, defaultCategorySelection, sellStockItemInRegister, validateSellFields } from './sellInRegister.js';
 import formStyles from './POSForm.module.css';
 
 const EMPTY_ADD_FORM = { outlet_id: '', name: '', unit: '', purchase_cost: '', supplier: '', reorder_level: '' };
+/** The sentence appended when a Register item's photo could not be saved — the item itself is fine. */
+function photoNote(photoError) {
+  return photoError ? ` Its photo was not saved (${photoError}) — add it under POS → Setup → Menu items → Edit.` : '';
+}
+
 const EMPTY_RECEIVE_FORM = { quantity: '', unit_cost: '', reference: '' };
-
-/**
- * Groups the flat `items` list under each of `categories`' own real rows
- * (in display order), so every registered category shows as its own
- * section — including one with zero items, so "create an item directly
- * inside a category" has somewhere to click even before any item exists
- * there yet. An item pointing at a category that has SINCE been archived
- * (the same edge case the old flat table's own `categoryOptions` dropdown
- * already handled) gets its own clearly-labelled section too, rather than
- * silently vanishing from the screen — it just can't accept new items,
- * since an archived category can no longer be chosen for one. A final
- * "Uncategorized" section, always present, covers items with no category
- * at all (stock category is optional, unlike a menu item's).
- *
- * Every section also carries a `selectId` — a real category's own numeric
- * `id` for a real category section, or the section's own string `key` for
- * the two kinds of section that aren't a real, manageable category row
- * (archived-but-referenced, Uncategorized). This is the one value the
- * single-category selector below and the categories card's own row keys
- * (`row.id ?? row.key`) both agree on, so "which section is selected" and
- * "which category row is highlighted" can never drift apart.
- */
-function computeSections(categories, items) {
-  const sortedCategories = (categories ?? [])
-    .slice()
-    .sort((a, b) => (a.sort_order !== b.sort_order ? a.sort_order - b.sort_order : a.name.localeCompare(b.name)));
-  const activeNames = new Set(sortedCategories.map((category) => category.name));
-
-  const itemsByCategoryName = new Map();
-  const uncategorizedItems = [];
-  for (const item of items ?? []) {
-    if (!item.category) {
-      uncategorizedItems.push(item);
-      continue;
-    }
-    if (!itemsByCategoryName.has(item.category)) itemsByCategoryName.set(item.category, []);
-    itemsByCategoryName.get(item.category).push(item);
-  }
-
-  const sections = sortedCategories.map((category) => ({
-    key: `category-${category.id}`,
-    selectId: category.id,
-    title: category.name,
-    categoryName: category.name,
-    canAddItem: true,
-    items: itemsByCategoryName.get(category.name) ?? [],
-  }));
-
-  for (const [name, categoryItems] of itemsByCategoryName) {
-    if (!activeNames.has(name)) {
-      const key = `archived-category-${name}`;
-      sections.push({ key, selectId: key, title: `${name} (archived category)`, categoryName: name, canAddItem: false, items: categoryItems });
-    }
-  }
-
-  sections.push({ key: 'uncategorized', selectId: 'uncategorized', title: 'Uncategorized', categoryName: null, canAddItem: true, items: uncategorizedItems });
-  return sections;
-}
-
-/**
- * A purely visual threshold for the "On hand" column's pill — never
- * written back anywhere, so a plain `Number()` comparison is fine here
- * even though this codebase's own "quantity is exact, always" rule
- * (mirroring ARCHITECTURE.md §1/§12 for money) governs every real WRITE to
- * a quantity value. Matches the existing "Low stock only" filter's own
- * definition (`current_quantity <= reorder_level`) exactly for the warning
- * tier, and adds a distinct, more urgent tier once it's actually at or
- * below zero.
- */
-function stockLevelTone(currentQuantity, reorderLevel) {
-  const quantity = Number(currentQuantity);
-  if (quantity <= 0) return { tone: 'danger', label: 'Out of stock' };
-  if (quantity <= Number(reorderLevel)) return { tone: 'warning', label: 'Low stock' };
-  return null;
-}
+// `name: null` means "not edited yet" — the Add form's own Name field is shown instead, so the two never drift apart until the user chooses to differ.
+const EMPTY_SELL_FORM = { name: '', price: '', category: '', quantity: '1', photo: null };
+const EMPTY_ADD_SELL_FORM = { name: null, price: '', category: '', quantity: '1', photo: null };
 
 /**
  * StockItemsTab — PLAN.md Phase 6's "POS inventory & stock control"
@@ -148,6 +84,35 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
 
   const [archiving, setArchiving] = useState(null);
 
+  // "Sell in Register" (see `sellInRegister.js`): which stock items are
+  // already sold, and the registered Register (menu) categories a stock
+  // item can be sold under. `links` is `null` while loading and
+  // `'unavailable'` when the caller lacks `pos.stock_manage` (the
+  // endpoint's gate) — the Register column and button then simply don't
+  // render, with no error banner.
+  const [links, setLinks] = useState(null);
+  const [menuCategories, setMenuCategories] = useState(null);
+  const [outletMenuNames, setOutletMenuNames] = useState([]);
+  const [sellForm, setSellForm] = useState(EMPTY_SELL_FORM);
+  const [sellError, setSellError] = useState(null);
+  const [sellSubmitting, setSellSubmitting] = useState(false);
+  // After a partial failure (the Register item was created but its stock link
+  // failed), `{[stockItemId]: {menuItemId}}` — so a retry, whether from the
+  // still-open panel, a reopened one, or an item added via the Add form's
+  // checkbox, only redoes the recipe link and never creates a second menu
+  // item. Keyed by stock item so it can never leak onto a different row.
+  const [sellResumes, setSellResumes] = useState({});
+  const sellPanelItemIdRef = useRef(null);
+  // Which stock item's Sell panel is on screen right now — read by `handleSellSubmit` after its awaits.
+  useEffect(() => {
+    sellPanelItemIdRef.current = activePanel?.type === 'sell' ? String(activePanel.item.id) : null;
+  }, [activePanel]);
+  const sellResume = activePanel?.type === 'sell' ? (sellResumes[String(activePanel.item.id)] ?? null) : null;
+  const [addSell, setAddSell] = useState(false);
+  // Bumped to clear the (uncontrolled) Add-form image input after a submit or when selling is switched off.
+  const [addPhotoKey, setAddPhotoKey] = useState(0);
+  const [addSellForm, setAddSellForm] = useState(EMPTY_ADD_SELL_FORM);
+
   async function reloadCategories() {
     try {
       setCategories(await stockApi.listStockItemCategories());
@@ -179,7 +144,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   // underlying data actually changes, not on every unrelated re-render
   // (e.g. typing into the Add/Edit form) — `computeSections` otherwise
   // returns a fresh array/object identity every single call.
-  const sections = useMemo(() => (items === null || categories === null ? null : computeSections(categories, items)), [items, categories]);
+  const sections = useMemo(() => (items === null || categories === null ? null : computeCategorySections(categories, items)), [items, categories]);
   const currentSection = sections ? (sections.find((section) => section.selectId === selectedRowKey) ?? null) : null;
 
   /**
@@ -234,6 +199,36 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
       setItems([]);
       setError(caught instanceof ApiError ? caught.message : 'Could not load stock items.');
     }
+    // Deliberately not part of the try above: a role that can view stock
+    // but not manage recipes (403) must still see the list — only the
+    // Register column/button go away.
+    try {
+      setLinks(await stockApi.listMenuItemLinks({ outletId: outletFilter || undefined }));
+    } catch {
+      setLinks('unavailable');
+    }
+  }
+
+  /** Registered Register (menu) categories — fetched lazily, the first time a sell form opens. Returns the list so a caller can derive a default from it immediately. */
+  async function loadMenuCategories() {
+    if (menuCategories !== null) return menuCategories;
+    try {
+      const list = await posApi.listMenuCategories();
+      setMenuCategories(list);
+      return list;
+    } catch {
+      setMenuCategories([]);
+      return [];
+    }
+  }
+
+  async function loadOutletMenuNames(outletId) {
+    try {
+      const menuItems = await posApi.listMenuItems(outletId);
+      setOutletMenuNames(menuItems.map((menuItem) => menuItem.name.trim().toLowerCase()));
+    } catch {
+      setOutletMenuNames([]);
+    }
   }
 
   useEffect(() => {
@@ -262,12 +257,39 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
     setActivePanel({ type: 'add', sectionKey: section.key, categoryName: section.categoryName, sectionTitle: section.title });
     setAddForm((current) => ({ ...EMPTY_ADD_FORM, outlet_id: outletFilter || current.outlet_id }));
     setAddError(null);
+    setAddSell(false);
+    setAddSellForm(EMPTY_ADD_SELL_FORM);
   }
 
   function openEdit(item) {
     setActivePanel({ type: 'edit', item });
     setEditForm({ name: item.name, unit: item.unit, category: item.category ?? '', supplier: item.supplier ?? '', reorder_level: item.reorder_level });
     setEditError(null);
+  }
+
+  async function openSell(item) {
+    setActivePanel({ type: 'sell', item });
+    setSellForm({ ...EMPTY_SELL_FORM, name: item.name });
+    setSellError(null);
+    loadOutletMenuNames(item.outlet_id);
+    const list = await loadMenuCategories();
+    // Only fills the category if the user hasn't already picked one while the list was loading.
+    setSellForm((current) => (current.category === '' ? { ...current, category: defaultCategorySelection(item.category, list) } : current));
+  }
+
+  /** Ticking "Also sell in Register" on the Add form — loads the category list and pre-selects the one matching this section's stock category. */
+  async function handleAddSellToggle(checked, categoryName, outletId) {
+    setAddSell(checked);
+    if (!checked) {
+      // Not selling means no Register item to hold a picture — drop it rather than silently ignoring a chosen file.
+      setAddSellForm((current) => ({ ...current, photo: null }));
+      setAddPhotoKey((key) => key + 1);
+      return;
+    }
+    setAddSellForm(EMPTY_ADD_SELL_FORM);
+    if (outletId) loadOutletMenuNames(outletId);
+    const list = await loadMenuCategories();
+    setAddSellForm((current) => (current.category === '' ? { ...current, category: defaultCategorySelection(categoryName, list) } : current));
   }
 
   function openReceive(item) {
@@ -294,11 +316,31 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
       // while the panel was open) — a case the panel itself no longer
       // renders in on the next tick regardless.
       const liveSection = sections?.find((section) => section.key === activePanel.sectionKey);
-      await stockApi.createStockItem({
+      const categoryName = (liveSection ? liveSection.categoryName : activePanel.categoryName) || undefined;
+
+      // "Also sell in Register": validate BEFORE creating anything, so a bad
+      // price never leaves a stock item created with the sale half-done.
+      let sellInput = null;
+      if (addSell) {
+        sellInput = {
+          name: addSellForm.name ?? addForm.name,
+          price: addSellForm.price,
+          quantityPerSale: addSellForm.quantity,
+          photo: addSellForm.photo,
+          categoryChoice: choiceFromSelection(addSellForm.category, categoryName),
+        };
+        const problem = validateSellFields(sellInput);
+        if (problem) {
+          setAddError(problem);
+          return;
+        }
+      }
+
+      const created = await stockApi.createStockItem({
         outletId: addForm.outlet_id,
         name: addForm.name,
         unit: addForm.unit,
-        category: (liveSection ? liveSection.categoryName : activePanel.categoryName) || undefined,
+        category: categoryName,
         purchaseCost: addForm.purchase_cost || undefined,
         supplier: addForm.supplier || undefined,
         reorderLevel: addForm.reorder_level || undefined,
@@ -307,11 +349,83 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
       // adding several items to the same category/outlet in a row needs
       // neither reopening the form nor re-picking the outlet each time.
       setAddForm((current) => ({ ...EMPTY_ADD_FORM, outlet_id: current.outlet_id }));
+
+      if (sellInput) {
+        const result = await sellStockItemInRegister({ stockItem: created, ...sellInput });
+        setAddSell(false);
+        setAddSellForm(EMPTY_ADD_SELL_FORM);
+        setAddPhotoKey((key) => key + 1);
+        if (!result.ok) {
+          if (result.step === 'link') {
+            // The Register item exists already — remember it, so "Sell in Register" on this row only re-links it.
+            setSellResumes((current) => ({ ...current, [String(created.id)]: result.resume }));
+            loadOutletMenuNames(created.outlet_id);
+            setAddError(`"${created.name}" was added to stock and to the Register, but its stock link failed (${result.message}). Use Sell in Register on its row to retry the link.${photoNote(result.photoError)}`);
+          } else {
+            setAddError(`"${created.name}" was added to stock, but it could not be put in the Register (${result.message}). Use Sell in Register on its row to try again.`);
+          }
+        } else if (result.photoError) {
+          setAddError(`"${created.name}" was added to stock and to the Register.${photoNote(result.photoError)}`);
+        }
+      }
       await reloadItems();
     } catch (caught) {
       setAddError(caught instanceof ApiError ? caught.message : 'Could not create this stock item.');
     } finally {
       setAddSubmitting(false);
+    }
+  }
+
+  async function handleSellSubmit(event) {
+    event.preventDefault();
+    const item = activePanel.item;
+    const submission = {
+      name: sellForm.name,
+      price: sellForm.price,
+      quantityPerSale: sellForm.quantity,
+      photo: sellForm.photo,
+      categoryChoice: choiceFromSelection(sellForm.category, item.category),
+    };
+    // A resume only re-links an already-created Register item, using the
+    // remembered quantity — the (locked, possibly reopened and blank) form
+    // fields are not needed, so they are not validated.
+    const problem = sellResumes[String(item.id)] ? null : validateSellFields(submission);
+    if (problem) {
+      setSellError(problem);
+      return;
+    }
+
+    setSellSubmitting(true);
+    setSellError(null);
+    try {
+      const itemKey = String(item.id);
+      const result = await sellStockItemInRegister({ stockItem: item, ...submission, resume: sellResumes[itemKey] });
+      // The user may have closed this panel or opened another row's while the request ran — only touch what is still on screen.
+      const stillOpen = sellPanelItemIdRef.current === itemKey;
+      if (result.ok) {
+        setSellResumes((current) => {
+          const next = { ...current };
+          delete next[itemKey];
+          return next;
+        });
+        if (stillOpen) setActivePanel(null);
+        await reloadItems();
+        // After the reload — a successful reload clears the screen's error banner.
+        if (result.photoError) setError(`"${submission.name.trim()}" is now in the Register.${photoNote(result.photoError)}`);
+        return;
+      }
+      if (result.step === 'link') {
+        // The Register item now exists (and is sellable); only the stock
+        // link failed. Remember it so "Retry linking" never creates a second one.
+        setSellResumes((current) => ({ ...current, [itemKey]: result.resume }));
+        loadOutletMenuNames(item.outlet_id); // The new Register item now exists — keep the duplicate-name check current.
+        if (stillOpen) setSellError(`"${submission.name.trim()}" was added to the Register, but its stock link failed (${result.message}). Retry linking, or set it up under Stock → Recipes.${photoNote(result.photoError)}`);
+        await reloadItems();
+      } else if (stillOpen) {
+        setSellError(result.message);
+      }
+    } finally {
+      setSellSubmitting(false);
     }
   }
 
@@ -422,9 +536,18 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
           const editingItem = activePanel?.type === 'edit' && liveEditItem ? liveEditItem : null;
           const liveReceiveItem = activePanel?.type === 'receive' ? section.items.find((item) => item.id === activePanel.item.id) : null;
           const receivingItem = activePanel?.type === 'receive' && liveReceiveItem ? liveReceiveItem : null;
+          const liveSellItem = activePanel?.type === 'sell' ? section.items.find((item) => item.id === activePanel.item.id) : null;
+          const sellingItem = activePanel?.type === 'sell' && liveSellItem ? liveSellItem : null;
+          const linksLoaded = Array.isArray(links);
+          const registerState = (item) => classifyStockItem(item.id, links);
+          const anyNotSold = linksLoaded && section.items.some((item) => registerState(item).kind === 'none');
+          const editingRegisterState = editingItem && linksLoaded ? registerState(editingItem) : null;
 
           return (
             <div className={formStyles.categorySection} key={section.key}>
+              {anyNotSold && (
+                <p className={formStyles.hint}>Items marked &quot;Not sold&quot; don&apos;t appear in the POS Register until you use Sell in Register on them.</p>
+              )}
               <DataTable
                 title={section.title}
                 state={section.items.length === 0 ? 'empty' : 'success'}
@@ -464,6 +587,20 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                   { key: 'reorder_level', label: 'Reorder level', align: 'right', render: (row) => formatQuantity(row.reorder_level, row.unit) },
                   { key: 'purchase_cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.purchase_cost} currencyCode={activeProperty.base_currency} /> },
                   { key: 'supplier', label: 'Supplier', render: (row) => row.supplier ?? '—' },
+                  ...(linksLoaded
+                    ? [
+                        {
+                          key: 'register',
+                          label: 'Register',
+                          render: (row) => {
+                            const state = registerState(row);
+                            if (state.kind === 'direct') return <StatusPill tone="success" label={`In Register — ${state.menuItemName}`} />;
+                            if (state.kind === 'ingredient') return <StatusPill tone="info" label="Ingredient only" />;
+                            return <StatusPill tone="neutral" label="Not sold" />;
+                          },
+                        },
+                      ]
+                    : []),
                 ]}
                 rows={section.items}
                 rowKey={(row) => row.id}
@@ -472,6 +609,11 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                     <Button size="compact" variant="ghost" disabled={isOffline} onClick={() => openReceive(row)}>
                       Receive
                     </Button>
+                    {linksLoaded && registerState(row).kind !== 'direct' && (
+                      <Button size="compact" variant="ghost" disabled={isOffline} onClick={() => openSell(row)}>
+                        Sell in Register
+                      </Button>
+                    )}
                     <Button size="compact" variant="ghost" disabled={isOffline} onClick={() => openEdit(row)}>
                       Edit
                     </Button>
@@ -546,6 +688,54 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                         disabled={isOffline}
                       />
                     </label>
+                    {linksLoaded && (
+                      <div className={formStyles.field}>
+                        <label className={formStyles.label} htmlFor="add-item-photo">
+                          Item image (optional)
+                        </label>
+                        <input
+                          id="add-item-photo"
+                          key={addPhotoKey}
+                          className={formStyles.fileInput}
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          onChange={(e) => {
+                            const photo = e.target.files?.[0] ?? null;
+                            // The picture lives on the Register menu item (a stock item has no image of its own), so choosing one also turns on selling.
+                            if (photo && !addSell) handleAddSellToggle(true, section.categoryName, addForm.outlet_id);
+                            setAddSellForm((current) => ({ ...current, photo }));
+                          }}
+                          disabled={isOffline}
+                        />
+                        <p className={formStyles.hint}>Shown on the item&apos;s tile in the Register — choosing one also sells this item in the Register (set its price and category below).</p>
+                      </div>
+                    )}
+                    {linksLoaded && (
+                      <label className={formStyles.checkboxField}>
+                        <input
+                          className={formStyles.checkbox}
+                          type="checkbox"
+                          checked={addSell}
+                          onChange={(e) => handleAddSellToggle(e.target.checked, section.categoryName, addForm.outlet_id)}
+                          disabled={isOffline}
+                        />
+                        <span className={formStyles.label}>Also sell in Register</span>
+                      </label>
+                    )}
+                    {addSell && (
+                      <SellInRegisterFields
+                        idPrefix="add-sell"
+                        showPhoto={false}
+                        values={{ ...addSellForm, name: addSellForm.name ?? addForm.name }}
+                        // Keeps the Register name following the stock Name until the user types a different one.
+                        onChange={(next) => setAddSellForm({ ...next, name: addSellForm.name === null && next.name === addForm.name ? null : next.name })}
+                        menuCategories={menuCategories}
+                        stockCategory={section.categoryName}
+                        unit={addForm.unit}
+                        duplicateName={outletMenuNames.includes((addSellForm.name ?? addForm.name).trim().toLowerCase()) && (addSellForm.name ?? addForm.name).trim() !== ''}
+                        isOffline={isOffline}
+                      />
+                    )}
                     <div className={formStyles.actionsRow}>
                       <Button type="submit" loading={addSubmitting} disabled={isOffline}>
                         Add item
@@ -573,6 +763,9 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                     On hand is {formatQuantity(editingItem.current_quantity, editingItem.unit)} — quantity only changes through a recorded event, not a direct edit. Use the{' '}
                     <strong>Receive</strong> action to log a delivery, or Sales, Wastage, or a Stock take for the other ways it moves.
                   </p>
+                  {editingRegisterState?.kind === 'direct' && (
+                    <p className={formStyles.hint}>Sold in the Register as &quot;{editingRegisterState.menuItemName}&quot; — change its price or category under POS → Setup → Menu items.</p>
+                  )}
                   <form className={formStyles.row} onSubmit={handleEditSubmit}>
                     <label className={formStyles.field}>
                       <span className={formStyles.label}>Name</span>
@@ -612,6 +805,41 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                     <div className={formStyles.actionsRow}>
                       <Button type="submit" loading={editSubmitting} disabled={isOffline}>
                         Save changes
+                      </Button>
+                      <Button type="button" variant="ghost" onClick={() => setActivePanel(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
+                </Card>
+              )}
+
+              {sellingItem && (
+                <Card title={`Sell in Register — ${sellingItem.name}`}>
+                  {sellError && (
+                    <p role="alert" className={formStyles.errorBanner}>
+                      {sellError}
+                    </p>
+                  )}
+                  <p className={formStyles.hint}>
+                    Adds this item to the POS Register menu and links it to this stock item, so each sale is deducted from stock. It appears in the Register the next time the outlet is opened or its menu is refreshed.
+                  </p>
+                  {sellResume && <p className={formStyles.hint}>The Register item was already created — only its stock link is left to retry.</p>}
+                  <form className={formStyles.row} onSubmit={handleSellSubmit}>
+                    <SellInRegisterFields
+                      idPrefix="sell"
+                      values={sellForm}
+                      onChange={setSellForm}
+                      menuCategories={menuCategories}
+                      stockCategory={sellingItem.category}
+                      unit={sellingItem.unit}
+                      onHand={sellingItem.current_quantity}
+                      duplicateName={sellResume === null && sellForm.name.trim() !== '' && outletMenuNames.includes(sellForm.name.trim().toLowerCase())}
+                      isOffline={isOffline || sellResume !== null}
+                    />
+                    <div className={formStyles.actionsRow}>
+                      <Button type="submit" loading={sellSubmitting} disabled={isOffline}>
+                        {sellResume ? 'Retry linking' : 'Sell in Register'}
                       </Button>
                       <Button type="button" variant="ghost" onClick={() => setActivePanel(null)}>
                         Cancel
@@ -687,7 +915,11 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
       {archiving && (
         <ConfirmDialog
           title="Archive this stock item?"
-          consequence={`This archives "${archiving.name}". It stops appearing in lists and pickers; its own past movement history is unaffected.`}
+          consequence={`This archives "${archiving.name}". It stops appearing in lists and pickers; its own past movement history is unaffected.${
+            Array.isArray(links) && classifyStockItem(archiving.id, links).kind !== 'none'
+              ? ` It is part of the recipe of ${classifyStockItem(archiving.id, links).menuItemCount} Register menu item(s) — check those afterwards.`
+              : ''
+          }`}
           confirmLabel="Archive"
           onConfirm={async () => {
             setArchiving(null);
