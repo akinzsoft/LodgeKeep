@@ -82,6 +82,19 @@ class RoomOutOfOrderError extends AppError {
 }
 
 /**
+ * Gap closure (room management): an archived (or otherwise non-`active`) room
+ * cannot receive a guest — `checkIn` and a `roomMove` destination both
+ * refuse it, with no override, for the same reason an out-of-order room
+ * has none: the room was deliberately retired, and a checkbox at the
+ * moment of check-in is not the place to un-retire it.
+ */
+class RoomNotActiveError extends AppError {
+  constructor(roomId, status) {
+    super('BUSINESS_RULE_ROOM_NOT_ACTIVE', `Room ${roomId} is ${status} and cannot be used.`, 422, { roomId, status });
+  }
+}
+
+/**
  * ARCHITECTURE.md §11: check-out requires every folio the guest owes
  * directly to carry a zero balance. PLAN.md Phase 4 (Accounts Receivable):
  * a folio billed to a company account is exempt — see `checkOut`'s own
@@ -142,6 +155,7 @@ module.exports = {
   RoomUnavailableError,
   RoomNotCleanError,
   RoomOutOfOrderError,
+  RoomNotActiveError,
   InvalidReservationTransitionError,
   ArrivalAfterDepartureError,
   ArrivalBeforeBusinessDateError,

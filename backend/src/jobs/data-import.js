@@ -164,6 +164,18 @@ async function commitCompanyRow({ trx, importRunId, row }) {
 /** Statuses whose file room_number becomes the reservation's preferred room. */
 const PREFERRED_ROOM_STATUSES = new Set(['waitlisted', 'tentative', 'confirmed']);
 
+/**
+ * Why a room cannot take an in-house guest, or null if it can: retired
+ * (archived/out of service) or already occupied. Called twice per row — on the
+ * run's own (possibly stale) room row as a cheap early refusal, and again on the
+ * locked row, which is the one that counts.
+ */
+async function inHouseRoomProblem({ trx, room, roomNumber }) {
+  if (room.status !== 'active') return `Room ${roomNumber} is ${room.status} — this in-house guest was not imported.`;
+  if (await isRoomOccupied({ trx, room })) return `Room ${roomNumber} is already occupied — this in-house guest was not imported.`;
+  return null;
+}
+
 async function commitReservationRow({ trx, importRunId, run, row, roomTypes, rateCodes, rooms, existingGuests, conflictedRows }) {
   const guestMatch = matchExistingGuestByContact({ email: row.guest_email, phone: row.guest_phone }, existingGuests);
   if (guestMatch === null || guestMatch === 'ambiguous') {
@@ -184,28 +196,60 @@ async function commitReservationRow({ trx, importRunId, run, row, roomTypes, rat
   const isHistorical = property?.current_business_date ? departureDate <= property.current_business_date : false;
   const holdsInventory = !isHistorical && !NON_INVENTORY_HOLDING_STATUSES.has(status);
 
-  // The file's room_number means different things by status. checked_in:
-  // the room the guest is in now — locked and checked like a live check-in,
-  // so an occupied room fails this row instead of double-assigning it.
-  // checked_out: historical, recorded as a closed assignment. An active
-  // booking not yet checked in: a non-binding preferred room (a room is only
-  // assigned at check-in), kept only when it matches the booked room type,
-  // the same rule `createReservation` applies. Cancelled/no-show/expired: ignored.
-  // Checked before inventory is reserved, so a skipped row changes nothing.
   const roomNumber = normalizedCode(row.room_number);
   const listedRoom = roomNumber ? rooms.get(roomNumber) : null;
+
+  // A cheap, UNLOCKED look at the room row this run already loaded, so a row
+  // that is plainly unimportable (the room is retired or already has a guest)
+  // is refused before it touches inventory. Best-effort only: the row can
+  // change after the run read it, so the authoritative check is repeated
+  // below on the LOCKED row.
+  if (listedRoom && status === 'checked_in') {
+    const problem = await inHouseRoomProblem({ trx, room: listedRoom, roomNumber: trimmed(row.room_number) });
+    if (problem) throw new Error(problem);
+  }
+
+  // Inventory FIRST, then the room lock — the same order `createReservation`
+  // and room management use (reservations -> `room_type_inventory` -> rooms).
+  // This job used to lock the in-house room and only then reserve inventory,
+  // the exact inverse: `reserveInventoryForDates` now share-locks the type's
+  // rooms while it holds the inventory row, so an import row holding a room
+  // and wanting inventory could deadlock against any booking of the same
+  // type. A row that later fails (occupied, archived room) throws, and the
+  // row's own transaction rolls the inventory increment back with it, so
+  // "a skipped row changes nothing" still holds.
+  if (holdsInventory) {
+    await reserveInventoryForDates({ trx, roomTypeId: roomType.id, stayDates, bypassThreshold: conflictedRows.has(row.__rowNumber) });
+  }
+
+  // The file's room_number means different things by status. checked_in:
+  // the room the guest is in now — locked and checked like a live check-in,
+  // so an occupied (or archived) room fails this row instead of
+  // double-assigning it or putting a guest in a retired room. checked_out:
+  // historical, recorded as a closed assignment (an archived room is fine —
+  // it is only history). An active booking not yet checked in: a non-binding
+  // preferred room (a room is only assigned at check-in), kept only when it
+  // matches the booked room type, the same rule `createReservation` applies.
+  // Cancelled/no-show/expired: ignored.
   let inHouseRoom = null;
   if (listedRoom && status === 'checked_in') {
     inHouseRoom = (await lockRooms({ trx, roomIds: [listedRoom.id] })).get(String(listedRoom.id));
-    if (inHouseRoom && (await isRoomOccupied({ trx, room: inHouseRoom }))) {
-      throw new Error(`Room ${trimmed(row.room_number)} is already occupied — this in-house guest was not imported.`);
+    // `rooms` was read once at the start of the run; the LOCKED row is the truth.
+    if (inHouseRoom) {
+      const problem = await inHouseRoomProblem({ trx, room: inHouseRoom, roomNumber: trimmed(row.room_number) });
+      if (problem) throw new Error(problem);
     }
   }
-  const preferredRoomId =
-    listedRoom && PREFERRED_ROOM_STATUSES.has(status) && String(listedRoom.room_type_id) === String(roomType.id) ? listedRoom.id : null;
 
-  if (holdsInventory) {
-    await reserveInventoryForDates({ trx, roomTypeId: roomType.id, stayDates, bypassThreshold: conflictedRows.has(row.__rowNumber) });
+  let preferredRoomId =
+    listedRoom && PREFERRED_ROOM_STATUSES.has(status) && String(listedRoom.room_type_id) === String(roomType.id) ? listedRoom.id : null;
+  if (preferredRoomId != null) {
+    // A preference is best-effort here (never a reason to fail the row), but it
+    // must not name a room that was archived or moved to another type since the
+    // run's room list was read — re-read it as a locking read, after the
+    // inventory lock (the same reasoning as `createReservation`).
+    const fresh = await trx.table('rooms').where({ id: preferredRoomId }).forShare().first();
+    if (!fresh || fresh.status !== 'active' || String(fresh.room_type_id) !== String(roomType.id)) preferredRoomId = null;
   }
 
   const [reservationId] = await trx.table('reservations').insert({

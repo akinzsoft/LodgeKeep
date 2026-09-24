@@ -38,6 +38,7 @@ const {
   RoomUnavailableError,
   RoomNotCleanError,
   RoomOutOfOrderError,
+  RoomNotActiveError,
   InvalidReservationTransitionError,
   ArrivalAfterDepartureError,
   ArrivalBeforeBusinessDateError,
@@ -283,8 +284,25 @@ async function listGuests({ context, activity }) {
  * the full reasoning; this is a thin re-export so every existing call site
  * in this file (`roomTypeId` always supplied here) keeps working unchanged.
  */
-async function livePhysicalCount({ db, roomTypeId, stayDate }) {
-  return sharedLivePhysicalCount({ db, roomTypeId, stayDate });
+async function livePhysicalCount({ db, roomTypeId, stayDate, lock = false }) {
+  return sharedLivePhysicalCount({ db, roomTypeId, stayDate, lock });
+}
+
+/**
+ * A preferred room must be in service and of the booked room type — the two
+ * rules a preference is validated against at booking time. Called twice by
+ * `createReservation`: once on a plain read (friendly early rejection), and
+ * again on a locking read after the inventory lock (the check that actually
+ * holds; see the comments there).
+ */
+function assertPreferredRoomUsable(room, roomTypeId) {
+  // Gap closure (room management): an archived room is retired — it must not be requestable.
+  if (room.status !== 'active') {
+    throw new ValidationError('PREFERRED_ROOM_NOT_ACTIVE', 'The specified preferred room is not in service and cannot be requested.');
+  }
+  if (String(room.room_type_id) !== String(roomTypeId)) {
+    throw new ValidationError('PREFERRED_ROOM_TYPE_MISMATCH', 'The specified preferred room does not belong to the requested room type.');
+  }
 }
 
 async function ensureInventoryRow({ trx, roomTypeId, stayDate }) {
@@ -328,7 +346,10 @@ async function reserveInventoryForDates({ trx, roomTypeId, stayDates, bypassThre
 
     const row = await trx.table('room_type_inventory').where({ room_type_id: roomTypeId, stay_date: stayDate }).forUpdate().first();
 
-    const physicalCount = await livePhysicalCount({ db: trx, roomTypeId, stayDate });
+    // `lock: true` — a LOCKING read, so a room move/archive/out-of-order period that committed
+    // while this booking was queued on the inventory lock above is seen, not hidden behind the
+    // REPEATABLE READ snapshot taken before that wait. See `room-availability.js`.
+    const physicalCount = await livePhysicalCount({ db: trx, roomTypeId, stayDate, lock: true });
     const threshold = Math.floor((physicalCount * Number(row.overbooking_threshold_pct)) / 100);
     if (!bypassThreshold && row.rooms_sold + 1 > threshold) {
       throw new OverbookingThresholdExceededError(roomTypeId, stayDate);
@@ -486,14 +507,19 @@ async function createReservation({
   // raw FK-violation error — but deliberately NOT checked against current
   // occupancy: a preference for a future date can't be, and shouldn't be,
   // gated on who happens to be in that room today.
+  //
+  // THIS read is only the fast, friendly rejection: a plain read against this
+  // transaction's snapshot, taken before it queues on the inventory lock. It
+  // guarantees nothing about the room's state at COMMIT — a room move or
+  // archive can commit while this booking waits. The authoritative check is
+  // `assertPreferredRoomUsable` again, as a locking read, AFTER the inventory
+  // lock below.
   if (preferredRoomId != null) {
     const preferredRoom = await trx.table('rooms').where({ id: preferredRoomId }).first();
     if (!preferredRoom) {
       throw new ValidationError('PREFERRED_ROOM_NOT_FOUND', 'The specified preferred room does not exist at this property.');
     }
-    if (String(preferredRoom.room_type_id) !== String(roomTypeId)) {
-      throw new ValidationError('PREFERRED_ROOM_TYPE_MISMATCH', 'The specified preferred room does not belong to the requested room type.');
-    }
+    assertPreferredRoomUsable(preferredRoom, roomTypeId);
   }
 
   // PLAN.md Phase 4 (Group Blocks) — the same friendly existence check as
@@ -525,6 +551,25 @@ async function createReservation({
     } else {
       throw error;
     }
+  }
+
+  // The authoritative preferred-room check: a LOCKING read, after the
+  // inventory lock. A room-management change (move to another type, archive)
+  // holds the type's inventory lock while it runs, so this booking cannot get
+  // past `reserveInventoryForDates` until that change has committed — and only
+  // a locking read is guaranteed to see the committed result rather than this
+  // transaction's older snapshot. Without it the room manager's "clear the
+  // preference on open reservations" step misses this reservation, which did
+  // not exist yet when it ran, and a retired (or wrong-type) room is saved as
+  // a preference. Lock order stays inventory -> room, the documented order.
+  // Runs for a waitlisted booking too: it holds no inventory but still saves
+  // the preference.
+  if (preferredRoomId != null) {
+    const lockedPreferredRoom = await trx.table('rooms').where({ id: preferredRoomId }).forShare().first();
+    if (!lockedPreferredRoom) {
+      throw new ValidationError('PREFERRED_ROOM_NOT_FOUND', 'The specified preferred room does not exist at this property.');
+    }
+    assertPreferredRoomUsable(lockedPreferredRoom, roomTypeId);
   }
 
   const [id] = await trx.table('reservations').insert({
@@ -622,6 +667,15 @@ async function openBookingFolio({ trx, id }) {
  * (ascending stay_date) or physical room rows (ascending id, `lockRooms`)
  * before any `reservation_rooms` write. Cross-module locks (folios, AR
  * account) only ever cover this reservation's own rows.
+ *
+ * Room management (`setup/room-management.js`) is the one caller that holds
+ * inventory rows AND room rows together, and it takes them in the order
+ * reservations -> room_type_inventory (type, stay_date ascending) -> rooms
+ * (ascending id). That is consistent with every path above (none of them
+ * takes a room lock and THEN a reservation or inventory lock), so keep it:
+ * a new path that locks a room first and inventory second would deadlock
+ * against a room-type change. (`jobs/data-import.js` already does — see the
+ * known-and-accepted note in `room-management.js`.)
  */
 async function lockReservation({ trx, id }) {
   return trx.table('reservations').where({ id }).forUpdate().first();
@@ -665,6 +719,40 @@ async function isRoomOccupied({ trx, room }) {
   if (room.front_desk_status === 'occupied') return true;
   const openAssignment = await trx.table('reservation_rooms').where({ room_id: room.id, effective_to: null }).first();
   return Boolean(openAssignment);
+}
+
+/** The reservation statuses whose `preferred_room_id` still means something — the same set `listEligiblePreferredRooms` treats as a live preference. A cancelled / no-show / checked-out reservation keeps its historical preference untouched. */
+const OPEN_PREFERENCE_STATUSES = ['tentative', 'confirmed', 'checked_in'];
+
+/**
+ * Gap closure (room management): open reservations that named one of these
+ * rooms as their preferred room. A plain read — the caller decides how to
+ * lock the result (`setup/room-management.js` locks them by primary key, in
+ * order, BEFORE inventory and rooms, and re-reads this after taking its locks
+ * to catch any that appeared meanwhile). `db` may be a plain scoped accessor
+ * or a transaction accessor.
+ */
+async function findOpenReservationsPreferringRooms({ db, roomIds }) {
+  if (roomIds.length === 0) return [];
+  return db
+    .table('reservations')
+    .whereIn('preferred_room_id', roomIds)
+    .whereIn('status', OPEN_PREFERENCE_STATUSES)
+    .select('id', 'confirmation_number', 'status', 'preferred_room_id');
+}
+
+/**
+ * Gap closure (room management): a room that changes type or is archived can
+ * no longer honour a guest's request for it — a preference was validated at
+ * booking to name a room of the reservation's own type, and there is no API
+ * to edit a preference afterwards. So the preference is CLEARED (the booking
+ * itself is untouched). The caller must already hold these reservations'
+ * row locks; this only writes. Setup calls this rather than writing
+ * `reservations` itself (module boundary).
+ */
+async function clearPreferredRoomForReservations({ trx, reservationIds }) {
+  if (reservationIds.length === 0) return;
+  await trx.table('reservations').whereIn('id', reservationIds).update({ preferred_room_id: null });
 }
 
 /** `tentative` -> `confirmed`. No inventory change: a tentative hold already counts against sellable inventory (§11). */
@@ -771,6 +859,12 @@ async function checkIn({ trx, id, roomId, overrideDirty }) {
   const room = (await lockRooms({ trx, roomIds: [roomId] })).get(String(roomId));
   if (!room) {
     throw new ValidationError('ROOM_NOT_FOUND', 'The specified room does not exist at this property.');
+  }
+  // Gap closure (room management): an archived room can never receive a
+  // guest, with no override. Read off the row `lockRooms` just locked, so it
+  // serializes against `archiveRooms`, which takes the same room lock.
+  if (room.status !== 'active') {
+    throw new RoomNotActiveError(roomId, room.status);
   }
   if (room.housekeeping_reported_status !== 'clean' && !overrideDirty) {
     throw new RoomNotCleanError(roomId);
@@ -991,6 +1085,9 @@ async function roomMove({ trx, id, newRoomId, reason }) {
   const newRoom = lockedRooms.get(String(newRoomId));
   if (!newRoom) {
     throw new ValidationError('ROOM_NOT_FOUND', 'The specified room does not exist at this property.');
+  }
+  if (newRoom.status !== 'active') {
+    throw new RoomNotActiveError(newRoomId, newRoom.status);
   }
   if (newRoom.has_discrepancy) {
     throw new RoomOutOfOrderError(newRoomId);
@@ -1490,6 +1587,9 @@ module.exports = {
   releaseInventoryForDates,
   lockRooms,
   isRoomOccupied,
+  findOpenReservationsPreferringRooms,
+  clearPreferredRoomForReservations,
+  OPEN_PREFERENCE_STATUSES,
   configureOverbookingThreshold,
   createReservation,
   openBookingFolio,

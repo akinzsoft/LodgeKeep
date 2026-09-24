@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RoomsScreen } from '../RoomsScreen.jsx';
 
@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   listRoomTypes: vi.fn(),
   listRateCodes: vi.fn(),
   listRooms: vi.fn(),
+  bulkChangeRoomType: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -17,6 +18,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       listRoomTypes: mocks.listRoomTypes,
       listRateCodes: mocks.listRateCodes,
       listRooms: mocks.listRooms,
+      bulkChangeRoomType: mocks.bulkChangeRoomType,
     },
   };
 });
@@ -72,5 +74,46 @@ describe('<RoomsScreen>', () => {
     expect(await screen.findByText('101')).toBeInTheDocument();
     expect(screen.queryByText('201')).not.toBeInTheDocument();
     expect(screen.getByText(/Showing rooms for/)).toBeInTheDocument();
+  });
+
+  it('threads isOffline to the Rooms tab, which disables room changes and says why', async () => {
+    mocks.listRooms.mockResolvedValue([
+      { id: '10', room_number: '101', floor: '1', room_type_id: '1', front_desk_status: 'vacant', housekeeping_reported_status: 'clean' },
+    ]);
+    render(<RoomsScreen activeProperty={ACTIVE_PROPERTY} isOffline />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Rooms' }));
+    await screen.findByText('101');
+    expect(screen.getByText(/You're offline/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeDisabled();
+  });
+
+  it('after moving rooms to a type, "View <type> rooms" narrows the list to that type', async () => {
+    mocks.listRoomTypes.mockResolvedValue([
+      { id: '1', code: 'DLX', name: 'Deluxe', default_occupancy: 2, base_rate: '150.00' },
+      { id: '2', code: 'STD', name: 'Standard', default_occupancy: 2, base_rate: '90.00' },
+    ]);
+    mocks.listRooms.mockResolvedValue([
+      { id: '10', room_number: '101', floor: '1', room_type_id: '1', front_desk_status: 'vacant', housekeeping_reported_status: 'clean' },
+      { id: '11', room_number: '201', floor: '2', room_type_id: '2', front_desk_status: 'vacant', housekeeping_reported_status: 'clean' },
+    ]);
+    mocks.bulkChangeRoomType.mockResolvedValue({
+      changed: [{ id: '10' }],
+      unchanged: [],
+      cleared_preferences: [],
+      cleared_connecting_links: [],
+    });
+    render(<RoomsScreen activeProperty={ACTIVE_PROPERTY} />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Rooms' }));
+    await screen.findByText('101');
+    expect(screen.getByText('201')).toBeInTheDocument(); // unfiltered
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Change type' })[0]);
+    await userEvent.selectOptions(await screen.findByLabelText('New room type'), 'Standard (STD)');
+    await userEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Change type' }));
+
+    await userEvent.click(await screen.findByRole('button', { name: 'View Standard rooms' }));
+    expect(screen.getByText(/Showing rooms for/)).toHaveTextContent('Standard');
+    expect(screen.queryByText('101')).not.toBeInTheDocument();
+    expect(screen.getByText('201')).toBeInTheDocument();
   });
 });

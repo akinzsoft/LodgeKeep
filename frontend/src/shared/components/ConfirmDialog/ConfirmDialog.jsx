@@ -20,6 +20,8 @@ import styles from './ConfirmDialog.module.css';
  * @param {string} title
  * @param {string} consequence   The plain-words statement of what happens — DESIGN_SYSTEM.md §2's "stating the consequence in plain words", not a generic "Are you sure?".
  * @param {boolean} [requireReason]
+ * @param {import('react').ReactNode} [children]   Extra fields the confirmation needs (e.g. a target picker), rendered between the consequence and the reason. Additive: a caller with no children renders exactly as before.
+ * @param {boolean} [confirmDisabled]   Keeps Confirm disabled for a reason the dialog cannot know about (a required picker still empty, a request in flight, offline).
  * @param {string} [confirmLabel]
  * @param {string} [cancelLabel]
  * @param {(reason?: string) => void} onConfirm
@@ -29,6 +31,8 @@ export function ConfirmDialog({
   title,
   consequence,
   requireReason = false,
+  children,
+  confirmDisabled = false,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   onConfirm,
@@ -54,6 +58,8 @@ export function ConfirmDialog({
         </h2>
         <p className={styles.consequence}>{consequence}</p>
 
+        {children}
+
         {requireReason && (
           <div className={styles.reasonField}>
             <label htmlFor={reasonId} className={styles.reasonLabel}>
@@ -76,7 +82,7 @@ export function ConfirmDialog({
           <button
             type="button"
             className={styles.confirm}
-            disabled={reasonMissing}
+            disabled={reasonMissing || confirmDisabled}
             onClick={() => onConfirm(requireReason ? reason.trim() : undefined)}
           >
             {confirmLabel}

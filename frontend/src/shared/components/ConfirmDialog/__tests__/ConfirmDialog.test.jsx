@@ -76,4 +76,30 @@ describe('<ConfirmDialog>', () => {
     expect(screen.getByRole('button', { name: 'Cancel' }).tagName).toBe('BUTTON');
     expect(screen.getByRole('button', { name: 'Confirm' }).tagName).toBe('BUTTON');
   });
+
+  it('renders children (extra fields the confirmation needs) between the consequence and the reason', () => {
+    render(
+      <ConfirmDialog title="Move rooms?" consequence="The rooms move." requireReason onConfirm={() => {}} onCancel={() => {}}>
+        <label>
+          New type
+          <select>
+            <option>Deluxe</option>
+          </select>
+        </label>
+      </ConfirmDialog>
+    );
+    const dialog = screen.getByRole('alertdialog');
+    const text = dialog.textContent;
+    expect(text.indexOf('The rooms move.')).toBeLessThan(text.indexOf('New type'));
+    expect(text.indexOf('New type')).toBeLessThan(text.indexOf('Reason'));
+  });
+
+  it('confirmDisabled keeps Confirm disabled even when everything else is satisfied', async () => {
+    const onConfirm = vi.fn();
+    render(<ConfirmDialog title="Move?" consequence="c" confirmDisabled onConfirm={onConfirm} onCancel={() => {}} />);
+    const confirm = screen.getByRole('button', { name: 'Confirm' });
+    expect(confirm).toBeDisabled();
+    await userEvent.click(confirm);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
 });

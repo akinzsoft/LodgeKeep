@@ -40,6 +40,14 @@ function isValidAssignmentTransition(from, to) {
 async function requireRoom(db, roomId) {
   const room = await db.table('rooms').where({ id: roomId }).first();
   if (!room) throw new ValidationError('ROOM_NOT_FOUND', 'The specified room does not exist at this property.');
+  // Room management gap closure: an archived room is retired — no new work
+  // (assignments, status reports, out-of-order periods) may be raised
+  // against it. Only `archived`, not `out_of_service`: housekeeping
+  // legitimately works on a room taken out of service. Completing an
+  // assignment that already exists does not go through here.
+  if (room.status === 'archived') {
+    throw new ValidationError('ROOM_ARCHIVED', `Room ${room.room_number} is archived.`);
+  }
   return room;
 }
 

@@ -303,7 +303,7 @@ function Demo() {
           canManage={grantedPermissions.has('housekeeping.manage')}
         />
       ) : screenKey === 'rooms' ? (
-        <RoomsScreen activeProperty={activePropertyRecord} />
+        <RoomsScreen activeProperty={activePropertyRecord} isOffline={!isOnline} />
       ) : screenKey === 'reports' ? (
         <ReportingScreen activePropertyId={user.activePropertyId} />
       ) : screenKey === 'cashiering' ? (

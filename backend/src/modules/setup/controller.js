@@ -7,6 +7,7 @@
 
 const { ok, notFound } = require('../../shared/response');
 const service = require('./service');
+const roomManagement = require('./room-management');
 const { ValidationError } = require('../../shared/errors');
 
 function require_(body, field) {
@@ -375,14 +376,157 @@ async function bulkCreateRooms(req, res, next) {
   }
 }
 
+/**
+ * Room management gap closure. `PATCH /rooms/:id` used to hand `req.body`
+ * straight to a raw `.update()` — any column was writable (`status`,
+ * `front_desk_status`, `has_discrepancy`, `room_type_id`, ...), the exact
+ * latent gap `pickRoomTypeChanges`'s header describes, and a duplicate number
+ * surfaced as a bare 500. Now allowlisted to the two genuinely editable
+ * fields; everything else is silently ignored. Changing type, archiving and
+ * deleting are separate, guarded actions below — a room's type and lifecycle
+ * are never a side effect of an edit form.
+ */
+function pickRoomChanges(body) {
+  const changes = {};
+  if (body?.room_number !== undefined) changes.room_number = body.room_number;
+  if (body?.floor !== undefined) changes.floor = body.floor;
+  return changes;
+}
+
+const MAX_BULK_ROOMS = 500;
+
+/** A non-empty, bounded list of numeric room ids — anything else is a 400, never a query. */
+function requireRoomIds(body) {
+  const raw = body?.room_ids;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new ValidationError('MISSING_FIELD', '"room_ids" must be a non-empty list.', [{ field: 'room_ids', issue: 'missing' }]);
+  }
+  if (raw.length > MAX_BULK_ROOMS) {
+    throw new ValidationError('BATCH_TOO_LARGE', `At most ${MAX_BULK_ROOMS} rooms may be changed at once.`, [{ field: 'room_ids', issue: 'too_many' }]);
+  }
+  if (!raw.every((id) => (typeof id === 'string' || typeof id === 'number') && /^\d+$/.test(String(id)))) {
+    throw new ValidationError('INVALID_ROOM_IDS', '"room_ids" must contain only room ids.', [{ field: 'room_ids', issue: 'invalid' }]);
+  }
+  return raw.map(String);
+}
+
+/** A required reason, trimmed: whitespace alone is not a reason (the dialog trims, but the API must not rely on that). */
+function requireReason(body) {
+  const value = typeof body?.reason === 'string' ? body.reason.trim() : '';
+  if (value.length === 0) {
+    throw new ValidationError('MISSING_FIELD', '"reason" is required.', [{ field: 'reason', issue: 'missing' }]);
+  }
+  return value;
+}
+
+function optionalReason(body) {
+  return typeof body?.reason === 'string' && body.reason.trim().length > 0 ? body.reason.trim() : undefined;
+}
+
 async function updateRoom(req, res, next) {
+  try {
+    const { id } = req.params;
+    const changes = pickRoomChanges(req.body);
+    if (Object.keys(changes).length === 0) {
+      throw new ValidationError('MISSING_FIELD', 'Provide "room_number" and/or "floor".', [{ field: 'room_number', issue: 'missing' }]);
+    }
+    const result = await roomManagement.renameRoom({ context: req.context, id, changes, audit: req.audit });
+    if (!result) return notFound(res);
+    res.status(200).json(ok(result.room, { updated_open_order_labels: result.updated_open_order_labels }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function changeRoomType(req, res, next) {
+  try {
+    const { id } = req.params;
+    if (!(await service.getRoom({ context: req.context, id }))) return notFound(res);
+    const result = await roomManagement.changeRoomsType({
+      context: req.context,
+      roomIds: [id],
+      roomTypeId: require_(req.body, 'room_type_id'),
+      reason: optionalReason(req.body),
+      audit: req.audit,
+    });
+    res.status(200).json(ok(result, { changed_count: result.changed.length }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function bulkChangeRoomType(req, res, next) {
+  try {
+    const result = await roomManagement.changeRoomsType({
+      context: req.context,
+      roomIds: requireRoomIds(req.body),
+      roomTypeId: require_(req.body, 'room_type_id'),
+      reason: optionalReason(req.body),
+      audit: req.audit,
+    });
+    res.status(200).json(ok(result, { changed_count: result.changed.length }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function archiveRoom(req, res, next) {
+  try {
+    const { id } = req.params;
+    if (!(await service.getRoom({ context: req.context, id }))) return notFound(res);
+    const result = await roomManagement.archiveRooms({
+      context: req.context,
+      roomIds: [id],
+      reason: requireReason(req.body),
+      audit: req.audit,
+    });
+    res.status(200).json(ok(result, { changed_count: result.changed.length }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function bulkArchiveRooms(req, res, next) {
+  try {
+    const result = await roomManagement.archiveRooms({
+      context: req.context,
+      roomIds: requireRoomIds(req.body),
+      reason: requireReason(req.body),
+      audit: req.audit,
+    });
+    res.status(200).json(ok(result, { changed_count: result.changed.length }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function deleteRoom(req, res, next) {
   try {
     const { id } = req.params;
     const before = await service.getRoom({ context: req.context, id });
     if (!before) return notFound(res);
-    const room = await service.updateRoom({ context: req.context, id, changes: req.body ?? {} });
-    await req.audit({ entityType: 'rooms', entityId: id, action: 'update', beforeState: before, afterState: room });
-    res.status(200).json(ok(room));
+    const result = await roomManagement.deleteRoom({ context: req.context, id, reason: requireReason(req.body), audit: req.audit });
+    res.status(200).json(ok({ id: before.id, room_number: before.room_number, deleted: true, cleared_connecting_links: result.cleared_connecting_links }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getRoomUsage(req, res, next) {
+  try {
+    const usage = await roomManagement.getRoomUsage({ context: req.context, id: req.params.id });
+    if (!usage) return notFound(res);
+    res.status(200).json(ok(usage));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function restoreRoom(req, res, next) {
+  try {
+    const result = await roomManagement.restoreRoom({ context: req.context, id: req.params.id, audit: req.audit });
+    if (!result) return notFound(res);
+    res.status(200).json(ok(result.room, { restored: result.restored }));
   } catch (error) {
     next(error);
   }
@@ -390,7 +534,7 @@ async function updateRoom(req, res, next) {
 
 async function listRooms(req, res, next) {
   try {
-    res.status(200).json(ok(await service.listRooms({ context: req.context })));
+    res.status(200).json(ok(await service.listRooms({ context: req.context, status: req.query.status })));
   } catch (error) {
     next(error);
   }
@@ -788,6 +932,13 @@ module.exports = {
   createRoom,
   bulkCreateRooms,
   updateRoom,
+  changeRoomType,
+  bulkChangeRoomType,
+  archiveRoom,
+  bulkArchiveRooms,
+  deleteRoom,
+  getRoomUsage,
+  restoreRoom,
   listRooms,
   createRateCode,
   updateRateCode,

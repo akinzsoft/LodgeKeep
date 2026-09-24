@@ -52,4 +52,51 @@ class EmailTestSendFailedError extends ValidationError {
   }
 }
 
-module.exports = { DuplicateEntryError, InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError };
+/**
+ * A room-lifecycle change (change type, archive, delete — single or bulk)
+ * was refused by one or more guards. ONE error class for every guard failure
+ * so the UI parses a single shape: `details.blocked` is one entry per
+ * blocked room, each with the machine-readable `reasons` that blocked it
+ * (`OCCUPIED`, `HAS_OPEN_DISCREPANCY`, `WOULD_OVERBOOK`, `HAS_HISTORY`,
+ * `ARCHIVED`, `NOT_FOUND`). A bulk change is all-or-nothing: this is thrown
+ * INSTEAD of applying anything, so the caller can deselect the blocked rooms
+ * and retry. An unknown or cross-tenant id is reported as `NOT_FOUND`, never
+ * distinguishable from a nonexistent one.
+ */
+class RoomChangeBlockedError extends AppError {
+  constructor(operation, blocked) {
+    const count = blocked.length;
+    super(
+      'CONFLICT_ROOM_CHANGE_BLOCKED',
+      count === 1
+        ? `Nothing was changed: room ${blocked[0].room_number ?? blocked[0].room_id} is blocked.`
+        : `Nothing was changed: ${count} rooms are blocked.`,
+      409,
+      { operation, blocked }
+    );
+  }
+}
+
+/** Two attempts at a room-lifecycle transaction both lost a lock race (`ER_LOCK_DEADLOCK`) — rare, safe to retry, so it is a clean 409 rather than a bare 500. */
+class RoomBusyError extends AppError {
+  constructor() {
+    super('CONFLICT_ROOM_BUSY', 'The room is being changed by another request. Please try again.', 409);
+  }
+}
+
+/** A rename or restore was attempted on a room whose state does not allow it. */
+class RoomStateError extends AppError {
+  constructor(code, message, details) {
+    super(code, message, 409, details);
+  }
+}
+
+module.exports = {
+  DuplicateEntryError,
+  InvalidBulkRangeError,
+  TaxEffectiveDateOverlapError,
+  EmailTestSendFailedError,
+  RoomChangeBlockedError,
+  RoomBusyError,
+  RoomStateError,
+};

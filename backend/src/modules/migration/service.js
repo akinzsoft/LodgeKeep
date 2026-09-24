@@ -212,7 +212,9 @@ async function runDryRun({ context, importRunId }) {
       const listedRoom = roomNumber ? rooms.get(roomNumber) : null;
       if (listedRoom && trimmed(row.status) === 'checked_in') {
         const claimedBy = inHouseRoomsInFile.get(roomNumber);
-        if (listedRoom.front_desk_status === 'occupied' || openAssignmentRoomIds.has(String(listedRoom.id))) {
+        if (listedRoom.status !== 'active') {
+          errors.push({ columnName: 'room_number', message: `Room ${trimmed(row.room_number)} is ${listedRoom.status} — an in-house guest can't be imported into it.` });
+        } else if (listedRoom.front_desk_status === 'occupied' || openAssignmentRoomIds.has(String(listedRoom.id))) {
           errors.push({ columnName: 'room_number', message: `Room ${trimmed(row.room_number)} is already occupied — an in-house guest can't be imported into it.` });
         } else if (claimedBy !== undefined) {
           errors.push({ columnName: 'room_number', message: `Room ${trimmed(row.room_number)} is already given to the in-house guest on row ${claimedBy} of this file.` });

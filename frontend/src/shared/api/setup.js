@@ -102,8 +102,9 @@ export function archiveRoomType(id) {
 // Rooms
 // ---------------------------------------------------------------------
 
-export function listRooms() {
-  return request('/rooms');
+/** @param {{status?: 'archived'}} [params]  `status: 'archived'` lists only archived rooms (the view where Restore lives); otherwise the normal working list. */
+export function listRooms(params = {}) {
+  return request(params.status === 'archived' ? '/rooms?status=archived' : '/rooms');
 }
 
 export function createRoom(body) {
@@ -115,8 +116,43 @@ export function bulkCreateRooms(body) {
   return request('/rooms/bulk', { method: 'POST', body });
 }
 
+/** Rename and/or set the floor — the only two fields the backend accepts. */
 export function updateRoom(id, body) {
   return request(`/rooms/${id}`, { method: 'PATCH', body });
+}
+
+/**
+ * Room lifecycle (gap closure). Every guard failure — occupied, would oversell
+ * the type, open discrepancy, has history, unknown id — comes back as ONE
+ * shape: an `ApiError` with `code: 'CONFLICT_ROOM_CHANGE_BLOCKED'` whose
+ * `details.blocked` lists each blocked room and its reasons. Nothing is
+ * applied when that happens (all-or-nothing), so the caller can deselect the
+ * blocked rooms and retry. One room is just a list of one.
+ *
+ * @param {{room_ids: string[], room_type_id: string, reason?: string}} body
+ * @returns {Promise<{changed: object[], unchanged: object[], cleared_preferences: object[], cleared_connecting_links: object[]}>}
+ */
+export function bulkChangeRoomType(body) {
+  return request('/rooms/change-type', { method: 'POST', body });
+}
+
+/** @param {{room_ids: string[], reason: string}} body */
+export function bulkArchiveRooms(body) {
+  return request('/rooms/archive', { method: 'POST', body });
+}
+
+/** Deletes a room nothing references; otherwise a `CONFLICT_ROOM_CHANGE_BLOCKED` with a `HAS_HISTORY` reason — archive it instead. */
+export function deleteRoom(id, reason) {
+  return request(`/rooms/${id}`, { method: 'DELETE', body: { reason } });
+}
+
+/** Preflight for the Remove dialog: `{deletable, occupied, references}`. DELETE stays the authority. */
+export function getRoomUsage(id) {
+  return request(`/rooms/${id}/usage`);
+}
+
+export function restoreRoom(id) {
+  return request(`/rooms/${id}/restore`, { method: 'POST' });
 }
 
 // ---------------------------------------------------------------------

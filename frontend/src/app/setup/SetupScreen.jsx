@@ -154,7 +154,7 @@ export function SetupScreen({ activePropertyId, isOffline = false, onPropertiesC
           />
         )}
         {tab === 'room-types' && <RoomTypesTab activeProperty={activeProperty} disabled={!activeProperty} />}
-        {tab === 'rooms' && <RoomsTab activeProperty={activeProperty} disabled={!activeProperty} />}
+        {tab === 'rooms' && <RoomsTab activeProperty={activeProperty} disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'rate-codes' && <RateCodesTab activeProperty={activeProperty} disabled={!activeProperty} />}
         {tab === 'taxes' && <TaxesTab activeProperty={activeProperty} disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'reference-data' && <ReferenceDataTab disabled={!activeProperty} />}
