@@ -4,6 +4,7 @@ import { Money } from '../../shared/format/money.jsx';
 import { formatQuantity, stockLevelTone } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
 import { MenuCategoriesCard } from './MenuCategoriesCard.jsx';
+import { CostPricesCard } from './CostPricesCard.jsx';
 import { computeCategorySections } from './categorySections.js';
 import formStyles from './POSForm.module.css';
 
@@ -63,6 +64,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
   // menuItemId (string) -> { stockItemId } | null — see `resolveLinks`.
   const [linksByMenuItemId, setLinksByMenuItemId] = useState(null);
   const [error, setError] = useState(null);
+  const [showCostPrices, setShowCostPrices] = useState(false);
 
   const [selectedRowKey, setSelectedRowKey] = useState(null);
 
@@ -771,6 +773,27 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
             </div>
           );
         })()
+      )}
+
+      {/* Every item's cost price in one table, so the Sales/margin reports can show profit. Behind a toggle: it repeats every item, and is a one-off chore, not the everyday view. */}
+      {menuItems !== null && linksByMenuItemId !== null && (
+        <div className={formStyles.form}>
+          <div className={formStyles.actionsRow}>
+            <Button type="button" variant="secondary" onClick={() => setShowCostPrices((open) => !open)} aria-expanded={showCostPrices}>
+              {showCostPrices ? 'Hide cost prices' : 'Set cost prices for all items'}
+            </Button>
+          </div>
+        </div>
+      )}
+      {showCostPrices && menuItems !== null && linksByMenuItemId !== null && (
+        <CostPricesCard
+          menuItems={menuItems}
+          recipeKind={(id) => (linksByMenuItemId[id] === 'compound' ? 'compound' : linksByMenuItemId[id] ? 'stock' : 'none')}
+          linkedStockItemFor={linkedStockItemFor}
+          activeProperty={activeProperty}
+          isOffline={isOffline}
+          onSaved={reloadItems}
+        />
       )}
     </div>
   );
