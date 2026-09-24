@@ -302,6 +302,41 @@ describe('<MenuItemsTab>', () => {
     });
   });
 
+  describe('setting cost prices for every item', () => {
+    it('keeps the cost-price table out of the way until asked for, then edits and saves an untracked item\'s cost price and reloads', async () => {
+      mocks.listMenuItems.mockResolvedValue([menuItem({ id: '5', name: 'Plain snack' })]);
+      mocks.updateMenuItem.mockResolvedValue({});
+      renderTab();
+      await screen.findByText('Plain snack');
+      expect(screen.queryByRole('heading', { name: 'Cost prices' })).not.toBeInTheDocument();
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Set cost prices for all items' }));
+      expect(await screen.findByRole('heading', { name: 'Cost prices' })).toBeInTheDocument();
+
+      await userEvent.type(screen.getByLabelText('Cost price for Plain snack'), '6');
+      const callsBefore = mocks.listMenuItems.mock.calls.length;
+      await userEvent.click(screen.getByRole('button', { name: 'Save 1 cost price' }));
+
+      await waitFor(() => expect(mocks.updateMenuItem).toHaveBeenCalledWith('5', { cost_price: '6' }));
+      await waitFor(() => expect(mocks.listMenuItems.mock.calls.length).toBeGreaterThan(callsBefore));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Hide cost prices' }));
+      expect(screen.queryByRole('heading', { name: 'Cost prices' })).not.toBeInTheDocument();
+    });
+
+    it('does not offer a cost-price input to an item that is sold from stock — its stock cost is used', async () => {
+      mocks.listMenuItems.mockResolvedValue([menuItem({ id: '5', name: 'Bottled beer' })]);
+      stockMocks.listMenuItemComponents.mockResolvedValue([{ stock_item_id: '30', quantity: '1.000' }]);
+      stockMocks.listStockItems.mockResolvedValue([stockItem({ id: '30', name: 'Bottled beer' })]);
+      renderTab();
+      await userEvent.click(await screen.findByRole('button', { name: 'Set cost prices for all items' }));
+
+      await screen.findByRole('heading', { name: 'Cost prices' });
+      expect(screen.queryByLabelText('Cost price for Bottled beer')).not.toBeInTheDocument();
+      expect(screen.getByText('From stock')).toBeInTheDocument();
+    });
+  });
+
   it('toggles a menu item stock-out state', async () => {
     mocks.listMenuItems.mockResolvedValue([menuItem()]);
     mocks.setMenuItemAvailability.mockResolvedValue({});
