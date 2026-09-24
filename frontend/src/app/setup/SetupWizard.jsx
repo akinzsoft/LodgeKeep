@@ -112,7 +112,7 @@ export function SetupWizard({ properties, activeProperty, onPropertiesChanged, i
 
       {currentStep.key === 'property' && <PropertyTab properties={properties} onPropertiesChanged={handlePropertiesChanged} />}
       {currentStep.key === 'room-types' && <RoomTypesTab activeProperty={activeProperty} disabled={disabled} />}
-      {currentStep.key === 'rooms' && <RoomsTab disabled={disabled} />}
+      {currentStep.key === 'rooms' && <RoomsTab disabled={disabled} isOffline={isOffline} />}
       {currentStep.key === 'rate-codes' && <RateCodesTab activeProperty={activeProperty} disabled={disabled} />}
       {currentStep.key === 'taxes' && <TaxesTab activeProperty={activeProperty} disabled={disabled} isOffline={isOffline} />}
       {currentStep.key === 'users' && <UsersTab disabled={disabled} isOffline={isOffline} />}

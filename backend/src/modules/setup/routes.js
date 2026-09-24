@@ -89,6 +89,18 @@ function setupRouter() {
   router.post('/rooms', requirePermission('setup.manage'), controller.createRoom);
   router.post('/rooms/bulk', requirePermission('setup.manage'), controller.bulkCreateRooms);
   router.patch('/rooms/:id', requirePermission('setup.manage'), controller.updateRoom);
+  // Room management gap closure: guarded lifecycle actions, all `setup.manage`
+  // (admins already had this power through the old unguarded PATCH, so this
+  // narrows what they can do rather than widening it; no new permission key).
+  // Bulk routes have distinct static paths, so they cannot collide with
+  // `/rooms/:id/...` (different segment count) or `/rooms/bulk`.
+  router.get('/rooms/:id/usage', requirePermission('setup.view'), controller.getRoomUsage);
+  router.post('/rooms/change-type', requirePermission('setup.manage'), controller.bulkChangeRoomType);
+  router.post('/rooms/archive', requirePermission('setup.manage'), controller.bulkArchiveRooms);
+  router.post('/rooms/:id/change-type', requirePermission('setup.manage'), controller.changeRoomType);
+  router.post('/rooms/:id/archive', requirePermission('setup.manage'), controller.archiveRoom);
+  router.post('/rooms/:id/restore', requirePermission('setup.manage'), controller.restoreRoom);
+  router.delete('/rooms/:id', requirePermission('setup.manage'), controller.deleteRoom);
 
   router.get('/rate-codes', requirePermission('setup.view'), controller.listRateCodes);
   router.post('/rate-codes', requirePermission('setup.manage'), controller.createRateCode);

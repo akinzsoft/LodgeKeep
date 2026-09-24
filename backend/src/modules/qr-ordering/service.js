@@ -697,6 +697,8 @@ async function createToken({ context, outletId, type, tableLabel, roomId, baseUr
   if (type === 'room') {
     const room = await db.table('rooms').where({ id: roomId }).first();
     if (!room) throw new ValidationError('ROOM_NOT_FOUND', 'The specified room does not exist at this property.');
+    // Room management gap closure: no new printed QR for a retired room.
+    if (room.status === 'archived') throw new ValidationError('ROOM_ARCHIVED', `Room ${room.room_number} is archived.`);
   }
 
   const raw = generateRawToken();

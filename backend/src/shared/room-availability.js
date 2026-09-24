@@ -35,32 +35,43 @@
 
 /**
  * @param {object} params
- * @param {object} params.db  A scoped accessor (read-only; no lock is taken here).
+ * @param {object} params.db  A scoped accessor. Read-only unless `lock` is set.
  * @param {string} params.stayDate  'YYYY-MM-DD'. Out-of-order periods covering this date are excluded.
+ * @param {boolean} [params.lock]  Read with `FOR SHARE` — see `livePhysicalCount`.
  */
-async function outOfOrderRoomIds({ db, stayDate }) {
+async function outOfOrderRoomIds({ db, stayDate, lock = false }) {
   if (!stayDate) return [];
-  return (
-    await db
-      .table('out_of_order_periods')
-      .where('start_date', '<=', stayDate)
-      .where('end_date', '>=', stayDate)
-      .select('room_id')
-  ).map((row) => row.room_id);
+  let query = db.table('out_of_order_periods').where('start_date', '<=', stayDate).where('end_date', '>=', stayDate);
+  if (lock) query = query.forShare();
+  return (await query.select('room_id')).map((row) => row.room_id);
 }
 
 /**
  * @param {object} params
- * @param {object} params.db  A scoped accessor (read-only; no lock is taken here).
+ * @param {object} params.db  A scoped accessor. Read-only unless `lock` is set.
  * @param {string|number} [params.roomTypeId]
  * @param {string} params.stayDate  'YYYY-MM-DD'.
+ * @param {boolean} [params.lock]  Count with a LOCKING read (`FOR SHARE`) on the rooms and
+ *   out-of-order periods it reads. REQUIRED for any caller that is about to ENFORCE capacity
+ *   inside a transaction (`reserveInventoryForDates`), and for nobody else.
+ *
+ *   Why: under REPEATABLE READ every plain read in a transaction sees the snapshot taken at
+ *   its FIRST read, and a booking's first read (the idempotency-key lookup) happens before it
+ *   queues on the `room_type_inventory` row lock. If a writer that lowers capacity — a room
+ *   moved to another type, archived or deleted, an out-of-order period, a discrepancy —
+ *   commits during that wait, a plain count still sees the old rooms and the booking is
+ *   accepted into a night the type no longer has room for. A locking read returns the latest
+ *   COMMITTED rows instead (and makes a still-open writer finish first), which is exactly the
+ *   freshness a capacity decision needs. Reports and availability searches, which only
+ *   display a number, keep the plain read — they take no lock and must not block writers.
  */
-async function livePhysicalCount({ db, roomTypeId, stayDate }) {
-  const oooRoomIds = await outOfOrderRoomIds({ db, stayDate });
+async function livePhysicalCount({ db, roomTypeId, stayDate, lock = false }) {
+  const oooRoomIds = await outOfOrderRoomIds({ db, stayDate, lock });
 
   let query = db.table('rooms').where({ status: 'active', has_discrepancy: false });
   if (roomTypeId) query = query.where({ room_type_id: roomTypeId });
   if (oooRoomIds.length > 0) query = query.whereNotIn('id', oooRoomIds);
+  if (lock) query = query.forShare();
   return query.count();
 }
 

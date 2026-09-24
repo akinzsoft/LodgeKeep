@@ -21,14 +21,10 @@ import styles from './RoomsScreen.module.css';
  * for this domain — Housekeeping already uses it, confirming a real
  * top-level Rooms screen was anticipated, just never built.
  *
- * No `isOffline` prop, unlike every other top-level screen in this app:
- * `RoomTypesTab`/`RoomsTab` (reused unchanged from `app/setup/`) have never
- * accepted or acted on one, even under `SetupScreen`'s own existing call to
- * them — neither tab's submit button actually disables while offline. A
- * banner here claiming changes are "disabled" would be false; the honest
- * fix is in those two tabs themselves, a pre-existing gap this pass did
- * not introduce and is out of scope to silently paper over with a banner
- * that doesn't match real behaviour.
+ * `isOffline` is threaded to `RoomsTab`, which disables every room change
+ * (rename, change type, archive, restore, delete, bulk-add) and says why
+ * while offline — nothing is queued. `RoomTypesTab` has never accepted it
+ * (a pre-existing gap this pass leaves alone; that tab is untouched).
  *
  * Gap closure (user-reported): "on Rooms page on list of rooms add if i
  * click on any roomtype it shld bring all rooms associated to that room
@@ -43,7 +39,7 @@ const TABS = [
   { key: 'rooms', label: 'Rooms' },
 ];
 
-export function RoomsScreen({ activeProperty }) {
+export function RoomsScreen({ activeProperty, isOffline = false }) {
   const [tab, setTab] = useState('room-types');
   const [roomTypeFilter, setRoomTypeFilter] = useState(null);
 
@@ -83,6 +79,8 @@ export function RoomsScreen({ activeProperty }) {
             disabled={!activeProperty}
             filterRoomTypeId={roomTypeFilter}
             onClearFilter={() => setRoomTypeFilter(null)}
+            onFilterRoomType={(roomTypeId) => setRoomTypeFilter(roomTypeId)}
+            isOffline={isOffline}
           />
         )}
       </div>

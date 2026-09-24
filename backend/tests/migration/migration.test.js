@@ -556,6 +556,35 @@ describe('Data migration (PLAN.md Phase 5)', () => {
         expect(room2.front_desk_status).toBe('occupied');
       });
 
+      it('an archived room: dry run refuses an in-house guest into it, while a historical (checked_out) row still records its stay there', async () => {
+        const [archivedId] = await t.trx('rooms').insert({
+          tenant_id: ctx.a.id,
+          property_id: property.id,
+          room_type_id: roomType.id,
+          room_number: 'IMP-ARCH',
+          status: 'archived',
+        });
+        const fileContent = csv(header, [
+          [guest.email, '', 'DLX', 'BAR', '2027-12-20', '2027-12-22', '2', '0', 'checked_in', 'IMP-ARCH'], // a live guest in a retired room: refused
+          [guest.email, '', 'DLX', 'BAR', '2027-12-25', '2027-12-27', '2', '0', 'checked_out', 'IMP-ARCH'], // only history: fine
+        ]);
+        const { importRunId, dryRunRes } = await uploadAndDryRun({ entityType: 'reservations', propertyId: property.id, fileContent, filename: 'archived.csv' });
+
+        const roomErrors = dryRunRes.body.data.errors.filter((e) => e.column_name === 'room_number');
+        expect(roomErrors.map((e) => e.row_number)).toEqual([1]);
+        expect(roomErrors[0].message).toMatch(/archived/);
+
+        const { run } = await commitAndRunJob({ importRunId });
+        expect(run.rows_created).toBe(1);
+        expect(run.rows_skipped).toBe(1);
+        // No live guest in the retired room; the historical stay is a closed assignment.
+        expect(await openAssignments(archivedId)).toBe(0);
+        const history = await t.trx('reservation_rooms').where({ room_id: archivedId });
+        expect(history).toHaveLength(1);
+        expect(history[0].effective_to).not.toBeNull();
+        expect((await t.trx('rooms').where({ id: archivedId }).first()).front_desk_status).toBe('vacant');
+      });
+
       it('an in-house room that becomes occupied between dry run and commit skips that row only, without touching inventory', async () => {
         const fileContent = csv(header, [
           [guest.email, '', 'DLX', 'BAR', '2027-12-10', '2027-12-12', '2', '0', 'checked_in', 'IMP-3'],

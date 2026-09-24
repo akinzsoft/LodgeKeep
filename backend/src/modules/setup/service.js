@@ -485,19 +485,19 @@ async function createRoom({ context, roomNumber, floor, roomTypeId, connectingRo
   );
 }
 
-async function updateRoom({ context, id, changes }) {
-  const db = scopedDb().for(context);
-  await db.table('rooms').where({ id }).update(changes);
-  return getRoom({ context, id });
-}
-
 async function getRoom({ context, id }) {
   const db = scopedDb().for(context);
   return db.table('rooms').where({ id }).first();
 }
 
-async function listRooms({ context }) {
+/**
+ * Room management gap closure: `status: 'archived'` lists ONLY the archived
+ * rooms (the "Archived rooms" view, where Restore lives); anything else is
+ * the normal working list, which excludes archived rooms.
+ */
+async function listRooms({ context, status } = {}) {
   const db = scopedDb().for(context);
+  if (status === 'archived') return db.table('rooms').where({ status: 'archived' }).orderBy('room_number');
   return db.table('rooms').whereNot({ status: 'archived' }).orderBy('room_number');
 }
 
@@ -812,7 +812,8 @@ async function getSetupProgress({ context }) {
   const counts = hasProperty
     ? await Promise.all([
         db.table('room_types').where({ status: 'active' }).count(),
-        db.table('rooms').count(),
+        // An archived room is not part of a working property — counting it would keep the "Rooms" step complete after every room was retired.
+        db.table('rooms').whereNot({ status: 'archived' }).count(),
         db.table('rate_codes').where({ status: 'active' }).count(),
         db.table('taxes').count(),
         db.table('user_property_access').count(),
@@ -932,7 +933,6 @@ module.exports = {
   getRoomType,
   listRoomTypes,
   createRoom,
-  updateRoom,
   getRoom,
   listRooms,
   expandRoomNumberRange,
