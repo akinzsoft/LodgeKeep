@@ -29,7 +29,7 @@ function BuildingIcon() {
 export function PropertySwitcher({ activeProperty, properties, onSwitchProperty }) {
   if (properties.length <= 1) {
     return (
-      <div className={chip.chip} title="Active property">
+      <div className={`${chip.chip} ${styles.nameChip}`} title="Active property">
         <span className={chip.icon}>
           <BuildingIcon />
         </span>

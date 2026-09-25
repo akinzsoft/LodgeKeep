@@ -4,13 +4,24 @@
   max-width: 16rem;
 }
 
+/* Phone width: the property chip takes whatever width the date chip, bell and
+   avatar leave, and ellipsizes inside it. Without this it shrank to nothing
+   but its icon and the current property was not shown at all. */
+.switcher,
+.nameChip {
+  min-width: 0;
+}
+
 @media (width <= 639px) {
-  .nameOnly {
-    max-width: 7rem;
+  .nameChip,
+  .switcher {
+    flex: 1;
   }
 
+  .nameOnly,
   .select {
-    max-width: 9rem;
+    max-width: none;
+    width: 100%;
   }
 }
 

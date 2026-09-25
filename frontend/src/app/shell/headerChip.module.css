@@ -44,9 +44,12 @@
 }
 
 /* Phone width: the top bar cannot fit two labelled chips, the bell and the
-   user menu on a 390px row — the value stays, the small label goes. */
+   user menu on a 390px row — the value stays; the small label and the icon
+   go, so the property name (which must always be visible, PRODUCT_REQUIREMENTS.md
+   App shell) keeps room to show. */
 @media (width <= 639px) {
-  .label {
+  .label,
+  .icon {
     display: none;
   }
 }
