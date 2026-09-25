@@ -78,19 +78,22 @@ function readTimeoutMs() {
   return Number.isFinite(configured) && configured > 0 ? configured : 8000;
 }
 
-async function paystackFetch(path, { method = 'GET', body } = {}) {
-  // Reads are bounded so a hung Paystack call cannot hold a webhook request
-  // open. Writes (initialize, refund, charge_authorization) are NOT timed
-  // out: `processTenantBillingCycle` treats any thrown gateway error as a
-  // definitive failure, so aborting a slow-but-successful charge would record
-  // it as failed and send a dunning email.
-  const signal = method === 'GET' ? AbortSignal.timeout(readTimeoutMs()) : undefined;
+async function paystackFetch(path, { method = 'GET', body, timeoutMs } = {}) {
+  // Resolved BEFORE the try below so an unset key still surfaces as
+  // `GatewayNotConfiguredError` (501), never as a network error.
+  const key = secretKey();
+  // Only a call that passes `timeoutMs` (Verify Transaction) is bounded, so a
+  // hung Paystack call cannot hold a webhook request open. Writes (initialize,
+  // refund, charge_authorization) are NOT timed out: `processTenantBillingCycle`
+  // treats any thrown gateway error as a definitive failure, so aborting a
+  // slow-but-successful charge would record it as failed and send a dunning email.
+  const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
   let response;
   try {
     response = await fetch(`${PAYSTACK_BASE_URL}${path}`, {
       method,
       headers: {
-        Authorization: `Bearer ${secretKey()}`,
+        Authorization: `Bearer ${key}`,
         'Content-Type': 'application/json',
       },
       body: body ? JSON.stringify(body) : undefined,
@@ -137,7 +140,7 @@ async function initializeTransaction({ email, amount, currency, reference, callb
  * whole module exists to capture. See file header for why.
  */
 async function verifyTransaction({ reference }) {
-  const data = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`);
+  const data = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`, { timeoutMs: readTimeoutMs() });
   const auth = data.authorization ?? {};
   return {
     status: data.status, // 'success' | 'failed' | 'abandoned' | ...

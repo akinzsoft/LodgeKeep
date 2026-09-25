@@ -127,15 +127,20 @@ function toSafeInteger(value) {
  * Duck-typed on `code`/`details` rather than `instanceof`, because the adapter
  * modules are `jest.mock`ed in several suites.
  *
- * - 404 from Paystack: no such transaction -> `'record_not_found'`.
+ * Confirmed against the live sandbox: Paystack answers Verify Transaction for an
+ * unknown reference with HTTP **400** and `{code: "transaction_not_found"}` — not
+ * 404 — so the body's own code is what identifies it (a 404 is accepted too).
+ *
+ * - "no such transaction" -> `'record_not_found'`.
  * - Everything else (401/403 = misconfigured key, 429, 5xx, timeout, network
- *   failure, an unconfigured gateway, or any unexpected error) -> `'transient'`.
- *   A bad key must be retryable and LOUD, never a silent rejection of a
- *   genuine payment.
+ *   failure, an unconfigured gateway, any other 400, or any unexpected error)
+ *   -> `'transient'`. A bad key must be retryable and LOUD, never a silent
+ *   rejection of a genuine payment.
  */
 function interpretGatewayError(error) {
-  const httpStatus = error?.details?.httpStatus;
-  if (httpStatus === 404) return 'record_not_found';
+  const details = error?.details;
+  if (details?.httpStatus === 404) return 'record_not_found';
+  if (details?.body?.code === 'transaction_not_found') return 'record_not_found';
   return 'transient';
 }
 

@@ -41,7 +41,7 @@ const paystack = require('./paystack-adapter');
 const { assertAllowedCallbackUrl } = require('../../shared/callback-url');
 const { recordAuditEntry } = require('../../audit');
 const { classifyGatewayRecord, interpretGatewayError } = require('../../shared/gateway-record');
-const { persistWebhookEvent, finalizeWebhookEvent, deferWebhookEvent } = require('../../shared/webhook-events');
+const { persistWebhookEvent, finalizeWebhookEvent, deferWebhookEvent, webhookEventKey, RECORD_NOT_FOUND_GRACE_ATTEMPTS } = require('../../shared/webhook-events');
 // PLAN.md Phase 6 (QR self-ordering gap closure) — a one-way dependency,
 // the same shape this file's own `ar/service.js` import already
 // establishes: cashiering calls into `pos-pricing`/`pos/errors` (both
@@ -1005,10 +1005,19 @@ async function handlePaystackWebhook({ rawBody, signatureHeader, parsedBody }) {
   const reference = parsedBody?.data?.reference;
   const rawPayment = reference ? await knex()('payments').where({ provider: 'paystack', provider_reference: reference }).first() : null;
 
+  // Only "no credentials configured for this currency" means the event cannot be
+  // verified. Any OTHER failure (a database blip, a decrypt error) is a real
+  // error: it must surface as a 5xx so Paystack redelivers, rather than a
+  // genuine event being persisted as unsigned and never processed.
   const verified = rawPayment
-    ? (await paystack.resolveAdapterForCurrency(knex(), rawPayment.currency).catch(() => null))?.adapter.verifyWebhookSignature({ rawBody, signatureHeader }) ?? false
+    ? (
+        await paystack.resolveAdapterForCurrency(knex(), rawPayment.currency).catch((error) => {
+          if (error?.code === 'PAYMENT_GATEWAY_NOT_CONFIGURED') return null;
+          throw error;
+        })
+      )?.adapter.verifyWebhookSignature({ rawBody, signatureHeader }) ?? false
     : false;
-  const providerEventId = String(parsedBody?.data?.id ?? parsedBody?.id ?? generateUlid());
+  const providerEventId = webhookEventKey({ event: parsedBody?.event, id: parsedBody?.data?.id ?? parsedBody?.id, fallback: generateUlid() });
 
   // Persist FIRST (API.md §7). An unsigned request is kept as evidence but can
   // never block or alter a later signed event with the same id, and a signed
@@ -1071,7 +1080,7 @@ const SETTLED_PAYMENT_STATUSES = new Set(['CAPTURED', 'REFUNDED', 'PARTIALLY_REF
  *   (still NULL)   Paystack unreachable / transaction not final: scheduled for retry
  *   deferred_exhausted  gave up retrying
  */
-async function processPaymentWebhookEvent({ eventId, now = new Date() }) {
+async function decidePaymentWebhookEvent({ eventId, now = new Date() }) {
   const events = paymentWebhookEvents;
   const event = await events().where({ id: eventId }).first();
   if (!event) return { outcome: null, skipped: true };
@@ -1115,6 +1124,9 @@ async function processPaymentWebhookEvent({ eventId, now = new Date() }) {
     record = await adapter.verifyTransaction({ reference: payment.provider_reference });
   } catch (error) {
     if (interpretGatewayError(error) === 'record_not_found') {
+      // Not decided on the first look (read-after-write lag, a rotated key): retry a few
+      // times, and only a persistent 404 is a rejection.
+      if (event.attempt_count < RECORD_NOT_FOUND_GRACE_ATTEMPTS) return defer('record_not_found');
       const detail = { code: 'RECORD_NOT_FOUND', message: 'Paystack has no transaction with this reference.', httpStatus: 404 };
       await recordWebhookAudit({ payment, action: 'gateway_webhook_rejected', detail: { eventId: event.id, ...detail } });
       return finalize('rejected', detail, attribution);
@@ -1172,6 +1184,31 @@ async function processPaymentWebhookEvent({ eventId, now = new Date() }) {
   }
 
   return finalize('applied', { appliedStatus: result.verdict === 'confirmed' ? 'success' : 'failed', paystackStatus: record.status }, attribution);
+}
+
+/**
+ * The public entry point for deciding one persisted event: the inline webhook
+ * attempt, a Paystack redelivery and the retry sweep all call this. It NEVER
+ * throws — an unexpected error is logged and the event is deferred under the
+ * normal attempt cap (`deferred_exhausted` after `MAX_ATTEMPTS`), so a poison
+ * event can neither 500 the webhook (API.md §7: only a failure to persist is
+ * non-2xx) nor loop in the sweep forever.
+ */
+async function processPaymentWebhookEvent({ eventId, now = new Date() }) {
+  try {
+    return await decidePaymentWebhookEvent({ eventId, now });
+  } catch (error) {
+    console.error(`[payment-webhook] unexpected error deciding event ${eventId}: ${error?.message ?? error}`);
+    try {
+      const event = await paymentWebhookEvents().where({ id: eventId }).first();
+      if (event && event.outcome == null) {
+        await deferWebhookEvent({ events: paymentWebhookEvents, id: event.id, attemptCount: event.attempt_count, reason: `unexpected_error: ${error?.message ?? 'unknown'}`, now });
+      }
+    } catch (deferError) {
+      console.error(`[payment-webhook] could not defer event ${eventId}: ${deferError?.message ?? deferError}`);
+    }
+    return { outcome: null, error: true };
+  }
 }
 
 /** One `audit_log` row for a webhook decision that deserves a human's attention. Written before the event is finalized, so a crash retries rather than losing it. */

@@ -31,11 +31,14 @@ const dbModule = require('../../src/db');
 const gateway = require('../../src/modules/billing/paystack-gateway');
 const { addOneMonth } = require('../../src/modules/billing/service');
 const { runPaymentWebhookRetrySweep } = require('../../src/jobs/payment-webhooks');
+const { gatewayRecordFor } = require('../helpers/gateway-record');
+const guestPaystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
 const { MAX_ATTEMPTS } = require('../../src/shared/webhook-events');
 
 describe('runPaymentWebhookRetrySweep (real MySQL)', () => {
   let tenantId;
   let subscriptionId;
+  let propertyId;
   let counter = 0;
   const createdEventIds = [];
 
@@ -44,6 +47,14 @@ describe('runPaymentWebhookRetrySweep (real MySQL)', () => {
     const plan = await db()('plans').where({ code: 'standard' }).first('id');
     const suffix = `${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
     [tenantId] = await db()('tenants').insert({ name: 'Webhook Sweep Tenant', slug: `wh-sweep-${suffix}`, status: 'active' });
+    [propertyId] = await db()('properties').insert({
+      tenant_id: tenantId,
+      slug: `wh-sweep-prop-${suffix}`,
+      name: 'Webhook Sweep Property',
+      timezone: 'Africa/Lagos',
+      base_currency: 'NGN',
+      current_business_date: '2027-06-01',
+    });
     [subscriptionId] = await db()('subscriptions').insert({
       tenant_id: tenantId,
       plan_id: plan.id,
@@ -58,6 +69,7 @@ describe('runPaymentWebhookRetrySweep (real MySQL)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     gateway.verifyTransaction.mockReset();
+    guestPaystack.verifyTransaction.mockReset();
     jest.spyOn(console, 'error').mockImplementation(() => {});
   });
 
@@ -74,6 +86,9 @@ describe('runPaymentWebhookRetrySweep (real MySQL)', () => {
     for (const invoice of invoices) await db()('subscription_payments').where({ subscription_invoice_id: invoice.id }).delete();
     await db()('subscription_invoices').where({ tenant_id: tenantId }).delete();
     await db()('subscriptions').where({ tenant_id: tenantId }).delete();
+    await db()('payment_webhook_events').where({ tenant_id: tenantId }).delete();
+    await db()('payments').where({ tenant_id: tenantId }).delete();
+    await db()('properties').where({ tenant_id: tenantId }).delete();
     await db()('tenants').where({ id: tenantId }).delete();
     dbModule.__resetForTesting();
   });
@@ -228,5 +243,81 @@ describe('runPaymentWebhookRetrySweep (real MySQL)', () => {
     expect(subscription.status).toBe('active');
     expect((await eventOf(eventId)).outcome).toBe('applied');
     expect(await db()('audit_log').where({ tenant_id: tenantId, entity_id: String(paymentId), action: 'captured' })).toHaveLength(1);
+  });
+
+  describe('the guest-payment source', () => {
+    async function pendingRegisterPayment() {
+      counter += 1;
+      const reference = `wh-sweep-guest-ref-${Date.now().toString(36)}-${counter}`;
+      const [id] = await db()('payments').insert({
+        tenant_id: tenantId,
+        property_id: propertyId,
+        folio_id: null,
+        idempotency_key: `wh-sweep-guest-key-${reference}`,
+        provider: 'paystack',
+        provider_reference: reference,
+        amount: '20.00',
+        currency: 'NGN',
+        status: 'PENDING',
+        settlement_target: 'pos_register',
+      });
+      return db()('payments').where({ id }).first();
+    }
+
+    async function strandedGuestEvent(payment, { nextAttemptAt }) {
+      counter += 1;
+      const [id] = await db()('payment_webhook_events').insert({
+        tenant_id: tenantId,
+        property_id: propertyId,
+        related_payment_id: payment.id,
+        provider: 'paystack',
+        provider_event_id: `wh-sweep-guest-event-${Date.now().toString(36)}-${counter}`,
+        payload: JSON.stringify({ event: 'charge.success', data: { id: 800000 + counter, reference: payment.provider_reference, status: 'success' } }),
+        verified: true,
+        attempt_count: 1,
+        next_attempt_at: nextAttemptAt,
+      });
+      return id;
+    }
+
+    it('retries a due, stranded guest event and captures the payment once Paystack can be asked', async () => {
+      const payment = await pendingRegisterPayment();
+      const eventId = await strandedGuestEvent(payment, { nextAttemptAt: past() });
+      guestPaystack.verifyTransaction.mockResolvedValue(gatewayRecordFor(payment));
+
+      const results = await runPaymentWebhookRetrySweep(new Date());
+
+      expect(resultFor(results, eventId)).toMatchObject({ source: 'guest', outcome: 'applied' });
+      expect((await db()('payments').where({ id: payment.id }).first()).status).toBe('CAPTURED');
+      expect((await db()('payment_webhook_events').where({ id: eventId }).first()).outcome).toBe('applied');
+    });
+
+    it('rejects a retried guest event whose Paystack record disagrees, leaving the payment open', async () => {
+      const payment = await pendingRegisterPayment();
+      const eventId = await strandedGuestEvent(payment, { nextAttemptAt: past() });
+      guestPaystack.verifyTransaction.mockResolvedValue(gatewayRecordFor(payment, { amountSubunit: 5 }));
+
+      await runPaymentWebhookRetrySweep(new Date());
+
+      expect((await db()('payments').where({ id: payment.id }).first()).status).toBe('PENDING');
+      expect((await db()('payment_webhook_events').where({ id: eventId }).first()).outcome).toBe('rejected');
+    });
+
+    it('a poison guest event stops looping: it is deferred under the cap and finally exhausted', async () => {
+      const payment = await pendingRegisterPayment();
+      const eventId = await strandedGuestEvent(payment, { nextAttemptAt: past() });
+      // An unexpected (non-Paystack) error while asking: classified transient, so it is deferred, not fatal.
+      guestPaystack.verifyTransaction.mockRejectedValue(new Error('something unexpected'));
+
+      for (let i = 0; i < MAX_ATTEMPTS + 2; i += 1) {
+        await db()('payment_webhook_events').where({ id: eventId }).whereNull('outcome').update({ next_attempt_at: past() });
+        await runPaymentWebhookRetrySweep(new Date());
+      }
+
+      const row = await db()('payment_webhook_events').where({ id: eventId }).first();
+      expect(row.outcome).toBe('deferred_exhausted');
+      expect(row.next_attempt_at).toBeNull();
+      expect(row.attempt_count).toBeLessThanOrEqual(MAX_ATTEMPTS);
+    });
   });
 });

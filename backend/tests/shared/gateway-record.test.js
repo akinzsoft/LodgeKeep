@@ -132,6 +132,21 @@ describe('interpretGatewayError', () => {
     expect(interpretGatewayError({ details: { httpStatus: 404 } })).toBe('record_not_found');
   });
 
+  it('reads the response the live sandbox actually sends for an unknown reference (HTTP 400, code transaction_not_found)', () => {
+    const observedOnTheLiveSandbox = {
+      details: {
+        httpStatus: 400,
+        body: { status: false, message: 'Transaction reference not found.', type: 'validation_error', code: 'transaction_not_found' },
+      },
+    };
+    expect(interpretGatewayError(observedOnTheLiveSandbox)).toBe('record_not_found');
+  });
+
+  it('does not read any other 400 as "no such transaction"', () => {
+    expect(interpretGatewayError({ details: { httpStatus: 400, body: { status: false, code: 'invalid_key' } } })).toBe('transient');
+    expect(interpretGatewayError({ details: { httpStatus: 400 } })).toBe('transient');
+  });
+
   it.each([
     ['a 401 (bad key)', { details: { httpStatus: 401 } }],
     ['a 403', { details: { httpStatus: 403 } }],

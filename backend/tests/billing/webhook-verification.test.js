@@ -164,13 +164,21 @@ describe('Billing webhook — verified against Paystack’s own record', () => {
       await t.trx('tenants').where({ id: ctx.a.id }).update({ status: 'active' });
     });
 
-    it('rejects when Paystack has no such transaction (404)', async () => {
+    it('defers a first Paystack 404, and only a persistent 404 rejects', async () => {
       const { invoiceId, paymentId, reference } = await pendingSubscriptionPayment();
       gateway.verifyTransaction.mockRejectedValue(Object.assign(new Error('not found'), { details: { httpStatus: 404 } }));
+
       const { eventId } = await postWebhook({ reference });
+      let row = await eventRow(eventId);
+      expect(row.outcome).toBeNull(); // not decided on the first look
+      expect(row.attempt_count).toBe(1);
+
+      await t.trx('subscription_webhook_events').where({ id: row.id }).update({ attempt_count: 3 });
+      expect((await billingService.processBillingWebhookEvent({ eventId: row.id })).outcome).toBe('rejected');
       const after = await snapshotBilling({ invoiceId, paymentId });
       expect(after.payment).toBe('INITIATED');
-      expect((await eventRow(eventId)).outcome_detail.code).toBe('RECORD_NOT_FOUND');
+      row = await eventRow(eventId);
+      expect(row.outcome_detail.code).toBe('RECORD_NOT_FOUND');
     });
   });
 
@@ -199,12 +207,15 @@ describe('Billing webhook — verified against Paystack’s own record', () => {
       expect((await eventRow(eventId)).outcome_detail.appliedStatus).toBe('failed');
     });
 
-    it('records but ignores events that are not charge events', async () => {
+    it('records but ignores events that are not charge events, under their own key', async () => {
       const { paymentId, reference } = await pendingSubscriptionPayment();
-      const { eventId } = await postWebhook({ body: { event: 'refund.processed', data: { id: nextEventId(), reference } } });
+      const refundId = nextEventId();
+      await postWebhook({ body: { event: 'refund.processed', data: { id: refundId, reference } } });
       expect(gateway.verifyTransaction).not.toHaveBeenCalled();
       expect((await t.trx('subscription_payments').where({ id: paymentId }).first()).status).toBe('INITIATED');
-      expect(eventId).toBeDefined();
+      const row = await eventRow(`refund.processed:${refundId}`);
+      expect(row.outcome).toBe('ignored');
+      expect(row.outcome_detail.reason).toBe('event_not_handled');
     });
 
     it('ignores a card-verification checkout event that matches no subscription payment', async () => {

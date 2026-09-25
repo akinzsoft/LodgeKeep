@@ -83,7 +83,7 @@ const {
 } = require('./errors');
 const gateway = require('./paystack-gateway');
 const { classifyGatewayRecord, interpretGatewayError } = require('../../shared/gateway-record');
-const { persistWebhookEvent, finalizeWebhookEvent, deferWebhookEvent } = require('../../shared/webhook-events');
+const { persistWebhookEvent, finalizeWebhookEvent, deferWebhookEvent, webhookEventKey, RECORD_NOT_FOUND_GRACE_ATTEMPTS } = require('../../shared/webhook-events');
 
 const CARD_VERIFICATION_AMOUNT = process.env.BILLING_CARD_VERIFICATION_AMOUNT || '50.00';
 /** Re-review finding — how long a `billing_payment_method_checkouts` row stays completable after `startAddPaymentMethodCheckout` creates it. */
@@ -723,7 +723,7 @@ async function applyChargeOutcome({ tenantId, paymentId, success, providerPaymen
  */
 async function receiveBillingWebhook({ rawBody, signatureHeader, payload }) {
   const verified = gateway.verifyWebhookSignature({ rawBody, signatureHeader });
-  const providerEventId = payload?.data?.id ? String(payload.data.id) : (payload?.data?.reference ?? generateUlid());
+  const providerEventId = webhookEventKey({ event: payload?.event, id: payload?.data?.id, fallback: payload?.data?.reference ?? generateUlid() });
 
   // Attribute a SIGNED event to the tenant it concerns; an unsigned request
   // names references of its own choosing, so nothing it says is attributed.
@@ -788,7 +788,7 @@ const SETTLED_SUBSCRIPTION_PAYMENT_STATUSES = new Set(['CAPTURED', 'REFUNDED', '
  * legitimately matches no `subscription_payments` row and is recorded as
  * `ignored`/`unknown_reference`.
  */
-async function processBillingWebhookEvent({ eventId, now = new Date() }) {
+async function decideBillingWebhookEvent({ eventId, now = new Date() }) {
   const events = subscriptionWebhookEvents;
   const event = await events().where({ id: eventId }).first();
   if (!event) return { outcome: null, skipped: true };
@@ -828,6 +828,9 @@ async function processBillingWebhookEvent({ eventId, now = new Date() }) {
     record = await gateway.verifyTransaction({ reference: payment.provider_reference });
   } catch (error) {
     if (interpretGatewayError(error) === 'record_not_found') {
+      // Not decided on the first look (read-after-write lag, a rotated key): retry a few
+      // times, and only a persistent 404 is a rejection.
+      if (event.attempt_count < RECORD_NOT_FOUND_GRACE_ATTEMPTS) return defer('record_not_found');
       const detail = { code: 'RECORD_NOT_FOUND', message: 'Paystack has no transaction with this reference.', httpStatus: 404 };
       await recordBillingWebhookAudit({ payment, action: 'gateway_webhook_rejected', detail: { eventId: event.id, ...detail } });
       return finalize('rejected', detail, attribution);
@@ -879,6 +882,31 @@ async function processBillingWebhookEvent({ eventId, now = new Date() }) {
   }
 
   return finalize('applied', { appliedStatus: result.verdict === 'confirmed' ? 'success' : 'failed', paystackStatus: record.status }, attribution);
+}
+
+/**
+ * The public entry point for deciding one persisted billing event: the inline
+ * webhook attempt, a Paystack redelivery and the retry sweep all call this. It
+ * NEVER throws — an unexpected error is logged and the event is deferred under
+ * the normal attempt cap (`deferred_exhausted` after `MAX_ATTEMPTS`), so a
+ * poison event can neither 500 the webhook (API.md §7: only a failure to
+ * persist is non-2xx) nor loop in the sweep forever.
+ */
+async function processBillingWebhookEvent({ eventId, now = new Date() }) {
+  try {
+    return await decideBillingWebhookEvent({ eventId, now });
+  } catch (error) {
+    console.error(`[billing-webhook] unexpected error deciding event ${eventId}: ${error?.message ?? error}`);
+    try {
+      const event = await subscriptionWebhookEvents().where({ id: eventId }).first();
+      if (event && event.outcome == null) {
+        await deferWebhookEvent({ events: subscriptionWebhookEvents, id: event.id, attemptCount: event.attempt_count, reason: `unexpected_error: ${error?.message ?? 'unknown'}`, now });
+      }
+    } catch (deferError) {
+      console.error(`[billing-webhook] could not defer event ${eventId}: ${deferError?.message ?? deferError}`);
+    }
+    return { outcome: null, error: true };
+  }
 }
 
 /** One `audit_log` row for a webhook decision that deserves a human's attention. Written before the event is finalized, so a crash retries rather than losing it. */

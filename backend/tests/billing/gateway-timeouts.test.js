@@ -70,4 +70,21 @@ describe('billing paystack-gateway: bounded reads, unbounded writes', () => {
     expect(error.details).toEqual({ network: true });
     expect(interpretGatewayError(error)).toBe('transient');
   });
+
+  it('still reports an unset key as PAYMENT_GATEWAY_NOT_CONFIGURED (501), not as a network error', async () => {
+    delete process.env.BILLING_PAYSTACK_SECRET_KEY;
+    global.fetch = jest.fn();
+
+    for (const call of [
+      () => gateway.verifyTransaction({ reference: 'r' }),
+      () => gateway.chargeAuthorization({ email: 'a@b.co', amount: '1.00', currency: 'NGN', authorizationCode: 'AUTH_x', reference: 'r' }),
+      () => gateway.initializeTransaction({ email: 'a@b.co', amount: '1.00', currency: 'NGN', reference: 'r' }),
+    ]) {
+      const error = await call().catch((e) => e);
+      expect(error).toBeInstanceOf(gateway.GatewayNotConfiguredError);
+      expect(error.code).toBe('PAYMENT_GATEWAY_NOT_CONFIGURED');
+      expect(error.httpStatus).toBe(501);
+    }
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
 });

@@ -158,12 +158,12 @@ describe('guest webhook under real concurrent connections', () => {
     const eventId = newEventId();
     paystack.verifyTransaction.mockResolvedValue(gatewayRecordFor(payment));
 
-    // Signature is decided per call, so give each racing call its own answer.
-    paystack.verifyWebhookSignature.mockReset();
-    paystack.verifyWebhookSignature.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    // The signature is decided by the header each call carries, so which call
+    // is unsigned does not depend on which one reaches the check first.
+    paystack.verifyWebhookSignature.mockImplementation(({ signatureHeader }) => signatureHeader === 'good');
     const body = { event: 'charge.success', data: { id: Number(eventId), reference: payment.provider_reference, status: 'success' } };
-    const call = () => cashieringService.handlePaystackWebhook({ rawBody: JSON.stringify(body), signatureHeader: 'mocked', parsedBody: body });
-    const results = await Promise.allSettled([call(), call()]);
+    const call = (signatureHeader) => cashieringService.handlePaystackWebhook({ rawBody: JSON.stringify(body), signatureHeader, parsedBody: body });
+    const results = await Promise.allSettled([call('forged'), call('good')]);
 
     expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
     const rows = await db()('payment_webhook_events').where({ provider_event_id: eventId });

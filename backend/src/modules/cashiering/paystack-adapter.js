@@ -135,12 +135,13 @@ function toSubunit(amountDecimalString) {
 function buildAdapter(secretKey) {
   if (!secretKey) throw new GatewayNotConfiguredError('paystack');
 
-  async function paystackFetch(path, { method = 'GET', body } = {}) {
-    // A read (GET, e.g. Verify Transaction) is bounded so a hung Paystack
-    // call cannot hold a webhook request open. Writes (initialize, refund,
-    // subaccount) are deliberately NOT timed out: aborting a POST whose
-    // outcome is unknown would be worse than waiting for it.
-    const signal = method === 'GET' ? AbortSignal.timeout(readTimeoutMs()) : undefined;
+  async function paystackFetch(path, { method = 'GET', body, timeoutMs } = {}) {
+    // Only a call that passes `timeoutMs` (Verify Transaction) is bounded, so a
+    // hung Paystack call cannot hold a webhook request open. Other reads (e.g.
+    // bank resolution) and all writes (initialize, refund, subaccount) are
+    // deliberately NOT timed out: aborting a POST whose outcome is unknown would
+    // be worse than waiting for it, and bank resolution can be legitimately slow.
+    const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
     let response;
     try {
       response = await fetch(`${PAYSTACK_BASE_URL}${path}`, {
@@ -192,7 +193,7 @@ function buildAdapter(secretKey) {
 
   /** The manual/fallback sync path (see file header) — also what the webhook handler calls to double-check before trusting the payload. */
   async function verifyTransaction({ reference }) {
-    const data = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`);
+    const data = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`, { timeoutMs: readTimeoutMs() });
     return {
       status: data.status, // 'success' | 'failed' | 'abandoned' | ...
       reference: data.reference,

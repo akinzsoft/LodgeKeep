@@ -145,7 +145,8 @@ POST /api/v1/webhooks/{provider}
 - **Persisted** immediately, before processing — a crash mid-handling must not lose the event.
 - **Deduplicated** on the provider's own event/reference id (DATABASE.md's unique constraints).
 - **Processed idempotently** — replaying the same webhook twice produces the same end state.
-- **Responds `200` once persisted**, regardless of whether processing has finished — providers retry on anything else, and a slow synchronous handler shouldn't turn a webhook receiver into the system's timeout bottleneck. Processing can be asynchronous from receipt.
+- **Checked against the provider's own record** — a signed event is a hint, not the truth: the handler calls the provider's Verify Transaction endpoint and applies only what that record says, and only when its reference, amount and currency match the local payment. A mismatch is recorded on the event (`outcome: rejected`) and never captures. See ARCHITECTURE.md §7.
+- **Responds `200` once persisted**, regardless of whether processing has finished or what it decided (applied, ignored, rejected or deferred) — providers retry on anything else, and a slow synchronous handler shouldn't turn a webhook receiver into the system's timeout bottleneck. Processing may run inline after persistence (it does today) or asynchronously; either way an unexpected processing error is recorded and retried by the server, never returned as a non-2xx. Only a failure to persist is a non-2xx, because nothing was stored and the provider should retry. An event whose verification is unavailable is retried by the server (`src/jobs/payment-webhooks.js`), not by relying on the provider's redelivery.
 
 ## 8. What belongs here vs. in ARCHITECTURE.md
 

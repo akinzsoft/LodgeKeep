@@ -172,16 +172,40 @@ describe('Paystack webhook — verified against Paystack’s own record (guest p
       expect((await eventRow(eventId)).outcome_detail.code).toBe('REFERENCE_MISMATCH');
     });
 
-    it('rejects when Paystack has no such transaction (404), without failing the payment', async () => {
+    it('defers a first Paystack 404 (lag / rotated key), and only a persistent 404 rejects without failing the payment', async () => {
       const { folioId, payment } = await pendingPayment();
-      paystack.verifyTransaction.mockRejectedValue(new GatewayRequestError('paystack', 'Transaction reference not found', { httpStatus: 404 }));
+      // The exact response the live sandbox sends for an unknown reference.
+      paystack.verifyTransaction.mockRejectedValue(
+        new GatewayRequestError('paystack', 'Transaction reference not found.', { httpStatus: 400, body: { status: false, code: 'transaction_not_found' } })
+      );
+
       const { res, eventId } = await postWebhook({ payment });
       expect(res.status).toBe(200);
+      let row = await eventRow(eventId);
+      expect(row.outcome).toBeNull(); // not decided on the first look
+      expect(row.attempt_count).toBe(1);
+      await expectNotCaptured({ folioId, payment });
+
+      // Still 404 after the grace attempts: now it is a rejection.
+      await t.trx('payment_webhook_events').where({ id: row.id }).update({ attempt_count: 3 });
+      const result = await cashieringService.processPaymentWebhookEvent({ eventId: row.id });
+      expect(result.outcome).toBe('rejected');
       const after = await expectNotCaptured({ folioId, payment });
       expect(after.status).not.toBe('FAILED'); // left open: a genuine payment could still arrive
-      const row = await eventRow(eventId);
-      expect(row.outcome).toBe('rejected');
+      row = await eventRow(eventId);
       expect(row.outcome_detail.code).toBe('RECORD_NOT_FOUND');
+    });
+
+    it('recovers when a first 404 was only lag: the retry sees the record and captures', async () => {
+      const { payment } = await pendingPayment();
+      paystack.verifyTransaction.mockRejectedValueOnce(new GatewayRequestError('paystack', 'not found yet', { httpStatus: 404 }));
+      const { eventId } = await postWebhook({ payment });
+      const row = await eventRow(eventId);
+      expect(row.outcome).toBeNull();
+
+      paystack.verifyTransaction.mockResolvedValue(gatewayRecordFor(payment));
+      expect((await cashieringService.processPaymentWebhookEvent({ eventId: row.id })).outcome).toBe('applied');
+      expect((await t.trx('payments').where({ id: payment.id }).first()).status).toBe('CAPTURED');
     });
 
     it('writes an audit_log row for a rejection so it can be alerted on', async () => {
@@ -249,18 +273,31 @@ describe('Paystack webhook — verified against Paystack’s own record (guest p
 
     it('only acts on charge events: a refund notice no longer FAILs a payment', async () => {
       const { folioId, payment } = await pendingPayment();
-      const { res, eventId } = await postWebhook({
+      const refundId = nextEventId();
+      const { res } = await postWebhook({
         payment,
-        body: { event: 'refund.processed', data: { id: nextEventId(), reference: payment.provider_reference, status: 'processed' } },
+        body: { event: 'refund.processed', data: { id: refundId, reference: payment.provider_reference, status: 'processed' } },
       });
       expect(res.status).toBe(200);
       const after = await expectNotCaptured({ folioId, payment });
       expect(after.status).not.toBe('FAILED');
       expect(paystack.verifyTransaction).not.toHaveBeenCalled();
-      const row = await eventRow(Number((await t.trx('payment_webhook_events').orderBy('id', 'desc').first()).provider_event_id));
+      // A non-charge event is keyed under its own namespace, so it can never claim a transaction id.
+      const row = await eventRow(`refund.processed:${refundId}`);
       expect(row.outcome).toBe('ignored');
       expect(row.outcome_detail.reason).toBe('event_not_handled');
-      expect(eventId).toBeDefined();
+    });
+
+    it('a signed non-charge event with the same numeric id cannot block the genuine charge.success', async () => {
+      const { payment } = await pendingPayment();
+      const sharedId = nextEventId();
+      await postWebhook({ payment, body: { event: 'refund.processed', data: { id: sharedId, reference: payment.provider_reference } } });
+
+      paystack.verifyTransaction.mockResolvedValue(gatewayRecordFor(payment));
+      await postWebhook({ payment, eventId: sharedId });
+
+      expect((await t.trx('payments').where({ id: payment.id }).first()).status).toBe('CAPTURED');
+      expect((await eventRow(sharedId)).outcome).toBe('applied');
     });
   });
 
@@ -435,6 +472,33 @@ describe('Paystack webhook — verified against Paystack’s own record (guest p
       const { eventId } = await postWebhook({ payment, event: 'charge.failed' });
       expect(paystack.verifyTransaction).not.toHaveBeenCalled();
       expect((await eventRow(eventId)).outcome).toBe('ignored');
+    });
+  });
+  describe('signature verification failures', () => {
+    it('answers with an error (so Paystack redelivers) rather than persisting a genuine event as unsigned', async () => {
+      const { payment } = await pendingPayment();
+      const { resolveAdapterForCurrency } = require('../../src/modules/cashiering/paystack-adapter');
+      resolveAdapterForCurrency.mockRejectedValueOnce(new Error('database went away'));
+      const eventId = nextEventId();
+
+      const res = await t.request
+        .post('/api/v1/webhooks/paystack')
+        .set('x-paystack-signature', 'mocked')
+        .send({ event: 'charge.success', data: { id: eventId, reference: payment.provider_reference, status: 'success' } });
+
+      expect(res.status).toBeGreaterThanOrEqual(500);
+      expect(await eventRow(eventId)).toBeUndefined(); // nothing was persisted, so Paystack's redelivery is not deduplicated away
+    });
+
+    it('treats a genuinely unconfigured currency as unverifiable: persisted unsigned, never processed', async () => {
+      const { payment } = await pendingPayment();
+      const { resolveAdapterForCurrency, GatewayNotConfiguredError } = require('../../src/modules/cashiering/paystack-adapter');
+      resolveAdapterForCurrency.mockRejectedValueOnce(new GatewayNotConfiguredError('paystack'));
+      const { res, eventId } = await postWebhook({ payment });
+      expect(res.status).toBe(200);
+      const row = await eventRow(eventId);
+      expect(row.verified).toBe(0);
+      expect(paystack.verifyTransaction).not.toHaveBeenCalled();
     });
   });
 });

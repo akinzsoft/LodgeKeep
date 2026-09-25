@@ -35,6 +35,29 @@ const FIRST_ATTEMPT_GRACE_MS = 120_000;
 /** Give up after this many failed processing attempts (about 4 hours with the backoff below). */
 const MAX_ATTEMPTS = 12;
 
+/**
+ * A Paystack 404 for a reference we hold a payment for is not decided on the
+ * first look: it can be read-after-write lag right after the webhook, or a key
+ * rotated since the payment was created. The first few are deferred (about 7
+ * minutes with the backoff below); only a persistent 404 is rejected.
+ */
+const RECORD_NOT_FOUND_GRACE_ATTEMPTS = 3;
+
+/** Only these events are keyed by the bare provider id; see `webhookEventKey`. */
+const CHARGE_EVENT_TYPES = new Set(['charge.success', 'charge.failed']);
+
+/**
+ * The dedup key for an event. Charge events keep the bare transaction id
+ * (unchanged, so existing rows still dedupe). Every OTHER event type is
+ * namespaced, because its numeric `data.id` (a refund id, a dispute id) is not
+ * a transaction id and can collide with one — a signed non-charge event must
+ * never claim the key a genuine `charge.success` needs.
+ */
+function webhookEventKey({ event, id, fallback }) {
+  if (id == null || id === '') return fallback;
+  return CHARGE_EVENT_TYPES.has(event) ? String(id) : `${event ?? 'unknown'}:${id}`;
+}
+
 /** Backoff after the Nth failed attempt: 1, 2, 4, 8, 16, then capped at 30 minutes. */
 function backoffMinutes(attemptCount) {
   return Math.min(2 ** Math.max(0, attemptCount - 1), 30);
@@ -147,6 +170,8 @@ module.exports = {
   finalizeWebhookEvent,
   deferWebhookEvent,
   backoffMinutes,
+  webhookEventKey,
+  RECORD_NOT_FOUND_GRACE_ATTEMPTS,
   FIRST_ATTEMPT_GRACE_MS,
   MAX_ATTEMPTS,
 };
