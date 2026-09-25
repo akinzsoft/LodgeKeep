@@ -386,6 +386,56 @@ async function postRoomChargesForStay({ trx, reservationId, folioId, userId }) {
 }
 
 /**
+ * Room charges for nights whose night audit ALREADY ran — the nights Extend
+ * Stay adds when the extension is made after the fact (user-reported: a stay
+ * booked for one night was extended on the 18th to run through the 19th; the
+ * 17th's audit had closed before the extension existed, so that night was
+ * never billed, and nothing could bill it).
+ *
+ * Posted on the property's CURRENT business date, not back-dated to the night
+ * itself: a closed day's `daily_reports` snapshot is the accounting truth and
+ * is never reopened (ARCHITECTURE.md §6/§8), so the revenue lands in the open
+ * day's report instead of vanishing from every report. The description names
+ * the night ("Late room charge — 2026-09-17"), and Night Audit's own
+ * once-per-night guard deliberately ignores these lines (see
+ * `LATE_ROOM_CHARGE_PREFIX`), otherwise a late charge dated today would
+ * suppress today's real room charge.
+ *
+ * Idempotent per night: a night that already has a non-voided late charge on
+ * this folio is skipped, so a retried request never double-bills.
+ *
+ * @param {Array<{stayDate: string, rate: string}>} nights
+ * @returns {Promise<Array<{stayDate: string, rate: string}>>} the nights actually charged now
+ */
+const LATE_ROOM_CHARGE_PREFIX = 'Late room charge —';
+
+async function postLateRoomCharges({ trx, folioId, nights, businessDate, userId, overrideCreditLimit, overrideReason }) {
+  const charged = [];
+  for (const night of nights) {
+    const description = `${LATE_ROOM_CHARGE_PREFIX} ${night.stayDate}`;
+    const alreadyPosted = await trx
+      .table('folio_line_items')
+      .where({ folio_id: folioId, type: 'room_charge', description })
+      .whereNull('voided_at')
+      .first();
+    if (alreadyPosted) continue;
+    await postCharge({
+      trx,
+      folioId,
+      type: 'room_charge',
+      description,
+      amount: night.rate,
+      businessDate,
+      userId: userId ?? null,
+      overrideCreditLimit,
+      overrideReason,
+    });
+    charged.push(night);
+  }
+  return charged;
+}
+
+/**
  * A correction, discount, or comp — ARCHITECTURE.md §8's own worked
  * example ("ADJUSTMENT -£100.00 ... reverses it"). `amount` is signed and
  * posted EXACTLY as given, with no tax recomputation (a correction to a
@@ -1423,6 +1473,8 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
 }
 
 module.exports = {
+  LATE_ROOM_CHARGE_PREFIX,
+  postLateRoomCharges,
   recomputeFolioBalance,
   getFolio,
   listFoliosForReservation,

@@ -345,6 +345,38 @@ describe('<FrontDeskTab>', () => {
       expect(mocks.extendStay).toHaveBeenCalledWith('1', { newDepartureDate: '2027-01-06' });
     });
 
+    it('says which already-closed nights were charged when the extension bills them at once', async () => {
+      mocks.extendStay.mockResolvedValue({
+        ...RESERVATION,
+        status: 'checked_in',
+        departure_date: '2027-01-08',
+        late_charged_nights: [
+          { stayDate: '2027-01-05', rate: '5000.00' },
+          { stayDate: '2027-01-06', rate: '5000.00' },
+        ],
+      });
+
+      render(<FrontDeskTab />);
+      await screen.findByText('ABC123');
+      await userEvent.click(screen.getByRole('tab', { name: 'In-House' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Extend Stay' }));
+      await userEvent.clear(screen.getByLabelText('New departure date'));
+      await userEvent.type(screen.getByLabelText('New departure date'), '2027-01-08');
+      await userEvent.click(screen.getByRole('button', { name: 'Confirm extension' }));
+
+      expect(await screen.findByText(/2 nights already closed by Night Audit \(2027-01-05, 2027-01-06\) were charged/)).toBeInTheDocument();
+    });
+
+    it('explains that already-closed nights are charged right away, not that nothing is charged', async () => {
+      render(<FrontDeskTab />);
+      await screen.findByText('ABC123');
+      await userEvent.click(screen.getByRole('tab', { name: 'In-House' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Extend Stay' }));
+
+      expect(await screen.findByText(/already closed is charged to the folio right away/)).toBeInTheDocument();
+      expect(screen.queryByText(/posts no charge/i)).not.toBeInTheDocument();
+    });
+
     it('shows the real backend error when the extension is rejected (e.g. no inventory for the added night)', async () => {
       const { ApiError } = await import('../../../shared/api/ApiError.js');
       mocks.extendStay.mockRejectedValue(

@@ -53,6 +53,7 @@ const { writeOutboxEvent } = require('../../shared/outbox');
 const { notifyStaff } = require('../notifications/staff-notifications');
 const { calendarDateInZone } = require('../../shared/timezone');
 const cashiering = require('../cashiering/service');
+const reservationsService = require('../reservations/service');
 const {
   NightAuditAlreadyCompletedError,
   NightAuditAlreadyRunningError,
@@ -207,6 +208,16 @@ async function claimRun({ db, propertyId, businessDate, userId, existing }) {
  * POS module exists in this codebase (Phase 4/6) — flagged, not silently
  * omitted.
  */
+/**
+ * A room charge the audit posts must never make the audit itself fail: for a
+ * folio billed to a company on a block-mode credit account that is already at
+ * its limit, `postCharge` would throw, roll the whole run back to FAILED, and
+ * every retry would fail the same way — the property could not close the day.
+ * The charge is real and owed, so it posts over the limit, the account is
+ * flagged over-limit (`is_over_limit`) for collections, and the run continues.
+ */
+const SYSTEM_POSTING_OPTIONS = { overrideCreditLimit: true, overrideReason: 'Night audit system posting' };
+
 async function runCriticalTransaction({ db, propertyId, businessDate, runId }) {
   return db.transaction(async (trx) => {
     const inHouse = await trx.table('reservations').where({ status: 'checked_in' });
@@ -221,15 +232,46 @@ async function runCriticalTransaction({ db, propertyId, businessDate, runId }) {
         continue;
       }
 
-      const dailyRate = await trx
+      let dailyRate = await trx
         .table('reservation_daily_rates')
         .where({ reservation_id: reservation.id, stay_date: businessDate })
         .first();
+
+      // Overstay (user-reported: "the money didn't increase as new day after
+      // night audit is run"): a guest still checked in on or after their
+      // departure date is staying tonight, so tonight is billed at their last
+      // nightly rate and their departure moves to tomorrow — every night until
+      // front desk checks them out. Without this, the audit only billed nights
+      // fixed at booking time, and an overstay was silently free.
+      if (!dailyRate && reservation.departure_date <= businessDate) {
+        const overstay = await reservationsService.extendOverstayNight({
+          trx,
+          reservation,
+          folio,
+          businessDate,
+          postOptions: SYSTEM_POSTING_OPTIONS,
+        });
+        if (overstay) {
+          dailyRate = overstay.dailyRate;
+          exceptions.push({
+            type: 'overstay_auto_extended',
+            reservationId: reservation.id,
+            stayDate: businessDate,
+            ...(overstay.catchUpNights.length ? { catchUpNights: overstay.catchUpNights.map((n) => n.stayDate) } : {}),
+          });
+        } else {
+          // Nothing to copy a rate from (a data problem) — say so instead of leaving the guest silently unbilled.
+          exceptions.push({ type: 'overstay_without_rate', reservationId: reservation.id, stayDate: businessDate });
+        }
+      }
       if (!dailyRate) continue; // Tonight is not one of this reservation's booked nights.
 
+      // A "late room charge" (an already-audited night billed by Extend Stay)
+      // may be dated today; it must not count as tonight's charge.
       const alreadyPosted = await trx
         .table('folio_line_items')
         .where({ folio_id: folio.id, type: 'room_charge', business_date: businessDate })
+        .whereNot('description', 'like', `${cashiering.LATE_ROOM_CHARGE_PREFIX}%`)
         .whereNull('voided_at')
         .first();
       if (alreadyPosted) continue; // Step 4's own idempotency guard (ARCHITECTURE.md §6.2).
@@ -243,6 +285,7 @@ async function runCriticalTransaction({ db, propertyId, businessDate, runId }) {
         amount: dailyRate.rate,
         businessDate,
         userId: null, // System-posted; audit_log.source distinguishes "job" from "web".
+        ...SYSTEM_POSTING_OPTIONS,
       });
     }
 

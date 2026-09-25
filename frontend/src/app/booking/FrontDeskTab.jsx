@@ -169,20 +169,27 @@ export function FrontDeskTab({ isOffline = false } = {}) {
    * Gap closure (user-reported): "the customer have not check out ... he
    * suppose to pay for the number of night he as stay ... is it not
    * supposed to increase" — a guest still in-house past their booked
-   * departure date was never billed for the extra night(s), since Night
-   * Audit only bills nights already in `reservation_daily_rates`
-   * (`service.extendStay`'s own header). This posts no charge itself —
-   * it adds the extra night(s) to the reservation so Night Audit bills
-   * them normally, the next time it runs.
+   * departure date was never billed for the extra night(s). Night Audit now
+   * bills a still-in-house guest every night past departure on its own
+   * (`night-audit/service.js`), but front desk can still extend a stay
+   * explicitly, and extending over nights whose audit already ran charges
+   * those nights straight away (`service.extendStay`'s own header) — the
+   * result names them so the cashier is not surprised by the balance.
    */
   async function handleExtendStay(event) {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
-      await reservationsApi.extendStay(extending.id, { newDepartureDate });
+      const result = await reservationsApi.extendStay(extending.id, { newDepartureDate });
+      const lateNights = (result?.late_charged_nights ?? []).map((night) => night.stayDate);
       setExtending(null);
       setNewDepartureDate('');
+      setCheckoutSuccess(
+        lateNights.length
+          ? `Stay extended. ${lateNights.length === 1 ? '1 night' : `${lateNights.length} nights`} already closed by Night Audit (${lateNights.join(', ')}) ${lateNights.length === 1 ? 'was' : 'were'} charged to the folio now.`
+          : 'Stay extended.'
+      );
       await reloadBoard();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not extend this reservation’s stay.');
@@ -521,8 +528,8 @@ export function FrontDeskTab({ isOffline = false } = {}) {
       {extending && (
         <Card title={`Extend stay — ${extending.confirmation_number}`}>
           <p className={formStyles.disabledNotice}>
-            Currently booked through {extending.departure_date}. Extending posts no charge now — the added night(s)
-            are billed automatically the next time Night Audit runs.
+            Currently booked through {extending.departure_date}. Added nights that are still open are billed by Night
+            Audit as usual; any added night Night Audit has already closed is charged to the folio right away.
           </p>
           {error && (
             <p role="alert" className={formStyles.errorBanner}>

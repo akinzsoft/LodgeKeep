@@ -465,7 +465,7 @@ async function extendStay(req, res, next) {
       entityId: id,
       action: 'extend_stay',
       handler: async (trx) => {
-        const reservation = await service.extendStay({ trx, id, newDepartureDate });
+        const reservation = await service.extendStay({ trx, id, newDepartureDate, userId: req.context.userId });
         return { status: 200, body: ok(reservation) };
       },
     });
