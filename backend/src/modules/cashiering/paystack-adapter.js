@@ -115,6 +115,12 @@ class PropertyPayoutNotConfiguredError extends AppError {
   }
 }
 
+/** Upper bound for a Paystack READ call (Verify Transaction), in ms — default 8s; verify normally answers in about 1s. */
+function readTimeoutMs() {
+  const configured = Number(process.env.PAYSTACK_READ_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 8000;
+}
+
 /** Converts a DECIMAL-as-string money amount (e.g. "150.00") to Paystack's smallest-currency-unit integer (kobo/pesewas/cents). */
 function toSubunit(amountDecimalString) {
   const [whole, fraction = ''] = String(amountDecimalString).split('.');
@@ -130,14 +136,26 @@ function buildAdapter(secretKey) {
   if (!secretKey) throw new GatewayNotConfiguredError('paystack');
 
   async function paystackFetch(path, { method = 'GET', body } = {}) {
-    const response = await fetch(`${PAYSTACK_BASE_URL}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${secretKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    // A read (GET, e.g. Verify Transaction) is bounded so a hung Paystack
+    // call cannot hold a webhook request open. Writes (initialize, refund,
+    // subaccount) are deliberately NOT timed out: aborting a POST whose
+    // outcome is unknown would be worse than waiting for it.
+    const signal = method === 'GET' ? AbortSignal.timeout(readTimeoutMs()) : undefined;
+    let response;
+    try {
+      response = await fetch(`${PAYSTACK_BASE_URL}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal,
+      });
+    } catch (error) {
+      const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+      throw new GatewayRequestError('paystack', timedOut ? 'the request timed out' : (error?.message ?? 'network error'), timedOut ? { timedOut: true } : { network: true });
+    }
 
     const json = await response.json().catch(() => null);
     if (!response.ok || !json?.status) {
@@ -180,6 +198,10 @@ function buildAdapter(secretKey) {
       reference: data.reference,
       providerPaymentId: String(data.id),
       amountSubunit: data.amount,
+      // What was ORIGINALLY requested — Paystack's `amount` is what was
+      // collected, which can exceed this when the customer bore a fee
+      // (`src/shared/gateway-record.js` accepts that, and nothing less).
+      requestedAmountSubunit: data.requested_amount ?? null,
       currency: data.currency,
       gatewayResponse: data.gateway_response,
       channel: data.channel ?? null, // 'card' | 'ussd' | 'bank_transfer' | 'qr' | ...,

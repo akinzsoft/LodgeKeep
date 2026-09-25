@@ -40,6 +40,8 @@ const { resolveApplicableTaxVersions, computeChargeWithTax } = require('./tax-en
 const paystack = require('./paystack-adapter');
 const { assertAllowedCallbackUrl } = require('../../shared/callback-url');
 const { recordAuditEntry } = require('../../audit');
+const { classifyGatewayRecord, interpretGatewayError } = require('../../shared/gateway-record');
+const { persistWebhookEvent, finalizeWebhookEvent, deferWebhookEvent } = require('../../shared/webhook-events');
 // PLAN.md Phase 6 (QR self-ordering gap closure) — a one-way dependency,
 // the same shape this file's own `ar/service.js` import already
 // establishes: cashiering calls into `pos-pricing`/`pos/errors` (both
@@ -976,8 +978,6 @@ async function verifyPayment({ context, paymentId, userId }) {
  * which is the same outcome as today for any other unmatched webhook.
  */
 async function handlePaystackWebhook({ rawBody, signatureHeader, parsedBody }) {
-  const platformDb = scopedDb().for(systemContext());
-
   const reference = parsedBody?.data?.reference;
   const rawPayment = reference ? await knex()('payments').where({ provider: 'paystack', provider_reference: reference }).first() : null;
 
@@ -986,35 +986,186 @@ async function handlePaystackWebhook({ rawBody, signatureHeader, parsedBody }) {
     : false;
   const providerEventId = String(parsedBody?.data?.id ?? parsedBody?.id ?? generateUlid());
 
-  const existing = await platformDb.table('payment_webhook_events').where({ provider: 'paystack', provider_event_id: providerEventId }).first();
-  if (existing) return { deduplicated: true };
-
-  const [eventRowId] = await platformDb.table('payment_webhook_events').insert({
+  // Persist FIRST (API.md §7). An unsigned request is kept as evidence but can
+  // never block or alter a later signed event with the same id, and a signed
+  // redelivery of an event that was persisted but never finalized is processed
+  // again instead of being deduplicated away — see `src/shared/webhook-events.js`.
+  const persisted = await persistWebhookEvent({
+    events: paymentWebhookEvents,
     provider: 'paystack',
-    provider_event_id: providerEventId,
-    payload: JSON.stringify(parsedBody ?? {}),
+    providerEventId,
+    payload: parsedBody,
     verified,
+    attribution: rawPayment ? { tenant_id: rawPayment.tenant_id, property_id: rawPayment.property_id, related_payment_id: rawPayment.id } : {},
   });
 
   if (!verified) return { verified: false };
+  if (!persisted.needsProcessing) return { deduplicated: true };
 
-  const gatewayStatus = parsedBody?.data?.status === 'success' || parsedBody?.event === 'charge.success' ? 'success' : 'failed';
+  const { outcome } = await processPaymentWebhookEvent({ eventId: persisted.id });
+  return { verified: true, matched: Boolean(rawPayment), outcome };
+}
 
-  if (rawPayment) {
-    const context = workerContext({ tenantId: rawPayment.tenant_id, propertyId: rawPayment.property_id });
-    const scopedForTenant = scopedDb().for(context);
-    await scopedForTenant.transaction((trx) =>
-      applyGatewayResult({ trx, payment: rawPayment, gatewayStatus, providerPaymentId: String(parsedBody?.data?.id ?? ''), channel: parsedBody?.data?.channel })
-    );
-    await platformDb.table('payment_webhook_events').where({ id: eventRowId }).update({
-      tenant_id: rawPayment.tenant_id,
-      property_id: rawPayment.property_id,
-      related_payment_id: rawPayment.id,
-      processed_at: new Date(),
-    });
+/** A fresh PLATFORM_SCOPED table builder for the event table — `persistWebhookEvent`/`finalizeWebhookEvent` want one per call. */
+function paymentWebhookEvents() {
+  return scopedDb().for(systemContext()).table('payment_webhook_events');
+}
+
+/** The only Paystack events that may change a payment's state. Anything else is recorded and ignored. */
+const WEBHOOK_CHARGE_EVENTS = new Set(['charge.success', 'charge.failed']);
+/** A payment that already holds (or has held) the money: nothing a webhook says can change it. */
+const SETTLED_PAYMENT_STATUSES = new Set(['CAPTURED', 'REFUNDED', 'PARTIALLY_REFUNDED']);
+
+/**
+ * Decides ONE persisted webhook event — ARCHITECTURE.md §7: the webhook is a
+ * hint, Paystack's own record is the truth.
+ *
+ * A valid HMAC proves who SENT the event, not that what it CLAIMS is what
+ * Paystack holds. So nothing in the body (status, amount, currency) is
+ * trusted: this asks Paystack for its record of the transaction
+ * (`verifyTransaction`, the same call the browser-confirmation path makes),
+ * compares that record to the LOCAL payment (`classifyGatewayRecord`), and
+ * applies the outcome the RECORD dictates, through `applyGatewayResult`
+ * exactly as before. The amount credited was always the local
+ * `payments.amount`; what is new is that money is only recorded when
+ * Paystack confirms it collected that amount in that currency.
+ *
+ * Keyed by the persisted event row and safe to call any number of times,
+ * concurrently or not: the inline webhook attempt, a Paystack redelivery and
+ * the retry sweep (`src/jobs/payment-webhooks.js`) all land here.
+ *
+ * The verify call runs with NO database transaction open (ARCHITECTURE.md
+ * §6.4); the apply is its own short transaction, untouched.
+ *
+ * Outcomes recorded on the event row:
+ *   applied        state changed to what Paystack's record says
+ *   ignored        not a charge event / no local payment / already settled / already terminal
+ *   rejected       signed, but Paystack's record disagrees with the local payment (or has none).
+ *                  Nothing is captured; the payment is left open so a genuine payment can still arrive.
+ *   needs_review   Paystack confirms a matching payment but the local one was already
+ *                  FAILED/EXPIRED/CANCELLED (the guest paid after the popup closed): flagged, ledger untouched
+ *   (still NULL)   Paystack unreachable / transaction not final: scheduled for retry
+ *   deferred_exhausted  gave up retrying
+ */
+async function processPaymentWebhookEvent({ eventId, now = new Date() }) {
+  const events = paymentWebhookEvents;
+  const event = await events().where({ id: eventId }).first();
+  if (!event) return { outcome: null, skipped: true };
+  if (event.outcome != null || !event.verified) return { outcome: event.outcome, skipped: true };
+
+  const payload = typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
+  const eventType = payload?.event;
+  const reference = payload?.data?.reference;
+
+  const finalize = async (outcome, detail, attribution) => {
+    await finalizeWebhookEvent({ events, id: event.id, outcome, detail, attribution, now });
+    return { outcome };
+  };
+
+  if (!WEBHOOK_CHARGE_EVENTS.has(eventType)) return finalize('ignored', { reason: 'event_not_handled', event: eventType ?? null });
+
+  const payment = reference ? await knex()('payments').where({ provider: 'paystack', provider_reference: reference }).first() : null;
+  if (!payment) return finalize('ignored', { reason: 'unknown_reference' });
+
+  const attribution = { tenant_id: payment.tenant_id, property_id: payment.property_id, related_payment_id: payment.id };
+
+  if (SETTLED_PAYMENT_STATUSES.has(payment.status)) return finalize('ignored', { reason: 'already_settled', paymentStatus: payment.status }, attribution);
+
+  // A Register checkout cancelled locally is still payable at Paystack; a late
+  // capture of it is real money `applyGatewayResult` already knows how to record.
+  const lateRegisterCapture = payment.settlement_target === 'pos_register' && payment.status === 'CANCELLED';
+  const terminalUnpaid = TERMINAL_PAYMENT_STATUSES.has(payment.status) && !lateRegisterCapture;
+  if (terminalUnpaid && eventType === 'charge.failed') return finalize('ignored', { reason: 'already_terminal', paymentStatus: payment.status }, attribution);
+
+  const defer = async (reason) => {
+    const result = await deferWebhookEvent({ events, id: event.id, attemptCount: event.attempt_count, reason, now });
+    if (result === 'deferred_exhausted') {
+      await recordWebhookAudit({ payment, action: 'gateway_webhook_deferred_exhausted', detail: { eventId: event.id, reason } });
+    }
+    return { outcome: result };
+  };
+
+  let record;
+  try {
+    const { adapter } = await paystack.resolveAdapterForCurrency(knex(), payment.currency);
+    record = await adapter.verifyTransaction({ reference: payment.provider_reference });
+  } catch (error) {
+    if (interpretGatewayError(error) === 'record_not_found') {
+      const detail = { code: 'RECORD_NOT_FOUND', message: 'Paystack has no transaction with this reference.', httpStatus: 404 };
+      await recordWebhookAudit({ payment, action: 'gateway_webhook_rejected', detail: { eventId: event.id, ...detail } });
+      return finalize('rejected', detail, attribution);
+    }
+    // Paystack unreachable, rate-limited, or a bad/missing key: not a verdict.
+    // Loud, because a misconfigured key must never look like a quiet rejection.
+    console.error(`[payment-webhook] could not verify ${payment.provider_reference} with Paystack (event ${event.id}): ${error?.message ?? error}`);
+    return defer(`verify_failed: ${error?.message ?? 'unknown error'}`);
   }
 
-  return { verified: true, matched: Boolean(rawPayment) };
+  const result = classifyGatewayRecord({
+    record,
+    local: { reference: payment.provider_reference, amount: payment.amount, currency: payment.currency },
+  });
+
+  if (result.verdict === 'mismatch') {
+    const detail = { code: result.reasons[0].code, reasons: result.reasons, expected: result.expected, observed: result.observed };
+    console.error(`[payment-webhook] REJECTED signed event ${event.id} for ${payment.provider_reference}: ${result.reasons.map((r) => r.code).join(', ')}`);
+    await recordWebhookAudit({ payment, action: 'gateway_webhook_rejected', detail: { eventId: event.id, ...detail } });
+    return finalize('rejected', detail, attribution);
+  }
+
+  if (result.verdict === 'not_final') {
+    if (terminalUnpaid) return finalize('ignored', { reason: 'already_terminal', paymentStatus: payment.status }, attribution);
+    return defer(`transaction_not_final: ${record.status}`);
+  }
+
+  if (terminalUnpaid) {
+    if (result.verdict === 'failed') return finalize('ignored', { reason: 'already_terminal', paymentStatus: payment.status }, attribution);
+    // Paystack confirms a matching payment, but locally it was already failed /
+    // expired / cancelled — possibly with a booking abandoned around it. Money is
+    // at Paystack with nothing in the ledger. Flag it; do not reverse product
+    // decisions (inventory release, cancellation) automatically.
+    const detail = { reason: 'paid_after_terminal', paymentStatus: payment.status, providerPaymentId: record.providerPaymentId };
+    await recordWebhookAudit({ payment, action: 'gateway_webhook_needs_review', detail: { eventId: event.id, ...detail } });
+    return finalize('needs_review', detail, attribution);
+  }
+
+  try {
+    const context = workerContext({ tenantId: payment.tenant_id, propertyId: payment.property_id });
+    await scopedDb()
+      .for(context)
+      .transaction((trx) =>
+        applyGatewayResult({
+          trx,
+          payment,
+          gatewayStatus: result.verdict === 'confirmed' ? 'success' : String(record.status).toLowerCase(),
+          providerPaymentId: record.providerPaymentId,
+          channel: record.channel,
+        })
+      );
+  } catch (error) {
+    console.error(`[payment-webhook] applying event ${event.id} for ${payment.provider_reference} failed: ${error?.message ?? error}`);
+    return defer(`apply_failed: ${error?.message ?? 'unknown error'}`);
+  }
+
+  return finalize('applied', { appliedStatus: result.verdict === 'confirmed' ? 'success' : 'failed', paystackStatus: record.status }, attribution);
+}
+
+/** One `audit_log` row for a webhook decision that deserves a human's attention. Written before the event is finalized, so a crash retries rather than losing it. */
+async function recordWebhookAudit({ payment, action, detail }) {
+  const context = workerContext({ tenantId: payment.tenant_id, propertyId: payment.property_id });
+  await scopedDb()
+    .for(context)
+    .transaction((trx) =>
+      recordAuditEntry(trx, {
+        entityType: 'payments',
+        entityId: payment.id,
+        propertyId: payment.property_id,
+        action,
+        source: 'integration',
+        afterState: detail,
+        reason: 'A signed gateway webhook could not be applied as-is; see the event row outcome.',
+      })
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -1229,5 +1380,6 @@ module.exports = {
   finalizePosOrderCardCapture,
   verifyPayment,
   handlePaystackWebhook,
+  processPaymentWebhookEvent,
   refundPayment,
 };

@@ -82,6 +82,8 @@ const {
   CheckoutExpiredError,
 } = require('./errors');
 const gateway = require('./paystack-gateway');
+const { classifyGatewayRecord, interpretGatewayError } = require('../../shared/gateway-record');
+const { persistWebhookEvent, finalizeWebhookEvent, deferWebhookEvent } = require('../../shared/webhook-events');
 
 const CARD_VERIFICATION_AMOUNT = process.env.BILLING_CARD_VERIFICATION_AMOUNT || '50.00';
 /** Re-review finding — how long a `billing_payment_method_checkouts` row stays completable after `startAddPaymentMethodCheckout` creates it. */
@@ -723,40 +725,176 @@ async function receiveBillingWebhook({ rawBody, signatureHeader, payload }) {
   const verified = gateway.verifyWebhookSignature({ rawBody, signatureHeader });
   const providerEventId = payload?.data?.id ? String(payload.data.id) : (payload?.data?.reference ?? generateUlid());
 
-  const db = scopedDb().for(systemContext());
-  let inserted;
-  try {
-    const [id] = await db.platform().table('subscription_webhook_events').insert({
-      provider: 'paystack',
-      provider_event_id: providerEventId,
-      payload: JSON.stringify(payload ?? {}),
-      verified,
-    });
-    inserted = id;
-  } catch (error) {
-    if (error.code === 'ER_DUP_ENTRY') return { deduplicated: true }; // already recorded — API.md §7's "answer 200 on persistence" still applies at the controller
-    throw error;
-  }
+  // Attribute a SIGNED event to the tenant it concerns; an unsigned request
+  // names references of its own choosing, so nothing it says is attributed.
+  const reference = payload?.data?.reference;
+  const localPayment = verified && reference ? await findSubscriptionPaymentByReference(reference) : null;
+
+  // Persist FIRST (API.md §7). An unsigned request is kept as evidence but can
+  // never block or alter a later signed event with the same id, and a signed
+  // redelivery of an event that was persisted but never finalized is processed
+  // again instead of being deduplicated away — see `src/shared/webhook-events.js`.
+  const persisted = await persistWebhookEvent({
+    events: subscriptionWebhookEvents,
+    provider: 'paystack',
+    providerEventId,
+    payload,
+    verified,
+    attribution: localPayment ? { tenant_id: localPayment.tenant_id, related_subscription_payment_id: localPayment.id } : {},
+  });
 
   if (!verified) return { verified: false };
+  if (!persisted.needsProcessing) return { deduplicated: true };
 
+  const { outcome } = await processBillingWebhookEvent({ eventId: persisted.id });
+  return { verified: true, outcome };
+}
+
+/** A fresh PLATFORM_SCOPED table builder for the event table — `persistWebhookEvent`/`finalizeWebhookEvent` want one per call. */
+function subscriptionWebhookEvents() {
+  return scopedDb().for(systemContext()).platform().table('subscription_webhook_events');
+}
+
+function findSubscriptionPaymentByReference(reference) {
+  return scopedDb().for(systemContext()).platform().table('subscription_payments').where({ provider: 'paystack', provider_reference: reference }).first();
+}
+
+/** The only Paystack events that may change a subscription payment. Anything else is recorded and ignored. */
+const BILLING_WEBHOOK_CHARGE_EVENTS = new Set(['charge.success', 'charge.failed']);
+const OPEN_SUBSCRIPTION_PAYMENT_STATUSES = new Set(['INITIATED', 'PENDING']);
+const SETTLED_SUBSCRIPTION_PAYMENT_STATUSES = new Set(['CAPTURED', 'REFUNDED', 'PARTIALLY_REFUNDED']);
+
+/**
+ * Decides ONE persisted billing webhook event — ARCHITECTURE.md §7: the webhook
+ * is a hint, Paystack's own record is the truth.
+ *
+ * A valid HMAC proves who SENT the event, not that what it claims is what
+ * Paystack holds. Nothing in the body (status, amount, currency) is trusted:
+ * this asks Paystack for its record of the transaction, compares it to the
+ * LOCAL `subscription_payments` row (`classifyGatewayRecord`) and only then
+ * calls `applyChargeOutcome` — the same function the synchronous charge path
+ * uses, untouched. Without this, a validly-signed but false `charge.success`
+ * could mark an invoice paid, advance a subscription period, or convert a
+ * trial tenant to active.
+ *
+ * The verify call runs with NO database transaction open (ARCHITECTURE.md
+ * §6.4). Keyed by the persisted event row and safe to call any number of
+ * times: the inline attempt, a Paystack redelivery and the retry sweep
+ * (`src/jobs/payment-webhooks.js`) all land here. Outcomes are the same set
+ * the guest-payment processor records; see `cashiering/service.js`'s
+ * `processPaymentWebhookEvent`.
+ *
+ * The event of a card-verification checkout (`billing_payment_method_checkouts`)
+ * legitimately matches no `subscription_payments` row and is recorded as
+ * `ignored`/`unknown_reference`.
+ */
+async function processBillingWebhookEvent({ eventId, now = new Date() }) {
+  const events = subscriptionWebhookEvents;
+  const event = await events().where({ id: eventId }).first();
+  if (!event) return { outcome: null, skipped: true };
+  if (event.outcome != null || !event.verified) return { outcome: event.outcome, skipped: true };
+
+  const payload = typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
   const eventType = payload?.event;
   const reference = payload?.data?.reference;
-  if ((eventType === 'charge.success' || eventType === 'charge.failed') && reference) {
-    const payment = await db.platform().table('subscription_payments').where({ provider: 'paystack', provider_reference: reference }).first();
-    if (payment) {
-      await applyChargeOutcome({
-        tenantId: payment.tenant_id,
-        paymentId: payment.id,
-        success: eventType === 'charge.success',
-        providerPaymentId: payload.data.id ? String(payload.data.id) : null,
-        gatewayResponse: payload.data.gateway_response ?? null,
-      });
-      await db.platform().table('subscription_webhook_events').where({ id: inserted }).update({ tenant_id: payment.tenant_id, processed_at: new Date(), related_subscription_payment_id: payment.id });
+
+  const finalize = async (outcome, detail, attribution) => {
+    await finalizeWebhookEvent({ events, id: event.id, outcome, detail, attribution, now });
+    return { outcome };
+  };
+
+  if (!BILLING_WEBHOOK_CHARGE_EVENTS.has(eventType)) return finalize('ignored', { reason: 'event_not_handled', event: eventType ?? null });
+
+  const payment = reference ? await findSubscriptionPaymentByReference(reference) : null;
+  if (!payment) return finalize('ignored', { reason: 'unknown_reference' });
+
+  const attribution = { tenant_id: payment.tenant_id, related_subscription_payment_id: payment.id };
+
+  if (SETTLED_SUBSCRIPTION_PAYMENT_STATUSES.has(payment.status)) return finalize('ignored', { reason: 'already_settled', paymentStatus: payment.status }, attribution);
+
+  const terminalUnpaid = !OPEN_SUBSCRIPTION_PAYMENT_STATUSES.has(payment.status);
+  if (terminalUnpaid && eventType === 'charge.failed') return finalize('ignored', { reason: 'already_terminal', paymentStatus: payment.status }, attribution);
+
+  const defer = async (reason) => {
+    const result = await deferWebhookEvent({ events, id: event.id, attemptCount: event.attempt_count, reason, now });
+    if (result === 'deferred_exhausted') {
+      await recordBillingWebhookAudit({ payment, action: 'gateway_webhook_deferred_exhausted', detail: { eventId: event.id, reason } });
     }
+    return { outcome: result };
+  };
+
+  let record;
+  try {
+    record = await gateway.verifyTransaction({ reference: payment.provider_reference });
+  } catch (error) {
+    if (interpretGatewayError(error) === 'record_not_found') {
+      const detail = { code: 'RECORD_NOT_FOUND', message: 'Paystack has no transaction with this reference.', httpStatus: 404 };
+      await recordBillingWebhookAudit({ payment, action: 'gateway_webhook_rejected', detail: { eventId: event.id, ...detail } });
+      return finalize('rejected', detail, attribution);
+    }
+    // Paystack unreachable, rate-limited, or a bad/missing key: not a verdict.
+    // Loud, because a misconfigured key must never look like a quiet rejection.
+    console.error(`[billing-webhook] could not verify ${payment.provider_reference} with Paystack (event ${event.id}): ${error?.message ?? error}`);
+    return defer(`verify_failed: ${error?.message ?? 'unknown error'}`);
   }
 
-  return { verified: true };
+  const result = classifyGatewayRecord({
+    record,
+    local: { reference: payment.provider_reference, amount: payment.amount, currency: payment.currency },
+  });
+
+  if (result.verdict === 'mismatch') {
+    const detail = { code: result.reasons[0].code, reasons: result.reasons, expected: result.expected, observed: result.observed };
+    console.error(`[billing-webhook] REJECTED signed event ${event.id} for ${payment.provider_reference}: ${result.reasons.map((r) => r.code).join(', ')}`);
+    await recordBillingWebhookAudit({ payment, action: 'gateway_webhook_rejected', detail: { eventId: event.id, ...detail } });
+    return finalize('rejected', detail, attribution);
+  }
+
+  if (result.verdict === 'not_final') {
+    if (terminalUnpaid) return finalize('ignored', { reason: 'already_terminal', paymentStatus: payment.status }, attribution);
+    return defer(`transaction_not_final: ${record.status}`);
+  }
+
+  if (terminalUnpaid) {
+    if (result.verdict === 'failed') return finalize('ignored', { reason: 'already_terminal', paymentStatus: payment.status }, attribution);
+    // Paystack confirms a matching payment but locally it was already failed —
+    // money is at Paystack with nothing applied. Flag it; do not re-open a
+    // dunning decision automatically.
+    const detail = { reason: 'paid_after_terminal', paymentStatus: payment.status, providerPaymentId: record.providerPaymentId };
+    await recordBillingWebhookAudit({ payment, action: 'gateway_webhook_needs_review', detail: { eventId: event.id, ...detail } });
+    return finalize('needs_review', detail, attribution);
+  }
+
+  try {
+    await applyChargeOutcome({
+      tenantId: payment.tenant_id,
+      paymentId: payment.id,
+      success: result.verdict === 'confirmed',
+      providerPaymentId: record.providerPaymentId ?? null,
+      gatewayResponse: record.gatewayResponse ?? null,
+    });
+  } catch (error) {
+    console.error(`[billing-webhook] applying event ${event.id} for ${payment.provider_reference} failed: ${error?.message ?? error}`);
+    return defer(`apply_failed: ${error?.message ?? 'unknown error'}`);
+  }
+
+  return finalize('applied', { appliedStatus: result.verdict === 'confirmed' ? 'success' : 'failed', paystackStatus: record.status }, attribution);
+}
+
+/** One `audit_log` row for a webhook decision that deserves a human's attention. Written before the event is finalized, so a crash retries rather than losing it. */
+async function recordBillingWebhookAudit({ payment, action, detail }) {
+  await scopedDb()
+    .for(workerContext({ tenantId: payment.tenant_id }))
+    .transaction((trx) =>
+      recordAuditEntry(trx, {
+        entityType: 'subscription_payments',
+        entityId: payment.id,
+        action,
+        source: 'integration',
+        afterState: detail,
+        reason: 'A signed gateway webhook could not be applied as-is; see the event row outcome.',
+      })
+    );
 }
 
 module.exports = {
@@ -771,6 +909,7 @@ module.exports = {
   processTenantBillingCycle,
   applyChargeOutcome,
   receiveBillingWebhook,
+  processBillingWebhookEvent,
   addOneMonth,
   today,
 };

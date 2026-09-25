@@ -63,6 +63,7 @@ const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
+const { gatewayRecordFor } = require('../helpers/gateway-record');
 
 describe('Cashiering (PLAN.md Phase 2.5)', () => {
   const t = useTestApp();
@@ -75,6 +76,11 @@ describe('Cashiering (PLAN.md Phase 2.5)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // `clearAllMocks` keeps implementations, so a `verifyTransaction` or
+    // signature mock set by one test would otherwise leak into the next — and
+    // the webhook now compares Paystack's record against the local payment.
+    paystack.verifyTransaction.mockReset();
+    paystack.verifyWebhookSignature.mockReset();
   });
 
   function tokenFor({ tenant = ctx.a, userId, propertyId } = {}) {
@@ -549,6 +555,8 @@ describe('Cashiering (PLAN.md Phase 2.5)', () => {
         .set('Idempotency-Key', idemKey())
         .send({ amount: '20.00', currency: 'NGN', guest_email: 'guest@example.com' });
       const storedPayment = await t.trx('payments').where({ id: initRes.body.data.id }).first();
+      // Paystack's own record agrees with the local 20.00 payment.
+      paystack.verifyTransaction.mockResolvedValue(gatewayRecordFor(storedPayment, { providerPaymentId: '555' }));
 
       const webhookBody = { event: 'charge.success', data: { id: 555, reference: storedPayment.provider_reference, status: 'success' } };
       const first = await t.request
