@@ -32,6 +32,12 @@
  * module lands").
  */
 export const DEFAULT_NAV_GROUPS = [
+  // Departments, and the whole APPS group (Calendar, Task), are named in the
+  // spec's nav list but have no screen, endpoint or table behind them.
+  // Clicking any of them fell through to Home in `main.jsx`, so they are
+  // left out until each is built (user-confirmed). Their icons remain in
+  // `navIcons.jsx` for when they return. Add an item here only together
+  // with its `screenKey` branch in `main.jsx`.
   {
     label: 'MAIN',
     items: [
@@ -76,19 +82,11 @@ export const DEFAULT_NAV_GROUPS = [
       // via the API's own checks, the same split Cashiering's own
       // `cashiering.void_line` already established).
       { key: 'pos', label: 'POS', requiredPermission: 'pos.operate' },
-      { key: 'departments', label: 'Departments' },
       // Gap closure (user-reported): this item had no screen in `main.jsx`
       // and bounced to Home. It now opens `StaffScreen` (the existing
       // user-management tab). Gated on `setup.view`, the key `/users`
       // reads are gated on; `setup.manage` guards each write server-side.
       { key: 'staff', label: 'Staff', requiredPermission: 'setup.view' },
-    ],
-  },
-  {
-    label: 'APPS',
-    items: [
-      { key: 'calendar', label: 'Calendar', badge: 'New' },
-      { key: 'task', label: 'Task' },
     ],
   },
   {

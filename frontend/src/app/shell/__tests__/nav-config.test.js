@@ -36,3 +36,23 @@ describe('isNavItemAllowed', () => {
     }
   });
 });
+
+// User-reported: Departments (and Calendar/Task) had no screen and bounced to
+// Home when clicked. They are hidden until they exist.
+describe('DEFAULT_NAV_GROUPS', () => {
+  const keys = DEFAULT_NAV_GROUPS.flatMap((group) => group.items.map((item) => item.key));
+
+  it('lists no item that has no screen behind it', () => {
+    expect(keys).not.toContain('departments');
+    expect(keys).not.toContain('calendar');
+    expect(keys).not.toContain('task');
+  });
+
+  it('has no empty group', () => {
+    expect(DEFAULT_NAV_GROUPS.every((group) => group.items.length > 0)).toBe(true);
+  });
+
+  it('keeps Staff, which has a real screen', () => {
+    expect(keys).toContain('staff');
+  });
+});
