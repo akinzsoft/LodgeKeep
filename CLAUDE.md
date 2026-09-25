@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Redesign: the navy-and-blue look, applied app-wide through tokens (branch `redesign-navy-blue-look`; one commit, so `git revert` restores the warm design)
+
+**User-requested**: after being shown two reference dashboards ("Tripler": indigo/sage/coral with a light sidebar, then an admin dashboard with a dark navy sidebar, blue table headers and four bright KPI tiles), the user asked for the look to be applied "everywhere" on the understanding that it would be reversed if disliked, and chose the second ("i like this design"). The Tripler version was built first on `redesign-tripler-look` and is kept only for comparison; it was never merged.
+
+**What's real now**: almost entirely `tokens.css` — a cool near-white canvas, a bright-blue accent (`--accent` `#2563EB`), a dark navy sidebar (`#14205B`, with a lighter-navy active pill), solid-blue table header rows (new `--table-head-bg`/`--table-head-text`, used by `DataTable`), 14px card radius and a soft navy-tinted card shadow. Home's four KPI cards are solid tiles (blue, green, yellow, navy) with a white icon chip; a tile's text colour is a per-tile `--kpi-on`, because the yellow tile needs dark text. The POS Register keeps its own fixed dark panel, retoned to deep navy (`--pos-register-*`; the `-brass` token names are historical and now hold the blue). `--font-display` now aliases Inter and the Fraunces import was removed from `main.jsx` (the package is still a dependency). `DESIGN_SYSTEM.md` §1 documents the palette.
+
+**Two deliberate departures from the reference, both measured**: (1) the reference's tile colours fail as text carriers (white on its blue 3.1:1, green 2.0:1, yellow 1.45:1), so tiles use deepened fills at 4.7:1 or better and the yellow tile carries dark text (11:1); (2) its red tile is NOT used for a KPI because red means negative/destructive in the status vocabulary — that slot is navy. If red is ever wanted, use `--state-danger` semantics only.
+
+**Tests**: frontend 1181/1181, lint (3 pre-existing warnings), stylelint and build clean; no backend change, no test changed (colours are not asserted). **Gaps, flagged rather than hidden**: signed-in screens were not screenshot-verified by the assistant (the browser session was signed out and credentials are not entered on the user's behalf), so contrast was checked by calculation and the user's own review, not by scanning every screen; the reference's overlapping floating cards, grouped-bar chart, avatar row and progress rings were not built; per-tenant `--domain-*` theming still overrides the guest portal only.
+
 ## Gap closure: sidebar items that led nowhere — Staff opens a real screen, an inaccessible screen says so, and screen-less items are hidden (PRs #119 and #120)
 
 **User-reported on production, as super_admin**: "Clicking 'Staff' in the sidebar redirects to the dashboard," then the same for Departments. Asked to reproduce and report before fixing; reproduced in real Chrome against the dev app (the Staff item highlighted, the page stayed on Home, no request to any Staff endpoint), and the three questions asked were answered from the code and the browser, not assumed.
