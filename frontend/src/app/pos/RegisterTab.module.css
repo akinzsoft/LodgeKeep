@@ -160,7 +160,13 @@
 @media (width >= 900px) {
   .rail {
     flex-direction: column;
-    overflow: visible auto;
+    /* The rail is an 88px grid column and a rail item is 68px wide, so the old
+       12px side padding (68 + 24 = 92) overflowed it by 4px and drew a
+       horizontal scrollbar under the categories wherever scrollbars take
+       space. 8px each side fits (68 + 16 = 84); the rail only scrolls
+       vertically. */
+    padding: var(--space-3) var(--space-2);
+    overflow: hidden auto;
   }
 }
 
