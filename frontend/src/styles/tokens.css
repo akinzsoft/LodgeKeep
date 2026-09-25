@@ -19,80 +19,97 @@
 
 :root {
   /*
-   * "Lodgekeep warm" palette (user-supplied reference design): a warm cream
-   * canvas, white cards with a warm hairline border, a dark charcoal
-   * sidebar, brass as the primary accent and deep teal as the secondary,
-   * brick reserved for negative/down signals. Inter for UI text; Fraunces
-   * (--font-display) only for the Home greeting and the sidebar wordmark.
+   * "Navy & blue" palette (user-supplied reference admin dashboard): a dark
+   * navy sidebar, a bright-blue primary accent, blue table headers, a cool
+   * near-white canvas, and four bright KPI tiles (blue, green, yellow, navy).
+   * Inter throughout.
+   *
+   * Contrast was measured, not eyeballed. The reference's own tile colours
+   * fail as text carriers: white on its blue (#4A90FF) is 3.1:1, on its green
+   * 2.0:1, and on its yellow 1.45:1. So every fill that carries white text is
+   * deepened to at least 4.7:1 (blue #2563EB 5.2, green #1B7F45 5.0, navy
+   * 15:1), and the yellow tile carries dark text instead (11:1). The
+   * reference's red tile is deliberately NOT used for a KPI: red means
+   * negative/destructive in this system's status vocabulary, so a decorative
+   * red tile would dilute it; that slot is navy.
+   * To return to the previous palette, revert the commit that introduced this.
    */
 
   /* ---- surfaces ---- */
-  --surface-page: #FAF8F4; /* warm cream canvas — never pure white */
+  --surface-page: #F3F6FC; /* cool near-white canvas */
   --surface-card: #FFFFFF; /* cards, tables, modals */
-  --surface-sunken: #F4F0E8; /* inset areas, table headers, hover rows */
-  --border: #EAE4D6; /* warm hairline dividers */
-  --border-strong: #D9D0BF; /* input borders, emphasis */
+  --surface-sunken: #EEF2FA; /* inset areas, hover rows */
+  --border: #E1E7F3; /* hairline dividers */
+  --border-strong: #C9D2E6; /* input borders, emphasis */
 
   /* ---- text ---- */
-  --text-primary: #1F2926; /* headings, KPI numerals */
-  --text-secondary: #5C6B66; /* labels, supporting copy */
-  --text-muted: #6E7873; /* hints, placeholders, timestamps — darker than the reference's #8B9490 (3.1:1) to reach WCAG AA 4.5:1 on white */
-  --text-inverse: #FFFFFF; /* text on filled buttons/badges */
+  --text-primary: #151B33; /* headings, KPI numerals — 17:1 on white */
+  --text-secondary: #465070; /* labels, supporting copy — 8:1 */
+  --text-muted: #5F6A8A; /* hints, placeholders, timestamps — 5.4:1 on white, 5.0:1 on the canvas */
+  --text-inverse: #FFFFFF; /* text on filled buttons/badges/tiles */
 
-  /* ---- the primary accent — buttons, active nav, focus, links ---- */
-  --accent: #8A6D3B; /* brass */
-  --accent-hover: #735A2F;
-  --accent-tint: #F3EDE2;
-  --accent-ring: rgba(138, 109, 59, 0.25); /* input focus halo */
-  --accent-secondary: #2E5850; /* deep teal — avatars, secondary emphasis */
-  --accent-secondary-tint: #E3ECE9;
+  /* ---- the primary accent — buttons, active nav, focus, links, table headers ---- */
+  --accent: #2563EB; /* blue — 5.2:1 against white either way round */
+  --accent-hover: #1D4FC4;
+  --accent-tint: #E8F0FE;
+  --accent-ring: rgba(37, 99, 235, 0.28); /* input focus halo */
+  --accent-secondary: #1B7F45; /* green — avatars, secondary emphasis, positive deltas (5.0:1) */
+  --accent-secondary-tint: #E3F4EA;
+  --accent-tertiary: #FFD22E; /* yellow KPI tile — carries DARK text (11:1), never white */
+  --accent-tertiary-tint: #FFF6D6;
+  --accent-navy: #14205B; /* navy KPI tile / sidebar ground — white text is 15:1 */
+  --accent-sage-fill: #1B7F45; /* green KPI tile — white text is 5.0:1 */
 
-  /* ---- dark sidebar ---- */
-  --sidebar-bg: #14191C;
-  --sidebar-border: #232A2E;
-  --sidebar-text: #D9DDD9;
-  --sidebar-text-muted: #8B9490;
-  --sidebar-hover-bg: #1D2327;
-  --sidebar-active-bg: #3A3222; /* brass, deepened for the charcoal ground */
-  --sidebar-active-text: #F4EEE1;
+  /* ---- table header (reference: a solid blue header row) ---- */
+  --table-head-bg: #2563EB;
+  --table-head-text: #FFFFFF;
+
+  /* ---- dark navy sidebar ---- */
+  --sidebar-bg: #14205B;
+  --sidebar-border: #24357F;
+  --sidebar-text: #DCE3FA; /* 11.8:1 */
+  --sidebar-text-muted: #A3B0DC; /* 7.1:1 */
+  --sidebar-hover-bg: #1D2D75;
+  --sidebar-active-bg: #2A3C8F; /* a lighter navy pill */
+  --sidebar-active-text: #FFFFFF;
 
   /* ---- domain accents — assigned by meaning, reused on every screen ---- */
-  --domain-booking: #8A6D3B; /* reservations, bookings — shares the brass accent */
-  --domain-rooms: #9A6A26; /* rooms, inventory, housekeeping — ochre */
-  --domain-guest: #2E5850; /* profiles, guests, CRM — teal */
-  --domain-money: #4A7058; /* cashiering, revenue, AR — sage */
+  --domain-booking: #2563EB; /* reservations, bookings — shares the blue accent */
+  --domain-rooms: #8A6A00; /* rooms, inventory, housekeeping — dark amber (5.1:1) */
+  --domain-guest: #1B7F45; /* profiles, guests, CRM — green */
+  --domain-money: #0F7C8F; /* cashiering, revenue, AR — teal (4.9:1) */
 
   /*
    * Domain tints, for icon-badge backgrounds — DESIGN_SYSTEM.md §1: "define
    * these alongside rather than computing opacity at render time, which
    * produces muddy results over the sunken surface."
    */
-  --domain-booking-tint: #F3EDE2;
-  --domain-rooms-tint: #F5EBD8;
-  --domain-guest-tint: #E3ECE9;
-  --domain-money-tint: #E4EDE6;
+  --domain-booking-tint: #E8F0FE;
+  --domain-rooms-tint: #FFF3D1;
+  --domain-guest-tint: #E3F4EA;
+  --domain-money-tint: #DDF1F4;
 
   /* ---- semantic state — meaning, never decoration ---- */
-  --state-success: #2E6B4F;
-  --state-success-bg: #E5EFE9;
-  --state-warning: #93641C;
-  --state-warning-bg: #F6EDDA;
-  --state-danger: #B5482F; /* brick — negative/down/destructive only */
-  --state-danger-bg: #F6E4DE;
-  --state-info: #2E5850;
-  --state-info-bg: #E3ECE9;
-  --state-neutral: #5C6B66;
-  --state-neutral-bg: #EFEBE3;
+  --state-success: #1F7A4D;
+  --state-success-bg: #E3F4EA;
+  --state-warning: #8A5F0E;
+  --state-warning-bg: #FFF3D1;
+  --state-danger: #C62F2F; /* negative/down/destructive only */
+  --state-danger-bg: #FDE8E8;
+  --state-info: #2563EB;
+  --state-info-bg: #E8F0FE;
+  --state-neutral: #4F5A78;
+  --state-neutral-bg: #EDF0F7;
 
   /* ---- charts — ordered series colours ---- */
-  --chart-1: #8A6D3B; /* brass */
-  --chart-2: #2E5850; /* teal */
-  --chart-3: #B5482F; /* brick */
-  --chart-4: #CDB791; /* tan */
-  --chart-1-tint: #F3EDE2;
-  --chart-2-tint: #E3ECE9;
+  --chart-1: #4A90FF; /* blue */
+  --chart-2: #A9CFFF; /* light blue */
+  --chart-3: #FFC83D; /* yellow */
+  --chart-4: #6BCB77; /* green */
+  --chart-1-tint: #E8F0FE;
+  --chart-2-tint: #EAF3FF;
 
-  --overlay-scrim: rgba(20, 25, 28, 0.5); /* modal/drawer backdrops */
+  --overlay-scrim: rgba(15, 26, 74, 0.55); /* modal/drawer backdrops */
 
   /* ---- spacing & sizing — every value a multiple of 4px ---- */
   --space-1: 4px;
@@ -103,13 +120,13 @@
   --space-6: 32px;
   --space-8: 48px;
 
-  --radius-sm: 6px; /* inputs, small badges */
-  --radius-md: 8px; /* buttons, small cards */
-  --radius-lg: 10px; /* cards, modals */
+  --radius-sm: 8px; /* inputs, small badges */
+  --radius-md: 10px; /* buttons, small cards */
+  --radius-lg: 14px; /* cards, modals */
   --radius-full: 999px; /* fully rounded pills, avatars, progress bars */
 
-  --shadow-card: 0 1px 2px rgba(31, 41, 38, 0.03); /* the reference's cards read by their border, not a lift */
-  --shadow-raised: 0 12px 32px rgba(20, 25, 28, 0.14);
+  --shadow-card: 0 4px 18px rgba(20, 32, 91, 0.08); /* soft navy-tinted lift, as in the reference */
+  --shadow-raised: 0 16px 40px rgba(20, 32, 91, 0.22);
 
   --sidebar-w: 248px;
   --sidebar-w-collapsed: 72px;
@@ -120,7 +137,7 @@
 
   /* ---- typography ---- */
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-display: 'Fraunces', 'Georgia', 'Times New Roman', serif; /* Home greeting + sidebar wordmark only */
+  --font-display: var(--font-sans); /* Home greeting + sidebar wordmark; was a serif (Fraunces) before the redesign */
   --font-mono: 'JetBrains Mono', ui-monospace, monospace; /* folio amounts, confirmation codes, IDs */
 
   /* size/line-height/weight, split into three custom properties per style —
@@ -171,12 +188,12 @@
    * governing rule; the component's own CSS module references them via
    * var() only.
    */
-  --pos-register-panel-bg: #14191C;
-  --pos-register-rail-bg: #0F1315;
-  --pos-register-card-bg: #1D2327;
-  --pos-register-card-border: #262C2F;
-  --pos-register-ticket-bg: #181D20;
-  --pos-register-text-primary: #EDE7DA;
+  --pos-register-panel-bg: #0F1A4A;
+  --pos-register-rail-bg: #0A1238;
+  --pos-register-card-bg: #1A2A6C;
+  --pos-register-card-border: #2A3D8A;
+  --pos-register-ticket-bg: #122055;
+  --pos-register-text-primary: #EAF0FF;
 
   /*
    * Color-correction pass (user-reported): every gray on this screen must
@@ -188,22 +205,22 @@
    * which sit on the rail's darker background and read a touch dimmer than
    * the ticket's own body text.
    */
-  --pos-register-text-secondary: #9CA3A0;
-  --pos-register-rail-text: #7C837F; /* inactive category rail labels only */
-  --pos-register-brass: #8A6D3B;
-  --pos-register-brass-text: #D9C79A;
-  --pos-register-brass-tint: rgba(138, 109, 59, 0.22); /* active category rail item */
-  --pos-register-teal: #2E5850; /* "Open" status pill */
+  --pos-register-text-secondary: #A9B7E6;
+  --pos-register-rail-text: #8C9BD0; /* inactive category rail labels only */
+  --pos-register-brass: #5B94F5; /* named for the earlier palette; now the blue accent on the dark panel */
+  --pos-register-brass-text: #FFFFFF;
+  --pos-register-brass-tint: rgba(91, 148, 245, 0.30); /* active category rail item */
+  --pos-register-teal: #1B7F45; /* "Open" status pill */
   --pos-register-amber: #F2C94C; /* the ONLY saturated color anywhere on this screen — the "Send to Bar & Checkout" button, nothing else */
   --pos-register-amber-text: #1A1508; /* dark text for contrast against the amber button */
-  --pos-register-danger: #B5482F; /* remove/void actions only */
+  --pos-register-danger: #FF8A8A; /* remove/void actions only */
 
   /* The 3 payment-tender buttons (Cash/Card/NQR) deliberately share this
    * exact look, active or not — user-reported: "no highlighted/primary
    * state on any one of them," so the checkout button stays the one and
    * only emphasized control on the screen. */
-  --pos-register-payment-border: #33393C;
-  --pos-register-payment-text: #C8CDC9;
+  --pos-register-payment-border: #34489A;
+  --pos-register-payment-text: #D3DCF5;
   --pos-register-card-radius: 11px; /* the design brief's own explicit menu-card radius — not an approximation of --radius-md/--radius-lg */
   --pos-register-overlay-scrim: rgba(0, 0, 0, 0.55); /* the split-bill modal's own backdrop — darker than the light shell's --shadow-raised-adjacent scrim, matching this panel's own dark palette rather than ConfirmDialog.module.css's light-shell tint */
 }

@@ -32,8 +32,8 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--surface-sunken);
-  border-bottom: 1px solid var(--border);
+  background: var(--table-head-bg);
+  border-bottom: 1px solid var(--table-head-bg);
   padding: var(--space-3) var(--space-4);
   text-align: left;
   font-size: var(--text-caption-size);
@@ -41,7 +41,7 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
-  color: var(--text-muted);
+  color: var(--table-head-text);
 }
 
 .table tbody td {
