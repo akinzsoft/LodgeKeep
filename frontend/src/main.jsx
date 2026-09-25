@@ -25,6 +25,8 @@ import { SetupScreen } from './app/setup/SetupScreen.jsx';
 import { BookingScreen } from './app/booking/BookingScreen.jsx';
 import { HousekeepingScreen } from './app/housekeeping/HousekeepingScreen.jsx';
 import { RoomsScreen } from './app/rooms/RoomsScreen.jsx';
+import { StaffScreen } from './app/staff/StaffScreen.jsx';
+import { NoAccessScreen } from './app/shell/NoAccessScreen.jsx';
 import { ReportingScreen } from './app/reporting/ReportingScreen.jsx';
 import { CashieringScreen } from './app/cashiering/CashieringScreen.jsx';
 import { NightAuditScreen } from './app/night-audit/NightAuditScreen.jsx';
@@ -206,9 +208,12 @@ function Demo() {
   }
 
   // A property switch can take away the screen currently open (e.g. Setup
-  // after becoming front desk) — fall back to Home instead of rendering a
-  // screen whose menu item has disappeared.
-  const screenKey = isNavItemAllowed(activeItemKey, grantedPermissions) ? activeItemKey : 'home';
+  // after becoming front desk). Say so instead of silently swapping in
+  // Home: the user keeps the item they picked highlighted and sees why
+  // nothing opened (DESIGN_SYSTEM.md §2 — a failure is never a silent
+  // redirect). Home itself has no permission and is always allowed.
+  const accessDenied = !isNavItemAllowed(activeItemKey, grantedPermissions);
+  const screenKey = accessDenied ? null : activeItemKey;
 
   // Gap closure: a session restored via the bootstrap refresh (AuthContext.jsx's
   // own header) never submitted a login form this page load, so it carries
@@ -251,7 +256,7 @@ function Demo() {
       // Role codes are snake_case (`pos_operator`); the shell capitalizes each word.
       user={{ name: displayName, role: user.role?.replace(/_/g, ' ') }}
       permissions={grantedPermissions}
-      activeItemKey={screenKey}
+      activeItemKey={activeItemKey}
       onNavigate={setActiveItemKey}
       // Real name when `GET /properties` has resolved it; the same
       // "Property {id}" labelled stand-in as before while still loading or
@@ -291,7 +296,9 @@ function Demo() {
           {grantsError}
         </p>
       )}
-      {screenKey === 'setup' ? (
+      {accessDenied ? (
+        <NoAccessScreen onGoHome={() => setActiveItemKey('home')} />
+      ) : screenKey === 'setup' ? (
         <SetupScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} onPropertiesChanged={reloadProperties} />
       ) : screenKey === 'booking' ? (
         <BookingScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} />
@@ -304,6 +311,8 @@ function Demo() {
         />
       ) : screenKey === 'rooms' ? (
         <RoomsScreen activeProperty={activePropertyRecord} isOffline={!isOnline} />
+      ) : screenKey === 'staff' ? (
+        <StaffScreen activeProperty={activePropertyRecord} isOffline={!isOnline} />
       ) : screenKey === 'reports' ? (
         <ReportingScreen activePropertyId={user.activePropertyId} />
       ) : screenKey === 'cashiering' ? (

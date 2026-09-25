@@ -77,7 +77,11 @@ export const DEFAULT_NAV_GROUPS = [
       // `cashiering.void_line` already established).
       { key: 'pos', label: 'POS', requiredPermission: 'pos.operate' },
       { key: 'departments', label: 'Departments' },
-      { key: 'staff', label: 'Staff' },
+      // Gap closure (user-reported): this item had no screen in `main.jsx`
+      // and bounced to Home. It now opens `StaffScreen` (the existing
+      // user-management tab). Gated on `setup.view`, the key `/users`
+      // reads are gated on; `setup.manage` guards each write server-side.
+      { key: 'staff', label: 'Staff', requiredPermission: 'setup.view' },
     ],
   },
   {
