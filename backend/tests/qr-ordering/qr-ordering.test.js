@@ -50,6 +50,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
   };
 });
 
+const { recordForStoredPayment } = require('../helpers/gateway-record');
 const { useTestApp } = require('../helpers/app');
 const { sumMoney } = require('../../src/shared/money');
 const { seedTwoTenants } = require('../helpers/fixtures');
@@ -553,7 +554,7 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
         .send({ payment_method: 'card', guest_contact: 'confirmed@example.com', items: [{ menu_item_id: menuItemId, quantity: 1 }] });
       expect(created.status).toBe(201);
 
-      paystack.verifyTransaction.mockResolvedValue({ status: 'success', reference: 'r', providerPaymentId: 'ps_qr_1', amountSubunit: 2150, currency: 'NGN' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', providerPaymentId: 'ps_qr_1' }));
       const confirmed = await guestPost(`/${tableRaw}/orders/${created.body.data.id}/confirm-payment`).send({});
       expect(confirmed.status).toBe(200);
       expect(confirmed.body.data.payment.status).toBe('CAPTURED');
@@ -588,6 +589,26 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       expect(status.body.data.currency).toBe('NGN');
     });
 
+    it('confirm-payment refuses a Paystack record that does not match the payment, and settles nothing', async () => {
+      paystack.initializeTransaction.mockResolvedValue({ authorizationUrl: 'https://paystack.test/pay/mismatch', accessCode: 'm', reference: 'r' });
+      const created = await guestPost(`/${tableRaw}/orders`)
+        .set('Idempotency-Key', idemKey())
+        .send({ payment_method: 'card', guest_contact: 'mismatch@example.com', items: [{ menu_item_id: menuItemId, quantity: 1 }] });
+      expect(created.status).toBe(201);
+
+      // Paystack says success, but only collected 1 kobo.
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', amountSubunit: 1 }));
+      const confirmed = await guestPost(`/${tableRaw}/orders/${created.body.data.id}/confirm-payment`).send({});
+      expect(confirmed.status).toBe(422);
+      expect(confirmed.body.error.code).toBe('PAYMENT_GATEWAY_RECORD_MISMATCH');
+
+      const order = await t.trx('pos_orders').where({ id: created.body.data.pos_order_id }).first();
+      expect(order.status).not.toBe('settled');
+      expect(await t.trx('pos_order_settlements').where({ pos_order_id: order.id })).toHaveLength(0);
+      const payment = await t.trx('payments').where({ pos_order_id: order.id }).first();
+      expect(payment.status).not.toBe('CAPTURED');
+    });
+
     it('an unpaid card order status shows its items and the payment intent total, with no tax figure yet', async () => {
       paystack.initializeTransaction.mockResolvedValue({ authorizationUrl: 'https://paystack.test/pay/details', accessCode: 'd', reference: 'r' });
       const created = await guestPost(`/${tableRaw}/orders`)
@@ -608,7 +629,7 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
         .set('Idempotency-Key', idemKey())
         .send({ payment_method: 'card', guest_contact: 'failed@example.com', items: [{ menu_item_id: menuItemId, quantity: 1 }] });
 
-      paystack.verifyTransaction.mockResolvedValue({ status: 'failed', reference: 'r', providerPaymentId: 'ps_qr_2', amountSubunit: 2150, currency: 'NGN' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'failed', providerPaymentId: 'ps_qr_2' }));
       const confirmed = await guestPost(`/${tableRaw}/orders/${created.body.data.id}/confirm-payment`).send({});
       expect(confirmed.status).toBe(200);
       expect(confirmed.body.data.payment.status).toBe('FAILED');
@@ -929,7 +950,7 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       const created = await guestPost(`/${tableRaw}/orders`)
         .set('Idempotency-Key', idemKey())
         .send({ payment_method: 'card', guest_contact: 'queue@example.com', items: [{ menu_item_id: menuItemId, quantity: 1 }] });
-      paystack.verifyTransaction.mockResolvedValue({ status: 'success', reference: 'r', providerPaymentId: 'ps_q', amountSubunit: 2150, currency: 'NGN' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', providerPaymentId: 'ps_q' }));
       await guestPost(`/${tableRaw}/orders/${created.body.data.id}/confirm-payment`).send({});
       return created.body.data.id;
     }
@@ -1005,7 +1026,7 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       // A late gateway success — a delayed webhook, or the guest's own
       // confirm-payment callback landing after the fact — must never
       // resurrect this order or capture the cancelled payment.
-      paystack.verifyTransaction.mockResolvedValue({ status: 'success', reference: 'r', providerPaymentId: 'ps_late', amountSubunit: 2150, currency: 'NGN' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', providerPaymentId: 'ps_late' }));
       const confirmAttempt = await guestPost(`/${tableRaw}/orders/${id}/confirm-payment`).send({});
       expect(confirmAttempt.status).toBe(409);
       expect(confirmAttempt.body.error.code).toBe('CONFLICT_GUEST_ORDER_ALREADY_REJECTED');
@@ -1059,7 +1080,7 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       const created = await guestPost(`/${tableRaw}/orders`)
         .set('Idempotency-Key', idemKey())
         .send({ payment_method: 'card', guest_contact: 'autoreject@example.com', items: [{ menu_item_id: menuItemId, quantity: 1 }] });
-      paystack.verifyTransaction.mockResolvedValue({ status: 'success', reference: 'r', providerPaymentId: 'ps_ar', amountSubunit: 2150, currency: 'NGN' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', providerPaymentId: 'ps_ar' }));
       const confirmed = await guestPost(`/${tableRaw}/orders/${created.body.data.id}/confirm-payment`).send({});
       expect(confirmed.body.data.guestOrder.status).toBe('received');
       paystack.refundTransaction.mockResolvedValue({ status: 'processed' });
@@ -1087,7 +1108,7 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       const created = await guestPost(`/${tableRaw}/orders`)
         .set('Idempotency-Key', idemKey())
         .send({ payment_method: 'card', guest_contact: 'accepted@example.com', items: [{ menu_item_id: menuItemId, quantity: 1 }] });
-      paystack.verifyTransaction.mockResolvedValue({ status: 'success', reference: 'r', providerPaymentId: 'ps_ok', amountSubunit: 2150, currency: 'NGN' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', providerPaymentId: 'ps_ok' }));
       await guestPost(`/${tableRaw}/orders/${created.body.data.id}/confirm-payment`).send({});
 
       await t.request.post(`/api/v1/pos/guest-orders/${created.body.data.id}/accept`).set('Authorization', `Bearer ${staffToken()}`).send({});

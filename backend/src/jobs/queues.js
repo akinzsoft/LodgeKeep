@@ -76,6 +76,7 @@ const NOTIFICATIONS_SWEEP_QUEUE = 'notifications-sweep';
 const DOOR_ACCESS_RETENTION_QUEUE = 'door-access-retention';
 const EXPENSE_SCHEDULES_QUEUE = 'expense-schedules';
 const NIGHT_AUDIT_OVERDUE_QUEUE = 'night-audit-overdue';
+const PAYMENT_WEBHOOKS_QUEUE = 'payment-webhooks';
 
 let queue = null;
 let trialExpiryQueueInstance = null;
@@ -86,6 +87,7 @@ let notificationsSweepQueueInstance = null;
 let doorAccessRetentionQueueInstance = null;
 let expenseSchedulesQueueInstance = null;
 let nightAuditOverdueQueueInstance = null;
+let paymentWebhooksQueueInstance = null;
 
 function outboxDispatchQueue() {
   if (!queue) {
@@ -150,6 +152,21 @@ function nightAuditOverdueQueue() {
   return nightAuditOverdueQueueInstance;
 }
 
+/**
+ * `payment-webhooks` (security audit fix — Paystack webhooks verified against
+ * Paystack's own record) is its own tenth queue: a scheduler-only retry sweep
+ * (`src/jobs/payment-webhooks.js`) over persisted-but-undecided gateway
+ * webhook events. Its own queue for the same recurring reason every periodic
+ * sweep here gets one — a slow Paystack lookup must never delay the outbox,
+ * billing, or any other sweep, and vice versa.
+ */
+function paymentWebhooksQueue() {
+  if (!paymentWebhooksQueueInstance) {
+    paymentWebhooksQueueInstance = new Queue(PAYMENT_WEBHOOKS_QUEUE, { connection: redisConnection() });
+  }
+  return paymentWebhooksQueueInstance;
+}
+
 /** Test-only teardown — BullMQ's `Queue` holds its own connection handles beyond the shared `redisConnection()` instance, and both must close for the process to exit without `--forceExit`. */
 async function __closeQueuesForTesting() {
   if (queue) {
@@ -188,6 +205,10 @@ async function __closeQueuesForTesting() {
     await nightAuditOverdueQueueInstance.close();
     nightAuditOverdueQueueInstance = null;
   }
+  if (paymentWebhooksQueueInstance) {
+    await paymentWebhooksQueueInstance.close();
+    paymentWebhooksQueueInstance = null;
+  }
 }
 
 module.exports = {
@@ -209,5 +230,7 @@ module.exports = {
   expenseSchedulesQueue,
   NIGHT_AUDIT_OVERDUE_QUEUE,
   nightAuditOverdueQueue,
+  PAYMENT_WEBHOOKS_QUEUE,
+  paymentWebhooksQueue,
   __closeQueuesForTesting,
 };

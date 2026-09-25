@@ -72,15 +72,37 @@ function toSubunit(amountDecimalString) {
   return Number(whole) * 100 + Number(`${fraction}00`.slice(0, 2));
 }
 
-async function paystackFetch(path, { method = 'GET', body } = {}) {
-  const response = await fetch(`${PAYSTACK_BASE_URL}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${secretKey()}`,
-      'Content-Type': 'application/json',
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+/** Upper bound for a Paystack READ call (Verify Transaction), in ms — default 8s; verify normally answers in about 1s. */
+function readTimeoutMs() {
+  const configured = Number(process.env.PAYSTACK_READ_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 8000;
+}
+
+async function paystackFetch(path, { method = 'GET', body, timeoutMs } = {}) {
+  // Resolved BEFORE the try below so an unset key still surfaces as
+  // `GatewayNotConfiguredError` (501), never as a network error.
+  const key = secretKey();
+  // Only a call that passes `timeoutMs` (Verify Transaction) is bounded, so a
+  // hung Paystack call cannot hold a webhook request open. Writes (initialize,
+  // refund, charge_authorization) are NOT timed out: `processTenantBillingCycle`
+  // treats any thrown gateway error as a definitive failure, so aborting a
+  // slow-but-successful charge would record it as failed and send a dunning email.
+  const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
+  let response;
+  try {
+    response = await fetch(`${PAYSTACK_BASE_URL}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal,
+    });
+  } catch (error) {
+    const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+    throw new GatewayRequestError('paystack', timedOut ? 'the request timed out' : (error?.message ?? 'network error'), timedOut ? { timedOut: true } : { network: true });
+  }
 
   const json = await response.json().catch(() => null);
   if (!response.ok || !json?.status) {
@@ -118,13 +140,15 @@ async function initializeTransaction({ email, amount, currency, reference, callb
  * whole module exists to capture. See file header for why.
  */
 async function verifyTransaction({ reference }) {
-  const data = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`);
+  const data = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`, { timeoutMs: readTimeoutMs() });
   const auth = data.authorization ?? {};
   return {
     status: data.status, // 'success' | 'failed' | 'abandoned' | ...
     reference: data.reference,
     providerPaymentId: String(data.id),
     amountSubunit: data.amount,
+    // What was ORIGINALLY requested — see the guest-payment adapter's own note.
+    requestedAmountSubunit: data.requested_amount ?? null,
     currency: data.currency,
     gatewayResponse: data.gateway_response,
     authorization: {

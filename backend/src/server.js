@@ -36,6 +36,7 @@ const { startNotificationsSweepWorker, scheduleNotificationsSweep } = require('.
 const { startDoorAccessRetentionWorker, scheduleDoorAccessRetentionSweep } = require('./jobs/door-access-retention');
 const { startExpenseSchedulesWorker, scheduleExpenseSchedulesSweep } = require('./jobs/expense-schedules');
 const { startNightAuditOverdueWorker, scheduleNightAuditOverdueSweep } = require('./jobs/night-audit-overdue');
+const { startPaymentWebhooksWorker, schedulePaymentWebhookSweep } = require('./jobs/payment-webhooks');
 
 const port = Number(process.env.PORT || 3000);
 
@@ -114,4 +115,14 @@ scheduleExpenseSchedulesSweep().catch((error) => {
 startNightAuditOverdueWorker();
 scheduleNightAuditOverdueSweep().catch((error) => {
   console.error('Failed to schedule the night audit overdue sweep:', error);
+});
+
+// Security audit fix — `src/jobs/payment-webhooks.js`'s own header. A
+// minute-cadence retry sweep over persisted-but-undecided Paystack webhook
+// events (guest payments and subscription billing), so an event whose
+// verification against Paystack's own record was unavailable is retried
+// instead of stranded. The DB row is authoritative; Redis only schedules.
+startPaymentWebhooksWorker();
+schedulePaymentWebhookSweep().catch((error) => {
+  console.error('Failed to schedule the payment webhook retry sweep:', error);
 });

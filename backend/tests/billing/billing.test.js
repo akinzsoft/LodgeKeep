@@ -47,6 +47,11 @@ describe('Billing (PLAN.md Phase 5)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // `clearAllMocks` keeps implementations, so a `verifyTransaction` or
+    // signature mock set by one test would otherwise leak into the next — and
+    // the webhook now compares Paystack's record against the local payment.
+    gateway.verifyTransaction.mockReset();
+    gateway.verifyWebhookSignature.mockReset();
   });
 
   function tokenFor({ tenant = ctx.a, userId, propertyId } = {}) {
@@ -442,6 +447,16 @@ describe('Billing (PLAN.md Phase 5)', () => {
       });
 
       gateway.verifyWebhookSignature.mockReturnValue(true);
+      // Paystack's own record agrees with the local 50,000.00 NGN payment.
+      gateway.verifyTransaction.mockResolvedValue({
+        status: 'success',
+        reference: 'webhook-correlation-ref',
+        providerPaymentId: '999003',
+        amountSubunit: 5000000,
+        currency: 'NGN',
+        gatewayResponse: 'Successful',
+        authorization: {},
+      });
       const res = await t.request
         .post('/api/v1/webhooks/billing-paystack')
         .set('x-paystack-signature', 'valid')

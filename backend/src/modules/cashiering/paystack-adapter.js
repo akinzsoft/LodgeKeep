@@ -115,6 +115,12 @@ class PropertyPayoutNotConfiguredError extends AppError {
   }
 }
 
+/** Upper bound for a Paystack READ call (Verify Transaction), in ms — default 8s; verify normally answers in about 1s. */
+function readTimeoutMs() {
+  const configured = Number(process.env.PAYSTACK_READ_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 8000;
+}
+
 /** Converts a DECIMAL-as-string money amount (e.g. "150.00") to Paystack's smallest-currency-unit integer (kobo/pesewas/cents). */
 function toSubunit(amountDecimalString) {
   const [whole, fraction = ''] = String(amountDecimalString).split('.');
@@ -129,15 +135,28 @@ function toSubunit(amountDecimalString) {
 function buildAdapter(secretKey) {
   if (!secretKey) throw new GatewayNotConfiguredError('paystack');
 
-  async function paystackFetch(path, { method = 'GET', body } = {}) {
-    const response = await fetch(`${PAYSTACK_BASE_URL}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${secretKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+  async function paystackFetch(path, { method = 'GET', body, timeoutMs } = {}) {
+    // Only a call that passes `timeoutMs` (Verify Transaction) is bounded, so a
+    // hung Paystack call cannot hold a webhook request open. Other reads (e.g.
+    // bank resolution) and all writes (initialize, refund, subaccount) are
+    // deliberately NOT timed out: aborting a POST whose outcome is unknown would
+    // be worse than waiting for it, and bank resolution can be legitimately slow.
+    const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
+    let response;
+    try {
+      response = await fetch(`${PAYSTACK_BASE_URL}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal,
+      });
+    } catch (error) {
+      const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+      throw new GatewayRequestError('paystack', timedOut ? 'the request timed out' : (error?.message ?? 'network error'), timedOut ? { timedOut: true } : { network: true });
+    }
 
     const json = await response.json().catch(() => null);
     if (!response.ok || !json?.status) {
@@ -174,12 +193,16 @@ function buildAdapter(secretKey) {
 
   /** The manual/fallback sync path (see file header) — also what the webhook handler calls to double-check before trusting the payload. */
   async function verifyTransaction({ reference }) {
-    const data = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`);
+    const data = await paystackFetch(`/transaction/verify/${encodeURIComponent(reference)}`, { timeoutMs: readTimeoutMs() });
     return {
       status: data.status, // 'success' | 'failed' | 'abandoned' | ...
       reference: data.reference,
       providerPaymentId: String(data.id),
       amountSubunit: data.amount,
+      // What was ORIGINALLY requested — Paystack's `amount` is what was
+      // collected, which can exceed this when the customer bore a fee
+      // (`src/shared/gateway-record.js` accepts that, and nothing less).
+      requestedAmountSubunit: data.requested_amount ?? null,
       currency: data.currency,
       gatewayResponse: data.gateway_response,
       channel: data.channel ?? null, // 'card' | 'ussd' | 'bank_transfer' | 'qr' | ...,

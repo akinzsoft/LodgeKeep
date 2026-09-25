@@ -39,6 +39,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
   };
 });
 
+const { recordForStoredPayment } = require('../helpers/gateway-record');
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
@@ -136,7 +137,7 @@ describe('Portal booking + Night Audit non-collision (PLAN.md Phase 4)', () => {
     const reservationId = create.body.data.reservation.id;
     const folioId = create.body.data.folio.id;
 
-    paystack.verifyTransaction.mockResolvedValue({ status: 'success', reference: 'ref', providerPaymentId: 'ps_na', amountSubunit: 1, currency: 'NGN' });
+    paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', providerPaymentId: 'ps_na' }));
     await t.request
       .post(`/api/v1/portal/bookings/${create.body.data.reservation.confirmation_number}/confirm`)
       .set('X-Tenant-Slug', ctx.a.slug)

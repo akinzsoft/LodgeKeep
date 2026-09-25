@@ -27,6 +27,24 @@ class InvalidPaymentTransitionError extends AppError {
   }
 }
 
+/**
+ * Paystack's own record of a transaction disagrees with the local payment it is
+ * supposed to settle (a different amount, currency or reference). Raised by the
+ * browser/manual confirmation path (`verifyPayment`); the payment is left
+ * exactly as it was. The webhook path records the same disagreement on the
+ * event row instead of throwing (`processPaymentWebhookEvent`).
+ */
+class PaymentGatewayRecordMismatchError extends AppError {
+  constructor(paymentId, reasons) {
+    super(
+      'PAYMENT_GATEWAY_RECORD_MISMATCH',
+      'The payment gateway\'s record of this transaction does not match the payment recorded here, so it was not applied.',
+      422,
+      { paymentId, reasons: reasons.map((reason) => ({ code: reason.code, message: reason.message })) }
+    );
+  }
+}
+
 /** A refund (full or partial) requested for more than the payment's own captured amount, net of any prior refunds. */
 class RefundExceedsCapturedAmountError extends AppError {
   constructor(paymentId, requested, available) {
@@ -93,4 +111,5 @@ module.exports = {
   LineItemNotFoundError,
   CannotVoidInvoicedLineError,
   CannotPayArBilledFolioDirectlyError,
+  PaymentGatewayRecordMismatchError,
 };

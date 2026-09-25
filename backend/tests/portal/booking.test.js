@@ -50,6 +50,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
 // `tests/auth/breached-password.test.js`.
 jest.mock('../../src/auth/breached-password', () => ({ isPasswordBreached: jest.fn().mockResolvedValue(false) }));
 
+const { recordForStoredPayment } = require('../helpers/gateway-record');
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
@@ -200,7 +201,7 @@ describe('Guest portal booking + payment (PLAN.md Phase 4)', () => {
       const pendingOutbox = await t.trx('outbox_events').where({ event_type: 'reservation.confirmed', aggregate_id: reservationId });
       expect(pendingOutbox.length).toBe(0);
 
-      paystack.verifyTransaction.mockResolvedValue({ status: 'success', reference: 'ref', providerPaymentId: 'ps_1', amountSubunit: 1, currency: 'NGN' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', providerPaymentId: 'ps_1' }));
 
       const confirm = await publicRequest('post', `/api/v1/portal/bookings/${confirmationNumber}/confirm`).send({ property_slug: propertySlug });
       expect(confirm.status).toBe(200);
@@ -316,7 +317,7 @@ describe('Guest portal booking + payment (PLAN.md Phase 4)', () => {
       const confirmationNumber = create.body.data.reservation.confirmation_number;
       const folioId = create.body.data.folio.id;
 
-      paystack.verifyTransaction.mockResolvedValue({ status: 'failed', reference: 'ref', providerPaymentId: 'ps_2', amountSubunit: 1, currency: 'NGN' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'failed', providerPaymentId: 'ps_2' }));
 
       const confirm = await publicRequest('post', `/api/v1/portal/bookings/${confirmationNumber}/confirm`).send({ property_slug: propertySlug });
       expect(confirm.status).toBe(200);

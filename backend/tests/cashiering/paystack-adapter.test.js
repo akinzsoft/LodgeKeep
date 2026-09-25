@@ -101,3 +101,97 @@ describe('paystack-adapter: real sandbox calls', () => {
     expect(result.reference).toBe(reference);
   });
 });
+
+describe('paystack-adapter: reads are bounded and errors are classifiable (webhook verification)', () => {
+  const { GatewayRequestError } = require('../../src/modules/cashiering/paystack-adapter');
+  const { interpretGatewayError } = require('../../src/shared/gateway-record');
+  const realFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = realFetch;
+    delete process.env.PAYSTACK_READ_TIMEOUT_MS;
+  });
+
+  function jsonResponse(status, body) {
+    return { ok: status >= 200 && status < 300, status, json: async () => body };
+  }
+
+  it('gives Verify Transaction a timeout signal, and neither a POST nor another GET', async () => {
+    const signals = {};
+    global.fetch = jest.fn(async (url, options) => {
+      signals[options.method] = options.signal;
+      return jsonResponse(200, { status: true, data: { status: 'success', id: 1, reference: 'r', amount: 100, currency: 'NGN' } });
+    });
+    const adapter = buildAdapter('sk_test_x');
+
+    await adapter.verifyTransaction({ reference: 'r' });
+    await adapter.initializeTransaction({ email: 'a@b.co', amount: '1.00', currency: 'NGN', reference: 'r2' });
+    expect(signals.GET).toBeInstanceOf(AbortSignal);
+    expect(signals.POST).toBeUndefined();
+
+    // Bank resolution is a slow GET that is deliberately not bounded.
+    global.fetch = jest.fn(async (url, options) => {
+      signals.bank = options.signal;
+      return jsonResponse(200, { status: true, data: { account_number: '0000000000', account_name: 'X' } });
+    });
+    await adapter.resolveBankAccount({ accountNumber: '0000000000', bankCode: '058' });
+    expect(signals.bank).toBeUndefined();
+  });
+
+  it('surfaces the requested amount alongside the collected one', async () => {
+    global.fetch = jest.fn(async () =>
+      jsonResponse(200, { status: true, data: { status: 'success', id: 9, reference: 'r', amount: 2030, requested_amount: 2000, currency: 'NGN', channel: 'card' } })
+    );
+    const result = await buildAdapter('sk_test_x').verifyTransaction({ reference: 'r' });
+    expect(result).toMatchObject({ amountSubunit: 2030, requestedAmountSubunit: 2000, currency: 'NGN', channel: 'card' });
+  });
+
+  it('turns a timed-out read into a GatewayRequestError tagged timedOut, read as transient', async () => {
+    process.env.PAYSTACK_READ_TIMEOUT_MS = '20';
+    global.fetch = jest.fn((url, options) => new Promise((resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(options.signal.reason));
+    }));
+
+    const error = await buildAdapter('sk_test_x').verifyTransaction({ reference: 'r' }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(GatewayRequestError);
+    expect(error.details).toEqual({ timedOut: true });
+    expect(interpretGatewayError(error)).toBe('transient');
+  });
+
+  it('tags a network failure and reads it as transient', async () => {
+    global.fetch = jest.fn(async () => {
+      throw new TypeError('fetch failed');
+    });
+    const error = await buildAdapter('sk_test_x').verifyTransaction({ reference: 'r' }).catch((e) => e);
+    expect(error).toBeInstanceOf(GatewayRequestError);
+    expect(error.details).toEqual({ network: true });
+    expect(interpretGatewayError(error)).toBe('transient');
+  });
+
+  it('reads the live sandbox unknown-reference response (400 + transaction_not_found) as "no such transaction"', async () => {
+    global.fetch = jest.fn(async () =>
+      jsonResponse(400, {
+        status: false,
+        message: 'Transaction reference not found.',
+        meta: { nextStep: "Ensure that you're passing the reference of a transaction that exists on this integration" },
+        type: 'validation_error',
+        code: 'transaction_not_found',
+      })
+    );
+    const error = await buildAdapter('sk_test_x').verifyTransaction({ reference: 'nope' }).catch((e) => e);
+    expect(error).toBeInstanceOf(GatewayRequestError);
+    expect(interpretGatewayError(error)).toBe('record_not_found');
+  });
+
+  it('reads Paystack’s 404 as "no such transaction", and 401/429/5xx as transient', async () => {
+    const adapter = buildAdapter('sk_test_x');
+    const outcomes = {};
+    for (const status of [404, 401, 429, 500]) {
+      global.fetch = jest.fn(async () => jsonResponse(status, { status: false, message: `HTTP ${status}` }));
+      const error = await adapter.verifyTransaction({ reference: 'r' }).catch((e) => e);
+      outcomes[status] = interpretGatewayError(error);
+    }
+    expect(outcomes).toEqual({ 404: 'record_not_found', 401: 'transient', 429: 'transient', 500: 'transient' });
+  });
+});
