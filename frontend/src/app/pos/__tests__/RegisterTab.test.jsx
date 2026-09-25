@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, act, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RegisterTab } from '../RegisterTab.jsx';
@@ -353,8 +353,116 @@ describe('<RegisterTab>', () => {
   it('shows the item photo on its menu card', async () => {
     mocks.listMenuItems.mockResolvedValue([{ ...MENU_ITEM, image_url: '/api/v1/media/menu-items/cocktail.png' }]);
     await openNewTab([]);
-    const card = screen.getByRole('button', { name: 'Add House Cocktail' }).closest('div').parentElement;
+    // The whole card is the button now, so the photo is inside it.
+    const card = screen.getByRole('button', { name: 'Add House Cocktail' });
     expect(card.querySelector('img')).toHaveAttribute('src', '/api/v1/media/menu-items/cocktail.png');
+  });
+
+  /**
+   * Mobile/POS layout check: on a touch register the only thing that added an
+   * item was a 28px "+" in the corner of the card, while the ticket said "Tap a
+   * menu item to add it". The whole card is the tap target now.
+   */
+  describe('touch: the whole menu card is the tap target', () => {
+    it('is ONE button — no nested control — and tapping anywhere on it (photo, name, price) adds the item', async () => {
+      mocks.listMenuItems.mockResolvedValue([{ ...MENU_ITEM, image_url: '/api/v1/media/menu-items/cocktail.png' }]);
+      const order = await openNewTab([]);
+      mocks.getOrder.mockResolvedValue({ order, items: [], settlements: [] }); // every reload after the first taps
+      const tile = screen.getByRole('button', { name: 'Add House Cocktail' });
+
+      // One button: nothing interactive inside it, and the "+" is decoration only.
+      expect(within(tile).queryAllByRole('button')).toEqual([]);
+      expect(within(tile).getByText('+')).toHaveAttribute('aria-hidden', 'true');
+
+      await userEvent.click(tile.querySelector('img'));
+      await userEvent.click(within(tile).getByText('House Cocktail'));
+      await userEvent.click(within(tile).getByText(/20\.00/));
+      expect(mocks.addItem).toHaveBeenCalledTimes(3);
+      expect(mocks.addItem).toHaveBeenCalledWith('9', expect.objectContaining({ menuItemId: '3', quantity: 1 }));
+    });
+
+    it('a sold-out card is a disabled button, and being offline disables every card', async () => {
+      mocks.listMenuItems.mockResolvedValue([MENU_ITEM, SOLD_OUT_ITEM]);
+      await openNewTab();
+      expect(screen.getByRole('button', { name: 'Add Rare Steak' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Add House Cocktail' })).toBeEnabled();
+    });
+
+    it('offline: cards are disabled', async () => {
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} isOffline />);
+      await selectStation();
+      // Offline blocks opening a tab too, so there is no register to tap — nothing can be added.
+      expect(screen.queryByRole('button', { name: 'Add House Cocktail' })).not.toBeInTheDocument();
+      expect(mocks.addItem).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Mobile/POS layout check: below 900px the register stacks (menu above, ticket
+   * below) so the ticket and its checkout button end up a screen or two away from
+   * the menu being tapped. A pinned bar shows the running total and jumps to the
+   * ticket; opening a tab brings the register into view.
+   */
+  describe('the pinned order bar and bringing the register into view', () => {
+    let scrolled;
+
+    beforeEach(() => {
+      scrolled = [];
+      window.Element.prototype.scrollIntoView = vi.fn(function scrollIntoView() {
+        scrolled.push(this);
+      });
+    });
+
+    afterEach(() => {
+      delete window.Element.prototype.scrollIntoView;
+    });
+
+    it('is absent while the ticket is empty — and so is the spacer that reserves room for it', async () => {
+      await openNewTab([]);
+      expect(screen.queryByRole('region', { name: 'Order summary' })).not.toBeInTheDocument();
+      expect(document.querySelector('[class*="orderBarSpacer"]')).toBeNull();
+    });
+
+    it('comes with a spacer, so the fixed bar never covers the last of the page', async () => {
+      await openNewTab([orderItem()]);
+      await screen.findByRole('region', { name: 'Order summary' });
+      expect(document.querySelector('[class*="orderBarSpacer"]')).not.toBeNull();
+    });
+
+    it('shows the item count and running total, and its button jumps to the ticket', async () => {
+      await openNewTab([orderItem({ quantity: 2 })]);
+      const bar = await screen.findByRole('region', { name: 'Order summary' });
+      expect(bar).toHaveTextContent('2 items');
+      expect(await within(bar).findByText(/23\.00/)).toBeInTheDocument(); // the same total the ticket shows
+
+      scrolled.length = 0;
+      await userEvent.click(within(bar).getByRole('button', { name: 'Review & checkout' }));
+      expect(scrolled).toEqual([screen.getByRole('region', { name: 'Order ticket' })]);
+    });
+
+    it('says "1 item", not "1 items"', async () => {
+      await openNewTab([orderItem({ quantity: 1 })]);
+      expect(await screen.findByRole('region', { name: 'Order summary' })).toHaveTextContent(/\b1 item\b(?!s)/);
+    });
+
+    it('opening a tab scrolls the register into view once — adding items does not scroll again', async () => {
+      const order = { id: '9', table_label: '', status: 'open' };
+      mocks.openOrder.mockResolvedValue(order);
+      mocks.getOrder
+        .mockResolvedValueOnce({ order, items: [], settlements: [] })
+        .mockResolvedValue({ order, items: [orderItem()], settlements: [] });
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
+      await selectStation();
+      await clickNewTab();
+      await screen.findByText('Order Ticket');
+
+      const panel = screen.getByRole('navigation', { name: 'Menu categories' }).parentElement;
+      expect(scrolled).toEqual([panel]);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add House Cocktail' }));
+      await screen.findByText('Subtotal');
+      expect(scrolled).toEqual([panel]); // still just the one, from opening the tab
+    });
   });
 
   describe('card and NQR through Paystack', () => {
@@ -752,7 +860,9 @@ describe('<RegisterTab>', () => {
     expect(screen.queryByLabelText('Service %')).not.toBeInTheDocument();
 
     // Total = 20.00 subtotal + 1.50 tax + 1.50 service (7.5% of 20.00) = 23.00.
-    expect(await screen.findByText(/23\.00/)).toBeInTheDocument();
+    // Scoped to the ticket: the pinned order bar (narrow layouts) deliberately mirrors this total.
+    const ticket = screen.getByRole('region', { name: 'Order ticket' });
+    expect(await within(ticket).findByText(/23\.00/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
     expect(mocks.settleOrder).toHaveBeenCalledWith(

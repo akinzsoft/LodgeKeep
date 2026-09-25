@@ -17,6 +17,18 @@
   flex: 1;
 }
 
+/* Four buttons (Edit, Change type, Archive, Remove) are wider than a phone-width
+   card, and `actionsRow` (the shared flex row) does not wrap — "Remove" ended up
+   53px outside the card, reachable only by scrolling sideways inside it. Wrapping
+   keeps every action on screen; right-aligned to match the table layout. */
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 .roomCell {
   display: inline-flex;
   align-items: center;
