@@ -39,6 +39,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
   };
 });
 
+const { recordForStoredPayment } = require('../helpers/gateway-record');
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
@@ -212,7 +213,7 @@ describe('POS Register — Paystack card/NQR checkout', () => {
     it('captures the payment when Paystack reports success, recording the channel the guest used', async () => {
       const { orderId } = await openTabWithItem();
       const started = await startCheckout(orderId, { tender: 'card' });
-      paystack.verifyTransaction.mockResolvedValue({ status: 'success', providerPaymentId: '999', channel: 'ussd' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', providerPaymentId: '999', channel: 'ussd' }));
 
       const res = await t.request
         .post(`/api/v1/pos/orders/${orderId}/paystack-checkout/${started.body.data.id}/verify`)
@@ -225,10 +226,25 @@ describe('POS Register — Paystack card/NQR checkout', () => {
       expect(order.status).toBe('open');
     });
 
+    it('refuses a Paystack record that does not match the Register payment, leaving it PENDING', async () => {
+      const { orderId } = await openTabWithItem();
+      const started = await startCheckout(orderId, { tender: 'card' });
+      // Paystack says success but only collected 1 kobo.
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', amountSubunit: 1 }));
+
+      const res = await t.request
+        .post(`/api/v1/pos/orders/${orderId}/paystack-checkout/${started.body.data.id}/verify`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('PAYMENT_GATEWAY_RECORD_MISMATCH');
+      const payment = await t.trx('payments').where({ id: started.body.data.id }).first();
+      expect(payment.status).not.toBe('CAPTURED');
+    });
+
     it('leaves an abandoned payment PENDING so the cashier can retry the same transaction', async () => {
       const { orderId } = await openTabWithItem();
       const started = await startCheckout(orderId, { tender: 'card' });
-      paystack.verifyTransaction.mockResolvedValue({ status: 'abandoned', providerPaymentId: '1' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'abandoned', providerPaymentId: '1' }));
 
       const res = await t.request
         .post(`/api/v1/pos/orders/${orderId}/paystack-checkout/${started.body.data.id}/verify`)
@@ -239,7 +255,7 @@ describe('POS Register — Paystack card/NQR checkout', () => {
     it('marks a definite gateway failure FAILED', async () => {
       const { orderId } = await openTabWithItem();
       const started = await startCheckout(orderId, { tender: 'card' });
-      paystack.verifyTransaction.mockResolvedValue({ status: 'failed', providerPaymentId: '1' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'failed', providerPaymentId: '1' }));
 
       const res = await t.request
         .post(`/api/v1/pos/orders/${orderId}/paystack-checkout/${started.body.data.id}/verify`)
@@ -345,7 +361,7 @@ describe('POS Register — Paystack card/NQR checkout', () => {
     it('asks Paystack before voiding a tab with an open checkout, and refuses the void once it turns out paid', async () => {
       const { orderId } = await openTabWithItem();
       const started = await startCheckout(orderId, { tender: 'card' });
-      paystack.verifyTransaction.mockResolvedValue({ status: 'success', providerPaymentId: '555' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', providerPaymentId: '555' }));
 
       const res = await t.request
         .post(`/api/v1/pos/orders/${orderId}/void`)
@@ -359,7 +375,7 @@ describe('POS Register — Paystack card/NQR checkout', () => {
     it('voids a tab whose checkout was abandoned, cancelling the unpaid payment', async () => {
       const { orderId } = await openTabWithItem();
       const started = await startCheckout(orderId, { tender: 'card' });
-      paystack.verifyTransaction.mockResolvedValue({ status: 'abandoned', providerPaymentId: '1' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'abandoned', providerPaymentId: '1' }));
 
       const res = await t.request
         .post(`/api/v1/pos/orders/${orderId}/void`)

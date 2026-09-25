@@ -84,6 +84,7 @@ const {
   LineItemNotFoundError,
   CannotVoidInvoicedLineError,
   CannotPayArBilledFolioDirectlyError,
+  PaymentGatewayRecordMismatchError,
 } = require('./errors');
 
 const CHARGE_TYPES = new Set(['room_charge', 'pos_charge']);
@@ -922,6 +923,29 @@ async function verifyPayment({ context, paymentId, userId }) {
 
   const { adapter } = await paystack.resolveAdapterForCurrency(db, payment.currency);
   const result = await adapter.verifyTransaction({ reference: payment.provider_reference });
+
+  // Paystack's record must AGREE with the local payment before anything is
+  // applied — the same check the webhook path makes (`src/shared/gateway-record.js`).
+  // Only a disagreement stops here; how a not-yet-final status is treated below
+  // is unchanged (portal and QR flows key off it). The payment is left as it was.
+  const comparison = classifyGatewayRecord({
+    record: result,
+    local: { reference: payment.provider_reference, amount: payment.amount, currency: payment.currency },
+  });
+  if (comparison.verdict === 'mismatch') {
+    await recordAuditEntry(db, {
+      entityType: 'payments',
+      entityId: payment.id,
+      propertyId: payment.property_id,
+      userId: userId ?? null,
+      action: 'gateway_verification_rejected',
+      source: 'api',
+      afterState: { code: comparison.reasons[0].code, reasons: comparison.reasons, expected: comparison.expected, observed: comparison.observed },
+      reason: 'The gateway record did not match the local payment on confirmation; nothing was applied.',
+    });
+    throw new PaymentGatewayRecordMismatchError(payment.id, comparison.reasons);
+  }
+
   // A Register cashier verifies the moment the popup closes — often because
   // the guest closed it before paying ('abandoned') or is still mid-payment
   // ('ongoing'/'pending'). Only a definite gateway failure ends a Register

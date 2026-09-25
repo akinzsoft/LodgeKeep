@@ -45,6 +45,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
   };
 });
 
+const { recordForStoredPayment } = require('../helpers/gateway-record');
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
@@ -344,7 +345,7 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
       expect(created.status).toBe(201);
       const posOrderId = created.body.data.pos_order_id;
 
-      paystack.verifyTransaction.mockResolvedValue({ status: 'success', reference: 'qrstk-ref', providerPaymentId: 'ps_qrstk_1', amountSubunit: 2150, currency: 'NGN' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', providerPaymentId: 'ps_qrstk_1' }));
       const confirmed = await guestPost(`/${tableRaw}/orders/${created.body.data.id}/confirm-payment`).send({});
       expect(confirmed.status).toBe(200);
       expect(confirmed.body.data.payment.status).toBe('CAPTURED');
@@ -416,7 +417,7 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
       expect(created.status).toBe(201);
       const posOrderId = created.body.data.pos_order_id;
 
-      paystack.verifyTransaction.mockResolvedValue({ status: 'success', reference: 'qrstk-ref-2', providerPaymentId: 'ps_qrstk_2', amountSubunit: 2150, currency: 'NGN' });
+      paystack.verifyTransaction.mockImplementation(recordForStoredPayment(() => t.trx, { status: 'success', providerPaymentId: 'ps_qrstk_2' }));
       const confirmed = await guestPost(`/${tableRaw}/orders/${created.body.data.id}/confirm-payment`).send({});
       expect(confirmed.status).toBe(200); // Never rejected for insufficient stock.
       expect(confirmed.body.data.payment.status).toBe('CAPTURED');

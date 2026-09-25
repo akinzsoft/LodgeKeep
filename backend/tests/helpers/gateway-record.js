@@ -21,4 +21,20 @@ function gatewayRecordFor(paymentRow, overrides = {}) {
   };
 }
 
-module.exports = { gatewayRecordFor };
+/**
+ * A `verifyTransaction` mock implementation that answers, for whatever
+ * reference it is asked about, with a record built from the STORED payment row
+ * of that reference (see `gatewayRecordFor`). For suites where the payment is
+ * created deep inside a flow and its reference is generated, so the test cannot
+ * hard-code it. `getTrx` is a function so it reads the harness's CURRENT
+ * transaction: `recordForStoredPayment(() => t.trx, { status: 'success' })`.
+ */
+function recordForStoredPayment(getTrx, overrides = {}) {
+  return async ({ reference }) => {
+    const row = await getTrx()('payments').where({ provider_reference: reference }).first();
+    if (!row) throw new Error(`recordForStoredPayment: no stored payment has reference ${reference}`);
+    return gatewayRecordFor(row, overrides);
+  };
+}
+
+module.exports = { gatewayRecordFor, recordForStoredPayment };
