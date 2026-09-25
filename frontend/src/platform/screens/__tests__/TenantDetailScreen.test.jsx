@@ -183,4 +183,35 @@ describe('<TenantDetailScreen>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Reactivate tenant' }));
     expect(mocks.reactivateTenant).toHaveBeenCalledWith('1', '');
   });
+  it('a tenant whose purge is blocked tells the operator why, and shows the latest export', async () => {
+    mocks.getTenant.mockResolvedValue({
+      ...TENANT,
+      status: 'offboarding',
+      offboarding_requested_at: '2026-09-11T00:00:00.000Z',
+      retention_expires_at: '2026-10-11T00:00:00.000Z',
+      purge_blocked: true,
+      purge: { state: 'blocked', blocked_reason: 'export_missing', rows_deleted: 0 },
+      latest_export: { id: '3', status: 'failed', failed_reason: 'disk full' },
+    });
+    renderScreen();
+    await screen.findByRole('heading', { name: 'Acme Hotels' });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/Deletion is blocked: No completed data export exists/);
+    expect(screen.getByText(/Latest export: failed — disk full/)).toBeInTheDocument();
+    expect(screen.getByText(/permanently and automatically deleted/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['purging', /Permanent deletion is in progress \(1200 rows removed so far\)/],
+    ['purged', /data was permanently deleted on 2026-10-12/],
+  ])('a %s tenant offers no lifecycle action and no impersonation', async (status, message) => {
+    mocks.getTenant.mockResolvedValue({ ...TENANT, status, purge: { state: 'running', rows_deleted: 1200, completed_at: '2026-10-12' } });
+    renderScreen();
+    await screen.findByRole('heading', { name: 'Acme Hotels' });
+
+    expect(screen.getByRole('status')).toHaveTextContent(message);
+    for (const name of ['Suspend tenant', 'Reactivate tenant', 'Offboard tenant', 'Start impersonation']) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    }
+  });
 });

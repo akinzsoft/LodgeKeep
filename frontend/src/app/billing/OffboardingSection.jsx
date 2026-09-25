@@ -108,8 +108,8 @@ export function OffboardingSection({ isOffline = false }) {
             <>
               <p className={styles.paymentPanelHint}>
                 Leaving? Requesting offboarding makes your account read-only and starts preparing a complete, downloadable export of your own
-                guests, reservations, folios, and operational history. Your data is retained for 30 days after the request, in case you change your
-                mind or need to download it again.
+                guests, reservations, folios, and operational history. Your data is kept for 30 days after the request, in case you change your
+                mind or need to download it again. After that it is permanently and automatically deleted, so download your export first. Deletion cannot be undone.
               </p>
               {actionError && (
                 <p role="alert" className={styles.errorBanner}>
@@ -140,7 +140,7 @@ export function OffboardingSection({ isOffline = false }) {
               </div>
               <p className={styles.paymentPanelHint}>
                 Your account can still be reached to check this status and download your export, but every other write is disabled. Contact support
-                to reverse this before the retention window ends.
+                to reverse this before the retention window ends. When it ends, all of your data (guests, reservations, folios, staff accounts and history) is permanently and automatically deleted, and staff can no longer sign in. Download your export before then.
               </p>
 
               {actionError && (
@@ -179,7 +179,7 @@ export function OffboardingSection({ isOffline = false }) {
       {confirmOpen && (
         <ConfirmDialog
           title="Request offboarding?"
-          consequence="Your account will immediately become read-only and a full export of your data will start preparing. This does not delete anything — your data is retained for 30 days, and a platform administrator can reverse this before then."
+          consequence="Your account will immediately become read-only and a full export of your data will start preparing. Nothing is deleted immediately: your data is kept for 30 days, and a platform administrator can reverse this before then. When the 30 days end, your data is permanently and automatically deleted, so download your export first."
           requireReason
           confirmLabel={requesting ? 'Requesting…' : 'Request offboarding'}
           onConfirm={handleConfirmRequest}

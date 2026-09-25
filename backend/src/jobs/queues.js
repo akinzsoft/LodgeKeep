@@ -77,6 +77,7 @@ const DOOR_ACCESS_RETENTION_QUEUE = 'door-access-retention';
 const EXPENSE_SCHEDULES_QUEUE = 'expense-schedules';
 const NIGHT_AUDIT_OVERDUE_QUEUE = 'night-audit-overdue';
 const PAYMENT_WEBHOOKS_QUEUE = 'payment-webhooks';
+const TENANT_PURGE_QUEUE = 'tenant-purge';
 
 let queue = null;
 let trialExpiryQueueInstance = null;
@@ -88,6 +89,7 @@ let doorAccessRetentionQueueInstance = null;
 let expenseSchedulesQueueInstance = null;
 let nightAuditOverdueQueueInstance = null;
 let paymentWebhooksQueueInstance = null;
+let tenantPurgeQueueInstance = null;
 
 function outboxDispatchQueue() {
   if (!queue) {
@@ -167,6 +169,19 @@ function paymentWebhooksQueue() {
   return paymentWebhooksQueueInstance;
 }
 
+/**
+ * `tenant-purge` (the tenant retention-expiry purge) is its own eleventh queue: a
+ * scheduler-only sweep (`src/jobs/tenant-purge.js`) that may run for minutes deleting
+ * one tenant's data, and must never delay the outbox, billing or any other sweep.
+ * Only registered when `TENANT_PURGE_ENABLED=true` (`src/server.js`).
+ */
+function tenantPurgeQueue() {
+  if (!tenantPurgeQueueInstance) {
+    tenantPurgeQueueInstance = new Queue(TENANT_PURGE_QUEUE, { connection: redisConnection() });
+  }
+  return tenantPurgeQueueInstance;
+}
+
 /** Test-only teardown — BullMQ's `Queue` holds its own connection handles beyond the shared `redisConnection()` instance, and both must close for the process to exit without `--forceExit`. */
 async function __closeQueuesForTesting() {
   if (queue) {
@@ -209,6 +224,10 @@ async function __closeQueuesForTesting() {
     await paymentWebhooksQueueInstance.close();
     paymentWebhooksQueueInstance = null;
   }
+  if (tenantPurgeQueueInstance) {
+    await tenantPurgeQueueInstance.close();
+    tenantPurgeQueueInstance = null;
+  }
 }
 
 module.exports = {
@@ -232,5 +251,7 @@ module.exports = {
   nightAuditOverdueQueue,
   PAYMENT_WEBHOOKS_QUEUE,
   paymentWebhooksQueue,
+  TENANT_PURGE_QUEUE,
+  tenantPurgeQueue,
   __closeQueuesForTesting,
 };

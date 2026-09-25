@@ -56,6 +56,19 @@ describe('Platform console + impersonation (PLAN.md Phase 5)', () => {
     }
   });
 
+  it('an impersonation token stops working the moment its tenant is being purged', async () => {
+    const start = await startImpersonation();
+    const auth = { Authorization: `Bearer ${start.body.data.accessToken}` };
+    expect((await t.request.get('/api/v1/room-types').set(auth)).status).toBe(200);
+    await t.trx('tenants').where({ id: ctx.a.id }).update({ status: 'purging' });
+    try {
+      const res = await t.request.get('/api/v1/room-types').set(auth);
+      expect(res.status).toBeGreaterThanOrEqual(400);
+    } finally {
+      await t.trx('tenants').where({ id: ctx.a.id }).update({ status: 'active' });
+    }
+  });
+
   it('limits the property list to the granted property', async () => {
     const start = await startImpersonation();
     const res = await t.request.get('/api/v1/properties').set('Authorization', `Bearer ${start.body.data.accessToken}`);

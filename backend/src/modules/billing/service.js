@@ -82,6 +82,7 @@ const {
   CheckoutExpiredError,
 } = require('./errors');
 const gateway = require('./paystack-gateway');
+const { INACTIVE_SWEEP_STATUSES } = require('../../shared/tenant-lifecycle');
 const { classifyGatewayRecord, interpretGatewayError } = require('../../shared/gateway-record');
 const { persistWebhookEvent, finalizeWebhookEvent, deferWebhookEvent, webhookEventKey, RECORD_NOT_FOUND_GRACE_ATTEMPTS } = require('../../shared/webhook-events');
 
@@ -469,6 +470,14 @@ async function processTenantBillingCycle({ tenantId, now = new Date() }) {
     if (!subscription || subscription.status === 'canceled') return { action: 'skip' };
     if (new Date(subscription.current_period_start) > now) return { action: 'skip' }; // not due yet
 
+    // A tenant that is offboarding, being purged or already purged is never
+    // charged. Read AFTER the subscription lock, matching `applyChargeOutcome`'s
+    // and the purge claim's lock order (subscription before tenants), so the two
+    // can never deadlock. The purge claim also cancels the subscription, which the
+    // check above already covers; this is what stops billing at `offboarding`.
+    const tenantRow = await trx.platform().withContext(workerContext({ tenantId })).table('tenants').first('status');
+    if (!tenantRow || INACTIVE_SWEEP_STATUSES.includes(tenantRow.status)) return { action: 'skip_tenant_leaving' };
+
     const invoice = await ensureCurrentInvoice(trx, subscription);
     if (invoice.status !== 'open') return { action: 'skip' }; // already paid/void/uncollectible
 
@@ -588,6 +597,17 @@ async function applyChargeOutcome({ tenantId, paymentId, success, providerPaymen
     const subscription = await trx.platform().table('subscriptions').where({ id: invoice.subscription_id }).forUpdate().first();
     const tenantDb = trx.platform().withContext(workerContext({ tenantId }));
     const tenant = await tenantDb.table('tenants').where({ id: tenantId }).first();
+
+    // A late charge outcome for a subscription that was cancelled (the purge
+    // claim cancels it) or a tenant that is being purged / already purged: the
+    // payment and invoice rows above already record what really happened at the
+    // gateway, but a cancelled subscription is never revived, a leaving tenant is
+    // never converted or suspended, and nobody is emailed. Without this a late
+    // webhook would set `subscriptions.status` back to 'active'.
+    if (subscription.status === 'canceled' || ['purging', 'purged'].includes(tenant?.status)) {
+      if (success) await trx.platform().table('subscription_invoices').where({ id: invoice.id }).update({ status: 'paid', paid_at: new Date() });
+      return { action: success ? 'captured_subscription_inactive' : 'failed_subscription_inactive' };
+    }
 
     if (success) {
       await trx.platform().table('subscription_invoices').where({ id: invoice.id }).update({ status: 'paid', paid_at: new Date() });
@@ -809,6 +829,12 @@ async function decideBillingWebhookEvent({ eventId, now = new Date() }) {
   if (!payment) return finalize('ignored', { reason: 'unknown_reference' });
 
   const attribution = { tenant_id: payment.tenant_id, related_subscription_payment_id: payment.id };
+
+  // A tenant being purged (or purged) accepts nothing new; the payment row still
+  // records what happened at the gateway via `applyChargeOutcome`'s own guard, but
+  // no further processing (verification, dunning, conversion) is done here.
+  const owner = await scopedDb().for(workerContext({ tenantId: payment.tenant_id })).table('tenants').first('status');
+  if (!owner || ['purging', 'purged'].includes(owner.status)) return finalize('ignored', { reason: 'tenant_purging' }, attribution);
 
   if (SETTLED_SUBSCRIPTION_PAYMENT_STATUSES.has(payment.status)) return finalize('ignored', { reason: 'already_settled', paymentStatus: payment.status }, attribution);
 

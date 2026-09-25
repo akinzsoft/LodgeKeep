@@ -37,6 +37,7 @@ const { startDoorAccessRetentionWorker, scheduleDoorAccessRetentionSweep } = req
 const { startExpenseSchedulesWorker, scheduleExpenseSchedulesSweep } = require('./jobs/expense-schedules');
 const { startNightAuditOverdueWorker, scheduleNightAuditOverdueSweep } = require('./jobs/night-audit-overdue');
 const { startPaymentWebhooksWorker, schedulePaymentWebhookSweep } = require('./jobs/payment-webhooks');
+const { isTenantPurgeEnabled, startTenantPurgeWorker, scheduleTenantPurgeSweep } = require('./jobs/tenant-purge');
 
 const port = Number(process.env.PORT || 3000);
 
@@ -126,3 +127,18 @@ startPaymentWebhooksWorker();
 schedulePaymentWebhookSweep().catch((error) => {
   console.error('Failed to schedule the payment webhook retry sweep:', error);
 });
+
+// Tenant retention-expiry purge — `src/jobs/tenant-purge.js`'s own header. DESTRUCTIVE
+// (permanently deletes an offboarded tenant's data once its retention deadline has
+// passed and a completed export is on file), so it is registered ONLY when
+// TENANT_PURGE_ENABLED is exactly 'true'. Off by default: forgetting to enable it
+// keeps data past its deadline, the safe direction. No backups exist for this stack.
+if (isTenantPurgeEnabled()) {
+  startTenantPurgeWorker();
+  scheduleTenantPurgeSweep().catch((error) => {
+    console.error('Failed to schedule the tenant purge sweep:', error);
+  });
+  console.log('Tenant retention purge is ENABLED.');
+} else {
+  console.log('Tenant retention purge is disabled (set TENANT_PURGE_ENABLED=true to enable).');
+}

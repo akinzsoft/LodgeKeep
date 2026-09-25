@@ -48,6 +48,7 @@ const { redisConnection } = require('./redis-connection');
 const { subscriptionBillingQueue, SUBSCRIPTION_BILLING_QUEUE } = require('./queues');
 const { knex } = require('../db');
 const { processTenantBillingCycle } = require('../modules/billing/service');
+const { INACTIVE_SWEEP_STATUSES } = require('../shared/tenant-lifecycle');
 
 const SWEEP_JOB_NAME = 'sweep';
 const SWEEP_INTERVAL_MS = Number(process.env.SUBSCRIPTION_BILLING_SWEEP_INTERVAL_MS || 60_000);
@@ -55,10 +56,18 @@ const SWEEP_SCHEDULER_ID = 'subscription-billing-sweep';
 
 /** One tenant's billing cycle per iteration, each its own set of short transactions (see service.js) — a failure or a real gateway error on one tenant must never block the rest. */
 async function runSubscriptionBillingSweep(now = new Date()) {
+  // A tenant that is offboarding (or being/already purged) is not charged: a
+  // leaving, read-only customer should not keep being billed monthly for the
+  // whole retention window. The subscription is NOT cancelled for `offboarding`,
+  // so reactivating resumes billing (a missed period is not back-billed); the
+  // purge claim cancels it for good. `processTenantBillingCycle` re-checks this
+  // inside its own locked transaction.
   const due = await knex()('subscriptions')
-    .whereNot({ status: 'canceled' })
-    .andWhere('current_period_start', '<=', now)
-    .select('tenant_id');
+    .join('tenants', 'tenants.id', 'subscriptions.tenant_id')
+    .whereNot('subscriptions.status', 'canceled')
+    .whereNotIn('tenants.status', INACTIVE_SWEEP_STATUSES)
+    .andWhere('subscriptions.current_period_start', '<=', now)
+    .select('subscriptions.tenant_id');
 
   const results = [];
   for (const row of due) {

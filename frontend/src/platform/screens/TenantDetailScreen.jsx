@@ -5,7 +5,15 @@ import { platformApi, ApiError } from '../../shared/api/index.js';
 import { usePlatformAuth } from '../auth/PlatformAuthContext.jsx';
 import styles from './PlatformScreens.module.css';
 
-const STATUS_TONE = { trial: 'warning', active: 'success', suspended: 'danger', offboarding: 'neutral' };
+const STATUS_TONE = { trial: 'warning', active: 'success', suspended: 'danger', offboarding: 'neutral', purging: 'danger', purged: 'neutral' };
+
+/** What an operator should DO about a blocked purge, by the backend's blocked_reason code. */
+const PURGE_BLOCKED_HINT = {
+  export_missing: 'No completed data export exists from after the offboarding request. A fresh export has been queued automatically; if it keeps failing, check the export status above.',
+  retention_dates_missing: 'The offboarding request has no retention dates recorded, so deletion cannot be scheduled.',
+  warning_pending: 'The tenant has not yet been sent its final deletion warning; it is sent automatically.',
+  retention_window_invalid: 'The retention window is shorter than the configured minimum, so the tenant will not be deleted automatically.',
+};
 
 /** Duplicated from TenantListScreen.jsx rather than imported — the same "owned by the one screen that reads it" convention `BillingScreen.jsx`'s own SUBSCRIPTION_STATUS already established for a different-audience version of the identical vocabulary. */
 const SUBSCRIPTION_STATUS_TONE = { active: 'success', past_due: 'warning', canceled: 'neutral' };
@@ -187,6 +195,13 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
               </dd>
             </div>
           </dl>
+          {(tenant.status === 'purging' || tenant.status === 'purged') && (
+            <p className={styles.hint} role="status">
+              {tenant.status === 'purging'
+                ? `Permanent deletion is in progress${tenant.purge ? ` (${tenant.purge.rows_deleted} rows removed so far)` : ''}. It cannot be stopped or reversed, and no lifecycle action is available.`
+                : `This tenant's data was permanently deleted${tenant.purge?.completed_at ? ` on ${tenant.purge.completed_at}` : ''}. Only its billing records and this tombstone remain.`}
+            </p>
+          )}
           {(tenant.status === 'trial' || tenant.status === 'active') && (
             <form className={styles.form} onSubmit={handleSuspend}>
               <label className={styles.field}>
@@ -246,6 +261,21 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
               </p>
               <p className={styles.hint}>Requested: {tenant.offboarding_requested_at ?? '—'}</p>
               <p className={styles.hint}>Data retained until: {tenant.retention_expires_at ?? '—'}</p>
+              <p className={styles.hint}>
+                After that date the tenant&apos;s data is permanently and automatically deleted, once a completed
+                export exists.
+              </p>
+              {tenant.latest_export && (
+                <p className={styles.hint}>
+                  Latest export: {tenant.latest_export.status}
+                  {tenant.latest_export.failed_reason ? ` — ${tenant.latest_export.failed_reason}` : ''}
+                </p>
+              )}
+              {tenant.purge_blocked && (
+                <p role="alert" className={styles.errorBanner}>
+                  Deletion is blocked: {PURGE_BLOCKED_HINT[tenant.purge?.blocked_reason] ?? tenant.purge?.blocked_reason}
+                </p>
+              )}
             </div>
           )}
         </Card>
@@ -283,7 +313,7 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
         rowKey={(row) => row.id}
       />
 
-      {tenant && (
+      {tenant && tenant.status !== 'purging' && tenant.status !== 'purged' && (
         <Card title="Impersonate this tenant, read-only">
           {impersonationError && (
             <p role="alert" className={styles.errorBanner}>

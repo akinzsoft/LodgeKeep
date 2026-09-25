@@ -49,6 +49,19 @@ describe('<TenantListScreen>', () => {
     expect(screen.getByText('2027-01-10 09:00:00')).toBeInTheDocument();
   });
 
+  it('flags an offboarding tenant whose deletion is blocked, and shows purging/purged as their own statuses', async () => {
+    mocks.listTenants.mockResolvedValue([
+      { ...TENANT, id: '1', name: 'Stuck Inn', status: 'offboarding', purge_blocked: true },
+      { ...TENANT, id: '2', name: 'Going Inn', status: 'purging', purge_blocked: false },
+      { ...TENANT, id: '3', name: 'Gone Inn', status: 'purged', purge_blocked: false },
+    ]);
+    render(<TenantListScreen onSelectTenant={vi.fn()} onLogout={vi.fn()} />);
+    await screen.findByText('Stuck Inn');
+    expect(screen.getAllByText('Deletion blocked')).toHaveLength(1);
+    expect(screen.getByText('purging')).toBeInTheDocument();
+    expect(screen.getByText('purged')).toBeInTheDocument();
+  });
+
   it('shows honest fallbacks — no plan, never logged in, no subscription, not a trial', async () => {
     render(<TenantListScreen onSelectTenant={vi.fn()} onLogout={vi.fn()} />);
     await screen.findByText('Acme Hotels');

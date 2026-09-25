@@ -29,6 +29,7 @@ const { Worker } = require('bullmq');
 const { redisConnection } = require('./redis-connection');
 const { doorAccessRetentionQueue, DOOR_ACCESS_RETENTION_QUEUE } = require('./queues');
 const { knex, scopedDb } = require('../db');
+const { INACTIVE_SWEEP_STATUSES } = require('../shared/tenant-lifecycle');
 const { workerContext } = require('../modules/tenancy');
 const { recordAuditEntry } = require('../audit');
 const { purgeExpiredEvents } = require('../modules/access-monitoring/service');
@@ -53,7 +54,7 @@ async function runDoorAccessRetentionSweep() {
       );
     })
     .where('properties.status', 'active')
-    .whereNot('tenants.status', 'offboarding')
+    .whereNotIn('tenants.status', INACTIVE_SWEEP_STATUSES)
     .whereNotNull('lock_system_config.retention_days')
     .select('properties.id as id', 'properties.tenant_id as tenant_id');
 

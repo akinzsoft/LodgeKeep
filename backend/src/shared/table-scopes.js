@@ -353,6 +353,13 @@ const TABLE_SCOPES = Object.freeze({
   // src/modules/offboarding/service.js and the export job.
   tenant_data_exports: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
 
+  // Tenant retention purge — 20261103091000_create_tenant_purges. PLATFORM_SCOPED
+  // with `tenant_id` an `unscopedColumns` mandatory business column, following
+  // `tenant_data_exports`/`subscriptions`: Planmsys's own bookkeeping about a job
+  // run against a tenant. RETAINED after a purge. Reached only through
+  // hand-written queries in src/modules/offboarding/purge.js.
+  tenant_purges: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
+
   // Data migration — PLAN.md Phase 5's last unbuilt bullet,
   // PRODUCT_REQUIREMENTS.md §3.20. 20260927091000_create_import_runs
   // through 20260927093000_create_imported_record_map.

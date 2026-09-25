@@ -180,13 +180,24 @@ async function runExportJob({ tenantId, exportId }) {
     .update({ status: 'processing' });
   if (!claimed) return; // already completed/failed by a prior attempt
 
+  // A tenant whose purge has started has no data left worth exporting, and a file
+  // written now would outlive the purge that just deleted everything else.
+  const owner = await db.table('tenants').first('status');
+  if (!owner || ['purging', 'purged'].includes(owner.status)) {
+    await db.platform().table('tenant_data_exports').where({ id: exportId }).update({ status: 'failed', failed_reason: 'Tenant purge started' });
+    return;
+  }
+
   try {
     const { filePath, fileSizeBytes } = await generateTenantDataExport({ tenantId, exportId });
-    await db
+    // Conditional on still being `processing`: the purge claim marks an in-flight
+    // export `failed`, and a stale job must not flip that back to `completed`.
+    const completed = await db
       .platform()
       .table('tenant_data_exports')
-      .where({ id: exportId })
+      .where({ id: exportId, status: 'processing' })
       .update({ status: 'completed', file_path: filePath, file_size_bytes: fileSizeBytes, completed_at: new Date(), failed_reason: null });
+    if (!completed) fs.rmSync(filePath, { force: true }); // the row was failed under us: never leave an orphan file
   } catch (error) {
     await db
       .platform()
@@ -215,4 +226,5 @@ module.exports = {
   runExportJob,
   startTenantDataExportWorker,
   exportableTables,
+  storageDir: storageDir,
 };
