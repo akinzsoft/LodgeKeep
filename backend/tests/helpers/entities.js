@@ -2908,6 +2908,18 @@ const ENTITIES = [
   },
 
   {
+    table: 'tenant_purges',
+    // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns) — reached only
+    // through hand-written queries in src/modules/offboarding/purge.js. A bare
+    // UNIQUE(tenant_id): like `subscriptions`, only tenant `a` has a fixture row,
+    // so `newRow`/`duplicateRow` target `ctx.b` and `duplicateRow` collides with
+    // the row `newRow` inserted moments earlier in the same transaction.
+    uniqueKeys: [['tenant_id']],
+    newRow: (ctx) => ({ tenant_id: ctx.b.id, state: 'scheduled' }),
+    duplicateRow: (ctx) => ({ tenant_id: ctx.b.id, state: 'blocked' }),
+  },
+
+  {
     table: 'import_runs',
     // TENANT_SCOPED, property_id a nullable attribution column — see
     // 20260927091000_create_import_runs.js's own header. No unique

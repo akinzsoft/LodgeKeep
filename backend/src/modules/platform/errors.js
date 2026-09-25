@@ -46,4 +46,42 @@ class InvalidTenantLifecycleTransitionError extends AppError {
   }
 }
 
-module.exports = { TenantNotFoundError, PropertyNotInTenantError, InvalidTenantLifecycleTransitionError, ValidationError };
+/**
+ * The tenant's retention deadline passed and its data is being permanently
+ * deleted (`tenants.status = 'purging'`) — or has been (`'purged'`). Both are
+ * ONE-WAY: nothing reactivates, suspends, offboards or impersonates such a
+ * tenant. A 409 rather than the generic 422 above so the console can say plainly
+ * what happened instead of "invalid transition".
+ */
+class TenantPurgeStartedError extends AppError {
+  constructor(status) {
+    super(
+      status === 'purged' ? 'CONFLICT_TENANT_PURGED' : 'CONFLICT_TENANT_PURGING',
+      status === 'purged'
+        ? "This tenant's data has been permanently deleted and it cannot be reactivated, suspended, offboarded or impersonated."
+        : "This tenant's data is being permanently deleted. It can no longer be reactivated, suspended, offboarded or impersonated.",
+      409,
+      { status }
+    );
+  }
+}
+
+/** Throws `TenantPurgeStartedError` if `tenant` is purging or purged; a no-op for anything else (including a missing tenant, which callers report as not-found). */
+function assertNotPurging(tenant) {
+  if (tenant && (tenant.status === 'purging' || tenant.status === 'purged')) throw new TenantPurgeStartedError(tenant.status);
+}
+
+/**
+ * The lifecycle actions read the tenant BEFORE their conditional UPDATE (for the
+ * audit row's before-state), and that plain read fixes the transaction's REPEATABLE
+ * READ snapshot — so if the purge claim commits while the UPDATE waits for the
+ * row lock, `before.status` still says the old status. When an UPDATE affected
+ * nothing, the caller must therefore re-read the CURRENT status with a locking read
+ * (which sees the latest committed row) before deciding which error to raise.
+ * `readTenant` is `() => query`, so this file stays free of any data-access import.
+ */
+async function assertNotPurgingFresh(readLockedTenant) {
+  assertNotPurging(await readLockedTenant());
+}
+
+module.exports = { TenantNotFoundError, PropertyNotInTenantError, InvalidTenantLifecycleTransitionError, TenantPurgeStartedError, assertNotPurging, assertNotPurgingFresh, ValidationError };

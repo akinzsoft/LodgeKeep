@@ -73,7 +73,10 @@ async function enqueueOutboxDispatch({ tenantId, propertyId }) {
 
 /** The durable safety net — one dispatch run per active tenant. */
 async function runOutboxDispatchSweep() {
-  const tenants = await knex()('tenants').where({ status: 'active' }).select('id');
+  // `offboarding` too: the purge warning emails (`src/modules/offboarding/purge.js`)
+  // are written for a tenant in that status and must not depend solely on the
+  // reactive enqueue surviving a Redis blip.
+  const tenants = await knex()('tenants').whereIn('status', ['active', 'offboarding']).select('id');
   for (const tenant of tenants) {
     await dispatchPendingOutboxEventsForTenant({ context: workerContext({ tenantId: tenant.id, propertyId: null }) });
   }

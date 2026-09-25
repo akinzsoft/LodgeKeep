@@ -3,7 +3,7 @@ import { DataTable, StatusPill, Button } from '../../shared/components/index.js'
 import { platformApi, ApiError } from '../../shared/api/index.js';
 import styles from './PlatformScreens.module.css';
 
-const STATUS_TONE = { trial: 'warning', active: 'success', suspended: 'danger', offboarding: 'neutral' };
+const STATUS_TONE = { trial: 'warning', active: 'success', suspended: 'danger', offboarding: 'neutral', purging: 'danger', purged: 'neutral' };
 
 /** DESIGN_SYSTEM.md §1: status is always a filled pill with a text label, never colour alone — the same vocabulary `BillingScreen.jsx` owns for the tenant's own billing screen, duplicated here rather than imported (this is a different, broader-audience surface). */
 const SUBSCRIPTION_STATUS_TONE = { active: 'success', past_due: 'warning', canceled: 'neutral' };
@@ -62,7 +62,16 @@ export function TenantListScreen({ onSelectTenant, onLogout }) {
         columns={[
           { key: 'name', label: 'Name' },
           { key: 'slug', label: 'Slug' },
-          { key: 'status', label: 'Status', render: (row) => <StatusPill tone={STATUS_TONE[row.status] ?? 'neutral'} label={row.status} /> },
+          {
+            key: 'status',
+            label: 'Status',
+            render: (row) => (
+              <>
+                <StatusPill tone={STATUS_TONE[row.status] ?? 'neutral'} label={row.status} />
+                {row.purge_blocked && <StatusPill tone="danger" label="Deletion blocked" />}
+              </>
+            ),
+          },
           { key: 'plan', label: 'Plan', render: (row) => row.plan?.name ?? 'No plan' },
           { key: 'property_count', label: 'Properties', render: (row) => row.property_count },
           { key: 'trial', label: 'Trial', render: describeTrial },

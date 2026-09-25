@@ -1102,6 +1102,11 @@ async function decidePaymentWebhookEvent({ eventId, now = new Date() }) {
 
   const attribution = { tenant_id: payment.tenant_id, property_id: payment.property_id, related_payment_id: payment.id };
 
+  // A tenant being purged (or purged) accepts nothing: the event is recorded and
+  // dropped, never applied to data that is about to be, or already was, deleted.
+  const owner = await knex()('tenants').where({ id: payment.tenant_id }).first('status');
+  if (!owner || ['purging', 'purged'].includes(owner.status)) return finalize('ignored', { reason: 'tenant_purging' }, attribution);
+
   if (SETTLED_PAYMENT_STATUSES.has(payment.status)) return finalize('ignored', { reason: 'already_settled', paymentStatus: payment.status }, attribution);
 
   // A Register checkout cancelled locally is still payable at Paystack; a late

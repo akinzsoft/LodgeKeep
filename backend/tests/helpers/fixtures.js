@@ -2192,6 +2192,11 @@ async function seedTwoTenants(trx) {
       }),
     });
 
+    // One `tenant_purges` row for tenant `a` only, mirroring `subscriptions`
+    // above (a bare UNIQUE(tenant_id) table): the generic isolation suite's
+    // `newRow`/`duplicateRow` for it target tenant `b`, which must have none yet.
+    await insertReturningId(trx, 'tenant_purges', { tenant_id: t.id, state: 'scheduled' });
+
     t.subscriptionInvoices.push({
       id: await insertReturningId(trx, 'subscription_invoices', {
         tenant_id: t.id,

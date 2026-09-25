@@ -57,4 +57,30 @@ describe('GET /internal/ask-tls', () => {
 
     expect(res.status).toBe(404);
   });
+  // Tenant retention purge: a `purging`/`purged` tenant's subdomain must stop being
+  // issued TLS certificates — `resolveTenantRowForHostname` is shared with request
+  // resolution, so the two can never disagree.
+  describe('a tenant being purged', () => {
+    const { seedTwoTenants } = require('../helpers/fixtures');
+    let ctx;
+
+    beforeAll(async () => {
+      ctx = await seedTwoTenants(t.trx);
+    });
+
+    afterEach(async () => {
+      await t.trx('tenants').where({ id: ctx.a.id }).update({ status: 'active' });
+    });
+
+    test('an active tenant’s subdomain gets a certificate', async () => {
+      const res = await t.request.get(`/internal/ask-tls?domain=${ctx.a.slug}.${process.env.APP_DOMAIN}`);
+      expect(res.status).toBe(200);
+    });
+
+    test.each(['purging', 'purged'])('a %s tenant’s subdomain does not', async (status) => {
+      await t.trx('tenants').where({ id: ctx.a.id }).update({ status });
+      const res = await t.request.get(`/internal/ask-tls?domain=${ctx.a.slug}.${process.env.APP_DOMAIN}`);
+      expect(res.status).toBe(404);
+    });
+  });
 });

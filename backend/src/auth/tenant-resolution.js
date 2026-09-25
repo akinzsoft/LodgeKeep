@@ -31,6 +31,7 @@
  */
 
 const { fail } = require('../shared/response');
+const { isTenantResolvable } = require('../shared/tenant-lifecycle');
 
 function currentAppDomain() {
   const value = process.env.APP_DOMAIN;
@@ -68,7 +69,11 @@ async function resolveByCustomDomain(scoped, hostname) {
  */
 async function resolveTenantRowForHostname({ scoped, hostname, appDomain }) {
   const subdomain = subdomainOf(hostname, appDomain);
-  return subdomain ? scoped.bootstrap('tenants', 'slug', subdomain) : resolveByCustomDomain(scoped, hostname);
+  const row = subdomain ? await scoped.bootstrap('tenants', 'slug', subdomain) : await resolveByCustomDomain(scoped, hostname);
+  // A `purging`/`purged` tenant resolves to nothing: there is nothing left to
+  // reach, and the Caddy on-demand-TLS ask endpoint shares this function, so a
+  // purged tenant's subdomain also stops being issued certificates.
+  return isTenantResolvable(row) ? row : null;
 }
 
 /**
@@ -117,6 +122,13 @@ async function resolveTenantRowForHostname({ scoped, hostname, appDomain }) {
  * (that function has treated `offboarding` as write-blocked since the
  * signup pass — see its own header — this is the first request path that
  * can actually reach that branch with a real `offboarding` tenant).
+ *
+ * Tenant retention purge: `purging` and `purged` are the two statuses that DO
+ * resolve to nothing (`isTenantResolvable`). The tenant's data is being
+ * permanently deleted or is gone, so a request to its address gets the same
+ * generic "no organization" 404 as an address that never existed — and, because
+ * `tenant-domain-ask.js` calls `resolveTenantRowForHostname`, its subdomain also
+ * stops receiving TLS certificates.
  */
 function resolveTenant({ db, systemContext }) {
   return async function resolveTenantMiddleware(req, res, next) {
@@ -124,9 +136,10 @@ function resolveTenant({ db, systemContext }) {
       const scoped = db.for(systemContext());
       const devOverride = process.env.NODE_ENV !== 'production' ? req.get('X-Tenant-Slug') : null;
 
-      const tenantRow = devOverride
+      const candidateRow = devOverride
         ? await scoped.bootstrap('tenants', 'slug', devOverride)
         : await resolveTenantRowForHostname({ scoped, hostname: req.hostname, appDomain: currentAppDomain() });
+      const tenantRow = isTenantResolvable(candidateRow) ? candidateRow : null;
 
       if (!tenantRow) {
         // `code: null`, matching every other 404 in this codebase (API.md

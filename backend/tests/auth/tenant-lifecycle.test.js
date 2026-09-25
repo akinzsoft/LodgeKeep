@@ -194,4 +194,30 @@ describe('Tenant lifecycle read-only enforcement (PLAN.md Phase 5)', () => {
     expect(writeRes.status).toBe(403);
     expect(writeRes.body.error.code).toBe('FORBIDDEN_TENANT_READ_ONLY');
   });
+  // Tenant retention purge: `purging` (data being deleted) and `purged` (the
+  // tombstone) resolve to NOTHING — the same generic 404 as an address that never
+  // existed — and refuse every staff token, so access is gone at the purge claim.
+  describe.each(['purging', 'purged'])('a %s tenant', (status) => {
+    it('no longer resolves from its hostname: login is a 404', async () => {
+      await setStatus(ctx.a, status);
+      const res = await t.request
+        .post('/api/v1/auth/login')
+        .set('X-Tenant-Slug', ctx.a.slug)
+        .send({ email: ctx.a.users[0].email, password: 'a fixture password long enough to pass validation' });
+      expect(res.status).toBe(404);
+      expect(res.body.error.message).toBe('No organization is registered at this address.');
+    });
+
+    it('rejects an already-issued staff access token, even on a read', async () => {
+      await setStatus(ctx.a, status);
+      const res = await readRequest();
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('AUTH_SESSION_INVALID');
+    });
+
+    it('leaves the other tenant untouched', async () => {
+      await setStatus(ctx.a, status);
+      expect((await readRequest(ctx.b)).status).toBe(200);
+    });
+  });
 });

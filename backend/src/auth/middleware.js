@@ -21,7 +21,7 @@ const jwt = require('jsonwebtoken');
 const { verifyAccessToken } = require('./tokens');
 const { scopedDb } = require('../db');
 const { contextFromSession, guestContextFromSession, platformContext, impersonationContext, systemContext, withTenantLifecycle } = require('../modules/tenancy');
-const { isTenantWriteBlocked } = require('../shared/tenant-lifecycle');
+const { isTenantWriteBlocked, isTenantResolvable } = require('../shared/tenant-lifecycle');
 const {
   UnauthenticatedError,
   TokenExpiredError,
@@ -57,12 +57,17 @@ async function liveImpersonationContext(claims) {
     .where({ id: row.platform_user_id }).first();
   if (!platformUser || platformUser.status !== 'active') throw new SessionInvalidError();
 
-  return impersonationContext({
+  const context = impersonationContext({
     tenantId: row.tenant_id,
     propertyId: row.property_id,
     impersonationSessionId: row.id,
     platformUserId: row.platform_user_id,
   });
+  // The purge claim ends open sessions, but a session created in the instant before the
+  // claim committed must not outlive it: a purging/purged tenant is not viewable either.
+  const tenant = await db.for(context).table('tenants').first();
+  if (!isTenantResolvable(tenant)) throw new ImpersonationEndedError();
+  return context;
 }
 
 async function liveContextFor(claims) {
@@ -91,6 +96,9 @@ async function liveContextFor(claims) {
     // that decides what "blocked" means from these facts — this file only
     // fetches them and hands them to it.
     const tenant = await db.for(context).table('tenants').first();
+    // Belt and braces alongside the purge claim deactivating every user: a
+    // tenant being purged (or purged) accepts no staff token at all.
+    if (!isTenantResolvable(tenant)) throw new SessionInvalidError();
     return withTenantLifecycle(context, {
       status: tenant?.status ?? null,
       writeBlocked: isTenantWriteBlocked(tenant),

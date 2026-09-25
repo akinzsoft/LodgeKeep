@@ -57,6 +57,7 @@ const { Worker } = require('bullmq');
 const { redisConnection } = require('./redis-connection');
 const { nightAuditOverdueQueue, NIGHT_AUDIT_OVERDUE_QUEUE } = require('./queues');
 const { knex, scopedDb } = require('../db');
+const { INACTIVE_SWEEP_STATUSES } = require('../shared/tenant-lifecycle');
 const { workerContext } = require('../modules/tenancy');
 const { recordAuditEntry } = require('../audit');
 const { writeOutboxEvent } = require('../shared/outbox');
@@ -86,7 +87,7 @@ async function runNightAuditOverdueSweep() {
   const properties = await knex()('properties')
     .join('tenants', 'tenants.id', 'properties.tenant_id')
     .where('properties.status', 'active')
-    .whereNot('tenants.status', 'offboarding')
+    .whereNotIn('tenants.status', INACTIVE_SWEEP_STATUSES)
     .whereNotNull('properties.current_business_date')
     .select(
       'properties.id as id',

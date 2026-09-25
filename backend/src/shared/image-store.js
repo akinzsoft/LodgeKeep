@@ -119,6 +119,24 @@ function deleteImage(kind, fileName) {
   fs.rm(path.join(storageDir(kind), fileName), { force: true }, () => {});
 }
 
+/**
+ * STRICT removal, for the tenant retention purge: unlike `deleteImage` it is
+ * synchronous and reports the truth. Returns `true` when a file was removed and
+ * `false` when there was nothing to remove (an invalid name, or already gone);
+ * any OTHER failure (permissions, I/O) throws, so a purge can count and surface
+ * it instead of silently leaving a customer's photo on a public URL.
+ */
+function removeImageStrict(kind, fileName) {
+  if (!fileName || !FILE_NAME_PATTERN.test(fileName)) return false;
+  try {
+    fs.rmSync(path.join(storageDir(kind), fileName));
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 function imageUrl(kind, fileName) {
   return fileName ? `${MEDIA_PREFIX}${kind}/${fileName}` : null;
 }
@@ -185,6 +203,7 @@ module.exports = {
   fitInside,
   saveImage,
   deleteImage,
+  removeImageStrict,
   imageUrl,
   imageFilePath,
   fileNameFromUrl,

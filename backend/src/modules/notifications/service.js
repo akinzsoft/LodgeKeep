@@ -68,6 +68,10 @@ const EVENT_TEMPLATE_KEYS = {
   // final, distinct notice once the retry schedule is exhausted.
   'billing.payment_failed': 'billing_payment_failed',
   'billing.subscription_suspended': 'billing_subscription_suspended',
+  // Tenant retention purge — a warning to each of the tenant's admins before its
+  // data is permanently deleted (`src/modules/offboarding/purge.js`, T-7d and T-1d).
+  // `recipientEmail`, the same "staff, not a guest" key `billing.*` uses.
+  'offboarding.purge_warning': 'offboarding_purge_warning',
   // PLAN.md Phase 6 (QR self-ordering gap closure) — neither recipient is a
   // guest ACCOUNT (no login exists on this fully anonymous surface), so
   // both use the same `recipientEmail` payload key `ar.*`/`billing.*`
@@ -228,6 +232,14 @@ const DEFAULT_TEMPLATES = {
       paragraph('After {{attemptCount}} failed payment attempts over the last two weeks, your account has been suspended for non-payment.') +
       paragraph('Your data is safe and untouched — this only pauses new bookings and other changes; nothing already in your account is lost or hidden.') +
       note('Add a valid payment method to restore full access immediately.'),
+  },
+  offboarding_purge_warning: {
+    subject: '{{tenantName}}: your data will be permanently deleted on {{deletionDate}}',
+    body_html:
+      heading('Your data will be permanently deleted') +
+      paragraph('{{tenantName}} was scheduled for account closure. Its data will be permanently and irreversibly deleted on {{deletionDate}} ({{daysRemaining}} remaining).') +
+      paragraph('Download your data export from Billing before then — once the deletion runs it cannot be recovered.') +
+      note('If this is a mistake, contact support before {{deletionDate}} to reverse the closure.'),
   },
   pos_room_charge_otp: {
     subject: 'Confirm your room charge — {{propertyName}}',

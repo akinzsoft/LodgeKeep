@@ -33,7 +33,7 @@ const { writeAuthEvent } = require('../../auth/events');
 const { recordAuditEntry } = require('../../audit');
 const { SessionInvalidError } = require('../../auth/errors');
 const { ValidationError } = require('../../shared/errors');
-const { TenantNotFoundError, PropertyNotInTenantError, InvalidTenantLifecycleTransitionError } = require('./errors');
+const { TenantNotFoundError, PropertyNotInTenantError, InvalidTenantLifecycleTransitionError, assertNotPurging, assertNotPurgingFresh } = require('./errors');
 const { OFFBOARDABLE_FROM_STATUSES, computeRetentionExpiresAt, createExportAttempt } = require('../offboarding/service');
 const { enqueueTenantDataExportJob } = require('../../jobs/tenant-data-export');
 const { trialDaysRemaining, resolvePlanForRoster } = require('./health');
@@ -78,11 +78,32 @@ async function listTenants({ context }) {
  * the tenant's own gated `billing.view`), and none of the confirmed health
  * signals need it.
  */
+/**
+ * What the console needs to see about a leaving tenant: the purge's state, why it
+ * is blocked (the operator's to-do), and progress. `null` for a tenant that has
+ * never been offboarded. Never includes the deleted-row counts' contents beyond a
+ * total — they name tables, not data.
+ */
+function summarisePurge(row) {
+  if (!row) return null;
+  const counts = typeof row.deleted_counts === 'string' ? JSON.parse(row.deleted_counts) : row.deleted_counts;
+  return {
+    state: row.state,
+    blocked_reason: row.blocked_reason ?? null,
+    blocked_at: row.blocked_at ?? null,
+    started_at: row.started_at ?? null,
+    completed_at: row.completed_at ?? null,
+    warned_7d_at: row.warned_7d_at ?? null,
+    warned_1d_at: row.warned_1d_at ?? null,
+    rows_deleted: counts ? Object.values(counts).reduce((sum, n) => sum + Number(n || 0), 0) : 0,
+  };
+}
+
 async function attachTenantHealth(db, tenants) {
   if (tenants.length === 0) return tenants;
   const tenantIds = tenants.map((tenant) => tenant.id);
 
-  const [propertyRows, subscriptions, loginEvents, plans] = await Promise.all([
+  const [propertyRows, subscriptions, loginEvents, plans, purgeRows] = await Promise.all([
     db.platformDirectory().table('properties').whereIn('tenant_id', tenantIds).select('tenant_id'),
     db.platform().table('subscriptions').whereIn('tenant_id', tenantIds).select('tenant_id', 'status'),
     db
@@ -93,7 +114,10 @@ async function attachTenantHealth(db, tenants) {
       .orderBy('occurred_at', 'desc')
       .select('tenant_id', 'occurred_at'),
     db.reference().table('plans').orderBy('id'),
+    db.platform().table('tenant_purges').whereIn('tenant_id', tenantIds),
   ]);
+
+  const purgeByTenant = new Map(purgeRows.map((row) => [String(row.tenant_id), row]));
 
   const propertyCountByTenant = new Map();
   for (const row of propertyRows) {
@@ -121,6 +145,9 @@ async function attachTenantHealth(db, tenants) {
       trial_days_remaining: trialDaysRemaining(tenant),
       last_login_at: lastLoginByTenant.get(String(tenant.id)) ?? null,
       plan: plan ? { code: plan.code, name: plan.name } : null,
+      purge: summarisePurge(purgeByTenant.get(String(tenant.id))),
+      // The one signal an operator must act on: an offboarding tenant whose deletion cannot proceed.
+      purge_blocked: tenant.status === 'offboarding' && purgeByTenant.get(String(tenant.id))?.state === 'blocked',
     };
   });
 }
@@ -131,7 +158,7 @@ async function getTenantWithProperties({ context, tenantId }) {
   if (!tenant) return null;
   const properties = await db.platformDirectory().table('properties').where({ tenant_id: tenantId }).orderBy('name');
 
-  const [subscription, invoices, lastLoginEvent, plans] = await Promise.all([
+  const [subscription, invoices, lastLoginEvent, plans, purgeRow, latestExport] = await Promise.all([
     db.platform().table('subscriptions').where({ tenant_id: tenantId }).first(),
     db
       .platform()
@@ -146,6 +173,8 @@ async function getTenantWithProperties({ context, tenantId }) {
       .orderBy('occurred_at', 'desc')
       .first(),
     db.reference().table('plans').orderBy('id'),
+    db.platform().table('tenant_purges').where({ tenant_id: tenantId }).first(),
+    db.platform().table('tenant_data_exports').where({ tenant_id: tenantId }).orderBy('id', 'desc').first(),
   ]);
 
   const plan = resolvePlanForRoster(plans, tenant);
@@ -157,6 +186,12 @@ async function getTenantWithProperties({ context, tenantId }) {
     trial_days_remaining: trialDaysRemaining(tenant),
     last_login_at: lastLoginEvent?.occurred_at ?? null,
     plan: plan ? { code: plan.code, name: plan.name } : null,
+    purge: summarisePurge(purgeRow),
+    purge_blocked: tenant.status === 'offboarding' && purgeRow?.state === 'blocked',
+    // Status only — never the file path (a storage location) or the requester.
+    latest_export: latestExport
+      ? { id: String(latestExport.id), status: latestExport.status, completed_at: latestExport.completed_at ?? null, created_at: latestExport.created_at, failed_reason: latestExport.failed_reason ?? null }
+      : null,
     // Deliberately excludes payment-method detail — see attachTenantHealth's
     // own header for why.
     subscription: subscription
@@ -203,6 +238,7 @@ async function startImpersonation({ context, tenantId, propertyId, reason, ip, u
     if (!user || user.status !== 'active') throw new SessionInvalidError();
     const tenant = await db.platformDirectory().table('tenants').where({ id: tenantId }).first();
     if (!tenant) throw new TenantNotFoundError();
+    assertNotPurging(tenant);
 
     const property = await db.platformDirectory().table('properties').where({ id: propertyId, tenant_id: tenantId }).first();
     if (!property) throw new PropertyNotInTenantError();
@@ -300,6 +336,7 @@ async function suspendTenant({ context, tenantId, reason, ip, userAgent, request
     const updated = await lifecycle.changeStatus(tenantId, ['trial', 'active'], { status: 'suspended' });
     if (!updated) {
       if (!before) throw new TenantNotFoundError();
+      await assertNotPurgingFresh(() => db.platformDirectory().table('tenants').where({ id: tenantId }).forUpdate().first());
       throw new InvalidTenantLifecycleTransitionError(before.status, 'suspended');
     }
 
@@ -367,6 +404,9 @@ async function reactivateTenant({ context, tenantId, reason, ip, userAgent, requ
     });
     if (!updated) {
       if (!before) throw new TenantNotFoundError();
+      // ONE-WAY: if the purge claim's conditional UPDATE won the race, `before` (a plain read taken
+      // ahead of the lock wait) is stale — re-read the current status with a locking read.
+      await assertNotPurgingFresh(() => db.platformDirectory().table('tenants').where({ id: tenantId }).forUpdate().first());
       throw new InvalidTenantLifecycleTransitionError(before.status, 'active');
     }
 
@@ -415,6 +455,7 @@ async function offboardTenant({ context, tenantId, reason, ip, userAgent, reques
       });
       if (!updated) {
         if (!before) throw new TenantNotFoundError();
+        await assertNotPurgingFresh(() => db.platformDirectory().table('tenants').where({ id: tenantId }).forUpdate().first());
         throw new InvalidTenantLifecycleTransitionError(before.status, 'offboarding');
       }
 

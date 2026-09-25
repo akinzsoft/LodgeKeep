@@ -35,6 +35,13 @@
  *                 A platform admin can reverse it back to `active`
  *                 (`platform/service.js`'s `reactivateTenant`, widened for
  *                 this status too).
+ *   purging     — the tenant's retention deadline passed and its data is being
+ *   purged        permanently deleted (`src/modules/offboarding/purge.js`);
+ *                 `purged` is the tombstone left once it is. ONE-WAY: neither is
+ *                 reachable by `reactivateTenant`, and neither RESOLVES from a
+ *                 hostname at all (`isTenantResolvable`) — there is nothing left
+ *                 to log in to, and a purged tenant's subdomain must not keep
+ *                 receiving TLS certificates. Also read-only here, defensively.
  */
 
 function isTenantWriteBlocked(tenant) {
@@ -49,6 +56,24 @@ function isTenantWriteBlocked(tenant) {
   return true;
 }
 
+/** Statuses from which a hostname no longer resolves to a tenant at all. */
+const UNRESOLVABLE_TENANT_STATUSES = Object.freeze(['purging', 'purged']);
+
+/**
+ * Statuses a periodic sweep must NOT process a tenant in: a tenant that is
+ * leaving (or gone) is not sent bell alerts, has no expense schedules
+ * auto-posted, is not charged, and so on. `offboarding` is included because
+ * those jobs already excluded it; `purging`/`purged` because a sweep writing
+ * fresh rows for a tenant whose data is being deleted would race the purge and
+ * leave stragglers.
+ */
+const INACTIVE_SWEEP_STATUSES = Object.freeze(['offboarding', 'purging', 'purged']);
+
+/** False for a missing tenant and for a `purging`/`purged` one. */
+function isTenantResolvable(tenant) {
+  return Boolean(tenant) && !UNRESOLVABLE_TENANT_STATUSES.includes(tenant.status);
+}
+
 const DEFAULT_TRIAL_PERIOD_DAYS = Number(process.env.TRIAL_PERIOD_DAYS || 14);
 
 /** Pure, and takes "now" as a parameter so a test can pick a fixed instant rather than racing the real clock. */
@@ -56,4 +81,11 @@ function trialEndsAtFromNow(now = new Date(), days = DEFAULT_TRIAL_PERIOD_DAYS) 
   return new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
-module.exports = { isTenantWriteBlocked, trialEndsAtFromNow, DEFAULT_TRIAL_PERIOD_DAYS };
+module.exports = {
+  isTenantWriteBlocked,
+  isTenantResolvable,
+  UNRESOLVABLE_TENANT_STATUSES,
+  INACTIVE_SWEEP_STATUSES,
+  trialEndsAtFromNow,
+  DEFAULT_TRIAL_PERIOD_DAYS,
+};

@@ -24,6 +24,7 @@ const { Worker } = require('bullmq');
 const { redisConnection } = require('./redis-connection');
 const { notificationsSweepQueue, NOTIFICATIONS_SWEEP_QUEUE } = require('./queues');
 const { knex, scopedDb } = require('../db');
+const { INACTIVE_SWEEP_STATUSES } = require('../shared/tenant-lifecycle');
 const { workerContext } = require('../modules/tenancy');
 const reservationsService = require('../modules/reservations/service');
 const { notifyStaff } = require('../modules/notifications/staff-notifications');
@@ -46,7 +47,7 @@ async function runDepartingBalanceSweep() {
   const properties = await knex()('properties')
     .join('tenants', 'tenants.id', 'properties.tenant_id')
     .where('properties.status', 'active')
-    .whereNot('tenants.status', 'offboarding')
+    .whereNotIn('tenants.status', INACTIVE_SWEEP_STATUSES)
     .whereNotNull('properties.current_business_date')
     .select('properties.id as id', 'properties.tenant_id as tenant_id');
 
