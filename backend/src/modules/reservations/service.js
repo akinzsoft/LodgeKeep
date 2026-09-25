@@ -32,7 +32,12 @@ const {
 const { generateUlid } = require('../../shared/ulid');
 const { notifyStaff } = require('../notifications/staff-notifications');
 const { resolveRate } = require('../setup/service');
-const { postAdjustment: postFolioAdjustment, ensurePrimaryFolio, postRoomChargesForStay } = require('../cashiering/service');
+const {
+  postAdjustment: postFolioAdjustment,
+  ensurePrimaryFolio,
+  postRoomChargesForStay,
+  postLateRoomCharges,
+} = require('../cashiering/service');
 const {
   OverbookingThresholdExceededError,
   RoomUnavailableError,
@@ -1142,10 +1147,14 @@ async function roomMove({ trx, id, newRoomId, reason }) {
  * already in the building — this is not how a still-`confirmed` future
  * reservation's dates get changed, which remains the flagged
  * `PATCH /reservations/:id` gap). Night Audit bills the added night(s)
- * exactly like any other booked night, the next time it runs — this
- * function itself posts no charge.
+ * exactly like any other booked night, the next time it runs — EXCEPT any
+ * added night that is already before the property's current business date:
+ * its audit has already run and will never run again, so it would never be
+ * billed (user-reported: a one-night stay extended a day late lost a night's
+ * charge). Those nights are charged right away as late room charges
+ * (`cashiering.postLateRoomCharges`) and returned as `late_charged_nights`.
  */
-async function extendStay({ trx, id, newDepartureDate }) {
+async function extendStay({ trx, id, newDepartureDate, userId }) {
   const reservation = await lockReservation({ trx, id });
   if (!reservation) return null;
   if (reservation.status !== 'checked_in') {
@@ -1159,7 +1168,21 @@ async function extendStay({ trx, id, newDepartureDate }) {
   }
 
   const addedStayDates = expandStayDates(reservation.departure_date, newDepartureDate);
-  await reserveInventoryForDates({ trx, roomTypeId: reservation.room_type_id, stayDates: addedStayDates });
+
+  // A night before the current business date has already been audited and the
+  // guest was physically in the room — refusing to record it over a threshold
+  // would leave the guest unbilled (Night Audit's own overstay path bypasses
+  // the threshold for the same reason). Open and future nights still compete
+  // for inventory like any booking.
+  const businessDateNow = (await trx.table('properties').where({ id: reservation.property_id }).first())?.current_business_date ?? null;
+  const closedDates = businessDateNow ? addedStayDates.filter((stayDate) => stayDate < businessDateNow) : [];
+  const openDates = addedStayDates.filter((stayDate) => !closedDates.includes(stayDate));
+  if (closedDates.length) {
+    await reserveInventoryForDates({ trx, roomTypeId: reservation.room_type_id, stayDates: closedDates, bypassThreshold: true });
+  }
+  if (openDates.length) {
+    await reserveInventoryForDates({ trx, roomTypeId: reservation.room_type_id, stayDates: openDates });
+  }
 
   const rateCode = await trx.table('rate_codes').where({ id: reservation.rate_code_id }).first();
   const overrides = await trx
@@ -1178,7 +1201,102 @@ async function extendStay({ trx, id, newDepartureDate }) {
   );
 
   await trx.table('reservations').where({ id }).update({ departure_date: newDepartureDate });
-  return trx.table('reservations').where({ id }).first();
+
+  // Nights whose audit already ran are never billed by Night Audit — charge them now.
+  const currentBusinessDate = businessDateNow;
+  let lateChargedNights = [];
+  if (currentBusinessDate) {
+    const closedNights = addedStayDates.filter((stayDate) => stayDate < currentBusinessDate);
+    const folio = closedNights.length ? await trx.table('folios').where({ reservation_id: id, status: 'open' }).first() : null;
+    if (folio) {
+      const rows = await trx.table('reservation_daily_rates').where({ reservation_id: id }).whereIn('stay_date', closedNights);
+      lateChargedNights = await postLateRoomCharges({
+        trx,
+        folioId: folio.id,
+        nights: rows.map((row) => ({ stayDate: String(row.stay_date), rate: row.rate })),
+        businessDate: currentBusinessDate,
+        userId,
+      });
+    }
+  }
+
+  const updated = await trx.table('reservations').where({ id }).first();
+  return { ...updated, late_charged_nights: lateChargedNights };
+}
+
+/**
+ * Night Audit's overstay handling (user-reported: a guest still in-house past
+ * their departure date was never billed for the extra nights). Called from the
+ * audit's room-charge step for a `checked_in` reservation with no booked-night
+ * rate for the business date being closed, once its departure date has
+ * arrived: it books that night at the guest's LAST nightly rate, pushes the
+ * departure date to the following day (so a still-in-house guest is simply
+ * "leaving tomorrow", every night, until front desk checks them out), and
+ * counts the night against inventory. The threshold is bypassed — the guest is
+ * physically in the room, so refusing to record the night would only make the
+ * sold count wrong; front desk sees the overstay on the audit's exception list.
+ *
+ * Catch-up: if the departure date is already BEFORE the business date, nights
+ * between them were never billed (an overstay that predates this behaviour, or
+ * audits that ran while it was off). They are booked too and charged as late
+ * room charges, since their own audits have already run — otherwise moving the
+ * departure date forward would bury them where Extend Stay can never reach.
+ *
+ * `postCharge` options are passed through so the audit can post over a credit
+ * limit instead of failing the whole run (see the audit's own comment).
+ *
+ * Returns `{ dailyRate, catchUpNights }` (`dailyRate` is tonight's row), or
+ * null when the reservation has no rate to copy or no open folio.
+ */
+async function extendOverstayNight({ trx, reservation, folio, businessDate, postOptions = {} }) {
+  const lastRate = await trx
+    .table('reservation_daily_rates')
+    .where({ reservation_id: reservation.id })
+    .orderBy('stay_date', 'desc')
+    .first();
+  if (!lastRate || !folio) return null;
+
+  const catchUpDates = reservation.departure_date < businessDate ? expandStayDates(reservation.departure_date, businessDate) : [];
+  const allDates = [...catchUpDates, businessDate];
+
+  await reserveInventoryForDates({
+    trx,
+    roomTypeId: reservation.room_type_id,
+    stayDates: allDates,
+    bypassThreshold: true,
+  });
+  const existing = await trx.table('reservation_daily_rates').where({ reservation_id: reservation.id }).whereIn('stay_date', allDates);
+  const existingDates = new Set(existing.map((row) => String(row.stay_date)));
+  const missing = allDates.filter((stayDate) => !existingDates.has(stayDate));
+  if (missing.length) {
+    await trx.table('reservation_daily_rates').insert(
+      missing.map((stayDate) => ({
+        reservation_id: reservation.id,
+        stay_date: stayDate,
+        rate: lastRate.rate,
+        currency: lastRate.currency,
+      }))
+    );
+  }
+  const nextDay = new Date(`${businessDate}T00:00:00Z`);
+  nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+  await trx.table('reservations').where({ id: reservation.id }).update({ departure_date: nextDay.toISOString().slice(0, 10) });
+
+  let catchUpNights = [];
+  if (catchUpDates.length) {
+    const rows = await trx.table('reservation_daily_rates').where({ reservation_id: reservation.id }).whereIn('stay_date', catchUpDates);
+    catchUpNights = await postLateRoomCharges({
+      trx,
+      folioId: folio.id,
+      nights: rows.map((row) => ({ stayDate: String(row.stay_date), rate: row.rate })),
+      businessDate,
+      userId: null,
+      ...postOptions,
+    });
+  }
+
+  const dailyRate = await trx.table('reservation_daily_rates').where({ reservation_id: reservation.id, stay_date: businessDate }).first();
+  return { dailyRate, catchUpNights };
 }
 
 // ---------------------------------------------------------------------
@@ -1601,6 +1719,7 @@ module.exports = {
   checkOut,
   roomMove,
   extendStay,
+  extendOverstayNight,
   getReservation,
   listReservations,
   listWaitlist,
