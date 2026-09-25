@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
-    "bullmq": "^6.3.4",
+    "bullmq": "^6.3.8",
     "csv-parse": "^7.0.2",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
