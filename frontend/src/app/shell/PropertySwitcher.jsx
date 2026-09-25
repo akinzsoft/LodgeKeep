@@ -1,4 +1,13 @@
 import styles from './PropertySwitcher.module.css';
+import chip from './headerChip.module.css';
+
+function BuildingIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16M16 9h2a2 2 0 0 1 2 2v10M2 21h20M8 7h4M8 11h4M8 15h4" />
+    </svg>
+  );
+}
 
 /**
  * PropertySwitcher — PRODUCT_REQUIREMENTS.md's App shell, Top bar: "the
@@ -19,23 +28,39 @@ import styles from './PropertySwitcher.module.css';
  */
 export function PropertySwitcher({ activeProperty, properties, onSwitchProperty }) {
   if (properties.length <= 1) {
-    return <span className={styles.nameOnly}>{activeProperty.name}</span>;
+    return (
+      <div className={`${chip.chip} ${styles.nameChip}`} title="Active property">
+        <span className={chip.icon}>
+          <BuildingIcon />
+        </span>
+        <span className={chip.text}>
+          <span className={chip.label}>Property</span>
+          <span className={`${chip.value} ${styles.nameOnly}`}>{activeProperty.name}</span>
+        </span>
+      </div>
+    );
   }
 
   return (
-    <label className={styles.switcher}>
-      <span className={styles.srOnly}>Active property</span>
-      <select
-        className={styles.select}
-        value={activeProperty.id}
-        onChange={(event) => onSwitchProperty(event.target.value)}
-      >
-        {properties.map((property) => (
-          <option key={property.id} value={property.id}>
-            {property.name}
-          </option>
-        ))}
-      </select>
+    <label className={`${chip.chip} ${styles.switcher}`}>
+      <span className={chip.icon}>
+        <BuildingIcon />
+      </span>
+      <span className={chip.text}>
+        <span className={chip.label}>Property</span>
+        <span className={styles.srOnly}>Active property</span>
+        <select
+          className={styles.select}
+          value={activeProperty.id}
+          onChange={(event) => onSwitchProperty(event.target.value)}
+        >
+          {properties.map((property) => (
+            <option key={property.id} value={property.id}>
+              {property.name}
+            </option>
+          ))}
+        </select>
+      </span>
     </label>
   );
 }

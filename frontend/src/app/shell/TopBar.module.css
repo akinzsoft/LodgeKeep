@@ -22,6 +22,12 @@
   flex: 1;
 }
 
+/* Desktop: transparent to layout, the date and property chips are ordinary
+   items of the bar. */
+.context {
+  display: contents;
+}
+
 .iconButton {
   position: relative;
   display: flex;
@@ -330,12 +336,29 @@ div.notifOpen {
   white-space: nowrap;
 }
 
-@media (width <= 639px) {
+/* One row holds the menu button, two chips, the bell and the user menu only
+   from about 900px up. Below that (portrait tablets as well as phones) the
+   property name got cut to "Alpha…" or squeezed to its icon, and two
+   properties of one chain differ only in the part that gets cut. So the bar
+   wraps: controls on the first row, the date and property chips on a
+   full-width second row where the whole name fits. */
+@media (width <= 899px) {
   .topbar {
+    height: auto;
+    flex-wrap: wrap;
     gap: var(--space-2);
-    padding: 0 var(--space-3);
+    padding: var(--space-2) var(--space-3);
   }
 
+  .context {
+    display: flex;
+    flex: 1 0 100%;
+    order: 10;
+    gap: var(--space-2);
+  }
+}
+
+@media (width <= 639px) {
   .userName,
   .chevron {
     display: none;

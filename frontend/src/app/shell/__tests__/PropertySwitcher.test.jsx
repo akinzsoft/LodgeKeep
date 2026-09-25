@@ -45,4 +45,18 @@ describe('<PropertySwitcher>', () => {
     await userEvent.selectOptions(screen.getByRole('combobox'), '2');
     expect(onSwitchProperty).toHaveBeenCalledWith('2');
   });
+
+  it('labels the chip "Property" in both the name-only and switcher forms', () => {
+    const one = [{ id: '1', name: 'Alpha Hotels — Lagos' }];
+    const { rerender } = render(<PropertySwitcher activeProperty={one[0]} properties={one} onSwitchProperty={() => {}} />);
+    expect(screen.getByText('Property')).toBeInTheDocument();
+    rerender(
+      <PropertySwitcher
+        activeProperty={one[0]}
+        properties={[...one, { id: '2', name: 'Alpha Hotels — Abuja' }]}
+        onSwitchProperty={() => {}}
+      />
+    );
+    expect(screen.getByText('Property')).toBeInTheDocument();
+  });
 });

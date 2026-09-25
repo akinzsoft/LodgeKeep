@@ -1,7 +1,7 @@
 /*
- * Dark charcoal sidebar (the user-supplied reference design): light text on
- * `--sidebar-bg`, brass active pill, serif wordmark. Every colour comes from
- * `tokens.css`'s `--sidebar-*` block.
+ * Dark navy sidebar (the user-supplied admin-dashboard reference): light text
+ * on `--sidebar-bg`, a lighter-navy active pill, sans wordmark. Every colour
+ * comes from `tokens.css`'s `--sidebar-*` block.
  */
 .sidebar {
   width: var(--sidebar-w);
@@ -35,15 +35,15 @@
   padding: 0 var(--space-4);
 }
 
-/* LodgeKeep's own full-colour mark sits on a light tile so it stays legible
-   on the charcoal ground. */
+/* LodgeKeep's own full-colour mark sits on a white tile, as on the previous
+   dark sidebar, so it reads the same against any sidebar colour. */
 .brandIcon {
   width: 36px;
   height: 36px;
   flex-shrink: 0;
   padding: var(--space-1);
   border-radius: var(--radius-md);
-  background: var(--surface-page);
+  background: var(--surface-card);
   object-fit: contain;
 }
 

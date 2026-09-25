@@ -49,12 +49,12 @@
 .donutTrack {
   fill: none;
   stroke: var(--border);
-  stroke-width: 14;
+  stroke-width: 18;
 }
 
 .donutSegment {
   fill: none;
-  stroke-width: 14;
+  stroke-width: 18;
 }
 
 .segment1 {

@@ -1,0 +1,55 @@
+/*
+ * Shared look for the two "where am I" facts in the top bar — the business
+ * date and the active property. Both used to be bare text runs that read as
+ * one sentence; as chips they scan as two separate labelled facts. One file
+ * so the two can never drift apart in size or shape.
+ */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  white-space: nowrap;
+}
+
+.icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.label {
+  font-size: var(--text-caption-size); /* DESIGN_SYSTEM.md §1: never below 12px */
+  line-height: var(--text-caption-line);
+  color: var(--text-muted);
+}
+
+.value {
+  overflow: hidden;
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: 600;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+}
+
+/* Phone width: the top bar cannot fit two labelled chips, the bell and the
+   user menu on a 390px row — the value stays; the small label and the icon
+   go, so the property name (which must always be visible, PRODUCT_REQUIREMENTS.md
+   App shell) keeps room to show. */
+@media (width <= 639px) {
+  .label,
+  .icon {
+    display: none;
+  }
+}

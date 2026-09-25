@@ -105,9 +105,13 @@ export function TopBar({
 
       <div className={styles.spacer} />
 
-      <BusinessDateIndicator businessDate={businessDate} />
+      {/* `display: contents` on desktop, so these stay ordinary items of the
+          bar; on a phone it becomes its own full-width second row. */}
+      <div className={styles.context}>
+        <BusinessDateIndicator businessDate={businessDate} />
 
-      <PropertySwitcher activeProperty={activeProperty} properties={properties} onSwitchProperty={onSwitchProperty} />
+        <PropertySwitcher activeProperty={activeProperty} properties={properties} onSwitchProperty={onSwitchProperty} />
+      </div>
 
       {onToggleFullscreen && (
         <button

@@ -8,7 +8,6 @@ import '@fontsource/inter/500.css';
 import '@fontsource/inter/600.css';
 import '@fontsource/inter/700.css';
 // Display serif — only the Home greeting and the sidebar wordmark use it.
-import '@fontsource/fraunces/600.css';
 import './styles/tokens.css';
 import styles from './main.module.css';
 import { AuthProvider, useAuth } from './app/auth/index.js';

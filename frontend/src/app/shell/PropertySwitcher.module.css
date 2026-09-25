@@ -1,37 +1,48 @@
+/* The name-only chip: the shared `.value` already sizes and weights the text;
+   this only caps its width so a long property name ellipsizes. */
 .nameOnly {
-  overflow: hidden;
-  font-size: var(--text-label-size);
-  font-weight: var(--text-label-weight);
-  color: var(--text-primary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 16rem;
 }
 
-@media (width <= 639px) {
-  .nameOnly {
-    max-width: 7rem;
-  }
-
-  .select {
-    max-width: 9rem;
-  }
-}
-
-.switcher {
-  display: inline-flex;
+/* Phone width: the property chip takes whatever width the date chip, bell and
+   avatar leave, and ellipsizes inside it. Without this it shrank to nothing
+   but its icon and the current property was not shown at all. */
+.switcher,
+.nameChip {
   min-width: 0;
 }
 
+@media (width <= 639px) {
+  .nameChip,
+  .switcher {
+    flex: 1;
+  }
+
+  .nameOnly,
+  .select {
+    max-width: none;
+    width: 100%;
+  }
+}
+
+/* The dropdown variant lives inside the shared chip, so the native select is
+   flattened: no border of its own, the chip supplies it. */
+.switcher {
+  cursor: pointer;
+}
+
 .select {
-  min-height: var(--control-h-touch);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-3);
+  min-height: 0;
+  max-width: 16rem;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   font-family: var(--font-sans);
   font-size: var(--text-label-size);
-  font-weight: var(--text-label-weight);
+  line-height: var(--text-label-line);
+  font-weight: 600;
   color: var(--text-primary);
-  background: var(--surface-card);
   cursor: pointer;
 }
 

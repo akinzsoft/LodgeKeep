@@ -70,4 +70,15 @@ describe('POS register touch targets and layout (CSS rules)', () => {
     expect(css).toMatch(/@media \(width >= 900px\)\s*\{\s*\.orderBar,\s*\.orderBarSpacer\s*\{\s*display:\s*none;/);
     expect(rule('.orderBarSpacer')).toMatch(/height:/);
   });
+
+  // The rail is an 88px grid column and a rail item is 68px wide. With 12px side
+  // padding (68 + 24 = 92) the desktop rail overflowed by 4px and drew a
+  // horizontal scrollbar wherever scrollbars take space.
+  it('the desktop category rail is narrow enough for its items and never scrolls sideways', () => {
+    const media = css.slice(css.indexOf('@media (width >= 900px) {\n  .rail {'));
+    const block = media.slice(media.indexOf('.rail {'), media.indexOf('}', media.indexOf('.rail {')));
+    expect(declaration(block, 'padding')).toBe('var(--space-3) var(--space-2)');
+    expect(declaration(block, 'overflow')).toBe('hidden auto');
+  });
 });
+

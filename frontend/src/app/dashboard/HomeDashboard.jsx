@@ -236,7 +236,7 @@ export function HomeDashboard({ greetingName, businessDate, activeProperty, onNa
         <RoomsAvailableCard occupancy={occupancy} today={occupancyByDate.get(businessDate)} yesterday={occupancyByDate.get(yesterday)} />
         <NewGuestsCard reservationsSource={reservations} rows={reservationRows} businessDate={businessDate} week={week} bookingsThisWeek={bookingsThisWeek} />
         <KpiCard
-          accent="secondary"
+          accent="navy"
           icon={<RevenueIcon />}
           label="Total Revenue"
           periodHint="Room revenue posted today"
@@ -355,7 +355,7 @@ function NewGuestsCard({ reservationsSource, rows, businessDate, week, bookingsT
   const share = ratio(newThisWeek, bookingsThisWeek);
   return (
     <KpiCard
-      accent="primary"
+      accent="tertiary"
       icon={<NewGuestsIcon />}
       label="New Guests"
       periodHint="First-time guests arriving in the last 7 business days"
@@ -373,8 +373,15 @@ function NewGuestsCard({ reservationsSource, rows, businessDate, week, bookingsT
 
 const DELTA_WORD = { up: 'Up', down: 'Down', flat: 'No change' };
 
+const ACCENT_CLASS = {
+  primary: styles.accentPrimary,
+  secondary: styles.accentSecondary,
+  tertiary: styles.accentTertiary,
+  navy: styles.accentNavy,
+};
+
 function KpiCard({ accent, icon, label, periodHint, source, isEmpty, emptyMessage, value, delta, deltaContext, deltaSuffix, progress, progressLabel }) {
-  const accentClass = accent === 'secondary' ? styles.accentSecondary : styles.accentPrimary;
+  const accentClass = ACCENT_CLASS[accent] ?? styles.accentPrimary;
   let body;
   if (source.state === 'loading') {
     body = (
