@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { cwd } from 'node:process';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RoomsTab } from '../RoomsTab.jsx';
@@ -134,6 +137,26 @@ describe('<RoomsTab>', () => {
         expect(mocks.updateRoom).toHaveBeenCalledWith('10', { room_number: '101', floor: null });
         expect(await screen.findByRole('alert')).toHaveTextContent('Room "102" already exists');
       });
+    });
+
+    /**
+     * Mobile layout check: the four row actions did not wrap, so on a phone
+     * "Remove" sat outside the card. jsdom cannot measure it, so this pins the
+     * markup and the rule that lets the row wrap.
+     */
+    it('the row actions sit in a wrapping container, so all four stay on screen on a phone', async () => {
+      await renderLoaded();
+      const edit = within(rowFor('101')).getByRole('button', { name: 'Edit' });
+      const actions = edit.parentElement;
+      for (const name of ['Change type', 'Archive', 'Remove']) {
+        expect(within(rowFor('101')).getByRole('button', { name }).parentElement).toBe(actions);
+      }
+      expect(actions.className).toMatch(/rowActions/);
+
+      const css = readFileSync(join(cwd(), 'src/app/setup/RoomsTab.module.css'), 'utf8');
+      const block = css.slice(css.indexOf('.rowActions {'), css.indexOf('}', css.indexOf('.rowActions {')));
+      expect(block).toMatch(/display:\s*flex/);
+      expect(block).toMatch(/flex-wrap:\s*wrap/);
     });
 
     describe('selection', () => {

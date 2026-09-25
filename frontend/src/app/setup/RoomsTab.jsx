@@ -415,7 +415,7 @@ export function RoomsTab({ disabled, filterRoomTypeId, onClearFilter, onFilterRo
               Restore
             </Button>
           ) : (
-            <div className={formStyles.actionsRow}>
+            <div className={roomStyles.rowActions}>
               <Button size="compact" variant="secondary" disabled={actionsDisabled} onClick={() => startEdit(row)}>
                 Edit
               </Button>

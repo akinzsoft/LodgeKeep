@@ -238,6 +238,15 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const guestSearchGenerationRef = useRef(0);
   const guestSearchLatestByGroupRef = useRef(new Map());
 
+  // Touch-device layout pass: the register sits below the page's own header,
+  // tab strip and outlet/terminal row, so on a tablet its lower half — and
+  // with it the checkout button — used to start below the fold. Opening or
+  // switching to a tab brings the register itself into view (once per tab, not
+  // on every item added), and `panelRef`/`ticketRef` are also what the
+  // portrait-layout "Review & checkout" bar scrolls to.
+  const panelRef = useRef(null);
+  const ticketRef = useRef(null);
+
   useEffect(() => {
     posApi
       .listOutlets()
@@ -782,6 +791,11 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   // stale, still-loading tab's numbers during that gap.
   const orderLoaded = activeOrder && String(activeOrder.order.id) === String(activeOrderId);
   const unvoidedItems = orderLoaded ? activeOrder.items.filter((item) => !item.voided_at) : [];
+  const shownOrderId = orderLoaded ? activeOrder.order.id : null;
+  useEffect(() => {
+    if (shownOrderId == null) return;
+    panelRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [shownOrderId]);
   const distinctGroups = [...new Set(unvoidedItems.map((item) => item.split_group ?? null))];
   // Real, unambiguous flag for "has anyone actually started splitting this
   // tab" — deliberately not `distinctGroups.length > 1`, which would
@@ -994,7 +1008,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
               }}
             />
           ) : activeOrder && (
-            <div className={styles.panel}>
+            <>
+            <div className={styles.panel} ref={panelRef}>
               <nav className={styles.rail} aria-label="Menu categories">
                 <button
                   type="button"
@@ -1038,11 +1053,22 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
 
                 <div className={styles.menuGrid}>
                   {filteredMenuItems.map((item) => (
-                    <div key={item.id} className={`${styles.menuCard} ${!item.is_available ? styles.menuCardSoldOut : ''}`.trim()}>
+                    // The WHOLE card is the tap target: on a touch register a 28px "+"
+                    // in the corner was the only thing that added an item, while the
+                    // ticket said "Tap a menu item". One button, no nested control;
+                    // the "+" is only an affordance now (aria-hidden).
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`${styles.menuCard} ${!item.is_available ? styles.menuCardSoldOut : ''}`.trim()}
+                      onClick={() => handleAddItem(item.id)}
+                      disabled={isOffline || !item.is_available}
+                      aria-label={`Add ${item.name}`}
+                    >
                       {/* Decorative: the name right below already identifies the item. */}
                       {item.image_url && <img className={styles.menuCardImage} src={item.image_url} alt="" loading="lazy" />}
                       <span className={styles.menuCardName}>{item.name}</span>
-                      <div className={styles.menuCardFooter}>
+                      <span className={styles.menuCardFooter}>
                         {item.is_available ? (
                           <span className={styles.menuCardPrice}>
                             <Money amount={item.price} currencyCode={activeProperty.base_currency} />
@@ -1050,17 +1076,11 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                         ) : (
                           <span className={styles.soldOutBadge}>Sold out</span>
                         )}
-                        <button
-                          type="button"
-                          className={styles.addButton}
-                          onClick={() => handleAddItem(item.id)}
-                          disabled={isOffline || !item.is_available}
-                          aria-label={`Add ${item.name}`}
-                        >
+                        <span className={styles.addBadge} aria-hidden="true">
                           +
-                        </button>
-                      </div>
-                    </div>
+                        </span>
+                      </span>
+                    </button>
                   ))}
                   {filteredMenuItems.length === 0 && (
                     <p className={formStyles.disabledNotice}>
@@ -1074,7 +1094,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                 </div>
               </div>
 
-              <div className={styles.ticket} role="region" aria-label="Order ticket">
+              <div className={styles.ticket} role="region" aria-label="Order ticket" ref={ticketRef}>
                 <div className={styles.ticketHeader}>
                   <h2 className={styles.ticketTitle}>Order Ticket</h2>
                   <span className={styles.statusPill}>Open</span>
@@ -1193,6 +1213,36 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                 )}
               </div>
             </div>
+
+            {/* Portrait tablet / phone (below 900px, where the panel stacks the menu above
+                the ticket): the ticket and its checkout button end up a screen or two
+                BELOW the menu the cashier is tapping. This bar stays pinned to the bottom of
+                the screen while items are added — item count, running total, and one big
+                button that jumps to the ticket. Hidden by CSS on wide layouts, where the
+                ticket is already on screen beside the menu. */}
+            {unvoidedItems.length > 0 && !splitModalOpen && (
+              <div className={styles.orderBar} role="region" aria-label="Order summary">
+                <span className={styles.orderBarSummary}>
+                  {unvoidedItems.reduce((count, row) => count + row.quantity, 0)} item
+                  {unvoidedItems.reduce((count, row) => count + row.quantity, 0) === 1 ? '' : 's'}
+                  {singleSettlementForm && grandTotalFor(singleSettlementForm) !== null && (
+                    <>
+                      {' · '}
+                      <Money amount={grandTotalFor(singleSettlementForm)} currencyCode={activeProperty.base_currency} />
+                    </>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  className={styles.orderBarButton}
+                  onClick={() => ticketRef.current?.scrollIntoView?.({ block: 'start' })}
+                >
+                  Review &amp; checkout
+                </button>
+              </div>
+            )}
+            {unvoidedItems.length > 0 && !splitModalOpen && <div className={styles.orderBarSpacer} aria-hidden="true" />}
+            </>
           )}
 
           {splitModalOpen && settlementForms && (
