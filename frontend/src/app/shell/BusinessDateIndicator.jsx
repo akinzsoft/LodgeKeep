@@ -1,4 +1,29 @@
+import { StatusPill } from '../../shared/components/index.js';
 import styles from './BusinessDateIndicator.module.css';
+import chip from './headerChip.module.css';
+
+function CalendarIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 10h18M8 3v4M16 3v4" />
+    </svg>
+  );
+}
+
+function Chip({ value }) {
+  return (
+    <div className={chip.chip} title="Property business date">
+      <span className={chip.icon}>
+        <CalendarIcon />
+      </span>
+      <span className={chip.text}>
+        <span className={chip.label}>Business date</span>
+        <span className={chip.value}>{value}</span>
+      </span>
+    </div>
+  );
+}
 
 /**
  * BusinessDateIndicator — PRODUCT_REQUIREMENTS.md's App shell: "the
@@ -32,9 +57,8 @@ import styles from './BusinessDateIndicator.module.css';
 export function BusinessDateIndicator({ businessDate, now = new Date() }) {
   if (!businessDate) {
     return (
-      <div className={styles.indicator} title="Property business date">
-        <span className={styles.label}>Business date</span>
-        <span className={styles.value}>Not set</span>
+      <div className={styles.indicator}>
+        <Chip value="Not set" />
       </div>
     );
   }
@@ -46,12 +70,11 @@ export function BusinessDateIndicator({ businessDate, now = new Date() }) {
   const isDifferentFromToday = businessDate !== todayLocal;
 
   return (
-    <div className={styles.indicator} title="Property business date">
-      <span className={styles.label}>Business date</span>
-      <span className={styles.value}>{display}</span>
+    <div className={styles.indicator}>
+      <Chip value={display} />
       {isDifferentFromToday && (
         <span className={styles.note} role="note">
-          differs from today
+          <StatusPill tone="warning" label="differs from today" />
         </span>
       )}
     </div>

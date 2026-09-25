@@ -34,4 +34,13 @@ describe('<BusinessDateIndicator>', () => {
     expect(screen.getByText('Not set')).toBeInTheDocument();
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
+
+  // User-reported: the business date and property read as one run of plain
+  // text. Each is now a labelled chip, and "differs from today" is a pill
+  // (text, not colour alone).
+  it('labels the value and shows the differs-from-today note as a pill', () => {
+    render(<BusinessDateIndicator businessDate="2026-03-14" now={new Date(2026, 2, 15)} />);
+    expect(screen.getByText('Business date')).toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent('differs from today');
+  });
 });
