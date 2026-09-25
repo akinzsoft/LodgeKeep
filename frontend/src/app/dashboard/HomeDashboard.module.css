@@ -1,8 +1,11 @@
 /**
- * Home dashboard — the user-supplied "Lodgekeep warm" reference: a Fraunces
- * greeting, full-width summary widgets, KPI cards with a brass/teal left
- * edge, and warm-bordered white cards on the cream canvas. Built entirely on
- * the app-wide tokens (`--chart-*` for data colours).
+ * Home dashboard — the user-supplied "Tripler" reference: an Inter greeting,
+ * full-width summary widgets, solid-colour KPI tiles (indigo, sage, coral)
+ * with a white icon chip, and softly shadowed white cards on the light
+ * canvas. Built entirely on the app-wide tokens (`--chart-*` for data
+ * colours). Tile fills carry white text, so they use the deepened
+ * `--accent*` fills that were measured at about 4.7:1 or better, not the
+ * paler `--chart-*` colours.
  */
 
 .page {
@@ -153,26 +156,31 @@
   }
 }
 
+/* A solid tile: the accent is the whole background, so every child that
+   would normally use a muted grey must switch to white here. */
 .kpiCard {
-  --kpi-accent: var(--chart-1);
-  --kpi-accent-tint: var(--chart-1-tint);
+  --kpi-accent: var(--accent);
 
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   padding: var(--space-5);
-  border-left: 3px solid var(--kpi-accent);
   min-height: 10rem;
+  border: none;
+  background: var(--kpi-accent);
+  color: var(--text-inverse);
 }
 
 .accentPrimary {
-  --kpi-accent: var(--chart-1);
-  --kpi-accent-tint: var(--chart-1-tint);
+  --kpi-accent: var(--accent);
 }
 
 .accentSecondary {
-  --kpi-accent: var(--chart-2);
-  --kpi-accent-tint: var(--chart-2-tint);
+  --kpi-accent: var(--accent-sage-fill);
+}
+
+.accentTertiary {
+  --kpi-accent: var(--accent-tertiary);
 }
 
 .kpiTop {
@@ -183,22 +191,28 @@
   margin-bottom: var(--space-2);
 }
 
+/* White chip with the icon in the tile's own colour, as in the reference. */
 .iconBadge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 36px;
   height: 36px;
-  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--surface-sunken);
-  color: var(--text-secondary);
+  background: var(--surface-card);
+  color: var(--kpi-accent);
 }
 
+/* The delta sits on a white pill so its up/down colour keeps its meaning and
+   contrast on any tile; the arrow and sign carry it as well, never colour
+   alone. */
 .delta {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--surface-card);
   font-size: var(--text-caption-size);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -214,7 +228,7 @@
 }
 
 .delta_flat {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .kpiValue {
@@ -224,18 +238,25 @@
   font-weight: var(--text-kpi-weight);
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
-  color: var(--text-primary);
+  color: var(--text-inverse);
 }
 
 .kpiLabel,
 .kpiLabelMuted {
   margin: 0;
   font-size: var(--text-label-size);
-  color: var(--text-muted);
+  color: var(--text-inverse);
 }
 
 .kpiLabelMuted {
   margin-top: auto;
+}
+
+/* Empty and error copy inside a tile: the generic muted/danger colours are
+   unreadable on a solid fill. */
+.kpiCard .emptyMessage,
+.kpiCard .errorMessage {
+  color: var(--text-inverse);
 }
 
 .kpiLoading {
@@ -246,16 +267,16 @@
 
 .progressTrack {
   margin-top: var(--space-4);
-  height: 3px;
+  height: 4px;
   border-radius: var(--radius-full);
-  background: var(--border);
+  background: color-mix(in srgb, var(--text-inverse) 35%, transparent);
   overflow: hidden;
 }
 
 .progressFill {
   height: 100%;
   border-radius: inherit;
-  background: var(--kpi-accent);
+  background: var(--text-inverse);
 }
 
 /* ---- chart row ---- */

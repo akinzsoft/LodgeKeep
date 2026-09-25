@@ -6,58 +6,62 @@ Companion to `AGENT.md`. Follow this for all frontend visual implementation — 
 
 Define these as CSS custom properties once, in a single `tokens.css`, and reference them everywhere. No hardcoded hex values in component files — a colour that appears literally in a component is a defect, because the next tenant theme override won't reach it.
 
-**Colour tokens** — the "Lodgekeep warm" palette: a warm cream canvas, white cards with a warm hairline border, a dark charcoal sidebar, brass as the primary accent, deep teal as the secondary, and brick reserved for negative/down signals.
+**Colour tokens** — the "Tripler" palette: a cool light-grey canvas, white cards with a soft indigo-tinted shadow, a light sidebar, indigo as the primary accent, sage and coral as supporting colours, and a deeper red reserved for negative/down signals. (It replaced the earlier "Lodgekeep warm" cream/brass/teal palette; reverting the redesign commit restores that.) Contrast was measured: the reference's pale sage `#8FB8A4` and coral `#FF6B57` are only 2.2:1 and 2.8:1 under white text, so every fill that carries text uses a deepened version at about 4.7:1 or better; the pale versions appear only as chart fills, never as the sole carrier of meaning.
 
 ```css
 :root {
   /* surfaces */
-  --surface-page:    #FAF8F4;   /* warm cream canvas — never pure white */
+  --surface-page:    #F5F6FA;   /* cool light canvas */
   --surface-card:    #FFFFFF;   /* cards, tables, modals */
-  --surface-sunken:  #F4F0E8;   /* inset areas, table headers, hover rows */
-  --border:          #EAE4D6;   /* warm hairline dividers */
-  --border-strong:   #D9D0BF;   /* input borders, emphasis */
+  --surface-sunken:  #F0F1F7;   /* inset areas, table headers, hover rows */
+  --border:          #E6E8F0;   /* hairline dividers */
+  --border-strong:   #D3D6E3;   /* input borders, emphasis */
 
   /* text — AA on white */
-  --text-primary:    #1F2926;   /* headings, KPI numerals */
-  --text-secondary:  #5C6B66;   /* labels, supporting copy */
-  --text-muted:      #6E7873;   /* hints, placeholders, timestamps (4.57:1) */
-  --text-inverse:    #FFFFFF;   /* text on filled buttons/badges */
+  --text-primary:    #1F2033;   /* headings, KPI numerals (16:1) */
+  --text-secondary:  #4F5270;   /* labels, supporting copy (7.6:1) */
+  --text-muted:      #63677F;   /* hints, placeholders, timestamps (5.6:1) */
+  --text-inverse:    #FFFFFF;   /* text on filled buttons/badges/tiles */
 
   /* accents */
-  --accent:           #8A6D3B;  /* brass — buttons, active states, focus, links */
-  --accent-hover:     #735A2F;
-  --accent-tint:      #F3EDE2;
-  --accent-secondary: #2E5850;  /* deep teal — avatars, up-deltas, secondary emphasis */
+  --accent:            #4B4A8C;  /* indigo — buttons, active states, focus, links */
+  --accent-hover:      #3D3C75;
+  --accent-tint:       #ECECF6;
+  --accent-secondary:  #3F7A64;  /* deep sage — avatars, up-deltas, secondary emphasis */
+  --accent-sage-fill:  #457F68;  /* sage KPI tile (white text 4.7:1) */
+  --accent-tertiary:   #CF432B;  /* coral KPI tile (white text 4.7:1) */
 
-  /* dark sidebar */
-  --sidebar-bg:          #14191C;
-  --sidebar-text:        #D9DDD9;
-  --sidebar-text-muted:  #8B9490;
-  --sidebar-active-bg:   #3A3222;   /* brass, deepened for the charcoal ground */
-  --sidebar-active-text: #F4EEE1;
+  /* light sidebar */
+  --sidebar-bg:          #EEF0F6;
+  --sidebar-text:        #3A3C58;
+  --sidebar-text-muted:  #63677F;
+  --sidebar-active-bg:   #E1E1F3;   /* indigo tint */
+  --sidebar-active-text: #4B4A8C;
 
   /* domain accents — assigned by meaning, reused on every screen */
-  --domain-booking:  #8A6D3B;   /* reservations, bookings — shares --accent */
-  --domain-rooms:    #9A6A26;   /* rooms, inventory, housekeeping — ochre */
-  --domain-guest:    #2E5850;   /* profiles, guests, CRM — teal */
-  --domain-money:    #4A7058;   /* cashiering, revenue, AR — sage */
+  --domain-booking:  #4B4A8C;   /* reservations, bookings — shares --accent */
+  --domain-rooms:    #8A6D1F;   /* rooms, inventory, housekeeping — dark sand */
+  --domain-guest:    #3F7A64;   /* profiles, guests, CRM — sage */
+  --domain-money:    #2F7A78;   /* cashiering, revenue, AR — teal */
 
   /* semantic state — meaning, never decoration */
-  --state-success:   #2E6B4F;
-  --state-success-bg:#E5EFE9;
-  --state-warning:   #93641C;
-  --state-warning-bg:#F6EDDA;
-  --state-danger:    #B5482F;   /* brick — negative, down, destructive only */
-  --state-danger-bg: #F6E4DE;
-  --state-info:      #2E5850;
-  --state-info-bg:   #E3ECE9;
-  --state-neutral:   #5C6B66;
-  --state-neutral-bg:#EFEBE3;
+  --state-success:   #2A6B52;
+  --state-success-bg:#E6F1EC;
+  --state-warning:   #8A5F0E;
+  --state-warning-bg:#F8EDD2;
+  --state-danger:    #BA3526;   /* negative, down, destructive only — deeper than the decorative coral */
+  --state-danger-bg: #FBE7E3;
+  --state-info:      #4B4A8C;
+  --state-info-bg:   #ECECF6;
+  --state-neutral:   #55586F;
+  --state-neutral-bg:#EDEEF3;
 
   /* charts — ordered series colours */
-  --chart-1: #8A6D3B;  --chart-2: #2E5850;  --chart-3: #B5482F;  --chart-4: #CDB791;
+  --chart-1: #4B4A8C;  --chart-2: #6BA38A;  --chart-3: #F2604B;  --chart-4: #DCC98A;
 }
 ```
+
+Shape: radii are 8 / 10 / 16px (inputs, buttons, cards), and cards lift with `--shadow-card` (a soft indigo-tinted shadow) rather than relying on a border alone. The Home KPI row is solid colour tiles (indigo, sage, coral) with a white icon chip; the POS Register keeps its own fixed dark panel, retoned to deep indigo (`--pos-register-*`).
 
 Each domain accent needs a matching tint for icon-badge backgrounds (roughly the same hue at ~15% saturation) — define these alongside rather than computing opacity at render time, which produces muddy results over the sunken surface.
 
@@ -116,7 +120,7 @@ All spacing is a multiple of 4px. Card padding is `--space-4` on mobile, `--spac
 }
 ```
 
-Inter is self-hosted (`@fontsource/inter`, loaded once in `main.jsx`) so terminals that are offline still render it. `--font-display` (Fraunces, `@fontsource/fraunces`) is reserved for the Home greeting and the sidebar wordmark — never body text, labels, or numerals. Weights: 400 body, 500 labels, 600 headings, 700 page titles and KPI numerals. Never below 12px — front-desk terminals are often old, low-resolution, and viewed at arm's length. **Tabular figures (`font-variant-numeric: tabular-nums`) on every money column and folio total**, so digits align vertically down a column; proportional figures in a folio are genuinely hard to scan.
+Inter is self-hosted (`@fontsource/inter`, loaded once in `main.jsx`) so terminals that are offline still render it. `--font-display` now aliases Inter (the Home greeting and sidebar wordmark used to be a serif, Fraunces, before the Tripler palette; Fraunces is no longer loaded). Weights: 400 body, 500 labels, 600 headings, 700 page titles and KPI numerals. Never below 12px — front-desk terminals are often old, low-resolution, and viewed at arm's length. **Tabular figures (`font-variant-numeric: tabular-nums`) on every money column and folio total**, so digits align vertically down a column; proportional figures in a folio are genuinely hard to scan.
 
 **Touch targets**: minimum 44×44px on any screen a housekeeper or front-desk agent uses on a tablet or phone (3.18). Desktop-only admin screens may use 40px. **The POS order screen (3.4) is the one place this bends further**: PRODUCT_REQUIREMENTS.md §3.4 names it explicitly as "a different design problem from the rest of the product — used standing up, at speed, often one-handed, on a touch terminal... aim for 64px+ here." `--control-h-pos` (64px) is that token — scoped to `app/pos/`'s own order-screen components only, never used elsewhere in the admin app, and paired with fewer words and higher information sparsity than every other screen in this spec uses.
 
