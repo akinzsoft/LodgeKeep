@@ -761,6 +761,46 @@ describe('<StockItemsTab>', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
+    it("switching the Add form's outlet while selling picks the new outlet's menu category, even if the old outlet answers later", async () => {
+      mocks.listOutlets.mockResolvedValue([outlet(), outlet({ id: '3', name: 'Supermarket' })]);
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      const answers = {};
+      mocks.listMenuCategories.mockImplementation(({ outletId }) => new Promise((resolve) => (answers[outletId] = resolve)));
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      await userEvent.click(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — Beverages' }).closest('section');
+      await selectWhenLoaded('Outlet', '1');
+      await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
+      await userEvent.selectOptions(within(addCard).getByLabelText('Outlet'), '3');
+
+      // The bar's list arrives late — after the switch — but before the supermarket's.
+      answers['1']([{ id: '7', name: 'Beverages' }]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      answers['3']([{ id: '8', name: 'beverages' }]);
+      await waitFor(() => expect(within(addCard).getByLabelText('Menu category')).toHaveValue('beverages'));
+      expect(within(addCard).queryByRole('option', { name: 'Beverages' })).not.toBeInTheDocument();
+    });
+
+    it("loads each outlet's own menu categories for its items, once per outlet", async () => {
+      mocks.listStockItems.mockResolvedValue([item({ id: '9', name: 'Vodka', outlet_id: '1' }), item({ id: '10', name: 'Rice', outlet_id: '3' }), item({ id: '11', name: 'Gin', outlet_id: '1' })]);
+      mocks.listMenuItemLinks.mockResolvedValue([]);
+      mocks.listMenuCategories.mockImplementation(async ({ outletId }) => (outletId === '3' ? [{ id: '8', name: 'Groceries' }] : [{ id: '7', name: 'Beverages' }]));
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+
+      await userEvent.click(within((await screen.findByText('Rice')).closest('tr')).getByRole('button', { name: 'Sell in Register' }));
+      let card = screen.getByRole('heading', { name: 'Sell in Register — Rice' }).closest('section');
+      await waitFor(() => expect(within(within(card).getByLabelText('Menu category')).getByRole('option', { name: 'Groceries' })).toBeInTheDocument());
+      expect(within(card).queryByRole('option', { name: 'Beverages' })).not.toBeInTheDocument();
+
+      await userEvent.click(within(screen.getByText('Vodka').closest('tr')).getByRole('button', { name: 'Sell in Register' }));
+      card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
+      await waitFor(() => expect(within(card).getByLabelText('Menu category')).toHaveValue('Beverages'));
+      expect(within(card).queryByRole('option', { name: 'Groceries' })).not.toBeInTheDocument();
+
+      await userEvent.click(within(screen.getByText('Gin').closest('tr')).getByRole('button', { name: 'Sell in Register' }));
+      expect(mocks.listMenuCategories.mock.calls.map(([args]) => args.outletId)).toEqual(['3', '1']);
+    });
+
     it('sells an item under the matching existing Register category: creates the menu item, then links it with the entered quantity per sale', async () => {
       mocks.listMenuCategories.mockResolvedValue([{ id: '7', name: 'beverages' }]); // Different case — must still match.
       mocks.createMenuItem.mockResolvedValue({ id: '60' });
@@ -797,7 +837,7 @@ describe('<StockItemsTab>', () => {
       await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
 
       await waitFor(() => expect(mocks.upsertMenuItemComponents).toHaveBeenCalled());
-      expect(mocks.createMenuCategory).toHaveBeenCalledWith({ name: 'Beverages' });
+      expect(mocks.createMenuCategory).toHaveBeenCalledWith({ outletId: '1', name: 'Beverages' });
       expect(mocks.createMenuItem).toHaveBeenCalledWith(expect.objectContaining({ category: 'Beverages' }));
     });
 
@@ -1035,6 +1075,7 @@ describe('<StockItemsTab>', () => {
       render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
       await userEvent.click(within(await categoryBlock('Beverages')).getByRole('button', { name: 'Add item' }));
       const addCard = screen.getByRole('heading', { name: 'Add item — Beverages' }).closest('section');
+      await selectWhenLoaded('Outlet', '1');
       await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
       await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
       await waitFor(() => expect(within(addCard).getByLabelText('Menu category')).toHaveValue('Beverages'));

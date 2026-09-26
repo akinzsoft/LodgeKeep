@@ -162,9 +162,10 @@ async function archiveTerminal({ context, id }) {
 }
 
 // ---------------------------------------------------------------------
-// Menu categories — a registered list shared by every outlet at the
-// property; menu items pick one instead of typing it (see the
-// pos_menu_categories migration header). `pos_menu_items.category` keeps
+// Menu categories — a registered list per OUTLET (gap closure: a bar and a
+// supermarket at one property never share one; see the add-outlet-id
+// migration's header); menu items pick one of their own outlet's instead of
+// typing it. `pos_menu_items.category` keeps
 // holding the category name, so every reader is unchanged.
 // ---------------------------------------------------------------------
 
@@ -175,6 +176,8 @@ const menuCategoryCatalogue = createCategoryCatalogue({
   table: 'pos_menu_categories',
   resolveMode: 'name',
   optional: false,
+  scopeColumn: 'outlet_id',
+  duplicateSuffix: ' at this outlet',
   cascadeRename: { table: 'pos_menu_items', matchColumn: 'category' },
   inUseChecks: [{ table: 'pos_menu_items', matchColumn: 'category', matchBy: 'name', filter: (q) => q.where({ status: 'active' }) }],
   errors: {
@@ -186,13 +189,23 @@ const menuCategoryCatalogue = createCategoryCatalogue({
   },
 });
 
-const listMenuCategories = menuCategoryCatalogue.listCategories;
+/** One outlet's categories when `outletId` is given; every outlet's otherwise (each row carries its `outlet_id`). */
+function listMenuCategories({ context, includeArchived, outletId }) {
+  return menuCategoryCatalogue.listCategories({ context, includeArchived, scopeValue: outletId });
+}
 const getMenuCategory = menuCategoryCatalogue.getCategory;
-const createMenuCategory = menuCategoryCatalogue.createCategory;
+async function createMenuCategory({ context, outletId, name, sortOrder }) {
+  const outlet = await getOutlet({ context, id: outletId });
+  if (!outlet || outlet.status !== 'active') throw new OutletNotFoundError();
+  return menuCategoryCatalogue.createCategory({ context, name, sortOrder, scopeValue: outletId });
+}
+// Rename/archive act on one row by id, which already belongs to one outlet.
 const updateMenuCategory = menuCategoryCatalogue.updateCategory;
 const archiveMenuCategory = menuCategoryCatalogue.archiveCategory;
-/** The registered, active category matching `name` (case-insensitively) — its canonical spelling is what the menu item stores. */
-const resolveMenuCategoryName = menuCategoryCatalogue.resolveByName;
+/** The active category of THIS outlet matching `name` (case-insensitively) — its canonical spelling is what the menu item stores. */
+function resolveMenuCategoryName({ db, name, outletId }) {
+  return menuCategoryCatalogue.resolveByName({ db, name, scopeValue: outletId });
+}
 
 // ---------------------------------------------------------------------
 // Menu items
@@ -214,7 +227,7 @@ async function createMenuItem({ context, outletId, name, category, price, costPr
   const db = scopedDb().for(context);
   const outlet = await getOutlet({ context, id: outletId });
   if (!outlet) throw new OutletNotFoundError();
-  const categoryName = await resolveMenuCategoryName({ db, name: category });
+  const categoryName = await resolveMenuCategoryName({ db, name: category, outletId });
   const [id] = await db.table('pos_menu_items').insert({
     outlet_id: outletId,
     name,
@@ -234,13 +247,13 @@ async function updateMenuItem({ context, id, changes }) {
   const db = scopedDb().for(context);
   const next = { ...changes };
   if (next.category !== undefined) {
-    const current = await db.table('pos_menu_items').where({ id }).first('category');
+    const current = await db.table('pos_menu_items').where({ id }).first('category', 'outlet_id');
     const unchanged = current && typeof next.category === 'string' && next.category.trim() === current.category;
     // An item keeps its current category even if that category has since
     // been archived — editing only its price must not be refused. Only a
     // change of category has to name an active registered one.
     if (unchanged) delete next.category;
-    else next.category = await resolveMenuCategoryName({ db, name: next.category });
+    else next.category = await resolveMenuCategoryName({ db, name: next.category, outletId: current?.outlet_id });
   }
   await db.table('pos_menu_items').where({ id }).update(next);
   return getMenuItem({ context, id });

@@ -264,7 +264,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
         posApi.listMenuItems(id),
         posApi.listOrders({ outletId: id, status: 'open' }),
         // Best-effort: the rail falls back to the categories of the loaded items if this fails.
-        posApi.listMenuCategories().catch(() => []),
+        posApi.listMenuCategories({ outletId: id }).catch(() => []),
       ]);
       setTerminals(terminalList);
       setMenuItems(menuList);

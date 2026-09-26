@@ -1210,6 +1210,8 @@ describe('<RegisterTab>', () => {
         { id: '2', name: 'Beer' },
       ]);
       await openNewTab();
+      // Menu categories belong to one outlet — the rail asks for this outlet's only.
+      expect(mocks.listMenuCategories).toHaveBeenCalledWith({ outletId: '1' });
       const rail = screen.getByRole('navigation', { name: 'Menu categories' });
       expect(within(rail).getByRole('button', { name: /Beer/ })).toBeInTheDocument();
       expect(within(rail).getByRole('button', { name: /Drinks/ })).toBeInTheDocument();

@@ -1,0 +1,80 @@
+/* POS → Setup's outlet-first layout: the outlet being managed is a clear
+   context bar, and everything under it (menu, terminals) belongs to it. */
+
+.outletBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--domain-money);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+
+.outletBarText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.outletBarLabel {
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+}
+
+.outletBarName {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-h2-size);
+  line-height: var(--text-h2-line);
+  font-weight: var(--text-h2-weight);
+  overflow-wrap: anywhere;
+}
+
+.outletBarMeta {
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+}
+
+.sectionTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.sectionTab {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  cursor: pointer;
+}
+
+.sectionTab:hover {
+  color: var(--text-primary);
+}
+
+.sectionTabActive {
+  color: var(--domain-money);
+  border-bottom-color: var(--domain-money);
+}
+
+.selectedRow {
+  background: var(--surface-sunken);
+}
+
+.selectedRow td:first-child {
+  border-left: 3px solid var(--domain-money);
+  padding-left: calc(var(--space-4) - 3px);
+}

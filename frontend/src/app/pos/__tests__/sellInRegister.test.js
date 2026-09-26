@@ -125,7 +125,7 @@ describe('sellStockItemInRegister', () => {
     const result = await sellStockItemInRegister({ ...base, categoryChoice: { mode: 'create', name: 'Spirits' } });
 
     expect(result.ok).toBe(true);
-    expect(mocks.createMenuCategory).toHaveBeenCalledWith({ name: 'Spirits' });
+    expect(mocks.createMenuCategory).toHaveBeenCalledWith({ outletId: '1', name: 'Spirits' });
     expect(mocks.createMenuItem).toHaveBeenCalledWith(expect.objectContaining({ category: 'Spirits' }));
   });
 

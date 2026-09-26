@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, DataTable, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { formatQuantity, stockLevelTone } from './stockFormat.js';
@@ -91,12 +91,19 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
   const [restockSubmitting, setRestockSubmitting] = useState(false);
   const [restockSaved, setRestockSaved] = useState(false);
 
+  // Menu categories (and items) belong to one outlet (20261104090000). A slow
+  // answer for the outlet just switched away from must not replace the new
+  // one's data — every loader checks this before writing.
+  const outletRef = useRef(outletId);
   async function reloadCategories() {
+    const requestedFor = outletId;
+    let list;
     try {
-      setCategories(await posApi.listMenuCategories());
+      list = await posApi.listMenuCategories({ outletId });
     } catch {
-      setCategories([]);
+      list = [];
     }
+    if (outletRef.current === requestedFor) setCategories(list);
   }
 
   /** A category renamed or archived changes which menu items show it, so refresh both. */
@@ -117,7 +124,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
    * small enough that this stays fast, and there is no bulk
    * "components for every item" endpoint to call instead.
    */
-  async function resolveLinks(menuList) {
+  async function resolveLinks(menuList, requestedFor) {
     const entries = await Promise.all(
       menuList.map(async (item) => {
         try {
@@ -130,17 +137,20 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
         }
       })
     );
-    setLinksByMenuItemId(Object.fromEntries(entries));
+    if (outletRef.current === requestedFor) setLinksByMenuItemId(Object.fromEntries(entries));
   }
 
   async function reloadItems() {
+    const requestedFor = outletId;
     try {
       const [menuList, stockList] = await Promise.all([posApi.listMenuItems(outletId), stockApi.listStockItems({ outletId })]);
+      if (outletRef.current !== requestedFor) return;
       setMenuItems(menuList);
       setStockItems(stockList);
       setError(null);
-      await resolveLinks(menuList);
+      await resolveLinks(menuList, requestedFor);
     } catch (caught) {
+      if (outletRef.current !== requestedFor) return;
       setMenuItems([]);
       setStockItems([]);
       setLinksByMenuItemId({});
@@ -149,17 +159,15 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
   }
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; categories are shared across every outlet, fetched once regardless of which one is selected
-    reloadCategories();
-  }, []);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate: resets every piece of this outlet's own state before fetching the newly-selected outlet's data, the same reset-on-selection-change shape `StockItemsTab.jsx`'s own `handleFilterChange` already establishes
+    outletRef.current = outletId;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate: resets every piece of this outlet's own state (its menu categories included) before fetching the newly-selected outlet's data, the same reset-on-selection-change shape `StockItemsTab.jsx`'s own `handleFilterChange` already establishes
+    setCategories(null);
     setMenuItems(null);
     setStockItems(null);
     setLinksByMenuItemId(null);
     setActivePanel(null);
     setSelectedRowKey(null);
+    reloadCategories();
     reloadItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to `outletId` changing only
   }, [outletId]);
@@ -425,7 +433,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
       )}
       {isOffline && <p className={formStyles.disabledNotice}>You are offline. Menu items cannot be added, edited, restocked, or archived until connectivity returns.</p>}
 
-      <MenuCategoriesCard categories={categories} onChanged={handleCategoriesChanged} extraRows={extraRows} selectedRowKey={selectedRowKey} onSelectRow={selectSection} />
+      <MenuCategoriesCard outletId={outletId} outletName={outletName} categories={categories} onChanged={handleCategoriesChanged} extraRows={extraRows} selectedRowKey={selectedRowKey} onSelectRow={selectSection} />
 
       {currentSection === null ? (
         <DataTable state="loading" columns={[]} rows={[]} rowKey={(row) => row.id} />

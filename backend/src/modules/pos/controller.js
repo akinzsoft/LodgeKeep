@@ -219,7 +219,8 @@ async function listMenuItems(req, res, next) {
 async function listMenuCategories(req, res, next) {
   try {
     const includeArchived = req.query.include_archived === 'true';
-    res.status(200).json(ok(await service.listMenuCategories({ context: req.context, includeArchived })));
+    const outletId = req.query.outlet_id || undefined;
+    res.status(200).json(ok(await service.listMenuCategories({ context: req.context, includeArchived, outletId })));
   } catch (error) {
     next(error);
   }
@@ -233,7 +234,8 @@ function optionalSortOrder(body) {
 
 async function createMenuCategory(req, res, next) {
   try {
-    const category = await service.createMenuCategory({ context: req.context, name: req.body?.name, sortOrder: optionalSortOrder(req.body) });
+    const outletId = require_(req.body, 'outlet_id');
+    const category = await service.createMenuCategory({ context: req.context, outletId, name: req.body?.name, sortOrder: optionalSortOrder(req.body) });
     await req.audit({ entityType: 'pos_menu_categories', entityId: category.id, action: 'create', afterState: category });
     res.status(201).json(ok(category));
   } catch (error) {

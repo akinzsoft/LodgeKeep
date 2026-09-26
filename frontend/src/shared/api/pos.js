@@ -61,15 +61,17 @@ export function archiveTerminal(id) {
  * same param `listStockItemCategories`/`listExpenseCategories` both already
  * expose) — a real, previously-unflagged gap, not a deliberate omission.
  */
-export function listMenuCategories({ includeArchived } = {}) {
+/** Menu categories belong to one outlet — pass `outletId` for that outlet's list (every outlet's otherwise). */
+export function listMenuCategories({ includeArchived, outletId } = {}) {
   const params = new URLSearchParams();
   if (includeArchived) params.set('include_archived', 'true');
+  if (outletId) params.set('outlet_id', String(outletId));
   const query = params.toString();
   return request(`/pos/menu-categories${query ? `?${query}` : ''}`);
 }
 
-export function createMenuCategory({ name, sortOrder }) {
-  return request('/pos/menu-categories', { method: 'POST', body: { name, sort_order: sortOrder } });
+export function createMenuCategory({ outletId, name, sortOrder }) {
+  return request('/pos/menu-categories', { method: 'POST', body: { outlet_id: outletId, name, sort_order: sortOrder } });
 }
 
 export function updateMenuCategory(id, { name, sortOrder }) {

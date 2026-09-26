@@ -91,7 +91,9 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   // endpoint's gate) — the Register column and button then simply don't
   // render, with no error banner.
   const [links, setLinks] = useState(null);
-  const [menuCategories, setMenuCategories] = useState(null);
+  // Menu categories belong to one outlet (20261104090000): `{[outletId]: list}`,
+  // filled lazily the first time a sell form for that outlet opens.
+  const [menuCategoriesByOutlet, setMenuCategoriesByOutlet] = useState({});
   const [outletMenuNames, setOutletMenuNames] = useState([]);
   const [sellForm, setSellForm] = useState(EMPTY_SELL_FORM);
   const [sellError, setSellError] = useState(null);
@@ -209,26 +211,46 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
     }
   }
 
-  /** Registered Register (menu) categories — fetched lazily, the first time a sell form opens. Returns the list so a caller can derive a default from it immediately. */
-  async function loadMenuCategories() {
-    if (menuCategories !== null) return menuCategories;
+  /** One outlet's menu categories — fetched lazily, the first time a sell form for that outlet opens. Returns the list so a caller can derive a default from it immediately. */
+  async function loadMenuCategories(outletId) {
+    const key = String(outletId ?? '');
+    if (!key) return [];
+    if (menuCategoriesByOutlet[key]) return menuCategoriesByOutlet[key];
+    let list;
     try {
-      const list = await posApi.listMenuCategories();
-      setMenuCategories(list);
-      return list;
+      list = await posApi.listMenuCategories({ outletId });
     } catch {
-      setMenuCategories([]);
-      return [];
+      list = [];
     }
+    setMenuCategoriesByOutlet((current) => ({ ...current, [key]: list }));
+    return list;
   }
 
+  /** A sell may have created a menu category at that outlet — the next sell form there should see it. */
+  function forgetMenuCategories(outletId) {
+    setMenuCategoriesByOutlet((current) => {
+      const next = { ...current };
+      delete next[String(outletId)];
+      return next;
+    });
+  }
+
+  const menuCategoriesFor = (outletId) => (outletId ? (menuCategoriesByOutlet[String(outletId)] ?? null) : []);
+
+  // The outlet the open sell form (row panel or Add form) is for. Its menu
+  // names and default menu category arrive asynchronously; a slower answer
+  // for an outlet the user has since switched away from must not land.
+  const sellOutletRef = useRef(null);
+
   async function loadOutletMenuNames(outletId) {
+    let names;
     try {
       const menuItems = await posApi.listMenuItems(outletId);
-      setOutletMenuNames(menuItems.map((menuItem) => menuItem.name.trim().toLowerCase()));
+      names = menuItems.map((menuItem) => menuItem.name.trim().toLowerCase());
     } catch {
-      setOutletMenuNames([]);
+      names = [];
     }
+    if (sellOutletRef.current === String(outletId)) setOutletMenuNames(names);
   }
 
   useEffect(() => {
@@ -271,8 +293,11 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
     setActivePanel({ type: 'sell', item });
     setSellForm({ ...EMPTY_SELL_FORM, name: item.name });
     setSellError(null);
+    sellOutletRef.current = String(item.outlet_id);
+    setOutletMenuNames([]);
     loadOutletMenuNames(item.outlet_id);
-    const list = await loadMenuCategories();
+    const list = await loadMenuCategories(item.outlet_id);
+    if (sellOutletRef.current !== String(item.outlet_id)) return;
     // Only fills the category if the user hasn't already picked one while the list was loading.
     setSellForm((current) => (current.category === '' ? { ...current, category: defaultCategorySelection(item.category, list) } : current));
   }
@@ -287,8 +312,24 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
       return;
     }
     setAddSellForm(EMPTY_ADD_SELL_FORM);
+    sellOutletRef.current = String(outletId ?? '');
+    setOutletMenuNames([]);
     if (outletId) loadOutletMenuNames(outletId);
-    const list = await loadMenuCategories();
+    const list = await loadMenuCategories(outletId);
+    if (sellOutletRef.current !== String(outletId ?? '')) return;
+    setAddSellForm((current) => (current.category === '' ? { ...current, category: defaultCategorySelection(categoryName, list) } : current));
+  }
+
+  /** The Add form's outlet changed while "Also sell in Register" is ticked — the menu category picked belongs to the old outlet, so re-pick from the new one's list, keeping the name/price/photo already typed. */
+  async function handleAddOutletChange(outletId, categoryName) {
+    setAddForm((current) => ({ ...current, outlet_id: outletId }));
+    if (!addSell) return;
+    setAddSellForm((current) => ({ ...current, category: '' }));
+    sellOutletRef.current = String(outletId ?? '');
+    setOutletMenuNames([]);
+    if (outletId) loadOutletMenuNames(outletId);
+    const list = await loadMenuCategories(outletId);
+    if (sellOutletRef.current !== String(outletId ?? '')) return;
     setAddSellForm((current) => (current.category === '' ? { ...current, category: defaultCategorySelection(categoryName, list) } : current));
   }
 
@@ -352,6 +393,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
 
       if (sellInput) {
         const result = await sellStockItemInRegister({ stockItem: created, ...sellInput });
+        if (sellInput.categoryChoice?.mode === 'create') forgetMenuCategories(created.outlet_id);
         setAddSell(false);
         setAddSellForm(EMPTY_ADD_SELL_FORM);
         setAddPhotoKey((key) => key + 1);
@@ -400,6 +442,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
     try {
       const itemKey = String(item.id);
       const result = await sellStockItemInRegister({ stockItem: item, ...submission, resume: sellResumes[itemKey] });
+      if (submission.categoryChoice?.mode === 'create') forgetMenuCategories(item.outlet_id);
       // The user may have closed this panel or opened another row's while the request ran — only touch what is still on screen.
       const stillOpen = sellPanelItemIdRef.current === itemKey;
       if (result.ok) {
@@ -637,7 +680,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                   <form className={formStyles.row} onSubmit={handleAddSubmit}>
                     <label className={formStyles.field}>
                       <span className={formStyles.label}>Outlet</span>
-                      <select className={formStyles.select} value={addForm.outlet_id} onChange={(e) => setAddForm({ ...addForm, outlet_id: e.target.value })} required disabled={isOffline}>
+                      <select className={formStyles.select} value={addForm.outlet_id} onChange={(e) => handleAddOutletChange(e.target.value, section.categoryName)} required disabled={isOffline}>
                         <option value="" disabled>
                           Select an outlet
                         </option>
@@ -732,7 +775,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                         values={{ ...addSellForm, name: addSellForm.name ?? addForm.name }}
                         // Keeps the Register name following the stock Name until the user types a different one.
                         onChange={(next) => setAddSellForm({ ...next, name: addSellForm.name === null && next.name === addForm.name ? null : next.name })}
-                        menuCategories={menuCategories}
+                        menuCategories={menuCategoriesFor(addForm.outlet_id)}
                         stockCategory={section.categoryName}
                         unit={addForm.unit}
                         duplicateName={outletMenuNames.includes((addSellForm.name ?? addForm.name).trim().toLowerCase()) && (addSellForm.name ?? addForm.name).trim() !== ''}
@@ -833,7 +876,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                       idPrefix="sell"
                       values={sellForm}
                       onChange={setSellForm}
-                      menuCategories={menuCategories}
+                      menuCategories={menuCategoriesFor(sellingItem.outlet_id)}
                       stockCategory={sellingItem.category}
                       unit={sellingItem.unit}
                       onHand={sellingItem.current_quantity}
