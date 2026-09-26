@@ -34,7 +34,7 @@
  * (`row.id ?? row.key`) both agree on, so "which section is selected" and
  * "which category row is highlighted" can never drift apart.
  */
-export function computeCategorySections(categories, items, { includeUncategorized = true } = {}) {
+export function computeCategorySections(categories, items, { includeUncategorized = true, noun = 'category' } = {}) {
   const sortedCategories = (categories ?? [])
     .slice()
     .sort((a, b) => (a.sort_order !== b.sort_order ? a.sort_order - b.sort_order : a.name.localeCompare(b.name)));
@@ -63,7 +63,7 @@ export function computeCategorySections(categories, items, { includeUncategorize
   for (const [name, categoryItems] of itemsByCategoryName) {
     if (!activeNames.has(name)) {
       const key = `archived-category-${name}`;
-      sections.push({ key, selectId: key, title: `${name} (archived category)`, categoryName: name, canAddItem: false, items: categoryItems });
+      sections.push({ key, selectId: key, title: `${name} (archived ${noun})`, categoryName: name, canAddItem: false, items: categoryItems });
     }
   }
 

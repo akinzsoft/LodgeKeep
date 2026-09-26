@@ -23,11 +23,12 @@ export function StockCategoriesCard({ categories, onChanged, extraRows, selected
   return (
     <CategoryCatalogueCard
       title="Stock categories"
-      hint="Categories are shared by every outlet. Stock items choose one of these, so the Stock Items list shows consistent names. Click a category to see its items below."
+      hint="Stock categories group what you hold in storage, and are shared by every outlet. They are separate from menu categories, which group what guests buy. Stock items choose one of these, so the Stock Items list shows consistent names. Click a stock category to see its items below."
+      noun="stock category"
       namePlaceholder="e.g. Wine"
       countColumnLabel="Stock items"
-      renameHint="Renaming updates every stock item in this category."
-      archiveConsequence="will no longer be offered for stock items. A category still used by stock items cannot be archived — move those items first."
+      renameHint="Renaming updates every stock item in this stock category."
+      archiveConsequence="will no longer be offered for stock items. A stock category still used by stock items cannot be archived — move those items first."
       categories={categories}
       onChanged={onChanged}
       api={{ create: stockApi.createStockItemCategory, update: stockApi.updateStockItemCategory, archive: stockApi.archiveStockItemCategory }}

@@ -218,6 +218,19 @@ describe('<StockItemsTab>', () => {
     expect(within(await categoryBlock('Uncategorized')).getByRole('button', { name: 'Add item' })).toBeInTheDocument();
   });
 
+  it('says under the outlet filter that it filters items only, and changing it never refetches the property-wide stock categories', async () => {
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+    const filter = await screen.findByLabelText('Filter by outlet');
+    expect(filter).toHaveAccessibleDescription('Filters items only — stock categories are shared by every outlet.');
+    await categoryBlock('Beverages');
+    const categoryCalls = mocks.listStockItemCategories.mock.calls.length;
+
+    await userEvent.selectOptions(filter, '1');
+
+    await waitFor(() => expect(mocks.listStockItems).toHaveBeenLastCalledWith(expect.objectContaining({ outletId: '1' })));
+    expect(mocks.listStockItemCategories).toHaveBeenCalledTimes(categoryCalls);
+  });
+
   it('low-stock filtering calls the real endpoint with low_stock requested', async () => {
     render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
     await waitFor(() => expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: undefined, lowStockOnly: false }));
@@ -397,9 +410,9 @@ describe('<StockItemsTab>', () => {
     mocks.listStockItemCategories.mockResolvedValue([{ id: '1', name: 'Beverages', sort_order: 0, item_count: 0 }]);
     mocks.listStockItems.mockResolvedValue([item({ category: 'Discontinued Line' })]);
     render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
-    await selectCategory('Discontinued Line (archived category)');
+    await selectCategory('Discontinued Line (archived stock category)');
 
-    const section = await categoryBlock('Discontinued Line (archived category)');
+    const section = await categoryBlock('Discontinued Line (archived stock category)');
     expect(within(section).getByText('Vodka')).toBeInTheDocument();
     expect(within(section).queryByRole('button', { name: 'Add item' })).not.toBeInTheDocument();
   });
@@ -518,11 +531,11 @@ describe('<StockItemsTab>', () => {
       // the Add panel that's still open underneath it.
       const categoriesCard = screen.getByRole('heading', { name: 'Stock categories' }).closest('section');
       await userEvent.click(within(categoriesCard).getByRole('button', { name: 'Edit' }));
-      const renameInput = within(categoriesCard).getByLabelText('Rename category');
+      const renameInput = within(categoriesCard).getByLabelText('Rename stock category');
       await userEvent.clear(renameInput);
       await userEvent.type(renameInput, 'Drinks');
       mocks.listStockItemCategories.mockResolvedValue([{ id: '1', name: 'Drinks', sort_order: 0, item_count: 0 }]);
-      await userEvent.click(within(categoriesCard).getByRole('button', { name: 'Save category' }));
+      await userEvent.click(within(categoriesCard).getByRole('button', { name: 'Save stock category' }));
 
       // The Add panel's own heading follows the rename...
       const addCard = (await screen.findByRole('heading', { name: 'Add item — Drinks' })).closest('section');
@@ -564,8 +577,8 @@ describe('<StockItemsTab>', () => {
       // represents genuinely happened server-side in the meantime.
       mocks.listStockItems.mockResolvedValue([item({ current_quantity: '90.000', purchase_cost: '5.00' })]);
       const categoriesCard = screen.getByRole('heading', { name: 'Stock categories' }).closest('section');
-      await userEvent.type(within(categoriesCard).getByLabelText('Category name'), 'Wine');
-      await userEvent.click(within(categoriesCard).getByRole('button', { name: 'Add category' }));
+      await userEvent.type(within(categoriesCard).getByLabelText('Stock category name'), 'Wine');
+      await userEvent.click(within(categoriesCard).getByRole('button', { name: 'Add stock category' }));
 
       expect(await within(editCard).findByText(/90\.000 ml/)).toBeInTheDocument();
     });
@@ -611,7 +624,7 @@ describe('<StockItemsTab>', () => {
 
     await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
     const editCard = screen.getByRole('heading', { name: 'Edit — Vodka' }).closest('section');
-    await selectWhenLoaded('Category', 'Cleaning supplies');
+    await selectWhenLoaded('Stock category', 'Cleaning supplies');
     await userEvent.click(within(editCard).getByRole('button', { name: 'Save changes' }));
 
     expect(mocks.updateStockItem).toHaveBeenCalledWith('9', expect.objectContaining({ category: 'Cleaning supplies' }));
@@ -673,12 +686,12 @@ describe('<StockItemsTab>', () => {
       render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
       const card = (await screen.findByRole('heading', { name: 'Stock categories' })).closest('section');
 
-      await userEvent.type(within(card).getByLabelText('Category name'), 'Wine');
+      await userEvent.type(within(card).getByLabelText('Stock category name'), 'Wine');
       mocks.listStockItemCategories.mockResolvedValue([
         { id: '1', name: 'Beverages', sort_order: 0, item_count: 0 },
         { id: '3', name: 'Wine', sort_order: 0, item_count: 0 },
       ]);
-      await userEvent.click(within(card).getByRole('button', { name: 'Add category' }));
+      await userEvent.click(within(card).getByRole('button', { name: 'Add stock category' }));
 
       expect(mocks.createStockItemCategory).toHaveBeenCalledWith({ name: 'Wine', sortOrder: undefined });
       expect(await within(card).findByText('Wine')).toBeInTheDocument();
@@ -756,7 +769,7 @@ describe('<StockItemsTab>', () => {
 
       await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
       const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
-      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('beverages'));
+      await waitFor(() => expect(within(card).getByLabelText('Menu category')).toHaveValue('beverages'));
 
       await userEvent.type(within(card).getByLabelText('Selling price'), '15');
       await userEvent.clear(within(card).getByLabelText('Used per sale (ml)'));
@@ -778,7 +791,7 @@ describe('<StockItemsTab>', () => {
       await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
       const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
       await waitFor(() => expect(within(card).getByRole('option', { name: 'Create "Beverages"' })).toBeInTheDocument());
-      expect(within(card).getByLabelText('Register category')).toHaveValue('__create__');
+      expect(within(card).getByLabelText('Menu category')).toHaveValue('__create__');
 
       await userEvent.type(within(card).getByLabelText('Selling price'), '15');
       await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
@@ -799,14 +812,14 @@ describe('<StockItemsTab>', () => {
       const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
 
       await waitFor(() => expect(within(card).getByRole('option', { name: 'Snacks' })).toBeInTheDocument());
-      expect(within(card).getByLabelText('Register category')).toHaveValue('');
+      expect(within(card).getByLabelText('Menu category')).toHaveValue('');
       await userEvent.type(within(card).getByLabelText('Selling price'), '5');
       await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
 
       // The category select is `required`, so the browser itself refuses to submit until one is chosen.
       expect(mocks.createMenuItem).not.toHaveBeenCalled();
       expect(mocks.createStockItem).not.toHaveBeenCalled();
-      await userEvent.selectOptions(within(card).getByLabelText('Register category'), 'Snacks');
+      await userEvent.selectOptions(within(card).getByLabelText('Menu category'), 'Snacks');
       mocks.createMenuItem.mockResolvedValue({ id: '80' });
       mocks.upsertMenuItemComponents.mockResolvedValue([]);
       await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
@@ -818,7 +831,7 @@ describe('<StockItemsTab>', () => {
       const row = await renderWithItem();
       await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
       const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
-      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(card).getByLabelText('Menu category')).toHaveValue('Beverages'));
 
       fireInput(within(card).getByLabelText('Selling price'), '10');
       fireInput(within(card).getByLabelText('Used per sale (ml)'), '0');
@@ -841,7 +854,7 @@ describe('<StockItemsTab>', () => {
       const row = await renderWithItem();
       await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
       const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
-      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(card).getByLabelText('Menu category')).toHaveValue('Beverages'));
       await userEvent.type(within(card).getByLabelText('Selling price'), '15');
       await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
 
@@ -860,7 +873,7 @@ describe('<StockItemsTab>', () => {
       const row = await renderWithItem();
       await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
       const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
-      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(card).getByLabelText('Menu category')).toHaveValue('Beverages'));
       await userEvent.type(within(card).getByLabelText('Selling price'), '15');
       await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
 
@@ -891,7 +904,7 @@ describe('<StockItemsTab>', () => {
       await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
       await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
       await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
-      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Menu category')).toHaveValue('Beverages'));
       // The Register name defaults to the stock item's own name.
       expect(within(addCard).getByLabelText('Name in Register')).toHaveValue('Gin');
       await userEvent.type(within(addCard).getByLabelText('Selling price'), '12');
@@ -913,7 +926,7 @@ describe('<StockItemsTab>', () => {
       await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
       await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
       await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
-      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Menu category')).toHaveValue('Beverages'));
       fireInput(within(addCard).getByLabelText('Selling price'), '12');
       fireInput(within(addCard).getByLabelText('Used per sale (bottle)'), '0');
       await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
@@ -935,7 +948,7 @@ describe('<StockItemsTab>', () => {
       await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
       await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
       await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
-      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Menu category')).toHaveValue('Beverages'));
       await userEvent.type(within(addCard).getByLabelText('Selling price'), '12');
       await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
 
@@ -955,7 +968,7 @@ describe('<StockItemsTab>', () => {
       await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
       await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
       await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
-      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Menu category')).toHaveValue('Beverages'));
       await userEvent.type(within(addCard).getByLabelText('Selling price'), '12');
       await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
 
@@ -971,7 +984,7 @@ describe('<StockItemsTab>', () => {
       const row = await renderWithItem();
       await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
       let card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
-      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(card).getByLabelText('Menu category')).toHaveValue('Beverages'));
       await userEvent.type(within(card).getByLabelText('Selling price'), '15');
       await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
       await within(card).findByRole('alert');
@@ -1000,7 +1013,7 @@ describe('<StockItemsTab>', () => {
       await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
       await userEvent.type(within(addCard).getByLabelText('Unit'), 'bottle');
       await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
-      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Menu category')).toHaveValue('Beverages'));
       await userEvent.type(within(addCard).getByLabelText('Selling price'), '12');
       mocks.listStockItems.mockResolvedValue([item({ id: '20', name: 'Gin' })]);
       await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
@@ -1024,7 +1037,7 @@ describe('<StockItemsTab>', () => {
       const addCard = screen.getByRole('heading', { name: 'Add item — Beverages' }).closest('section');
       await userEvent.type(within(addCard).getByLabelText('Name'), 'Gin');
       await userEvent.click(within(addCard).getByLabelText('Also sell in Register'));
-      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Menu category')).toHaveValue('Beverages'));
       await userEvent.type(within(addCard).getByLabelText('Selling price'), '12');
 
       await userEvent.type(within(addCard).getByLabelText('Name'), 'x');
@@ -1039,7 +1052,7 @@ describe('<StockItemsTab>', () => {
       const row = await renderWithItem();
       await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
       const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
-      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(card).getByLabelText('Menu category')).toHaveValue('Beverages'));
       await userEvent.type(within(card).getByLabelText('Selling price'), '15');
       const photo = new File(['img'], 'vodka.png', { type: 'image/png' });
       await userEvent.upload(within(card).getByLabelText('Item image (optional)'), photo);
@@ -1057,7 +1070,7 @@ describe('<StockItemsTab>', () => {
       const row = await renderWithItem();
       await userEvent.click(within(row).getByRole('button', { name: 'Sell in Register' }));
       const card = screen.getByRole('heading', { name: 'Sell in Register — Vodka' }).closest('section');
-      await waitFor(() => expect(within(card).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(card).getByLabelText('Menu category')).toHaveValue('Beverages'));
       await userEvent.type(within(card).getByLabelText('Selling price'), '15');
       await userEvent.upload(within(card).getByLabelText('Item image (optional)'), new File(['img'], 'v.png', { type: 'image/png' }));
       await userEvent.click(within(card).getByRole('button', { name: 'Sell in Register' }));
@@ -1088,7 +1101,7 @@ describe('<StockItemsTab>', () => {
       expect(within(addCard).getAllByLabelText('Item image (optional)')).toHaveLength(1);
 
       expect(within(addCard).getByLabelText('Also sell in Register')).toBeChecked();
-      await waitFor(() => expect(within(addCard).getByLabelText('Register category')).toHaveValue('Beverages'));
+      await waitFor(() => expect(within(addCard).getByLabelText('Menu category')).toHaveValue('Beverages'));
       await userEvent.type(within(addCard).getByLabelText('Selling price'), '9');
       await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
 

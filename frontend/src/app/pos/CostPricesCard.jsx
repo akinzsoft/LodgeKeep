@@ -148,7 +148,7 @@ export function CostPricesCard({ menuItems, recipeKind, linkedStockItemFor, acti
         state={rows.length === 0 ? 'empty' : visibleRows.length === 0 ? 'empty' : 'success'}
         emptyMessage={rows.length === 0 ? 'No menu items at this outlet yet.' : 'Every editable item already has a cost price.'}
         columns={[
-          { key: 'category', label: 'Category', render: (row) => row.category ?? '—' },
+          { key: 'category', label: 'Menu category', render: (row) => row.category ?? '—' },
           { key: 'name', label: 'Item' },
           { key: 'price', label: 'Selling price', align: 'right', render: (row) => <Money amount={row.price} currencyCode={currencyCode} /> },
           {

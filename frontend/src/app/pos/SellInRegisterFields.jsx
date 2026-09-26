@@ -42,11 +42,11 @@ export function SellInRegisterFields({ idPrefix, values, onChange, menuCategorie
 
       <div className={formStyles.field}>
         <label className={formStyles.label} htmlFor={`${idPrefix}-category`}>
-          Register category
+          Menu category
         </label>
         <select id={`${idPrefix}-category`} className={formStyles.select} value={values.category} onChange={set('category')} required disabled={isOffline || menuCategories === null}>
           <option value="" disabled>
-            {menuCategories === null ? 'Loading categories…' : 'Select a category'}
+            {menuCategories === null ? 'Loading menu categories…' : 'Select a menu category'}
           </option>
           {createLabel && <option value={CREATE_CATEGORY_VALUE}>{createLabel}</option>}
           {(menuCategories ?? []).map((category) => (
