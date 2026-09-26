@@ -170,11 +170,11 @@ export function StockReportsTab({ activeProperty }) {
       )}
 
       <DataTable
-        title="Stock by category"
+        title="Stock categories — summary"
         state={overview === null || overview.byCategory.length === 0 ? 'empty' : 'success'}
         emptyMessage={overview === null ? 'Choose a date range and run the reports.' : 'No stock categories or items yet.'}
         columns={[
-          { key: 'category', label: 'Category', render: (row) => row.category ?? UNCATEGORIZED_LABEL },
+          { key: 'category', label: 'Stock category', render: (row) => row.category ?? UNCATEGORIZED_LABEL },
           { key: 'itemCount', label: 'Items', align: 'right' },
           { key: 'lowStockCount', label: 'Low / out of stock', align: 'right' },
           { key: 'soldCost', label: 'Cost of sales', align: 'right', render: (row) => <Money amount={row.soldCost} currencyCode={activeProperty.base_currency} /> },
@@ -185,11 +185,11 @@ export function StockReportsTab({ activeProperty }) {
       />
 
       <DataTable
-        title="Every stock item — by category"
+        title="Every stock item — by stock category"
         state={overview === null || overview.items.length === 0 ? 'empty' : 'success'}
         emptyMessage={overview === null ? 'Choose a date range and run the reports.' : 'No stock items yet.'}
         columns={[
-          { key: 'category', label: 'Category', render: (row) => row.category ?? UNCATEGORIZED_LABEL },
+          { key: 'category', label: 'Stock category', render: (row) => row.category ?? UNCATEGORIZED_LABEL },
           { key: 'name', label: 'Stock item' },
           { key: 'currentQuantity', label: 'On hand', align: 'right', render: (row) => formatQuantity(row.currentQuantity, row.unit) },
           { key: 'soldQty', label: 'Sold', align: 'right', render: (row) => formatQuantity(row.soldQty, row.unit) },
@@ -214,7 +214,7 @@ export function StockReportsTab({ activeProperty }) {
           emptyMessage="No stock movements in this range for this outlet."
           columns={[
             { key: 'business_date', label: 'Date' },
-            { key: 'category', label: 'Category', render: (row) => row.stock_item_category?.trim() || UNCATEGORIZED_LABEL },
+            { key: 'category', label: 'Stock category', render: (row) => row.stock_item_category?.trim() || UNCATEGORIZED_LABEL },
             { key: 'stock_item_name', label: 'Stock item' },
             { key: 'type', label: 'Type', render: (row) => MOVEMENT_LABEL[row.type] ?? row.type },
             { key: 'quantity', label: 'Quantity', align: 'right', render: (row) => formatQuantity(row.quantity, row.stock_item_unit) },
@@ -247,7 +247,7 @@ export function StockReportsTab({ activeProperty }) {
         state={costOfSales === null || costOfSales.byItem.length === 0 ? 'empty' : 'success'}
         emptyMessage="Choose a date range and run the reports."
         columns={[
-          { key: 'category', label: 'Category', render: (row) => stockItemCategory(row.stockItemId) },
+          { key: 'category', label: 'Stock category', render: (row) => stockItemCategory(row.stockItemId) },
           { key: 'stockItemId', label: 'Stock item', render: (row) => stockItemName(row.stockItemId) },
           { key: 'cost', label: 'Cost', align: 'right', render: (row) => <Money amount={row.cost} currencyCode={activeProperty.base_currency} /> },
         ]}
@@ -260,7 +260,7 @@ export function StockReportsTab({ activeProperty }) {
         state={variance === null || variance.summaryByItem.length === 0 ? 'empty' : 'success'}
         emptyMessage="Choose a date range and run the reports."
         columns={[
-          { key: 'category', label: 'Category', render: (row) => stockItemCategory(row.stockItemId) },
+          { key: 'category', label: 'Stock category', render: (row) => stockItemCategory(row.stockItemId) },
           { key: 'stockItemId', label: 'Stock item', render: (row) => stockItemName(row.stockItemId) },
           { key: 'totalVariance', label: 'Total variance', align: 'right' },
         ]}
@@ -283,7 +283,7 @@ export function StockReportsTab({ activeProperty }) {
         emptyMessage="Choose a date range and run the reports."
         columns={[
           { key: 'name', label: 'Menu item' },
-          { key: 'category', label: 'Category', render: (row) => row.category ?? '—' },
+          { key: 'category', label: 'Menu category', render: (row) => row.category ?? '—' },
           { key: 'quantity', label: 'Qty sold', align: 'right' },
           { key: 'revenue', label: 'Revenue', align: 'right', render: (row) => <Money amount={row.revenue} currencyCode={activeProperty.base_currency} /> },
           { key: 'cost', label: 'Cost', align: 'right', render: (row) => moneyOrUnknown(row.cost, activeProperty.base_currency) },
@@ -295,11 +295,11 @@ export function StockReportsTab({ activeProperty }) {
       />
 
       <DataTable
-        title="Cost-of-sales margin — by category"
+        title="Cost-of-sales margin — by menu category"
         state={margin === null || margin.byCategory.length === 0 ? 'empty' : 'success'}
         emptyMessage="Choose a date range and run the reports."
         columns={[
-          { key: 'category', label: 'Category', render: (row) => row.category ?? 'No category' },
+          { key: 'category', label: 'Menu category', render: (row) => row.category ?? 'No menu category' },
           { key: 'revenue', label: 'Revenue', align: 'right', render: (row) => <Money amount={row.revenue} currencyCode={activeProperty.base_currency} /> },
           { key: 'cost', label: 'Cost', align: 'right', render: (row) => moneyOrUnknown(row.cost, activeProperty.base_currency) },
           { key: 'margin', label: 'Margin', align: 'right', render: (row) => moneyOrUnknown(row.margin, activeProperty.base_currency) },

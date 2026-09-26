@@ -174,7 +174,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
   }
 
   const sections = useMemo(
-    () => (menuItems === null || categories === null ? null : computeCategorySections(categories, menuItems, { includeUncategorized: false })),
+    () => (menuItems === null || categories === null ? null : computeCategorySections(categories, menuItems, { includeUncategorized: false, noun: 'menu category' })),
     [menuItems, categories]
   );
   const currentSection = sections ? (sections.find((section) => section.selectId === selectedRowKey) ?? null) : null;
@@ -619,7 +619,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                       />
                     </label>
                     <label className={formStyles.field}>
-                      <span className={formStyles.label}>Category</span>
+                      <span className={formStyles.label}>Menu category</span>
                       <select className={formStyles.select} value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })} required disabled={isOffline}>
                         {categoryOptions(editForm.category).map((name) => (
                           <option key={name} value={name}>
@@ -704,7 +704,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                 )}
                 {restockSaved && <p className={formStyles.hint}>Stock recorded.</p>}
                 {restockableItems.length === 0 ? (
-                  <p className={formStyles.hint}>No stock-tracked items in this category yet — add one above with Qty supplied/Unit cost filled in, or link a recipe via Stock → Recipes.</p>
+                  <p className={formStyles.hint}>No stock-tracked items in this menu category yet — add one above with Qty supplied/Unit cost filled in, or link a recipe via Stock → Recipes.</p>
                 ) : (
                   <form className={formStyles.row} onSubmit={handleRestockSubmit}>
                     <label className={formStyles.field}>

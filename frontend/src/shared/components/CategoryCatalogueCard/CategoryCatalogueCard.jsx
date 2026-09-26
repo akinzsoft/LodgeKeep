@@ -45,7 +45,9 @@ export function CategoryCatalogueCard({
   extraRows = [], // [{ key, name, item_count }] — selectable, not manageable
   selectedRowKey = null,
   onSelectRow = null, // (row) => void
+  noun = 'category', // lowercase; e.g. 'menu category' so two POS catalogues never both read as a bare "Category"
 }) {
+  const Noun = noun.charAt(0).toUpperCase() + noun.slice(1);
   const [form, setForm] = useState({ name: '', sort_order: '' });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -61,7 +63,7 @@ export function CategoryCatalogueCard({
       setForm({ name: '', sort_order: '' });
       await onChanged();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not add this category.');
+      setError(caught instanceof ApiError ? caught.message : `Could not add this ${noun}.`);
     } finally {
       setSubmitting(false);
     }
@@ -75,7 +77,7 @@ export function CategoryCatalogueCard({
       setEditing(null);
       await onChanged();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not save this category.');
+      setError(caught instanceof ApiError ? caught.message : `Could not save this ${noun}.`);
     }
   }
 
@@ -87,7 +89,7 @@ export function CategoryCatalogueCard({
       await api.archive(category.id);
       await onChanged();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not archive this category.');
+      setError(caught instanceof ApiError ? caught.message : `Could not archive this ${noun}.`);
     }
   }
 
@@ -101,7 +103,7 @@ export function CategoryCatalogueCard({
       )}
       <form className={styles.row} onSubmit={handleCreate}>
         <label className={styles.field}>
-          <span className={styles.label}>Category name</span>
+          <span className={styles.label}>{Noun} name</span>
           <input className={styles.input} value={form.name} maxLength={60} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={namePlaceholder} required />
         </label>
         <label className={styles.field}>
@@ -110,18 +112,18 @@ export function CategoryCatalogueCard({
         </label>
         <div className={styles.actionsRow}>
           <Button type="submit" loading={submitting}>
-            Add category
+            Add {noun}
           </Button>
         </div>
       </form>
 
       <DataTable
         state={categories === null ? 'loading' : categories.length === 0 && extraRows.length === 0 ? 'empty' : 'success'}
-        emptyMessage="No categories yet — add the first one above."
+        emptyMessage={`No ${noun.replace(/y$/, 'ies')} yet — add the first one above.`}
         columns={[
           {
             key: 'name',
-            label: 'Category',
+            label: Noun,
             render: (row) =>
               onSelectRow ? (
                 <button type="button" className={styles.rowSelectButton} onClick={() => onSelectRow(row)}>
@@ -155,9 +157,9 @@ export function CategoryCatalogueCard({
       />
 
       {editing && (
-        <form className={styles.row} onSubmit={handleSaveEdit} aria-label="Edit category">
+        <form className={styles.row} onSubmit={handleSaveEdit} aria-label={`Edit ${noun}`}>
           <label className={styles.field}>
-            <span className={styles.label}>Rename category</span>
+            <span className={styles.label}>Rename {noun}</span>
             <input className={styles.input} value={editing.name} maxLength={60} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required />
           </label>
           <label className={styles.field}>
@@ -165,7 +167,7 @@ export function CategoryCatalogueCard({
             <input className={styles.input} type="number" step="1" value={editing.sort_order} onChange={(e) => setEditing({ ...editing, sort_order: e.target.value })} />
           </label>
           <div className={styles.actionsRow}>
-            <Button type="submit">Save category</Button>
+            <Button type="submit">Save {noun}</Button>
             <Button type="button" variant="ghost" onClick={() => setEditing(null)}>
               Cancel
             </Button>
@@ -176,7 +178,7 @@ export function CategoryCatalogueCard({
 
       {archiving && (
         <ConfirmDialog
-          title="Archive category"
+          title={`Archive ${noun}`}
           consequence={`"${archiving.name}" ${archiveConsequence}`}
           confirmLabel="Archive"
           onConfirm={confirmArchive}

@@ -107,7 +107,7 @@ export function classifyStockItem(stockItemId, links) {
 /** Returns a message for the first invalid field, or `null` when all are fine. Money/quantity stay strings — never parsed to floats. */
 export function validateSellFields({ name, price, quantityPerSale, categoryChoice, photo }) {
   if (!String(name ?? '').trim()) return 'Enter the name to show in the Register.';
-  if (!categoryChoice || categoryChoice.mode === 'choose') return 'Choose the Register category this item is sold under.';
+  if (!categoryChoice || categoryChoice.mode === 'choose') return 'Choose the menu category this item is sold under.';
   if (!MONEY_PATTERN.test(String(price ?? '').trim())) return 'Enter a selling price of zero or more, with at most 2 decimal places.';
   const quantity = String(quantityPerSale ?? '').trim();
   if (!QUANTITY_PATTERN.test(quantity) || Number(quantity) <= 0) return 'Enter how much of this stock item one sale uses — more than zero, with at most 3 decimal places.';
@@ -142,7 +142,7 @@ export async function sellStockItemInRegister({ stockItem, name, price, category
         // Already there (a concurrent create, or the list was stale) — the
         // category we wanted exists, which is all this step needs.
         if (!(caught instanceof ApiError && caught.status === 409)) {
-          return { ok: false, step: 'category', message: messageOf(caught, 'Could not create the Register category.'), resume: { menuItemId: null } };
+          return { ok: false, step: 'category', message: messageOf(caught, 'Could not create the menu category.'), resume: { menuItemId: null } };
         }
       }
     }

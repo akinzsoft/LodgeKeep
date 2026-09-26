@@ -144,7 +144,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   // underlying data actually changes, not on every unrelated re-render
   // (e.g. typing into the Add/Edit form) — `computeSections` otherwise
   // returns a fresh array/object identity every single call.
-  const sections = useMemo(() => (items === null || categories === null ? null : computeCategorySections(categories, items)), [items, categories]);
+  const sections = useMemo(() => (items === null || categories === null ? null : computeCategorySections(categories, items, { noun: 'stock category' })), [items, categories]);
   const currentSection = sections ? (sections.find((section) => section.selectId === selectedRowKey) ?? null) : null;
 
   /**
@@ -494,7 +494,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
       <div className={formStyles.row}>
         <label className={formStyles.field}>
           <span className={formStyles.label}>Filter by outlet</span>
-          <select className={formStyles.select} value={outletFilter} onChange={(event) => handleFilterChange(() => setOutletFilter(event.target.value))}>
+          <select className={formStyles.select} value={outletFilter} aria-describedby="stock-items-outlet-filter-hint" onChange={(event) => handleFilterChange(() => setOutletFilter(event.target.value))}>
             <option value="">All outlets</option>
             {(outlets ?? []).map((outlet) => (
               <option key={outlet.id} value={outlet.id}>
@@ -513,6 +513,9 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
           <span className={formStyles.label}>Low stock only</span>
         </label>
       </div>
+      <p id="stock-items-outlet-filter-hint" className={formStyles.hint}>
+        Filters items only — stock categories are shared by every outlet.
+      </p>
 
       <StockCategoriesCard categories={categories} onChanged={handleCategoriesChanged} extraRows={extraRows} selectedRowKey={selectedRowKey} onSelectRow={selectSection} />
 
@@ -707,7 +710,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                           }}
                           disabled={isOffline}
                         />
-                        <p className={formStyles.hint}>Shown on the item&apos;s tile in the Register — choosing one also sells this item in the Register (set its price and category below).</p>
+                        <p className={formStyles.hint}>Shown on the item&apos;s tile in the Register — choosing one also sells this item in the Register (set its price and menu category below).</p>
                       </div>
                     )}
                     {linksLoaded && (
@@ -776,9 +779,9 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                       <input className={formStyles.input} value={editForm.unit} onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })} required disabled={isOffline} />
                     </label>
                     <label className={formStyles.field}>
-                      <span className={formStyles.label}>Category</span>
+                      <span className={formStyles.label}>Stock category</span>
                       <select className={formStyles.select} value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })} disabled={isOffline}>
-                        <option value="">No category</option>
+                        <option value="">No stock category</option>
                         {categoryOptions(editForm.category).map((name) => (
                           <option key={name} value={name}>
                             {name}
