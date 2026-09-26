@@ -40,8 +40,6 @@ describe('POS (PLAN.md Phase 4)', () => {
   beforeAll(async () => {
     ctx = await seedTwoTenants(t.trx);
     await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: '2027-03-01' });
-    // Menu items may only use registered categories.
-    await t.trx('pos_menu_categories').insert(['Mains', 'Snacks'].map((name) => ({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, name })));
   });
 
   function tokenFor({ tenant = ctx.a, userId, propertyId } = {}) {
@@ -90,6 +88,8 @@ describe('POS (PLAN.md Phase 4)', () => {
       outlet_id: outletId,
       device_ref: `TERM-${suffix}`,
     });
+    // Menu items may only use their own outlet's registered categories.
+    await t.trx('pos_menu_categories').insert(['Mains', 'Snacks'].map((name) => ({ tenant_id: tenant.id, property_id: propertyId, outlet_id: outletId, name })));
     const [menuItemId] = await t.trx('pos_menu_items').insert({
       tenant_id: tenant.id,
       property_id: propertyId,
@@ -216,6 +216,12 @@ describe('POS (PLAN.md Phase 4)', () => {
         .set('Authorization', `Bearer ${managerToken}`)
         .send({ outlet_id: outletId, device_ref: `DEV-${Date.now()}`, supports_contactless: true });
       expect(terminal.status).toBe(201);
+
+      const category = await t.request
+        .post('/api/v1/pos/menu-categories')
+        .set('Authorization', `Bearer ${managerToken}`)
+        .send({ outlet_id: outletId, name: 'Mains' });
+      expect(category.status).toBe(201);
 
       const menuItem = await t.request
         .post('/api/v1/pos/menu-items')

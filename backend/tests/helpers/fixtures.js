@@ -832,6 +832,7 @@ async function seedTwoTenants(trx) {
       id: await insertReturningId(trx, 'pos_menu_categories', {
         tenant_id: t.id,
         property_id: property.id,
+        outlet_id: t.posOutlets[0].id,
         name: 'Cocktails',
       }),
       property_id: property.id,

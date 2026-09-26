@@ -76,17 +76,28 @@ function cleanSortOrder(sortOrder) {
  * @param {{table, matchColumn, matchBy, filter?}} [config.listCountSource] - defaults to inUseChecks[0].
  * @param {boolean} [config.restrictListCountToRows=false] - expenses: true.
  * @param {{categoryNotFound: () => Error, categoryInUse: (name, ...counts) => Error}} config.errors
+ * @param {string} [config.scopeColumn] - POS menu: 'outlet_id'. Each category
+ *   row then belongs to one value of this column: create requires a
+ *   `scopeValue`, list/resolve filter by it, and item counts, the archive
+ *   in-use check and the rename cascade only match items carrying the same
+ *   value (so one outlet's "Drinks" never counts or renames another's).
+ *   Stock and expenses omit it and behave exactly as before.
+ * @param {string} [config.duplicateSuffix] - appended to the duplicate-name message, e.g. ' at this outlet'.
  */
 function createCategoryCatalogue(config) {
-  const { table, resolveMode, cascadeRename, inUseChecks, errors } = config;
+  const { table, resolveMode, cascadeRename, inUseChecks, errors, scopeColumn } = config;
   const nameMaxLength = config.nameMaxLength ?? 60;
   const optional = config.optional ?? false;
   const listCountSource = config.listCountSource ?? inUseChecks[0];
   const restrictListCountToRows = config.restrictListCountToRows ?? false;
+  const scopeKeyPart = (row) => (scopeColumn ? `${row[scopeColumn]}::` : '');
+  const duplicateSuffix = config.duplicateSuffix ?? '';
+  const hasScopeValue = (value) => value !== undefined && value !== null && value !== '';
 
-  async function listCategories({ context, includeArchived = false }) {
+  async function listCategories({ context, includeArchived = false, scopeValue }) {
     const db = scopedDb().for(context);
-    const query = db.table(table);
+    let query = db.table(table);
+    if (scopeColumn && hasScopeValue(scopeValue)) query = query.where({ [scopeColumn]: scopeValue });
     const rows = await (includeArchived ? query : query.where({ status: 'active' })).orderBy('sort_order').orderBy('name');
     if (rows.length === 0) return rows;
 
@@ -96,18 +107,18 @@ function createCategoryCatalogue(config) {
       childQuery = childQuery.whereIn(matchColumn, rows.map((row) => (matchBy === 'id' ? row.id : row.name)));
     }
     if (filter) childQuery = filter(childQuery);
-    const childRows = await childQuery.select(matchColumn);
+    const childRows = await childQuery.select(scopeColumn ? [matchColumn, scopeColumn] : [matchColumn]);
 
     const countByKey = new Map();
     for (const child of childRows) {
       const value = child[matchColumn];
       if (!value) continue; // stock: a stock item's category may be null (optional).
-      const key = keyFor(matchBy, value);
+      const key = scopeKeyPart(child) + keyFor(matchBy, value);
       countByKey.set(key, (countByKey.get(key) ?? 0) + 1);
     }
     return rows.map((row) => ({
       ...row,
-      item_count: countByKey.get(keyFor(matchBy, matchBy === 'id' ? row.id : row.name)) ?? 0,
+      item_count: countByKey.get(scopeKeyPart(row) + keyFor(matchBy, matchBy === 'id' ? row.id : row.name)) ?? 0,
     }));
   }
 
@@ -116,19 +127,24 @@ function createCategoryCatalogue(config) {
     return db.table(table).where({ id }).first();
   }
 
-  async function createCategory({ context, name, sortOrder }) {
+  async function createCategory({ context, name, sortOrder, scopeValue }) {
+    if (scopeColumn && !hasScopeValue(scopeValue)) {
+      throw new ValidationError('MISSING_FIELD', `"${scopeColumn}" is required.`, [{ field: scopeColumn, issue: 'missing' }]);
+    }
     const db = scopedDb().for(context);
     const clean = cleanName(name, nameMaxLength);
-    return withDuplicateMapping(table, `A category named "${clean}" already exists.`, async () => {
+    return withDuplicateMapping(table, `A category named "${clean}" already exists${duplicateSuffix}.`, async () => {
       const cleanSort = cleanSortOrder(sortOrder);
-      const [id] = await db.table(table).insert({ name: clean, sort_order: cleanSort ?? 0 });
+      const insertRow = { name: clean, sort_order: cleanSort ?? 0 };
+      if (scopeColumn) insertRow[scopeColumn] = scopeValue;
+      const [id] = await db.table(table).insert(insertRow);
       return getCategory({ context, id });
     });
   }
 
   async function updateCategory({ context, id, name, sortOrder }) {
     const db = scopedDb().for(context);
-    return withDuplicateMapping(table, `A category named "${typeof name === 'string' ? name.trim() : ''}" already exists.`, () =>
+    return withDuplicateMapping(table, `A category named "${typeof name === 'string' ? name.trim() : ''}" already exists${duplicateSuffix}.`, () =>
       db.transaction(async (trx) => {
         const category = await trx.table(table).where({ id }).forUpdate().first();
         if (!category) return null;
@@ -138,7 +154,9 @@ function createCategoryCatalogue(config) {
         if (Object.keys(changes).length === 0) return category;
         await trx.table(table).where({ id }).update(changes);
         if (changes.name && changes.name !== category.name && cascadeRename) {
-          await trx.table(cascadeRename.table).where({ [cascadeRename.matchColumn]: category.name }).update({ [cascadeRename.matchColumn]: changes.name });
+          let renameQuery = trx.table(cascadeRename.table).where({ [cascadeRename.matchColumn]: category.name });
+          if (scopeColumn) renameQuery = renameQuery.where({ [scopeColumn]: category[scopeColumn] });
+          await renameQuery.update({ [cascadeRename.matchColumn]: changes.name });
         }
         return trx.table(table).where({ id }).first();
       })
@@ -154,6 +172,7 @@ function createCategoryCatalogue(config) {
       for (const check of inUseChecks) {
         const matchValue = check.matchBy === 'id' ? category.id : category.name;
         let query = trx.table(check.table).where({ [check.matchColumn]: matchValue });
+        if (scopeColumn) query = query.where({ [scopeColumn]: category[scopeColumn] });
         if (check.filter) query = check.filter(query);
         counts.push(await query.count());
       }
@@ -165,10 +184,12 @@ function createCategoryCatalogue(config) {
     });
   }
 
-  async function resolveByName({ db, name }) {
+  async function resolveByName({ db, name, scopeValue }) {
     const trimmed = typeof name === 'string' ? name.trim() : '';
     if (!trimmed && optional) return null;
-    const category = trimmed ? await db.table(table).where({ name: trimmed, status: 'active' }).first() : null;
+    let query = db.table(table).where({ name: trimmed, status: 'active' });
+    if (scopeColumn) query = query.where({ [scopeColumn]: scopeValue ?? null });
+    const category = trimmed ? await query.first() : null;
     if (!category) throw errors.categoryNotFound();
     return category.name;
   }

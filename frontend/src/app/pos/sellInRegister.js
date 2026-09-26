@@ -137,7 +137,7 @@ export async function sellStockItemInRegister({ stockItem, name, price, category
   if (menuItemId === null) {
     if (categoryChoice.mode === 'create') {
       try {
-        await posApi.createMenuCategory({ name: categoryChoice.name });
+        await posApi.createMenuCategory({ outletId: stockItem.outlet_id, name: categoryChoice.name });
       } catch (caught) {
         // Already there (a concurrent create, or the list was stale) — the
         // category we wanted exists, which is all this step needs.

@@ -61,6 +61,7 @@ describe('<SetupTab>', () => {
     render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Terminals' }));
     expect(await screen.findByText('Terminals — Main Bar')).toBeInTheDocument();
 
     await userEvent.type(screen.getByLabelText('Device ref'), 'TERM-1');
@@ -98,6 +99,7 @@ describe('<SetupTab>', () => {
     render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Terminals' }));
     const terminalsSection = (await screen.findByRole('heading', { name: 'Terminals — Main Bar' })).closest('section');
     await userEvent.click(within(terminalsSection).getByRole('button', { name: 'Edit' }));
     const editCard = (await screen.findByRole('heading', { name: 'Edit terminal' })).closest('section');
@@ -133,6 +135,27 @@ describe('<SetupTab>', () => {
   it('renders MenuItemsTab once an outlet is selected — its own behavior is covered by MenuItemsTab.test.jsx', async () => {
     render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
     await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
-    expect(await screen.findByRole('heading', { name: 'Menu categories' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Menu categories — Main Bar' })).toBeInTheDocument();
+    expect(mocks.listMenuCategories).toHaveBeenCalledWith({ outletId: '1' });
+  });
+
+  it('shows which outlet is being managed, and the switcher moves everything below to the other outlet', async () => {
+    mocks.listOutlets.mockResolvedValue([
+      { id: '1', code: 'BAR', name: 'Main Bar', type: 'bar' },
+      { id: '3', code: 'SHOP', name: 'Supermarket', type: 'restaurant' },
+    ]);
+    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+    expect(await screen.findByText(/Choose an outlet with Manage/)).toBeInTheDocument();
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Manage' }))[0]);
+
+    const bar = screen.getByRole('region', { name: 'Outlet being managed' });
+    expect(within(bar).getByRole('heading', { name: 'Main Bar' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Menu categories — Main Bar' })).toBeInTheDocument();
+
+    await userEvent.selectOptions(within(bar).getByLabelText('Switch outlet'), '3');
+    expect(within(bar).getByRole('heading', { name: 'Supermarket' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Menu categories — Supermarket' })).toBeInTheDocument();
+    expect(mocks.listMenuCategories).toHaveBeenLastCalledWith({ outletId: '3' });
+    expect(mocks.listTerminals).toHaveBeenLastCalledWith('3');
   });
 });

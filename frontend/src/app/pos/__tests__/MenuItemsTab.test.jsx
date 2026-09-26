@@ -400,16 +400,49 @@ describe('<MenuItemsTab>', () => {
   });
 
   describe('menu categories', () => {
+    it("a slow items answer for the previous outlet never replaces the new outlet's items", async () => {
+      let answerOld;
+      mocks.listMenuCategories.mockResolvedValue([CATEGORY]);
+      mocks.listMenuItems.mockImplementation((id) =>
+        id === '1' ? new Promise((resolve) => (answerOld = resolve)) : Promise.resolve([menuItem({ id: '30', name: 'Rice bag', outlet_id: '3' })])
+      );
+      const { rerender } = renderTab();
+      rerender(<MenuItemsTab activeProperty={{ base_currency: 'NGN' }} outletId="3" outletName="Supermarket" />);
+      expect(await screen.findByText('Rice bag')).toBeInTheDocument();
+
+      answerOld([menuItem({ id: '10', name: 'Old bar item' })]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(screen.getByText('Rice bag')).toBeInTheDocument();
+      expect(screen.queryByText('Old bar item')).not.toBeInTheDocument();
+    });
+
+    it("shows only the selected outlet's categories, and a slow answer for the previous outlet never replaces them", async () => {
+      let answerOld;
+      mocks.listMenuCategories.mockImplementation(({ outletId }) =>
+        outletId === '1' ? new Promise((resolve) => (answerOld = resolve)) : Promise.resolve([{ id: '8', name: 'Groceries', sort_order: 0, item_count: 0 }])
+      );
+      const { rerender } = renderTab();
+      rerender(<MenuItemsTab activeProperty={{ base_currency: 'NGN' }} outletId="3" outletName="Supermarket" />);
+      const card = (await screen.findByRole('heading', { name: 'Menu categories — Supermarket' })).closest('section');
+      expect(await within(card).findByText('Groceries')).toBeInTheDocument();
+
+      answerOld([CATEGORY]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(within(card).getByText('Groceries')).toBeInTheDocument();
+      expect(within(card).queryByText(CATEGORY.name)).not.toBeInTheDocument();
+      expect(within(card).getByText(/belong to this outlet only/)).toBeInTheDocument();
+    });
+
     it('registers a new category from the Menu categories card', async () => {
       mocks.createMenuCategory.mockResolvedValue({ id: '3', name: 'Starters' });
       renderTab();
-      const card = (await screen.findByRole('heading', { name: 'Menu categories' })).closest('section');
+      const card = (await screen.findByRole('heading', { name: 'Menu categories — Main Bar' })).closest('section');
 
       await userEvent.type(within(card).getByLabelText('Menu category name'), 'Starters');
       mocks.listMenuCategories.mockResolvedValue([CATEGORY, { id: '3', name: 'Starters', sort_order: 0, item_count: 0 }]);
       await userEvent.click(within(card).getByRole('button', { name: 'Add menu category' }));
 
-      expect(mocks.createMenuCategory).toHaveBeenCalledWith({ name: 'Starters', sortOrder: undefined });
+      expect(mocks.createMenuCategory).toHaveBeenCalledWith({ outletId: '1', name: 'Starters', sortOrder: undefined });
       expect(await within(card).findByText('Starters')).toBeInTheDocument();
     });
 
@@ -418,7 +451,7 @@ describe('<MenuItemsTab>', () => {
         new ApiError({ code: 'CONFLICT_POS_MENU_CATEGORY_IN_USE', message: '"Drinks" is still used by 1 menu item — move them to another category first.' })
       );
       renderTab();
-      const card = (await screen.findByRole('heading', { name: 'Menu categories' })).closest('section');
+      const card = (await screen.findByRole('heading', { name: 'Menu categories — Main Bar' })).closest('section');
       await userEvent.click(within(card).getByRole('button', { name: 'Archive' }));
       const dialog = await screen.findByRole('alertdialog');
       await userEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));

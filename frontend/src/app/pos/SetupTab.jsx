@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Card, DataTable, Button } from '../../shared/components/index.js';
 import { posApi, ApiError } from '../../shared/api/index.js';
 import formStyles from './POSForm.module.css';
+import styles from './SetupTab.module.css';
 import { MenuItemsTab } from './MenuItemsTab.jsx';
 
 /**
@@ -33,10 +34,19 @@ import { MenuItemsTab } from './MenuItemsTab.jsx';
  * own sibling `create*` form's fields — `status` stays reachable only
  * through Archive, matching `RoomTypesTab.jsx`'s own precedent.
  */
+const OUTLET_TYPE_LABELS = { bar: 'Bar', restaurant: 'Restaurant', room_service: 'Room service', spa: 'Spa', poolside: 'Poolside' };
+
+/** What sits under the outlet being managed — menu first, since that is where setup time goes. */
+const OUTLET_SECTIONS = [
+  { key: 'menu', label: 'Menu categories & items' },
+  { key: 'terminals', label: 'Terminals' },
+];
+
 export function SetupTab({ activeProperty, isOffline = false }) {
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState(null);
   const [selectedOutletId, setSelectedOutletId] = useState(null);
+  const [outletSection, setOutletSection] = useState('menu');
 
   const [outletForm, setOutletForm] = useState({ code: '', name: '', type: 'bar' });
   const [outletSubmitting, setOutletSubmitting] = useState(false);
@@ -78,6 +88,7 @@ export function SetupTab({ activeProperty, isOffline = false }) {
   }
 
   function handleSelectOutlet(outlet) {
+    if (!outlet) return;
     setSelectedOutletId(outlet.id);
     setTerminals(null);
     setEditingTerminalId(null);
@@ -216,9 +227,10 @@ export function SetupTab({ activeProperty, isOffline = false }) {
         ]}
         rows={outlets ?? []}
         rowKey={(row) => row.id}
+        rowClassName={(row) => (row.id === selectedOutletId ? styles.selectedRow : undefined)}
         actions={(row) => (
           <>
-            <Button size="compact" variant="ghost" onClick={() => handleSelectOutlet(row)}>
+            <Button size="compact" variant="ghost" onClick={() => handleSelectOutlet(row)} aria-pressed={row.id === selectedOutletId}>
               Manage
             </Button>
             <Button size="compact" variant="ghost" onClick={() => startEditOutlet(row)}>
@@ -269,63 +281,107 @@ export function SetupTab({ activeProperty, isOffline = false }) {
         </Card>
       )}
 
+      {!selectedOutlet && outlets?.length > 0 && (
+        <p className={formStyles.hint}>Choose an outlet with Manage to set up its menu categories, menu items and terminals. Each outlet keeps its own.</p>
+      )}
+
       {selectedOutlet && (
         <>
-          <Card title={`Terminals — ${selectedOutlet.name}`}>
-            {terminalError && (
-              <p role="alert" className={formStyles.errorBanner}>
-                {terminalError}
-              </p>
-            )}
-            <form className={formStyles.row} onSubmit={handleCreateTerminal}>
-              <label className={formStyles.field}>
-                <span className={formStyles.label}>Device ref</span>
-                <input
-                  className={formStyles.input}
-                  value={terminalForm.device_ref}
-                  onChange={(e) => setTerminalForm({ ...terminalForm, device_ref: e.target.value })}
-                  required
-                />
-              </label>
-              <label className={formStyles.checkboxField}>
-                <input
-                  className={formStyles.checkbox}
-                  type="checkbox"
-                  checked={terminalForm.supports_contactless}
-                  onChange={(e) => setTerminalForm({ ...terminalForm, supports_contactless: e.target.checked })}
-                />
-                <span className={formStyles.label}>Supports contactless</span>
-              </label>
-              <div className={formStyles.actionsRow}>
-                <Button type="submit" loading={terminalSubmitting}>
-                  Add terminal
-                </Button>
-              </div>
-            </form>
-            <DataTable
-              state={terminals === null ? 'loading' : terminals.length === 0 ? 'empty' : 'success'}
-              emptyMessage="No terminals yet."
-              columns={[
-                { key: 'device_ref', label: 'Device ref' },
-                { key: 'supports_contactless', label: 'Contactless', render: (row) => (row.supports_contactless ? 'Yes' : 'No') },
-              ]}
-              rows={terminals ?? []}
-              rowKey={(row) => row.id}
-              actions={(row) => (
-                <>
-                  <Button size="compact" variant="ghost" onClick={() => startEditTerminal(row)}>
-                    Edit
-                  </Button>
-                  <Button size="compact" variant="danger" onClick={() => posApi.archiveTerminal(row.id).then(() => reloadOutletDetail(selectedOutletId))}>
-                    Archive
-                  </Button>
-                </>
+          <section className={styles.outletBar} aria-label="Outlet being managed">
+            <div className={styles.outletBarText}>
+              <span className={styles.outletBarLabel}>Managing outlet</span>
+              <h2 className={styles.outletBarName}>{selectedOutlet.name}</h2>
+              <span className={styles.outletBarMeta}>
+                {selectedOutlet.code} · {OUTLET_TYPE_LABELS[selectedOutlet.type] ?? selectedOutlet.type} — menu categories, menu items and terminals below belong to this outlet only.
+              </span>
+            </div>
+            <label className={formStyles.field}>
+              <span className={formStyles.label}>Switch outlet</span>
+              <select className={formStyles.select} value={selectedOutletId} onChange={(e) => handleSelectOutlet(outlets.find((o) => String(o.id) === e.target.value))}>
+                {outlets.map((outlet) => (
+                  <option key={outlet.id} value={outlet.id}>
+                    {outlet.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </section>
+
+          <div className={styles.sectionTabs} role="tablist" aria-label={`${selectedOutlet.name} setup`}>
+            {OUTLET_SECTIONS.map((section) => (
+              <button
+                key={section.key}
+                type="button"
+                role="tab"
+                aria-selected={outletSection === section.key}
+                className={`${styles.sectionTab} ${outletSection === section.key ? styles.sectionTabActive : ''}`}
+                onClick={() => setOutletSection(section.key)}
+              >
+                {section.label}
+              </button>
+            ))}
+          </div>
+
+          {outletSection === 'menu' && <MenuItemsTab activeProperty={activeProperty} outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} />}
+
+          {outletSection === 'terminals' && (
+            <Card title={`Terminals — ${selectedOutlet.name}`}>
+              {terminalError && (
+                <p role="alert" className={formStyles.errorBanner}>
+                  {terminalError}
+                </p>
               )}
-            />
+              <form className={formStyles.row} onSubmit={handleCreateTerminal}>
+                <label className={formStyles.field}>
+                  <span className={formStyles.label}>Device ref</span>
+                  <input
+                    className={formStyles.input}
+                    value={terminalForm.device_ref}
+                    onChange={(e) => setTerminalForm({ ...terminalForm, device_ref: e.target.value })}
+                    required
+                  />
+                </label>
+                <label className={formStyles.checkboxField}>
+                  <input
+                    className={formStyles.checkbox}
+                    type="checkbox"
+                    checked={terminalForm.supports_contactless}
+                    onChange={(e) => setTerminalForm({ ...terminalForm, supports_contactless: e.target.checked })}
+                  />
+                  <span className={formStyles.label}>Supports contactless</span>
+                </label>
+                <div className={formStyles.actionsRow}>
+                  <Button type="submit" loading={terminalSubmitting}>
+                    Add terminal
+                  </Button>
+                </div>
+              </form>
+              <DataTable
+                state={terminals === null ? 'loading' : terminals.length === 0 ? 'empty' : 'success'}
+                emptyMessage="No terminals yet."
+                columns={[
+                  { key: 'device_ref', label: 'Device ref' },
+                  { key: 'supports_contactless', label: 'Contactless', render: (row) => (row.supports_contactless ? 'Yes' : 'No') },
+                ]}
+                rows={terminals ?? []}
+                rowKey={(row) => row.id}
+                actions={(row) => (
+                  <>
+                    <Button size="compact" variant="ghost" onClick={() => startEditTerminal(row)}>
+                      Edit
+                    </Button>
+                    <Button size="compact" variant="danger" onClick={() => posApi.archiveTerminal(row.id).then(() => reloadOutletDetail(selectedOutletId))}>
+                      Archive
+                    </Button>
+                  </>
+                )}
+              />
 
-          </Card>
+            </Card>
 
-          {editingTerminalId !== null && (
+          )}
+
+          {outletSection === 'terminals' && editingTerminalId !== null && (
             <Card title="Edit terminal">
               {terminalEditError && (
                 <p role="alert" className={formStyles.errorBanner}>
@@ -363,7 +419,6 @@ export function SetupTab({ activeProperty, isOffline = false }) {
             </Card>
           )}
 
-          <MenuItemsTab activeProperty={activeProperty} outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} />
         </>
       )}
     </div>
