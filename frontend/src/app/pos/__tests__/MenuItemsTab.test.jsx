@@ -292,11 +292,11 @@ describe('<MenuItemsTab>', () => {
       // own defensive "archived category" section — not the default-
       // selected "Drinks" — matching `StockItemsTab.jsx`'s own identical
       // precedent for this edge case.
-      await selectCategory('Legacy (archived category)');
+      await selectCategory('Legacy (archived menu category)');
       const row = (await screen.findByText('Cocktail')).closest('tr');
       await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
       const editCard = screen.getByRole('heading', { name: 'Edit — Cocktail' }).closest('section');
-      const select = within(editCard).getByLabelText('Category');
+      const select = within(editCard).getByLabelText('Menu category');
       expect(select).toHaveValue('Legacy');
       expect([...select.options].map((o) => o.textContent)).toEqual(['Drinks', 'Legacy']);
     });
@@ -350,7 +350,7 @@ describe('<MenuItemsTab>', () => {
       mocks.listMenuItems.mockResolvedValue([menuItem()]);
       renderTab();
       const restockCard = (await screen.findByRole('heading', { name: 'Restock — Drinks' })).closest('section');
-      expect(within(restockCard).getByText(/No stock-tracked items in this category yet/)).toBeInTheDocument();
+      expect(within(restockCard).getByText(/No stock-tracked items in this menu category yet/)).toBeInTheDocument();
     });
 
     it('offers only linked items, and records a real delivery against the correct stock item', async () => {
@@ -405,9 +405,9 @@ describe('<MenuItemsTab>', () => {
       renderTab();
       const card = (await screen.findByRole('heading', { name: 'Menu categories' })).closest('section');
 
-      await userEvent.type(within(card).getByLabelText('Category name'), 'Starters');
+      await userEvent.type(within(card).getByLabelText('Menu category name'), 'Starters');
       mocks.listMenuCategories.mockResolvedValue([CATEGORY, { id: '3', name: 'Starters', sort_order: 0, item_count: 0 }]);
-      await userEvent.click(within(card).getByRole('button', { name: 'Add category' }));
+      await userEvent.click(within(card).getByRole('button', { name: 'Add menu category' }));
 
       expect(mocks.createMenuCategory).toHaveBeenCalledWith({ name: 'Starters', sortOrder: undefined });
       expect(await within(card).findByText('Starters')).toBeInTheDocument();

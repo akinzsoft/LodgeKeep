@@ -22,11 +22,12 @@ export function MenuCategoriesCard({ categories, onChanged, extraRows, selectedR
   return (
     <CategoryCatalogueCard
       title="Menu categories"
-      hint="Categories are shared by every outlet. Menu items choose one of these, so the Register and guest menu show consistent names. Click a category to see its items below."
+      hint="Menu categories group what guests buy, and are shared by every outlet. They are separate from stock categories, which group what you hold in storage. Menu items choose one of these, so the Register and guest menu show consistent names. Click a menu category to see its items below."
+      noun="menu category"
       namePlaceholder="e.g. Starters"
       countColumnLabel="Menu items"
-      renameHint="Renaming updates every menu item in this category."
-      archiveConsequence="will no longer be offered for menu items. A category still used by menu items cannot be archived — move those items first."
+      renameHint="Renaming updates every menu item in this menu category."
+      archiveConsequence="will no longer be offered for menu items. A menu category still used by menu items cannot be archived — move those items first."
       categories={categories}
       onChanged={onChanged}
       api={{ create: posApi.createMenuCategory, update: posApi.updateMenuCategory, archive: posApi.archiveMenuCategory }}

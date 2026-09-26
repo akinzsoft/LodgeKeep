@@ -153,7 +153,7 @@ describe('<StockReportsTab>', () => {
       const byItem = screen.getByRole('heading', { name: 'Cost-of-sales margin — by menu item' }).closest('section');
       expect(within(byItem).getByText('Bottle of Wine')).toBeInTheDocument();
       expect(within(byItem).getByText('33.3%')).toBeInTheDocument();
-      const byCategory = screen.getByRole('heading', { name: 'Cost-of-sales margin — by category' }).closest('section');
+      const byCategory = screen.getByRole('heading', { name: 'Cost-of-sales margin — by menu category' }).closest('section');
       expect(within(byCategory).getByText('Drinks')).toBeInTheDocument();
     });
 
@@ -204,12 +204,12 @@ describe('<StockReportsTab>', () => {
       render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
       await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
 
-      const byCategory = (await screen.findByRole('heading', { name: 'Stock by category' })).closest('section');
+      const byCategory = (await screen.findByRole('heading', { name: 'Stock categories — summary' })).closest('section');
       expect(within(byCategory).getByText('Spirits')).toBeInTheDocument();
       expect(within(byCategory).getByText('Empty shelf')).toBeInTheDocument();
       expect(within(byCategory).getByText('Uncategorized')).toBeInTheDocument();
 
-      const items = screen.getByRole('heading', { name: 'Every stock item — by category' }).closest('section');
+      const items = screen.getByRole('heading', { name: 'Every stock item — by stock category' }).closest('section');
       expect(within(items).getByText('Gin')).toBeInTheDocument();
       expect(within(items).getByText('Never sold ice')).toBeInTheDocument();
       expect(screen.getByText(/3 active stock items — cost of sales/)).toBeInTheDocument();
