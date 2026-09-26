@@ -66,3 +66,25 @@ export function percentOfMoney(amount, percent) {
   const roundedAbs = (absNumerator * 2n + denominator) / (2n * denominator);
   return fromCents(negative ? -roundedAbs : roundedAbs);
 }
+
+function toQtyUnits(quantityString) {
+  const [whole, fraction = ''] = String(quantityString).split('.');
+  const negative = whole.startsWith('-');
+  const wholeAbs = negative ? whole.slice(1) : whole;
+  const units = BigInt(wholeAbs || '0') * 1000n + BigInt(`${fraction}000`.slice(0, 3) || '0');
+  return negative ? -units : units;
+}
+
+/**
+ * A money unit cost (2dp) × a stock quantity (3dp), rounded half-up to the
+ * cent — e.g. what the stock on hand is worth. Ported from the backend's
+ * `backend/src/shared/quantity.js` `extendedCost`, same formula.
+ */
+export function extendedCost(unitCost, quantity) {
+  const numerator = toCents(unitCost) * toQtyUnits(quantity);
+  const denominator = 1000n;
+  const negative = numerator < 0n;
+  const absNumerator = negative ? -numerator : numerator;
+  const roundedAbs = (absNumerator * 2n + denominator) / (2n * denominator);
+  return fromCents(negative ? -roundedAbs : roundedAbs);
+}

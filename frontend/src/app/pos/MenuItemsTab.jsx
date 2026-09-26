@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, DataTable, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
+import { extendedCost } from '../../shared/money.js';
 import { formatQuantity, stockLevelTone } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
 import { MenuCategoriesCard } from './MenuCategoriesCard.jsx';
@@ -468,7 +469,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                   { key: 'price', label: 'Selling price', align: 'right', render: (row) => <Money amount={row.price} currencyCode={activeProperty.base_currency} /> },
                   {
                     key: 'stock',
-                    label: 'Stock',
+                    label: 'Stock balance',
                     align: 'right',
                     render: (row) => {
                       if (linksByMenuItemId?.[row.id] === 'compound') return 'Compound recipe';
@@ -491,6 +492,17 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                     render: (row) => {
                       const link = linkedStockItemFor(row.id);
                       return link?.purchase_cost != null ? <Money amount={link.purchase_cost} currencyCode={activeProperty.base_currency} /> : '—';
+                    },
+                  },
+                  {
+                    key: 'stock_value',
+                    label: 'Stock value',
+                    align: 'right',
+                    // What the stock on hand is worth at its unit cost — exact, never a float product.
+                    render: (row) => {
+                      const link = linkedStockItemFor(row.id);
+                      if (link?.purchase_cost == null || link.current_quantity == null) return '—';
+                      return <Money amount={extendedCost(link.purchase_cost, link.current_quantity)} currencyCode={activeProperty.base_currency} />;
                     },
                   },
                   { key: 'supplier', label: 'Supplier', render: (row) => linkedStockItemFor(row.id)?.supplier ?? '—' },
