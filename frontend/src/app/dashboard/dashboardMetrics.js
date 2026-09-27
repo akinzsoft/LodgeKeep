@@ -161,6 +161,22 @@ export function moneyPercentDelta(current, previous) {
   return { direction: change > 0 ? 'up' : 'down', label: `${change > 0 ? '+' : '−'}${Math.abs(change)}%` };
 }
 
+/** Change between two percentages, in percentage points (occupancy 64% → 70% is "+6 pts", not "+9%"). `null` when either side is unknown. */
+export function pointsDelta(current, previous) {
+  if (typeof current !== 'number' || typeof previous !== 'number') return null;
+  const difference = Math.round((current - previous) * 10) / 10;
+  if (difference === 0) return { direction: 'flat', label: '0 pts' };
+  const size = Number.isInteger(difference) ? Math.abs(difference) : Math.abs(difference).toFixed(1);
+  return { direction: difference > 0 ? 'up' : 'down', label: `${difference > 0 ? '+' : '−'}${size} pts` };
+}
+
+/** A percentage for display — whole numbers stay whole ("64%"), anything else gets one decimal ("64.5%"). */
+export function formatPercent(value) {
+  if (typeof value !== 'number') return '—';
+  const rounded = Math.round(value * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}%`;
+}
+
 export function totalMoney(amounts) {
   return sumMoney(amounts.map((amount) => amount ?? '0.00'));
 }
@@ -213,4 +229,25 @@ const SHORT_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 export function shortWeekday(date) {
   const [year, month, day] = date.split('-').map(Number);
   return SHORT_WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+}
+
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "23" — a business date's day of the month, for a 14-day chart axis. */
+export function dayOfMonth(date) {
+  return String(Number(date.slice(8, 10)));
+}
+
+/** "Wed, 23 Sep 2026" — a 'YYYY-MM-DD' business date, from its own digits (never the viewer's timezone). */
+export function formatBusinessDate(date) {
+  const [year, month, day] = date.split('-').map(Number);
+  return `${shortWeekday(date)}, ${day} ${SHORT_MONTHS[month - 1]} ${year}`;
+}
+
+/** "10 – 23 Sep" or "28 Aug – 10 Sep" — a chart's date range. */
+export function formatDateRange(from, to) {
+  const [, fromMonth, fromDay] = from.split('-').map(Number);
+  const [, toMonth, toDay] = to.split('-').map(Number);
+  if (fromMonth === toMonth) return `${fromDay} – ${toDay} ${SHORT_MONTHS[toMonth - 1]}`;
+  return `${fromDay} ${SHORT_MONTHS[fromMonth - 1]} – ${toDay} ${SHORT_MONTHS[toMonth - 1]}`;
 }

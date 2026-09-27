@@ -3,71 +3,64 @@ import { StatusPill, Button, Skeleton } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { reservationsApi, setupApi, housekeepingApi, reportingApi, nightAuditApi, ApiError } from '../../shared/api/index.js';
 import { STATUS_TONE as NIGHT_AUDIT_STATUS_TONE } from '../night-audit/NightAuditScreen.jsx';
-import { AreaChart, DonutChart, Sparkline, segmentClassName } from './DashboardCharts.jsx';
-import { BookingsIcon, RoomsIcon, NewGuestsIcon, RevenueIcon } from './dashboardIcons.jsx';
+import { AreaChart, BarChart, DonutChart, segmentClassName } from './DashboardCharts.jsx';
+import { ArrivalIcon, DepartureIcon, InHouseIcon, OccupancyIcon, RateIcon, RevenueIcon, RevparIcon, RoomsIcon } from './dashboardIcons.jsx';
 import {
   bookingsByRoomType,
-  countBookings,
-  countDelta,
-  countNewGuests,
   dateWindow,
+  dayOfMonth,
+  formatBusinessDate,
+  formatDateRange,
   formatLongDate,
+  formatPercent,
   greetingForHour,
-  isZeroMoney,
   moneyPercentDelta,
   moneyToChartValue,
   monthRange,
-  newVsReturningByDay,
-  ratio,
+  pointsDelta,
   shiftDate,
-  shortWeekday,
   totalMoney,
 } from './dashboardMetrics.js';
 import styles from './HomeDashboard.module.css';
 
 const NOT_FOR_ROLE = 'Not available for your role.';
+const TREND_DAYS = 14;
 
 /**
- * HomeDashboard — PRODUCT_REQUIREMENTS.md's "Manager dashboard (Home)":
- * greeting, two summary widgets, a 4-card KPI row, a 2-chart row, and the
- * operational alert strip.
+ * HomeDashboard — the property's Home screen, laid out the way hotel PMS
+ * dashboards conventionally are (user-requested: "professional and
+ * standard"):
  *
- * Every figure is real — nothing here is a placeholder:
+ * 1. A page header — greeting, property, business date, and shortcuts.
+ * 2. The four headline hotel KPIs for the current business date, each
+ *    against the previous business day: **Occupancy** (rooms sold ÷
+ *    sellable rooms), **ADR** (room revenue ÷ rooms sold), **RevPAR** (room
+ *    revenue ÷ sellable rooms) and **Room revenue**. All four come straight
+ *    from the Reporting module's occupancy and revenue reports — audited
+ *    `daily_reports` figures for a closed date, live figures for the open
+ *    one (see `reporting/service.js`), never recomputed here.
+ * 3. **Today's operations** — arrivals, departures, in-house guests and
+ *    rooms still free tonight, the numbers a front desk works from.
+ * 4. Trends over the last 14 business days — occupancy and daily room
+ *    revenue — plus bookings by room type for the month.
+ * 5. **Needs attention** — open housekeeping discrepancies, oversold room
+ *    types tonight, and whether night audit has run for this business date.
  *
- * - **Windows**: "this week" = the 7 business days ending on the property's
- *   own business date (ARCHITECTURE.md §6, never the wall clock), compared
- *   against the 7 business days before it. See `dashboardMetrics.js`.
- * - **Total Bookings**: room-holding reservations arriving this week (delta
- *   vs. last week); its bar is the week's average occupancy.
- * - **Rooms Available**: tonight's live sellable rooms (occupancy report's
- *   physical count minus rooms sold; delta vs. the previous business date);
- *   its bar is the share of rooms still free.
- * - **New Guests**: guests whose first-ever stay arrives this week (delta vs.
- *   last week); its bar is their share of this week's bookings.
- * - **Total Revenue**: today's posted room revenue (delta vs. the previous
- *   business date); its bar is today's share of this week's income.
- * - **Total Income — this week**: the week's room revenue, summed exactly,
- *   with a daily sparkline.
- * - **New vs. Returning Guests**: arrivals per business date, split by
- *   whether the guest has an earlier stay.
- * - **Bookings by Room Type**: room-holding reservations arriving in the
- *   business date's calendar month ("This month"), by type.
- * - **Guest Rating**: no guest reviews/ratings are collected anywhere in
- *   this codebase yet (confirmed: no table or endpoint exists), so this
- *   widget stays an honest empty state rather than showing invented stars.
- *
- * Each source is fetched independently, so one role's missing grant (e.g.
- * `reports.view_financial` for a front-desk account) degrades only the
- * cards that need it — to "Not available for your role.", never an error
- * banner — while everything else still renders.
+ * Every window is anchored on the property's business date
+ * (ARCHITECTURE.md §6), never the wall clock. Each source is fetched
+ * independently, so a role without a grant (e.g. `reports.view_financial`)
+ * sees "Not available for your role." on the cards that need it — never an
+ * error banner — while the rest still renders.
  *
  * @param {string} [greetingName]   The signed-in user's first name.
  * @param {string|null} businessDate   'YYYY-MM-DD' — the active property's current business date.
  * @param {object} [activeProperty]   The active property record (name, timezone, base_currency).
  * @param {() => void} [onNavigateToSetup]
+ * @param {(key: string) => void} [onNavigate]   Opens another screen by nav key.
+ * @param {(key: string) => boolean} [canNavigate]   Whether this user's role can open that screen.
  * @param {Date} [now]   Injectable clock for the greeting — tests only.
  */
-export function HomeDashboard({ greetingName, businessDate, activeProperty, onNavigateToSetup, now: nowProp }) {
+export function HomeDashboard({ greetingName, businessDate, activeProperty, onNavigateToSetup, onNavigate, canNavigate = () => true, now: nowProp }) {
   const [now] = useState(() => nowProp ?? new Date());
   const [reservations, setReservations] = useState(LOADING);
   const [roomTypes, setRoomTypes] = useState(null);
@@ -79,8 +72,9 @@ export function HomeDashboard({ greetingName, businessDate, activeProperty, onNa
   // `Money` refuses to format an amount with no currency (ARCHITECTURE.md
   // §1) — revenue cards wait on the property record rather than guessing one.
   const revenue = !businessDate ? NO_BUSINESS_DATE : activeProperty?.base_currency ? revenueResult : NO_CURRENCY;
-  const [arrivals, setArrivals] = useState(null);
-  const [departures, setDepartures] = useState(null);
+  const [arrivals, setArrivals] = useState(LOADING);
+  const [departures, setDepartures] = useState(LOADING);
+  const [inHouse, setInHouse] = useState(LOADING);
   const [discrepancies, setDiscrepancies] = useState(null);
   const [oversold, setOversold] = useState(null);
   const [nightAudit, setNightAudit] = useState(null);
@@ -93,12 +87,10 @@ export function HomeDashboard({ greetingName, businessDate, activeProperty, onNa
     const guard = (setter) => (value) => {
       if (!cancelled) setter(value);
     };
+    const load = (promise, setter) =>
+      promise.then((data) => guard(setter)({ state: 'success', data })).catch((caught) => guard(setter)(failure(caught)));
 
-    reservationsApi
-      .listReservations()
-      .then((rows) => guard(setReservations)({ state: 'success', data: rows }))
-      .catch((caught) => guard(setReservations)(failure(caught)));
-
+    load(reservationsApi.listReservations(), setReservations);
     // Names only — a role without `setup.view` still gets a real donut,
     // labelled "Room type {id}", rather than losing the chart entirely.
     setupApi
@@ -107,19 +99,15 @@ export function HomeDashboard({ greetingName, businessDate, activeProperty, onNa
       .catch(() => guard(setRoomTypes)([]));
 
     if (businessDate) {
-      reportingApi
-        .getOccupancyReport({ dateFrom: shiftDate(businessDate, -7), dateTo: businessDate })
-        .then((rows) => guard(setOccupancy)({ state: 'success', data: rows }))
-        .catch((caught) => guard(setOccupancy)(failure(caught)));
-      reportingApi
-        .getRevenueReport({ dateFrom: shiftDate(businessDate, -13), dateTo: businessDate })
-        .then((rows) => guard(setRevenue)({ state: 'success', data: rows }))
-        .catch((caught) => guard(setRevenue)(failure(caught)));
+      const from = shiftDate(businessDate, -(TREND_DAYS - 1));
+      load(reportingApi.getOccupancyReport({ dateFrom: from, dateTo: businessDate }), setOccupancy);
+      load(reportingApi.getRevenueReport({ dateFrom: from, dateTo: businessDate }), setRevenue);
       reportingApi.getOversoldRoomTypes(businessDate).then(guard(setOversold)).catch(() => guard(setOversold)(null));
     }
 
-    reservationsApi.listArrivals().then(guard(setArrivals)).catch(() => guard(setArrivals)(null));
-    reservationsApi.listDepartures().then(guard(setDepartures)).catch(() => guard(setDepartures)(null));
+    load(reservationsApi.listArrivals(), setArrivals);
+    load(reservationsApi.listDepartures(), setDepartures);
+    load(reservationsApi.listInHouse(), setInHouse);
     housekeepingApi
       .listDiscrepancies({ resolved: false })
       .then(guard(setDiscrepancies))
@@ -145,65 +133,50 @@ export function HomeDashboard({ greetingName, businessDate, activeProperty, onNa
 
   const currencyCode = activeProperty?.base_currency;
   const timeZone = activeProperty?.timezone;
-  const week = businessDate ? dateWindow(businessDate) : [];
-  const weekFrom = week[0];
-  const lastWeekFrom = businessDate ? shiftDate(businessDate, -13) : null;
-  const lastWeekTo = businessDate ? shiftDate(businessDate, -7) : null;
+  const trend = businessDate ? dateWindow(businessDate, TREND_DAYS) : [];
   const yesterday = businessDate ? shiftDate(businessDate, -1) : null;
 
-  const reservationRows = reservations.state === 'success' ? reservations.data : null;
-  const hasReservations = reservationRows !== null && reservationRows.length > 0;
   const occupancyByDate = new Map((occupancy.state === 'success' ? occupancy.data : []).map((row) => [row.date, row]));
   const revenueByDate = new Map((revenue.state === 'success' ? revenue.data : []).map((row) => [row.date, row]));
+  const occupancyToday = occupancyByDate.get(businessDate);
+  const occupancyYesterday = occupancyByDate.get(yesterday);
+  const revenueToday = revenueByDate.get(businessDate);
+  const revenueYesterday = revenueByDate.get(yesterday);
 
-  const bookingsThisWeek = reservationRows && businessDate ? countBookings(reservationRows, weekFrom, businessDate) : 0;
-  const weekOccupancyValues = week.map((date) => occupancyByDate.get(date)?.occupancyPct).filter((value) => typeof value === 'number');
-  const averageOccupancy =
-    weekOccupancyValues.length > 0 ? weekOccupancyValues.reduce((sum, value) => sum + value, 0) / weekOccupancyValues.length : null;
+  const physical = occupancyToday?.physicalCount ?? 0;
+  const roomsFree = occupancyToday ? Math.max(physical - occupancyToday.roomsSold, 0) : null;
 
-  const weekRevenue = week.map((date) => revenueByDate.get(date)?.roomRevenue ?? '0.00');
-  const weekIncome = totalMoney(weekRevenue);
-  const todayRevenue = revenueByDate.get(businessDate)?.roomRevenue ?? '0.00';
+  const reservationRows = reservations.state === 'success' ? reservations.data : null;
+
+  const shortcuts = [
+    { key: 'booking', label: 'Front desk & bookings', variant: 'primary' },
+    { key: 'reports', label: 'Reports', variant: 'secondary' },
+  ].filter((shortcut) => onNavigate && canNavigate(shortcut.key));
 
   return (
     <div className={styles.page}>
-      <div className={styles.greetingRow}>
-        <div className={styles.greetingText}>
+      <header className={styles.pageHeader}>
+        <div className={styles.pageTitleBlock}>
           <h1 className={styles.greeting}>
             {greetingForHour(now, timeZone)}
             {greetingName ? `, ${greetingName}` : ''}
           </h1>
+          {activeProperty?.name ? <p className={styles.propertyName}>{activeProperty.name}</p> : null}
           <p className={styles.subline}>
-            {activeProperty?.name ? `${activeProperty.name} — ` : ''}
             {formatLongDate(now, timeZone)}
+            {businessDate ? ` · Business date ${formatBusinessDate(businessDate)}` : ''}
           </p>
         </div>
-
-        <div className={styles.summaryWidgets}>
-          <section className={styles.widget} aria-label="Guest Rating">
-            <h2 className={styles.widgetTitle}>Guest Rating</h2>
-            <p className={styles.emptyMessage}>Guest ratings appear once guest reviews are collected.</p>
-          </section>
-
-          <section className={styles.widget} aria-label="Total Income — this week">
-            <h2 className={styles.widgetTitle}>
-              Total Income <span className={styles.widgetPeriod}>— this week</span>
-            </h2>
-            <WidgetBody
-              source={revenue}
-              isEmpty={isZeroMoney(weekIncome)}
-              emptyMessage="Total income appears once Cashiering is posting revenue."
-            >
-              <div className={styles.incomeRow}>
-                <span className={styles.widgetValue}>
-                  <Money amount={weekIncome} currencyCode={currencyCode} />
-                </span>
-                <Sparkline values={weekRevenue.map(moneyToChartValue)} ariaLabel="Daily income over the last 7 business days" />
-              </div>
-            </WidgetBody>
-          </section>
-        </div>
-      </div>
+        {shortcuts.length > 0 && (
+          <div className={styles.headerActions}>
+            {shortcuts.map((shortcut) => (
+              <Button key={shortcut.key} variant={shortcut.variant} onClick={() => onNavigate(shortcut.key)}>
+                {shortcut.label}
+              </Button>
+            ))}
+          </div>
+        )}
+      </header>
 
       {setupProgress?.operational === false && (
         <div className={styles.setupBanner} role="alert">
@@ -218,86 +191,164 @@ export function HomeDashboard({ greetingName, businessDate, activeProperty, onNa
         </div>
       )}
 
-      <div className={styles.kpiGrid}>
+      <section className={styles.kpiGrid} aria-label="Key figures for the business date">
         <KpiCard
-          accent="primary"
-          icon={<BookingsIcon />}
-          label="Total Bookings"
-          periodHint="Arrivals in the last 7 business days"
-          source={reservations}
-          isEmpty={!hasReservations || !businessDate}
-          emptyMessage={businessDate ? 'No reservations yet.' : 'Available once this property has a business date.'}
-          value={bookingsThisWeek}
-          delta={reservationRows && businessDate ? countDelta(bookingsThisWeek, countBookings(reservationRows, lastWeekFrom, lastWeekTo)) : null}
-          deltaContext="vs. the previous 7 days"
-          progress={averageOccupancy === null ? null : ratio(averageOccupancy, 100)}
-          progressLabel={averageOccupancy === null ? null : `Average occupancy this week: ${Math.round(averageOccupancy)}%`}
+          tone="blue"
+          icon={<OccupancyIcon />}
+          label="Occupancy"
+          source={occupancy}
+          ready={Boolean(occupancyToday) && physical > 0}
+          emptyMessage="No sellable rooms configured yet."
+          value={formatPercent(occupancyToday?.occupancyPct)}
+          delta={pointsDelta(occupancyToday?.occupancyPct, occupancyYesterday?.occupancyPct)}
+          detail={occupancyToday && physical > 0 ? `${occupancyToday.roomsSold} of ${physical} rooms sold` : null}
         />
-        <RoomsAvailableCard occupancy={occupancy} today={occupancyByDate.get(businessDate)} yesterday={occupancyByDate.get(yesterday)} />
-        <NewGuestsCard reservationsSource={reservations} rows={reservationRows} businessDate={businessDate} week={week} bookingsThisWeek={bookingsThisWeek} />
         <KpiCard
-          accent="navy"
-          icon={<RevenueIcon />}
-          label="Total Revenue"
-          periodHint="Room revenue posted today"
+          tone="teal"
+          icon={<RateIcon />}
+          label="ADR"
+          hint="Average daily rate — room revenue ÷ rooms sold"
           source={revenue}
-          isEmpty={isZeroMoney(todayRevenue)}
-          emptyMessage="No revenue posted for today yet."
-          value={<Money amount={todayRevenue} currencyCode={currencyCode} />}
-          delta={moneyPercentDelta(todayRevenue, revenueByDate.get(yesterday)?.roomRevenue ?? '0.00')}
-          deltaContext="vs. the previous business day"
-          deltaSuffix="today"
-          progress={isZeroMoney(weekIncome) ? null : ratio(moneyToChartValue(todayRevenue), moneyToChartValue(weekIncome))}
-          progressLabel={
-            isZeroMoney(weekIncome)
-              ? null
-              : `Today is ${Math.round(ratio(moneyToChartValue(todayRevenue), moneyToChartValue(weekIncome)) * 100)}% of this week's income`
+          // An average rate needs at least one room sold — with none, there is no rate to show (never a false ₦0.00).
+          ready={soldAny(revenueToday)}
+          emptyMessage="No rooms sold on this business date yet."
+          value={soldAny(revenueToday) ? <Money amount={revenueToday.adr} currencyCode={currencyCode} /> : null}
+          delta={soldAny(revenueToday) && soldAny(revenueYesterday) ? moneyPercentDelta(revenueToday.adr, revenueYesterday.adr) : null}
+          detail="Average daily rate"
+        />
+        <KpiCard
+          tone="green"
+          icon={<RevparIcon />}
+          label="RevPAR"
+          hint="Revenue per available room — room revenue ÷ sellable rooms"
+          source={revenue}
+          ready={Boolean(revenueToday) && revenueToday.revpar != null}
+          emptyMessage="No sellable rooms configured yet."
+          value={revenueToday?.revpar != null ? <Money amount={revenueToday.revpar} currencyCode={currencyCode} /> : null}
+          delta={revenueToday?.revpar != null && revenueYesterday?.revpar != null ? moneyPercentDelta(revenueToday.revpar, revenueYesterday.revpar) : null}
+          detail="Revenue per available room"
+        />
+        <KpiCard
+          tone="navy"
+          icon={<RevenueIcon />}
+          label="Room revenue"
+          source={revenue}
+          ready={Boolean(revenueToday)}
+          emptyMessage="No revenue posted for this business date yet."
+          value={revenueToday ? <Money amount={revenueToday.roomRevenue} currencyCode={currencyCode} /> : null}
+          delta={revenueToday && revenueYesterday ? moneyPercentDelta(revenueToday.roomRevenue, revenueYesterday.roomRevenue) : null}
+          detail={
+            revenue.state === 'success' ? (
+              <>
+                <Money amount={totalMoney(dateWindow(businessDate).map((date) => revenueByDate.get(date)?.roomRevenue ?? '0.00'))} currencyCode={currencyCode} /> over the last 7
+                days
+              </>
+            ) : null
           }
         />
-      </div>
+      </section>
 
-      <div className={styles.chartRow}>
-        <section className={`${styles.chartCard} ${styles.chartCardWide}`} aria-label="New vs. Returning Guests">
-          <div className={styles.chartHeader}>
-            <div>
-              <h2 className={styles.chartTitle}>New vs. Returning Guests</h2>
-              <p className={styles.chartSubtitle}>Last 7 days</p>
-            </div>
-            <ul className={styles.legend}>
-              <li className={styles.legendItem}>
-                <span className={`${styles.legendSwatch} ${segmentClassName(0)}`} aria-hidden="true" />
-                New
-              </li>
-              <li className={styles.legendItem}>
-                <span className={`${styles.legendSwatch} ${segmentClassName(1)}`} aria-hidden="true" />
-                Returning
-              </li>
-            </ul>
+      <section className={styles.card} aria-label="Today's operations">
+        <div className={styles.cardHeader}>
+          <div>
+            <h2 className={styles.cardTitle}>Today&rsquo;s operations</h2>
+            {businessDate && <p className={styles.cardSubtitle}>{formatBusinessDate(businessDate)}</p>}
           </div>
-          <NewVsReturningBody reservationsSource={reservations} rows={reservationRows} week={week} businessDate={businessDate} />
+        </div>
+        <div className={styles.opsGrid}>
+          <OpsStat tone="blue" icon={<ArrivalIcon />} label="Arrivals" caption="Expected to check in" source={arrivals} count={arrivals.data?.length} />
+          <OpsStat tone="amber" icon={<DepartureIcon />} label="Departures" caption="Due to check out" source={departures} count={departures.data?.length} />
+          <OpsStat tone="green" icon={<InHouseIcon />} label="In-house" caption="Stays checked in now" source={inHouse} count={inHouse.data?.length} />
+          <OpsStat
+            tone="teal"
+            icon={<RoomsIcon />}
+            label="Rooms available"
+            caption={roomsFree === null ? 'Free tonight' : `Free tonight, of ${physical} sellable`}
+            source={occupancy}
+            count={roomsFree === null ? undefined : roomsFree}
+          />
+        </div>
+      </section>
+
+      <div className={styles.twoColumn}>
+        <section className={`${styles.card} ${styles.wide}`} aria-label="Occupancy trend">
+          <div className={styles.cardHeader}>
+            <div>
+              <h2 className={styles.cardTitle}>Occupancy</h2>
+              <p className={styles.cardSubtitle}>{trend.length ? `Last ${TREND_DAYS} days · ${formatDateRange(trend[0], businessDate)}` : `Last ${TREND_DAYS} days`}</p>
+            </div>
+            {occupancy.state === 'success' && trendAverage(trend, occupancyByDate) !== null && (
+              <div className={styles.headerFigure}>
+                <span className={styles.headerFigureValue}>{formatPercent(trendAverage(trend, occupancyByDate))}</span>
+                <span className={styles.headerFigureLabel}>average</span>
+              </div>
+            )}
+          </div>
+          <SourceBody source={occupancy} skeletonHeight="13.75rem">
+            <AreaChart
+              labels={trend.map(dayOfMonth)}
+              series={[{ key: 'occupancy', label: 'Occupancy', tone: 'primary', values: trend.map((date) => occupancyByDate.get(date)?.occupancyPct ?? 0) }]}
+              maxValue={100}
+              formatTick={(tick) => `${tick}%`}
+              ariaLabel={`Occupancy over the last ${TREND_DAYS} business days, ending at ${formatPercent(occupancyToday?.occupancyPct)}`}
+            />
+          </SourceBody>
         </section>
 
-        <section className={`${styles.chartCard} ${styles.chartCardNarrow}`} aria-label="Bookings by Room Type">
-          <div className={styles.chartHeader}>
+        <section className={`${styles.card} ${styles.narrow}`} aria-label="Bookings by room type">
+          <div className={styles.cardHeader}>
             <div>
-              <h2 className={styles.chartTitle}>Bookings by Room Type</h2>
-              <p className={styles.chartSubtitle}>This month</p>
+              <h2 className={styles.cardTitle}>Bookings by room type</h2>
+              <p className={styles.cardSubtitle}>Arrivals this month</p>
             </div>
           </div>
           <RoomTypeBody reservationsSource={reservations} rows={reservationRows} roomTypes={roomTypes} businessDate={businessDate} />
         </section>
       </div>
 
-      <section className={styles.chartCard} aria-label="Today at a glance">
-        <h2 className={styles.chartTitle}>Today at a glance</h2>
-        <ul className={styles.alertList}>
-          <AlertRow label="Arrivals today" count={arrivals?.length} />
-          <AlertRow label="Departures today" count={departures?.length} />
-          <AlertRow label="Housekeeping discrepancies" count={discrepancies?.length} dangerIfNonZero />
-          <AlertRow label="Oversold room types tonight" count={oversold?.length} dangerIfNonZero />
-          <AlertRow label="Night audit for today's business date" pill={nightAuditPill(nightAudit)} />
-        </ul>
-      </section>
+      <div className={styles.twoColumn}>
+        <section className={`${styles.card} ${styles.wide}`} aria-label="Room revenue trend">
+          <div className={styles.cardHeader}>
+            <div>
+              <h2 className={styles.cardTitle}>Room revenue</h2>
+              <p className={styles.cardSubtitle}>{trend.length ? `Last ${TREND_DAYS} days · ${formatDateRange(trend[0], businessDate)}` : `Last ${TREND_DAYS} days`}</p>
+            </div>
+            {revenue.state === 'success' && (
+              <div className={styles.headerFigure}>
+                <span className={styles.headerFigureValue}>
+                  <Money amount={totalMoney(trend.map((date) => revenueByDate.get(date)?.roomRevenue ?? '0.00'))} currencyCode={currencyCode} />
+                </span>
+                <span className={styles.headerFigureLabel}>total</span>
+              </div>
+            )}
+          </div>
+          <SourceBody source={revenue} skeletonHeight="13.75rem">
+            <BarChart
+              labels={trend.map(dayOfMonth)}
+              values={trend.map((date) => moneyToChartValue(revenueByDate.get(date)?.roomRevenue ?? '0.00'))}
+              highlightIndex={trend.length - 1}
+              ariaLabel={`Daily room revenue over the last ${TREND_DAYS} business days`}
+            />
+          </SourceBody>
+        </section>
+
+        <section className={`${styles.card} ${styles.narrow}`} aria-label="Needs attention">
+          <div className={styles.cardHeader}>
+            <div>
+              <h2 className={styles.cardTitle}>Needs attention</h2>
+              <p className={styles.cardSubtitle}>For this business date</p>
+            </div>
+          </div>
+          <ul className={styles.attentionList}>
+            <AttentionRow label="Housekeeping discrepancies" count={discrepancies?.length} />
+            <AttentionRow label="Oversold room types tonight" count={oversold?.length} />
+            <li className={styles.attentionRow}>
+              <span className={styles.attentionLabel}>Night audit</span>
+              {nightAuditPill(nightAudit)}
+            </li>
+          </ul>
+        </section>
+      </div>
     </div>
   );
 }
@@ -312,166 +363,103 @@ function failure(caught) {
   return { state: 'error', message: caught instanceof ApiError ? caught.message : 'Could not load.' };
 }
 
-function WidgetBody({ source, isEmpty, emptyMessage, children }) {
-  if (source.state === 'loading') return <Skeleton height="2.25rem" />;
+/** Whether a revenue-report day sold any rooms (so its ADR means something). */
+function soldAny(day) {
+  return Boolean(day) && day.adr != null && Number(day.roomsSold) > 0;
+}
+
+/** Mean occupancy across the window's days that have a figure; `null` when none do. */
+function trendAverage(dates, occupancyByDate) {
+  const values = dates.map((date) => occupancyByDate.get(date)?.occupancyPct).filter((value) => typeof value === 'number');
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+}
+
+function SourceBody({ source, skeletonHeight, children }) {
+  if (source.state === 'loading') return <Skeleton height={skeletonHeight} />;
   if (source.state === 'error') return <p className={styles.errorMessage}>{source.message}</p>;
   if (source.state === 'empty') return <p className={styles.emptyMessage}>{source.message}</p>;
-  if (isEmpty) return <p className={styles.emptyMessage}>{emptyMessage}</p>;
   return children;
 }
 
-function RoomsAvailableCard({ occupancy, today, yesterday }) {
-  const physical = today?.physicalCount ?? 0;
-  const available = today ? Math.max(physical - today.roomsSold, 0) : 0;
-  let delta = null;
-  if (today && yesterday) {
-    // An already-audited day carries no physical count (its snapshot stores
-    // the reproduced occupancy % instead) — today's live count stands in.
-    const yesterdayPhysical = yesterday.physicalCount ?? physical;
-    delta = countDelta(available, Math.max(yesterdayPhysical - yesterday.roomsSold, 0));
-  }
-  return (
-    <KpiCard
-      accent="secondary"
-      icon={<RoomsIcon />}
-      label="Rooms Available"
-      periodHint="Sellable rooms still free tonight"
-      source={occupancy}
-      isEmpty={!today || physical === 0}
-      emptyMessage="No rooms configured yet."
-      value={available}
-      delta={delta}
-      deltaContext="vs. the previous business day"
-      deltaSuffix="today"
-      progress={ratio(available, physical)}
-      progressLabel={physical ? `${available} of ${physical} rooms free tonight` : null}
-    />
-  );
-}
-
-function NewGuestsCard({ reservationsSource, rows, businessDate, week, bookingsThisWeek }) {
-  const newThisWeek = rows && businessDate ? countNewGuests(rows, week[0], businessDate) : 0;
-  const newLastWeek = rows && businessDate ? countNewGuests(rows, shiftDate(businessDate, -13), shiftDate(businessDate, -7)) : 0;
-  const share = ratio(newThisWeek, bookingsThisWeek);
-  return (
-    <KpiCard
-      accent="tertiary"
-      icon={<NewGuestsIcon />}
-      label="New Guests"
-      periodHint="First-time guests arriving in the last 7 business days"
-      source={reservationsSource}
-      isEmpty={!rows || rows.length === 0 || !businessDate}
-      emptyMessage={businessDate ? 'No guest stays yet.' : 'Available once this property has a business date.'}
-      value={newThisWeek}
-      delta={rows && businessDate ? countDelta(newThisWeek, newLastWeek) : null}
-      deltaContext="vs. the previous 7 days"
-      progress={share}
-      progressLabel={share === null ? null : `${Math.round(share * 100)}% of this week's bookings are first-time guests`}
-    />
-  );
-}
+const TONE_CLASS = {
+  blue: styles.toneBlue,
+  teal: styles.toneTeal,
+  green: styles.toneGreen,
+  navy: styles.toneNavy,
+  amber: styles.toneAmber,
+};
 
 const DELTA_WORD = { up: 'Up', down: 'Down', flat: 'No change' };
 
-const ACCENT_CLASS = {
-  primary: styles.accentPrimary,
-  secondary: styles.accentSecondary,
-  tertiary: styles.accentTertiary,
-  navy: styles.accentNavy,
-};
-
-function KpiCard({ accent, icon, label, periodHint, source, isEmpty, emptyMessage, value, delta, deltaContext, deltaSuffix, progress, progressLabel }) {
-  const accentClass = ACCENT_CLASS[accent] ?? styles.accentPrimary;
-  let body;
+/**
+ * One headline figure. The card keeps the same shape in every state —
+ * label and icon at the top, the figure (or "—"), then a context line — so
+ * a missing figure reads as "nothing yet", never as a broken card.
+ */
+function KpiCard({ tone, icon, label, hint, source, ready, emptyMessage, value, delta, detail }) {
+  let figure;
+  let context;
   if (source.state === 'loading') {
-    body = (
-      <div data-testid="kpi-loading" className={styles.kpiLoading}>
-        <Skeleton variant="circle" height="2.25rem" />
-        <Skeleton height="1.75rem" width="60%" />
-        <Skeleton variant="text" width="45%" />
-      </div>
-    );
+    figure = <Skeleton height="2rem" width="60%" />;
+    context = <Skeleton variant="text" width="45%" />;
   } else if (source.state === 'error') {
-    body = <p className={styles.errorMessage}>{source.message}</p>;
-  } else if (source.state === 'empty' || isEmpty) {
-    body = <p className={styles.emptyMessage}>{source.state === 'empty' ? source.message : emptyMessage}</p>;
+    figure = <span className={styles.kpiValueMissing}>—</span>;
+    context = <span className={styles.errorMessage}>{source.message}</span>;
+  } else if (source.state === 'empty' || !ready) {
+    figure = <span className={styles.kpiValueMissing}>—</span>;
+    context = <span className={styles.kpiContext}>{source.state === 'empty' ? source.message : emptyMessage}</span>;
+  } else {
+    figure = value;
+    context = (
+      <>
+        {delta ? (
+          <span
+            className={`${styles.delta} ${styles[`delta_${delta.direction}`]}`}
+            aria-label={delta.direction === 'flat' ? `${DELTA_WORD.flat} vs. the previous business day` : `${DELTA_WORD[delta.direction]} ${delta.label.replace(/^[+−]/, '')} vs. the previous business day`}
+          >
+            <span aria-hidden="true">{delta.direction === 'up' ? '▲' : delta.direction === 'down' ? '▼' : '■'}</span>
+            {delta.label}
+          </span>
+        ) : null}
+        <span className={styles.kpiContext}>{delta ? 'vs. previous day' : detail}</span>
+      </>
+    );
   }
 
   return (
-    <article className={`${styles.kpiCard} ${accentClass}`} aria-label={label}>
-      {body ?? (
-        <>
-          <div className={styles.kpiTop}>
-            <span className={styles.iconBadge}>{icon}</span>
-            {delta && (
-              <span
-                className={`${styles.delta} ${styles[`delta_${delta.direction}`]}`}
-                aria-label={
-                  delta.direction === 'flat'
-                    ? `${DELTA_WORD.flat} ${deltaContext}`
-                    : `${DELTA_WORD[delta.direction]} ${delta.label.replace(/^[+−]/, '')} ${deltaContext}`
-                }
-                title={deltaContext}
-              >
-                <span aria-hidden="true">{delta.direction === 'up' ? '↗' : delta.direction === 'down' ? '↘' : '→'}</span>
-                {delta.label}
-                {deltaSuffix ? ` ${deltaSuffix}` : ''}
-              </span>
-            )}
-          </div>
-          <p className={styles.kpiValue}>{value}</p>
-          <p className={styles.kpiLabel} title={periodHint}>
-            {label}
-          </p>
-          {progress !== null && progress !== undefined && (
-            <div
-              className={styles.progressTrack}
-              role="progressbar"
-              aria-label={progressLabel}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(progress * 100)}
-              title={progressLabel}
-            >
-              <div className={styles.progressFill} style={{ width: `${progress * 100}%` }} />
-            </div>
-          )}
-        </>
-      )}
-      {body && <p className={styles.kpiLabelMuted}>{label}</p>}
+    <article className={styles.kpiCard} aria-label={label}>
+      <div className={styles.kpiHeader}>
+        <span className={styles.kpiLabel} title={hint}>
+          {label}
+        </span>
+        <span className={`${styles.iconChip} ${TONE_CLASS[tone] ?? styles.toneBlue}`}>{icon}</span>
+      </div>
+      <p className={styles.kpiValue}>{figure}</p>
+      <div className={styles.kpiFooter}>{context}</div>
+      {ready && source.state === 'success' && delta && detail ? <p className={styles.kpiDetail}>{detail}</p> : null}
     </article>
   );
 }
 
-function NewVsReturningBody({ reservationsSource, rows, week, businessDate }) {
-  if (reservationsSource.state === 'loading') return <Skeleton height="13.75rem" />;
-  if (reservationsSource.state !== 'success') {
-    const className = reservationsSource.state === 'error' ? styles.errorMessage : styles.emptyMessage;
-    return <p className={className}>{reservationsSource.message}</p>;
-  }
-  if (!businessDate) return <p className={styles.emptyMessage}>Available once this property has a business date.</p>;
-  if (rows.length === 0) {
-    return <p className={styles.emptyMessage}>This trend chart fills in once Reservations and Guest Profiles are tracking bookings.</p>;
-  }
-  const days = newVsReturningByDay(rows, week);
-  const newTotal = days.reduce((sum, day) => sum + day.newGuests, 0);
-  const returningTotal = days.reduce((sum, day) => sum + day.returningGuests, 0);
-  if (newTotal + returningTotal === 0) {
-    return <p className={styles.emptyMessage}>No guest arrivals in the last 7 business days.</p>;
-  }
+function OpsStat({ tone, icon, label, caption, source, count }) {
+  let figure;
+  if (source.state === 'loading') figure = <Skeleton height="1.75rem" width="3rem" />;
+  else if (source.state === 'success' && typeof count === 'number') figure = count;
+  else figure = <span className={styles.kpiValueMissing}>—</span>;
+  const note = source.state === 'error' || source.state === 'empty' ? source.message : caption;
   return (
-    <AreaChart
-      labels={week.map(shortWeekday)}
-      series={[
-        { key: 'new', label: 'New', tone: 'primary', values: days.map((day) => day.newGuests) },
-        { key: 'returning', label: 'Returning', tone: 'secondary', values: days.map((day) => day.returningGuests) },
-      ]}
-      ariaLabel={`Guest arrivals over the last 7 business days: ${newTotal} new, ${returningTotal} returning`}
-    />
+    <div className={styles.opsStat} role="group" aria-label={label}>
+      <span className={`${styles.iconChip} ${TONE_CLASS[tone] ?? styles.toneBlue}`}>{icon}</span>
+      <div className={styles.opsText}>
+        <span className={styles.opsValue}>{figure}</span>
+        <span className={styles.opsLabel}>{label}</span>
+        <span className={styles.opsCaption}>{note}</span>
+      </div>
+    </div>
   );
 }
 
-/** Arrivals within the business date's calendar month, matching the card's "This month" subtitle. */
+/** Arrivals within the business date's calendar month, matching the card's "Arrivals this month" subtitle. */
 function RoomTypeBody({ reservationsSource, rows, roomTypes, businessDate }) {
   if (reservationsSource.state === 'loading') return <Skeleton height="11rem" />;
   if (reservationsSource.state !== 'success') {
@@ -479,16 +467,13 @@ function RoomTypeBody({ reservationsSource, rows, roomTypes, businessDate }) {
     return <p className={className}>{reservationsSource.message}</p>;
   }
   if (!businessDate) return <p className={styles.emptyMessage}>Available once this property has a business date.</p>;
-  if (rows.length === 0) {
-    return <p className={styles.emptyMessage}>This breakdown appears once Rooms and Reservations are configured.</p>;
-  }
   const segments = bookingsByRoomType(rows, roomTypes, monthRange(businessDate));
   if (segments.length === 0) {
     return <p className={styles.emptyMessage}>No bookings arriving this month yet.</p>;
   }
   const total = segments.reduce((sum, segment) => sum + segment.count, 0);
   return (
-    <>
+    <div className={styles.donutLayout}>
       <DonutChart
         segments={segments}
         centerValue={total}
@@ -500,39 +485,37 @@ function RoomTypeBody({ reservationsSource, rows, roomTypes, businessDate }) {
           <li key={segment.key} className={styles.donutLegendItem}>
             <span className={`${styles.legendSwatch} ${segmentClassName(index)}`} aria-hidden="true" />
             <span className={styles.donutLegendLabel}>{segment.label}</span>
+            <span className={styles.donutLegendCount}>{segment.count}</span>
             <span className={styles.donutLegendPercent}>{segment.percent}%</span>
           </li>
         ))}
       </ul>
-    </>
+    </div>
   );
 }
 
 /**
- * `count === undefined` (load failed or not fetched) keeps the honest "Not
- * available yet" pill; a present count renders a real number, in danger tone
- * when it's a discrepancy/oversell figure and non-zero.
+ * `count === undefined` (load failed or not fetched) stays an honest "Not
+ * available"; zero is "None" in a success tone; anything else is a danger
+ * count — these rows only ever count problems.
  */
-function AlertRow({ label, count, dangerIfNonZero = false, pill }) {
-  const resolvedPill =
-    pill ??
-    (count === undefined ? (
-      <StatusPill tone="neutral" label="Not available yet" />
-    ) : (
-      <StatusPill tone={dangerIfNonZero && count > 0 ? 'danger' : 'neutral'} label={String(count)} />
-    ));
+function AttentionRow({ label, count }) {
+  let pill;
+  if (count === undefined) pill = <StatusPill tone="neutral" label="Not available" />;
+  else if (count === 0) pill = <StatusPill tone="success" label="None" />;
+  else pill = <StatusPill tone="danger" label={String(count)} />;
   return (
-    <li className={styles.alertRow}>
-      <span className={styles.alertLabel}>{label}</span>
-      {resolvedPill}
+    <li className={styles.attentionRow}>
+      <span className={styles.attentionLabel}>{label}</span>
+      {pill}
     </li>
   );
 }
 
 /** Maps the real `GET /night-audit/runs` result (or its load failure) onto a status pill, reusing `NightAuditScreen`'s own status→tone vocabulary. */
 function nightAuditPill(nightAudit) {
-  if (!nightAudit) return <StatusPill tone="neutral" label="Not available yet" />;
+  if (!nightAudit) return <StatusPill tone="neutral" label="Not available" />;
   if (nightAudit.message) return <StatusPill tone="neutral" label={nightAudit.message} />;
-  if (!nightAudit.status) return <StatusPill tone="neutral" label="Not yet run" />;
+  if (!nightAudit.status) return <StatusPill tone="warning" label="Not yet run" />;
   return <StatusPill tone={NIGHT_AUDIT_STATUS_TONE[nightAudit.status] ?? 'neutral'} label={nightAudit.status} />;
 }

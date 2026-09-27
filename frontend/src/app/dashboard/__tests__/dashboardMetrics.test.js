@@ -1,21 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import {
-  bookingsByRoomType,
-  countBookings,
-  countDelta,
-  countNewGuests,
-  dateWindow,
-  formatLongDate,
-  monthRange,
-  greetingForHour,
-  moneyPercentDelta,
-  newVsReturningByDay,
-  ratio,
-  shiftDate,
-  shortWeekday,
-  totalMoney,
-  wholePercentages,
-} from '../dashboardMetrics.js';
+import { bookingsByRoomType, countBookings, countDelta, countNewGuests, dateWindow, formatLongDate, monthRange, greetingForHour, moneyPercentDelta, newVsReturningByDay, ratio, shiftDate, shortWeekday, totalMoney, wholePercentages, pointsDelta, formatPercent, dayOfMonth, formatBusinessDate, formatDateRange } from '../dashboardMetrics.js';
+import { compactNumber } from '../DashboardCharts.jsx';
 
 function reservation(overrides) {
   return { id: '1', guest_id: '1', room_type_id: '1', status: 'confirmed', arrival_date: '2026-09-10', ...overrides };
@@ -145,3 +130,41 @@ describe('dashboardMetrics', () => {
     expect(shortWeekday('2026-09-10')).toBe('Thu');
   });
 });
+
+describe('pointsDelta', () => {
+  it('reports the change in percentage points, not percent', () => {
+    expect(pointsDelta(70, 64)).toEqual({ direction: 'up', label: '+6 pts' });
+    expect(pointsDelta(30, 40)).toEqual({ direction: 'down', label: '−10 pts' });
+    expect(pointsDelta(33.33, 30)).toEqual({ direction: 'up', label: '+3.3 pts' });
+    expect(pointsDelta(50, 50)).toEqual({ direction: 'flat', label: '0 pts' });
+  });
+
+  it('is null when either side is unknown', () => {
+    expect(pointsDelta(50, undefined)).toBeNull();
+    expect(pointsDelta(null, 50)).toBeNull();
+  });
+});
+
+describe('display formatting', () => {
+  it('formatPercent keeps whole numbers whole and rounds the rest to one decimal', () => {
+    expect(formatPercent(64)).toBe('64%');
+    expect(formatPercent(18.18)).toBe('18.2%');
+    expect(formatPercent(undefined)).toBe('—');
+  });
+
+  it('formats business dates from their own digits', () => {
+    expect(dayOfMonth('2026-09-03')).toBe('3');
+    expect(formatBusinessDate('2026-09-23')).toBe('Wed, 23 Sep 2026');
+    expect(formatDateRange('2026-09-10', '2026-09-23')).toBe('10 – 23 Sep');
+    expect(formatDateRange('2026-08-28', '2026-09-10')).toBe('28 Aug – 10 Sep');
+  });
+
+  it('compactNumber shortens axis labels', () => {
+    expect(compactNumber(0)).toBe('0');
+    expect(compactNumber(950)).toBe('950');
+    expect(compactNumber(1500)).toBe('1.5k');
+    expect(compactNumber(65000)).toBe('65k');
+    expect(compactNumber(1200000)).toBe('1.2M');
+  });
+});
+

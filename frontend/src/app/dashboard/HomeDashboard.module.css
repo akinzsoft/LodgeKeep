@@ -1,10 +1,9 @@
 /**
- * Home dashboard — the user-supplied admin-dashboard reference: an Inter
- * greeting, full-width summary widgets, solid-colour KPI tiles (blue, green,
- * yellow, navy) with a white icon chip, and softly shadowed white cards on
- * the light canvas. Built entirely on the app-wide tokens (`--chart-*` for
- * data colours). Tile fills use the deepened `--accent*` colours measured at
- * 4.7:1 or better against their text; the yellow tile carries dark text.
+ * Home dashboard — a conventional hotel PMS layout (user-requested:
+ * "professional and standard"): a page header, four white KPI cards with a
+ * tinted icon chip, a today's-operations strip, then paired trend and
+ * attention cards. Every value comes from the app-wide tokens; colour marks
+ * category (the icon chips) and direction (the delta pills), never decoration.
  */
 
 .page {
@@ -16,25 +15,34 @@
   color: var(--text-primary);
 }
 
-/* ---- greeting + summary widgets ---- */
+/* ---- page header ---- */
 
-.greetingRow {
+.pageHeader {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
   gap: var(--space-4);
 }
 
-.greetingText {
+.pageTitleBlock {
   min-width: 0;
 }
 
 .greeting {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 32px;
-  line-height: 1.2;
-  font-weight: 600;
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line);
+  font-weight: var(--text-h1-weight);
   letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.propertyName {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-body-size);
+  font-weight: 600;
   color: var(--text-primary);
 }
 
@@ -44,98 +52,97 @@
   color: var(--text-secondary);
 }
 
-.summaryWidgets {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--space-3);
-}
-
-@media (width >= 640px) {
-  .summaryWidgets {
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-4);
-  }
-}
-
-.widget,
-.kpiCard,
-.chartCard {
-  background: var(--surface-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-}
-
-.widget {
+.headerActions {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: var(--space-2);
-  padding: var(--space-4) var(--space-5);
-  min-height: 6.25rem;
 }
 
-.widgetTitle {
-  margin: 0;
-  font-size: var(--text-label-size);
-  font-weight: 400;
-  color: var(--text-secondary);
-}
-
-.widgetPeriod {
-  color: var(--text-secondary);
-}
-
-.widgetValue {
-  font-size: 22px;
-  line-height: 1.2;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.incomeRow {
-  display: flex;
-  align-items: flex-end;
-  justify-content: flex-start;
-  gap: var(--space-4);
-}
-
-.emptyMessage,
-.errorMessage {
-  margin: 0;
-  font-size: var(--text-label-size);
-  line-height: var(--text-label-line);
-}
-
-.emptyMessage {
-  color: var(--text-muted);
-}
-
-.errorMessage {
-  color: var(--state-danger);
-}
-
-/* ---- setup banner (kept from the pre-redesign dashboard) ---- */
+/* ---- setup banner ---- */
 
 .setupBanner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
-  flex-wrap: wrap;
+  gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  border-left: 3px solid var(--accent);
-  background: var(--surface-card);
+  border: 1px solid var(--state-warning);
+  border-radius: var(--radius-md);
+  background: var(--state-warning-bg);
 }
 
 .setupBannerText {
   margin: 0;
+  color: var(--state-warning);
   font-size: var(--text-body-size);
-  color: var(--text-secondary);
 }
 
-/* ---- KPI row — DESIGN_SYSTEM.md §1: "KPI rows reflow 4 → 2 → 1." ---- */
+/* ---- shared card ---- */
+
+.card,
+.kpiCard {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+@media (width >= 640px) {
+  .card {
+    padding: var(--space-5);
+  }
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: var(--text-h3-size);
+  line-height: var(--text-h3-line);
+  font-weight: var(--text-h3-weight);
+  color: var(--text-primary);
+}
+
+.cardSubtitle {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+}
+
+.headerFigure {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+}
+
+.headerFigureValue {
+  font-size: var(--text-h3-size);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.headerFigureLabel {
+  font-size: var(--text-caption-size);
+  color: var(--text-muted);
+}
+
+/* ---- KPI row ---- */
 
 .kpiGrid {
   display: grid;
@@ -145,256 +152,268 @@
 
 @media (width >= 640px) {
   .kpiGrid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (width >= 1280px) {
+@media (width >= 1180px) {
   .kpiGrid {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
-/* A solid tile: the accent is the whole background, so every child that
-   would normally use a muted grey must switch to white here. */
 .kpiCard {
-  --kpi-accent: var(--accent);
-  --kpi-on: var(--text-inverse); /* text on the tile */
-  --kpi-chip-icon: var(--kpi-accent); /* icon colour inside the white chip */
-
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-5);
-  min-height: 10rem;
-  border: none;
-  background: var(--kpi-accent);
-  color: var(--kpi-on);
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
 }
 
-.accentPrimary {
-  --kpi-accent: var(--accent);
-}
-
-.accentSecondary {
-  --kpi-accent: var(--accent-sage-fill);
-}
-
-/* Yellow cannot carry white text (1.45:1); it takes dark text instead. */
-.accentTertiary {
-  --kpi-accent: var(--accent-tertiary);
-  --kpi-on: var(--text-primary);
-  --kpi-chip-icon: var(--text-primary);
-}
-
-.accentNavy {
-  --kpi-accent: var(--accent-navy);
-}
-
-.kpiTop {
+.kpiHeader {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  margin-bottom: var(--space-2);
 }
 
-/* White chip with the icon in the tile's own colour, as in the reference. */
-.iconBadge {
-  display: inline-flex;
+.kpiLabel {
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.kpiValue {
+  margin: 0;
+  min-height: 2.25rem;
+  font-size: 28px;
+  line-height: 1.25;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.kpiValueMissing {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.kpiFooter {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-md);
-  background: var(--surface-card);
-  color: var(--kpi-chip-icon);
+  gap: var(--space-2);
+  min-height: 1.5rem;
 }
 
-/* The delta sits on a white pill so its up/down colour keeps its meaning and
-   contrast on any tile; the arrow and sign carry it as well, never colour
-   alone. */
+.kpiContext {
+  font-size: var(--text-label-size);
+  color: var(--text-muted);
+}
+
+.kpiDetail {
+  margin: 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
 .delta {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   padding: 2px var(--space-2);
   border-radius: var(--radius-full);
-  background: var(--surface-card);
   font-size: var(--text-caption-size);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .delta_up {
-  color: var(--accent-secondary);
+  background: var(--state-success-bg);
+  color: var(--state-success);
 }
 
 .delta_down {
+  background: var(--state-danger-bg);
   color: var(--state-danger);
 }
 
 .delta_flat {
-  color: var(--text-secondary);
+  background: var(--state-neutral-bg);
+  color: var(--state-neutral);
 }
 
-.kpiValue {
-  margin: 0;
-  font-size: var(--text-kpi-size);
-  line-height: var(--text-kpi-line);
-  font-weight: var(--text-kpi-weight);
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-  color: var(--kpi-on);
+/* ---- icon chips (category colour) ---- */
+
+.iconChip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-md);
 }
 
-.kpiLabel,
-.kpiLabelMuted {
-  margin: 0;
-  font-size: var(--text-label-size);
-  color: var(--kpi-on);
+.toneBlue {
+  background: var(--domain-booking-tint);
+  color: var(--domain-booking);
 }
 
-.kpiLabelMuted {
-  margin-top: auto;
+.toneTeal {
+  background: var(--domain-money-tint);
+  color: var(--domain-money);
 }
 
-/* Empty and error copy inside a tile: the generic muted/danger colours are
-   unreadable on a solid fill. */
-.kpiCard .emptyMessage,
-.kpiCard .errorMessage {
-  color: var(--kpi-on);
+.toneGreen {
+  background: var(--domain-guest-tint);
+  color: var(--domain-guest);
 }
 
-.kpiLoading {
+.toneAmber {
+  background: var(--domain-rooms-tint);
+  color: var(--domain-rooms);
+}
+
+.toneNavy {
+  background: var(--surface-sunken);
+  color: var(--accent-navy);
+}
+
+/* ---- today's operations ---- */
+
+.opsGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-3);
+}
+
+@media (width >= 640px) {
+  .opsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (width >= 1180px) {
+  .opsGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.opsStat {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-page);
+}
+
+.opsText {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  min-width: 0;
 }
 
-.progressTrack {
-  margin-top: var(--space-4);
-  height: 4px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--kpi-on) 30%, transparent);
-  overflow: hidden;
+.opsValue {
+  font-size: 24px;
+  line-height: 1.2;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
 }
 
-.progressFill {
-  height: 100%;
-  border-radius: inherit;
-  background: var(--kpi-on);
+.opsLabel {
+  font-size: var(--text-body-size);
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
-/* ---- chart row ---- */
+.opsCaption {
+  font-size: var(--text-caption-size);
+  color: var(--text-muted);
+}
 
-.chartRow {
+/* ---- two-column rows ---- */
+
+.twoColumn {
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--space-4);
 }
 
 @media (width >= 1024px) {
-  .chartRow {
+  .twoColumn {
     grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   }
 }
 
-.chartCard {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-5);
+.wide,
+.narrow {
   min-width: 0;
 }
 
-.chartCardWide,
-.chartCardNarrow {
-  min-height: 18rem;
-}
+/* ---- room-type donut ---- */
 
-.chartHeader {
+.donutLayout {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.chartSubtitle {
-  margin: var(--space-1) 0 0;
-  font-size: var(--text-label-size);
-  color: var(--text-muted);
-}
-
-.chartTitle {
-  margin: 0;
-  font-size: var(--text-h3-size);
-  line-height: var(--text-h3-line);
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.legend {
-  display: flex;
+  flex-direction: column;
   gap: var(--space-4);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.legendItem {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-caption-size);
-  color: var(--text-secondary);
-}
-
-.legendSwatch {
-  display: inline-block;
-  flex-shrink: 0;
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
 }
 
 .donutLegend {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-2) var(--space-4);
-  margin: var(--space-2) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .donutLegendItem {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--space-2);
-  min-width: 0;
-  font-size: var(--text-caption-size);
-}
-
-.donutLegendLabel {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--text-label-size);
   color: var(--text-secondary);
 }
 
+.donutLegendLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.donutLegendCount {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
 .donutLegendPercent {
+  min-width: 3ch;
+  text-align: right;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
 }
 
-/* ---- today at a glance (kept from the pre-redesign dashboard) ---- */
+.legendSwatch {
+  display: inline-block;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 2px;
+}
 
-.alertList {
+/* ---- needs attention ---- */
+
+.attentionList {
   display: flex;
   flex-direction: column;
   margin: 0;
@@ -402,7 +421,7 @@
   list-style: none;
 }
 
-.alertRow {
+.attentionRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -411,12 +430,27 @@
   border-bottom: 1px solid var(--border);
 }
 
-.alertRow:last-child {
+.attentionRow:last-child {
   border-bottom: none;
-  padding-bottom: 0;
 }
 
-.alertLabel {
+.attentionLabel {
   font-size: var(--text-body-size);
   color: var(--text-primary);
+}
+
+/* ---- messages ---- */
+
+.emptyMessage,
+.errorMessage {
+  margin: 0;
+  font-size: var(--text-label-size);
+}
+
+.emptyMessage {
+  color: var(--text-muted);
+}
+
+.errorMessage {
+  color: var(--state-danger);
 }

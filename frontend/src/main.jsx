@@ -342,6 +342,8 @@ function Demo() {
           businessDate={businessDate}
           activeProperty={activePropertyRecord}
           onNavigateToSetup={() => setActiveItemKey('setup')}
+          onNavigate={setActiveItemKey}
+          canNavigate={(key) => isNavItemAllowed(key, grantedPermissions)}
         />
       )}
       {toast && (

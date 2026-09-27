@@ -99,3 +99,11 @@
   height: 2.25rem;
   overflow: visible;
 }
+
+.bar {
+  fill: var(--chart-2);
+}
+
+.barHighlight {
+  fill: var(--chart-1);
+}
