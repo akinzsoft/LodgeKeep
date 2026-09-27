@@ -313,13 +313,37 @@ exports.up = async function up(knex) {
   });
 
   // Category names become unique per property before the merge can rely on it — dropped first, re-added after.
+  //
+  // Bug fix, found in production (not caught by CI — the test fixtures'
+  // two categories always had a matching name on both sides, so the one
+  // path this exercises never ran there): migrateProperty()'s own
+  // "make both lists hold the same names" step inserts a NEW category row
+  // on whichever side is missing a name match (e.g. a menu category with
+  // no same-named stock category — the ordinary case for data that was
+  // never kept in sync, which is every tenant that existed before that
+  // sync existed). That insert never supplies outlet_id, because by then
+  // outlet_id is a retired concept — the real "which outlet(s)" answer for
+  // a category from here on is pos_outlet_categories, populated in the
+  // very next lines of that same block. But the column itself is still
+  // NOT NULL at that point in the migration (it isn't dropped until the
+  // very end, since pos_menu_items/stock_items still need to report their
+  // OWN outlet_id for the rest of the loop to read) — so the insert failed
+  // outright with a real, live "column has no default value" error.
+  // Making outlet_id nullable HERE, the same place its own uniqueness
+  // and foreign key are already being retired, is the correct fix: every
+  // EXISTING row's real outlet_id is completely untouched (this only
+  // changes what a FUTURE insert may omit), and the column is dropped
+  // outright a few dozen lines below regardless, once the whole loop is
+  // done reading from it.
   await knex.schema.alterTable('pos_menu_categories', (table) => {
     table.dropForeign(['tenant_id', 'property_id', 'outlet_id'], 'pos_menu_categories_outlet_foreign');
     table.dropUnique(['outlet_id', 'name'], 'pos_menu_categories_outlet_id_name_unique');
+    table.bigInteger('outlet_id').unsigned().nullable().alter();
   });
   await knex.schema.alterTable('stock_item_categories', (table) => {
     table.dropForeign(['tenant_id', 'property_id', 'outlet_id'], 'stock_item_categories_outlet_foreign');
     table.dropUnique(['outlet_id', 'name'], 'stock_item_categories_outlet_id_name_unique');
+    table.bigInteger('outlet_id').unsigned().nullable().alter();
   });
 
   const properties = await knex('properties').select('tenant_id', 'id as property_id').orderBy('id');
