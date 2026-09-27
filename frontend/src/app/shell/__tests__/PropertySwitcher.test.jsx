@@ -46,6 +46,39 @@ describe('<PropertySwitcher>', () => {
     expect(onSwitchProperty).toHaveBeenCalledWith('2');
   });
 
+  it('says "Choose a property" when none is active, instead of showing the first property as if it were selected', async () => {
+    const onSwitchProperty = vi.fn();
+    render(
+      <PropertySwitcher
+        activeProperty={{ id: null, name: 'No property selected' }}
+        properties={[
+          { id: '1', name: 'Alpha Hotels — Lagos' },
+          { id: '2', name: 'Alpha Hotels — Abuja' },
+        ]}
+        onSwitchProperty={onSwitchProperty}
+      />
+    );
+    const select = screen.getByRole('combobox');
+    expect(select).toHaveValue('');
+    expect(screen.getByRole('option', { name: 'Choose a property' })).toBeDisabled();
+    await userEvent.selectOptions(select, '2');
+    expect(onSwitchProperty).toHaveBeenCalledWith('2');
+  });
+
+  it('offers no "Choose a property" option once a property is active', () => {
+    render(
+      <PropertySwitcher
+        activeProperty={{ id: '1', name: 'Alpha Hotels — Lagos' }}
+        properties={[
+          { id: '1', name: 'Alpha Hotels — Lagos' },
+          { id: '2', name: 'Alpha Hotels — Abuja' },
+        ]}
+        onSwitchProperty={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('option', { name: 'Choose a property' })).not.toBeInTheDocument();
+  });
+
   it('labels the chip "Property" in both the name-only and switcher forms', () => {
     const one = [{ id: '1', name: 'Alpha Hotels — Lagos' }];
     const { rerender } = render(<PropertySwitcher activeProperty={one[0]} properties={one} onSwitchProperty={() => {}} />);

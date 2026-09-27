@@ -67,7 +67,7 @@ export function BookingScreen({ activePropertyId, isOffline = false }) {
       )}
 
       {!activeProperty ? (
-        <p className={styles.loading}>Select an active property to manage bookings.</p>
+        <p className={styles.loading}>Choose a property from the Property box in the top bar to manage bookings.</p>
       ) : (
         <>
           <div className={styles.tabs} role="tablist" aria-label="Booking sections">

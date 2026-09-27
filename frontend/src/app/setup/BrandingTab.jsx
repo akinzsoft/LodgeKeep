@@ -34,7 +34,7 @@ export function BrandingTab({ activeProperty, onPropertiesChanged, isOffline = f
   const [solidBackground, setSolidBackground] = useState(null);
 
   if (!activeProperty) {
-    return <p className={formStyles.hint}>Select an active property to set its branding.</p>;
+    return <p className={formStyles.hint}>Choose a property from the Property box in the top bar to set its branding.</p>;
   }
 
   const logoUrl = activeProperty.logo_url ?? null;

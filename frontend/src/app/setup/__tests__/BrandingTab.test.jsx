@@ -27,7 +27,7 @@ describe('<BrandingTab>', () => {
 
   it('asks for an active property when there is none', () => {
     render(<BrandingTab activeProperty={null} onPropertiesChanged={vi.fn()} />);
-    expect(screen.getByText('Select an active property to set its branding.')).toBeInTheDocument();
+    expect(screen.getByText('Choose a property from the Property box in the top bar to set its branding.')).toBeInTheDocument();
   });
 
   it('shows the property name in place of a logo on the receipt and email previews until one is uploaded', () => {

@@ -263,7 +263,7 @@ function Demo() {
       // on a fetch failure (this file's own header) — never a broken UI.
       activeProperty={{
         id: user.activePropertyId,
-        name: activePropertyRecord?.name ?? `Property ${user.activePropertyId}`,
+        name: user.activePropertyId ? (activePropertyRecord?.name ?? `Property ${user.activePropertyId}`) : 'No property selected',
         logoUrl: activePropertyRecord?.logo_url ?? null,
       }}
       properties={user.properties.map((property) => ({

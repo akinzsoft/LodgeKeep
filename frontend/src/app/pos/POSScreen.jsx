@@ -72,7 +72,7 @@ export function POSScreen({ activeProperty, isOffline = false, currentUserLabel 
       <h1 className={styles.title}>POS</h1>
 
       {!activeProperty ? (
-        <p className={styles.loading}>Select an active property to use the POS.</p>
+        <p className={styles.loading}>Choose a property from the Property box in the top bar to use the POS.</p>
       ) : (
         <>
           <div className={styles.tabs} role="tablist" aria-label="POS sections">

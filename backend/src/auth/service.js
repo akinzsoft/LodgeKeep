@@ -76,9 +76,23 @@ function minutesFromNow(minutes) {
   return new Date(Date.now() + minutes * 60 * 1000);
 }
 
-/** The single property a user holds access to, or null if they hold zero or several (SECURITY.md §3: chosen, never guessed). */
-function defaultActiveProperty(access) {
-  return access.length === 1 ? access[0].property_id : null;
+/**
+ * Where a new session starts (SECURITY.md §3: "default: the user's only
+ * property, or their last-used one"): the only property the user holds
+ * access to; otherwise the one they last switched to
+ * (`users.last_active_property_id`), but only while they still hold access
+ * there; otherwise none — chosen by the user, never guessed.
+ *
+ * Bug fix, user-reported on production: the "last-used" half was never
+ * built, so a user with two properties started every sign-in and every page
+ * reload with no active property, and every property-scoped screen (POS
+ * outlets, categories, items) came up empty.
+ */
+function defaultActiveProperty(access, lastActivePropertyId = null) {
+  if (access.length === 1) return access[0].property_id;
+  if (lastActivePropertyId == null) return null;
+  const remembered = access.find((grant) => String(grant.property_id) === String(lastActivePropertyId));
+  return remembered ? remembered.property_id : null;
 }
 
 /**
@@ -170,7 +184,7 @@ async function staffLogin({ tenantId, email, password, ip, userAgent, requestId 
   const scoped = db.for(context);
 
   const access = await listPropertyAccess(scoped, context, user.id);
-  const activePropertyId = defaultActiveProperty(access);
+  const activePropertyId = defaultActiveProperty(access, user.last_active_property_id);
   const role = activePropertyId ? await roleAtProperty(scoped, context, user.id, activePropertyId) : null;
 
   // Gap closure: "enable or disable mfa verification code on the setup" —
@@ -435,7 +449,7 @@ async function verifyStaffMfa({ challengeToken, code, ip, userAgent, requestId }
   if (!user || user.status !== 'active') throw new MfaNotImplementedError();
 
   const access = await listPropertyAccess(scoped, context, userId);
-  const activePropertyId = defaultActiveProperty(access);
+  const activePropertyId = defaultActiveProperty(access, user.last_active_property_id);
   const role = activePropertyId ? await roleAtProperty(scoped, context, userId, activePropertyId) : null;
 
   await writeAuthEvent({
@@ -523,10 +537,10 @@ async function staffRefresh({ tenantId, refreshToken, propertyId, ip, userAgent,
   // trusting the caller's claim outright. When the caller supplies none at
   // all — the very first refresh after a page reload, `AuthContext.jsx`'s
   // bootstrap, has nothing in memory to send — fall back to the same
-  // "exactly one property, so it's unambiguous" default `staffLogin` itself
-  // uses, rather than always coming back with no active property for the
-  // common single-property tenant. A genuinely ambiguous (multi-property)
-  // user still gets `null` here, same as login, and must choose explicitly.
+  // default `staffLogin` itself uses — the only property, or the one the user
+  // last switched to — rather than coming back with no active property. Only
+  // a multi-property user with nothing remembered still gets `null`, and
+  // must choose explicitly.
   let activePropertyId = null;
   let role = null;
   if (propertyId) {
@@ -536,7 +550,7 @@ async function staffRefresh({ tenantId, refreshToken, propertyId, ip, userAgent,
       role = grant.role;
     }
   } else {
-    const defaulted = defaultActiveProperty(access);
+    const defaulted = defaultActiveProperty(access, user.last_active_property_id);
     if (defaulted) {
       activePropertyId = defaulted;
       role = access.find((g) => String(g.property_id) === String(defaulted))?.role ?? null;
@@ -649,6 +663,10 @@ async function switchProperty({ context, propertyId }) {
   if (!role) {
     throw new ValidationError('PROPERTY_NOT_ACCESSIBLE', 'You do not have access to that property.');
   }
+
+  // Remembered, so the next sign-in or page reload starts here again (see
+  // `defaultActiveProperty`).
+  await scoped.table('users').where({ id: context.userId }).update({ last_active_property_id: propertyId });
 
   const nextContext = withActiveProperty(context, propertyId);
   const accessToken = signAccessToken({

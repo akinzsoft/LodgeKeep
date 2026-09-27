@@ -51,9 +51,18 @@ export function PropertySwitcher({ activeProperty, properties, onSwitchProperty 
         <span className={styles.srOnly}>Active property</span>
         <select
           className={styles.select}
-          value={activeProperty.id}
-          onChange={(event) => onSwitchProperty(event.target.value)}
+          value={activeProperty.id ?? ''}
+          onChange={(event) => event.target.value && onSwitchProperty(event.target.value)}
         >
+          {/* No active property yet (a multi-property user who has never
+              switched): say so. Without this, the browser displayed the first
+              property's name while none was actually selected, and every
+              property-scoped screen was empty for no visible reason. */}
+          {activeProperty.id == null && (
+            <option value="" disabled>
+              Choose a property
+            </option>
+          )}
           {properties.map((property) => (
             <option key={property.id} value={property.id}>
               {property.name}

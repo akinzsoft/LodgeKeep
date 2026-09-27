@@ -467,6 +467,75 @@ describe('auth module (SECURITY.md §3, TESTING.md AUTH-1..15)', () => {
       expect(rotated.body.data.activePropertyId).toBeNull();
     });
 
+    // Bug fix, user-reported on production: a user with two properties set up
+    // POS at the second one, and the next morning's sign-in started with no
+    // property at all, so POS showed nothing. SECURITY.md §3's "or their
+    // last-used one" default.
+    describe("restores the multi-property user's last-used property", () => {
+      async function seedMultiPropertyUser(email) {
+        const [userId] = await t.trx('users').insert({
+          tenant_id: ctx.a.id,
+          email,
+          password_hash: await hashPassword(STRONG_PASSWORD),
+          first_name: 'Multi',
+          last_name: 'Property',
+          status: 'active',
+        });
+        await t.trx('user_property_access').insert([
+          { tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, user_id: userId, role: 'manager' },
+          { tenant_id: ctx.a.id, property_id: ctx.a.properties[1].id, user_id: userId, role: 'manager' },
+        ]);
+        return userId;
+      }
+
+      async function loginAndSwitch(email, propertyId) {
+        const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({ email, password: STRONG_PASSWORD });
+        const switched = await t.request
+          .post('/api/v1/auth/switch-property')
+          .set('Authorization', `Bearer ${login.body.data.accessToken}`)
+          .send({ property_id: String(propertyId) });
+        expect(switched.status).toBe(200);
+        return login;
+      }
+
+      it('a fresh sign-in starts at the property last switched to', async () => {
+        const email = 'remembered-login@example.com';
+        const userId = await seedMultiPropertyUser(email);
+        await loginAndSwitch(email, ctx.a.properties[1].id);
+
+        const row = await t.trx('users').where({ id: userId }).first();
+        expect(String(row.last_active_property_id)).toBe(String(ctx.a.properties[1].id));
+
+        const again = await asTenantA(t.request.post('/api/v1/auth/login')).send({ email, password: STRONG_PASSWORD });
+        expect(again.body.data.activePropertyId).toBe(String(ctx.a.properties[1].id));
+        expect(again.body.data.role).toBe('manager');
+        expect(jwt.decode(again.body.data.accessToken).property_id).toBe(String(ctx.a.properties[1].id));
+      });
+
+      it('a page-reload refresh (no property sent) resumes at the property last switched to', async () => {
+        const email = 'remembered-refresh@example.com';
+        await seedMultiPropertyUser(email);
+        const login = await loginAndSwitch(email, ctx.a.properties[1].id);
+
+        const rotated = await asTenantA(t.request.post('/api/v1/auth/refresh')).set('Cookie', refreshCookieHeader(login));
+        expect(rotated.status).toBe(200);
+        expect(rotated.body.data.activePropertyId).toBe(String(ctx.a.properties[1].id));
+        expect(jwt.decode(rotated.body.data.accessToken).property_id).toBe(String(ctx.a.properties[1].id));
+      });
+
+      it('ignores the remembered property once the user no longer has access there', async () => {
+        const email = 'remembered-revoked@example.com';
+        const userId = await seedMultiPropertyUser(email);
+        await loginAndSwitch(email, ctx.a.properties[1].id);
+        await t.trx('user_property_access').where({ user_id: userId, property_id: ctx.a.properties[1].id }).del();
+
+        const again = await asTenantA(t.request.post('/api/v1/auth/login')).send({ email, password: STRONG_PASSWORD });
+        // The one property still held, never the revoked one.
+        expect(again.body.data.activePropertyId).toBe(String(ctx.a.properties[0].id));
+        expect(jwt.decode(again.body.data.accessToken).property_id).toBe(String(ctx.a.properties[0].id));
+      });
+    });
+
     it('refuses to restore a property the caller no longer holds — re-verified, not trusted (SECURITY.md §3)', async () => {
       const login = await asTenantA(t.request.post('/api/v1/auth/login')).send({
         email: loginable.email,
