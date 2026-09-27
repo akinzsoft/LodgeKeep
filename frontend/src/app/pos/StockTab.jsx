@@ -5,16 +5,17 @@ import { StockGoodsReceivedTab } from './StockGoodsReceivedTab.jsx';
 import { StockTakesTab } from './StockTakesTab.jsx';
 import { StockWastageTab } from './StockWastageTab.jsx';
 import { StockReportsTab } from './StockReportsTab.jsx';
+import { StockReorderReportTab } from './StockReorderReportTab.jsx';
 import styles from './POSScreen.module.css';
 
 /**
  * StockTab — PLAN.md Phase 6's "POS inventory & stock control"
- * (PRODUCT_REQUIREMENTS.md §3.4). A thin container over six inner tabs,
+ * (PRODUCT_REQUIREMENTS.md §3.4). A thin container over seven inner tabs,
  * the same second-level `role="tablist"` composition `POSScreen.jsx`'s own
  * outer tablist already establishes one level up — a natural nesting, not
  * a new pattern.
  *
- * No client-side permission check hides any of the six inner tabs, even
+ * No client-side permission check hides any of the seven inner tabs, even
  * though the real backend (`stock/routes.js`) splits them across
  * `pos.stock_view` (Stock items' own read, Wastage — a floor action
  * reachable by `pos_operator`) and `pos.stock_manage` (everything else:
@@ -32,6 +33,7 @@ const STOCK_TABS = [
   { key: 'goods_received', label: 'Goods received' },
   { key: 'takes', label: 'Stock takes' },
   { key: 'wastage', label: 'Wastage' },
+  { key: 'reorder', label: 'Reorder report' },
   { key: 'reports', label: 'Reports' },
 ];
 
@@ -61,6 +63,7 @@ export function StockTab({ activeProperty, isOffline = false }) {
         {tab === 'goods_received' && <StockGoodsReceivedTab activeProperty={activeProperty} isOffline={isOffline} />}
         {tab === 'takes' && <StockTakesTab isOffline={isOffline} />}
         {tab === 'wastage' && <StockWastageTab isOffline={isOffline} />}
+        {tab === 'reorder' && <StockReorderReportTab activeProperty={activeProperty} />}
         {tab === 'reports' && <StockReportsTab activeProperty={activeProperty} />}
       </div>
     </div>

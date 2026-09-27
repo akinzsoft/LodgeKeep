@@ -28,7 +28,7 @@ describe('<StockTab>', () => {
     stockMocks.listStockTakes.mockResolvedValue([]);
   });
 
-  it('defaults to Stock items and switches between all six inner tabs, none hidden by any client-side permission check', async () => {
+  it('defaults to Stock items and switches between all seven inner tabs, none hidden by any client-side permission check', async () => {
     render(<StockTab activeProperty={{ base_currency: 'NGN' }} />);
     expect(screen.getByRole('tab', { name: 'Stock items', selected: true })).toBeInTheDocument();
     // The redesigned Stock items screen (gap closure) has no single global
@@ -48,6 +48,9 @@ describe('<StockTab>', () => {
 
     await userEvent.click(screen.getByRole('tab', { name: 'Wastage' }));
     expect(await screen.findByRole('heading', { name: 'Record wastage' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Reorder report' }));
+    expect(await screen.findByRole('heading', { name: 'Reorder report' })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Reports' }));
     expect(await screen.findByRole('button', { name: 'Run reports' })).toBeInTheDocument();
