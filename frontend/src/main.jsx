@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useState } from 'react';
+import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 // Inter was always named first in `--font-sans` but never actually loaded,
 // so every screen silently rendered in the OS fallback. Self-hosted (no
@@ -19,7 +19,7 @@ import { SignupScreen } from './app/auth/screens/SignupScreen.jsx';
 import { AppShell, isNavItemAllowed } from './app/shell/index.js';
 import { NotificationPopups } from './app/shell/NotificationPopups.jsx';
 import { MyAccountModal } from './app/account/MyAccountModal.jsx';
-import { notificationTarget } from './app/shell/notificationText.js';
+import { notificationTarget, notificationIntent } from './app/shell/notificationText.js';
 import { HomeDashboard } from './app/dashboard/HomeDashboard.jsx';
 import { SetupScreen } from './app/setup/SetupScreen.jsx';
 import { BookingScreen } from './app/booking/BookingScreen.jsx';
@@ -99,6 +99,12 @@ function Demo() {
   const [toast, setToast] = useState(null);
   const [switchError, setSwitchError] = useState(null);
   const [activeItemKey, setActiveItemKey] = useState('home');
+  // Where inside a screen a notification click should land (e.g. POS →
+  // Stock → Requests with one request open). `nonce` lets a second click on
+  // the same kind of notification land again; ordinary navigation clears it,
+  // so returning to POS from the sidebar still opens on the Register.
+  const [screenIntent, setScreenIntent] = useState(null);
+  const intentNonce = useRef(0); // only ever increases, so a screen that already applied one click never mistakes a later one for it
   // Self-service "My Profile" screen (user-requested) — deliberately NOT
   // driven through `activeItemKey`/`screenKey`: it's reachable from the
   // TopBar user menu regardless of role/permissions, and registering it in
@@ -240,7 +246,16 @@ function Demo() {
     // A stock alert opens POS for anyone who can sell; a Storekeeper has the
     // Stock screen instead.
     if (target === 'pos' && notification.type.startsWith('stock.') && !isNavItemAllowed('pos', grantedPermissions)) target = 'stock';
-    if (target && isNavItemAllowed(target, grantedPermissions)) setActiveItemKey(target);
+    if (target && isNavItemAllowed(target, grantedPermissions)) {
+      const intent = notificationIntent(notification);
+      setScreenIntent(intent ? { ...intent, nonce: (intentNonce.current += 1) } : null);
+      setActiveItemKey(target);
+    }
+  }
+
+  function navigateTo(key) {
+    setScreenIntent(null);
+    setActiveItemKey(key);
   }
 
   async function handleSwitchProperty(propertyId) {
@@ -261,7 +276,7 @@ function Demo() {
       user={{ name: displayName, role: user.role?.replace(/_/g, ' ') }}
       permissions={grantedPermissions}
       activeItemKey={activeItemKey}
-      onNavigate={setActiveItemKey}
+      onNavigate={navigateTo}
       // Real name when `GET /properties` has resolved it; the same
       // "Property {id}" labelled stand-in as before while still loading or
       // on a fetch failure (this file's own header) — never a broken UI.
@@ -327,9 +342,9 @@ function Demo() {
       ) : screenKey === 'profiles' ? (
         <ProfilesScreen isOffline={!isOnline} activeProperty={activePropertyRecord} />
       ) : screenKey === 'pos' ? (
-        <POSScreen activeProperty={activePropertyRecord} isOffline={!isOnline} currentUserLabel={displayName} permissions={grantedPermissions} />
+        <POSScreen activeProperty={activePropertyRecord} isOffline={!isOnline} currentUserLabel={displayName} permissions={grantedPermissions} intent={screenIntent} />
       ) : screenKey === 'stock' ? (
-        <StockScreen activeProperty={activePropertyRecord} isOffline={!isOnline} permissions={grantedPermissions} />
+        <StockScreen activeProperty={activePropertyRecord} isOffline={!isOnline} permissions={grantedPermissions} intent={screenIntent} />
       ) : screenKey === 'ar' ? (
         <ARScreen isOffline={!isOnline} />
       ) : screenKey === 'group_blocks' ? (
@@ -350,7 +365,7 @@ function Demo() {
           businessDate={businessDate}
           activeProperty={activePropertyRecord}
           onNavigateToSetup={() => setActiveItemKey('setup')}
-          onNavigate={setActiveItemKey}
+          onNavigate={navigateTo}
           canNavigate={(key) => isNavItemAllowed(key, grantedPermissions)}
         />
       )}

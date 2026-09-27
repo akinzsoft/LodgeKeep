@@ -18,12 +18,28 @@ const mocks = vi.hoisted(() => ({
 const stockMocks = vi.hoisted(() => ({
   listStockItems: vi.fn(),
   listStockTakes: vi.fn(),
+  listTransferRequests: vi.fn(),
+  getTransferRequest: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return { ...actual, posApi: mocks, stockApi: stockMocks, setupApi: { listRooms: vi.fn().mockResolvedValue([]) } };
 });
+
+const STOCK_REQUEST = {
+  id: '5',
+  status: 'issued',
+  note: null,
+  fromOutlet: { id: '1', name: 'Main Store', type: 'store' },
+  toOutlet: { id: '2', name: 'Main Bar' },
+  requestedBy: { userId: '9', name: 'Bola Barman' },
+  requestedAt: '2027-07-01T18:00:00Z',
+  decidedBy: { userId: '4', name: 'Kemi Store' },
+  decidedAt: '2027-07-01T19:00:00Z',
+  decisionNote: null,
+  lines: [{ stockItemId: '20', name: 'Coke', unit: 'bottle', archived: false, quantityRequested: '12.000', quantityIssued: '8.000', availableAtSource: null }],
+};
 
 describe('<POSScreen>', () => {
   beforeEach(() => {
@@ -40,6 +56,37 @@ describe('<POSScreen>', () => {
     mocks.listQrTokens.mockResolvedValue([]);
     stockMocks.listStockItems.mockResolvedValue([]);
     stockMocks.listStockTakes.mockResolvedValue([]);
+    stockMocks.listTransferRequests.mockResolvedValue([]);
+    stockMocks.getTransferRequest.mockResolvedValue(STOCK_REQUEST);
+  });
+
+  describe('opened from a stock-request notification', () => {
+    const MANAGER = new Set(['pos.operate', 'pos.stock_view', 'pos.stock_manage', 'pos.stock_transfer', 'pos.stock_request']);
+    const INTENT = { posTab: 'stock', stockTab: 'requests', requestId: '5', nonce: 1 };
+
+    it('lands on Stock → Requests with that request open', async () => {
+      render(<POSScreen activeProperty={{ base_currency: 'NGN' }} permissions={MANAGER} intent={INTENT} />);
+      expect(screen.getByRole('tab', { name: 'Stock', selected: true })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: 'Requests', selected: true })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Request #5 — Main Store → Main Bar' })).toBeInTheDocument();
+      expect(stockMocks.getTransferRequest).toHaveBeenCalledWith('5');
+    });
+
+    it('a later click while POS is already open moves there too, once per click', async () => {
+      const { rerender } = render(<POSScreen activeProperty={{ base_currency: 'NGN' }} permissions={MANAGER} />);
+      expect(screen.getByRole('tab', { name: 'Register', selected: true })).toBeInTheDocument();
+
+      rerender(<POSScreen activeProperty={{ base_currency: 'NGN' }} permissions={MANAGER} intent={INTENT} />);
+      expect(await screen.findByRole('heading', { name: 'Request #5 — Main Store → Main Bar' })).toBeInTheDocument();
+
+      // The user moves on; re-rendering with the same (already applied) click does not drag them back.
+      await userEvent.click(screen.getByRole('tab', { name: 'Shifts' }));
+      rerender(<POSScreen activeProperty={{ base_currency: 'NGN' }} permissions={MANAGER} intent={INTENT} />);
+      expect(screen.getByRole('tab', { name: 'Shifts', selected: true })).toBeInTheDocument();
+
+      rerender(<POSScreen activeProperty={{ base_currency: 'NGN' }} permissions={MANAGER} intent={{ ...INTENT, nonce: 2 }} />);
+      expect(screen.getByRole('tab', { name: 'Stock', selected: true })).toBeInTheDocument();
+    });
   });
 
   it('defaults to the Register tab and switches between all seven tabs, including the PLAN.md Phase 6 QR-ordering and stock-control ones', async () => {

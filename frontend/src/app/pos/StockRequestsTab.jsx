@@ -49,7 +49,7 @@ function defaultIssueQuantity(line) {
   return compareQuantity(available, line.quantityRequested) < 0 ? available : line.quantityRequested;
 }
 
-export function StockRequestsTab({ isOffline = false, permissions }) {
+export function StockRequestsTab({ isOffline = false, permissions, intent }) {
   const canRequest = !permissions || permissions.has('pos.stock_request');
   const canIssue = !permissions || permissions.has('pos.stock_transfer');
 
@@ -75,8 +75,13 @@ export function StockRequestsTab({ isOffline = false, permissions }) {
   const [acting, setActing] = useState(false);
   const [dialog, setDialog] = useState(null); // 'reject' | 'cancel' | null
   const listRequest = useRef(0);
+  // The request a notification pointed at, fetched on its own so it opens
+  // whatever the list is filtered to (an issued request is not "Pending").
+  const [focused, setFocused] = useState(null);
+  const focusRequest = useRef(0);
 
-  const selected = (requests ?? []).find((row) => String(row.id) === String(selectedId)) ?? null;
+  const selected =
+    (requests ?? []).find((row) => String(row.id) === String(selectedId)) ?? (focused && String(focused.id) === String(selectedId) ? focused : null);
 
   async function loadSourceItems(outletId) {
     const requestId = (itemsRequest.current += 1);
@@ -140,6 +145,27 @@ export function StockRequestsTab({ isOffline = false, permissions }) {
       });
   }, [filter]);
 
+  // Opening a stock-request notification: fetch that request and open it.
+  // Once per click (the intent's nonce); a newer click wins over a slower answer.
+  const focusId = intent?.requestId ?? null;
+  const focusNonce = intent?.nonce ?? null;
+  useEffect(() => {
+    if (!focusId) return;
+    const requestId = (focusRequest.current += 1);
+    stockApi
+      .getTransferRequest(focusId)
+      .then((row) => {
+        if (requestId !== focusRequest.current) return;
+        setFocused(row);
+        setSelectedId(row.id);
+        setIssueNote('');
+        setIssueQuantities(Object.fromEntries(row.lines.map((line) => [String(line.stockItemId), defaultIssueQuantity(line)])));
+      })
+      .catch(() => {
+        if (requestId === focusRequest.current) setError(`Request #${focusId} could not be found.`);
+      });
+  }, [focusId, focusNonce]);
+
   function chooseFrom(outletId) {
     setFromOutletId(outletId);
     if (outletId === toOutletId) setToOutletId('');
@@ -197,6 +223,8 @@ export function StockRequestsTab({ isOffline = false, permissions }) {
     setError(null);
     setNotice(null);
     setActing(true);
+    // A decision changes the request: from here on it is shown from the refreshed list, never the copy a notification fetched.
+    setFocused(null);
     try {
       const updated = await action();
       setNotice(successMessage(updated));

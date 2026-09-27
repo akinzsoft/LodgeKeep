@@ -151,6 +151,19 @@ export function notificationTarget(type) {
   return null;
 }
 
+/**
+ * Where inside its screen a notification should land, beyond the sidebar
+ * key `notificationTarget` gives — or null to open the screen as it is.
+ * A stock-request notification opens Stock → Requests with that request
+ * open (`posTab` for the POS screen; the Storekeeper's own Stock screen
+ * ignores it).
+ */
+export function notificationIntent(notification) {
+  if (!notification.type.startsWith('stock.transfer_request')) return null;
+  const requestId = parsePayload(notification).requestId;
+  return { posTab: 'stock', stockTab: 'requests', requestId: requestId == null ? null : String(requestId) };
+}
+
 /** "just now", "5m ago", "3h ago", "2d ago". */
 export function timeAgo(isoString, now = Date.now()) {
   const then = new Date(isoString).getTime();
