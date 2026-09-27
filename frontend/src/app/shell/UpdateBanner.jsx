@@ -5,9 +5,9 @@ import styles from './UpdateBanner.module.css';
  * A new version of the app has been deployed while this page was open
  * (`useNewVersionAvailable`). The page keeps working on the old version until
  * someone reloads — a reload is never forced, because the Register may hold a
- * half-rung tab or a form may be half filled in. "Later" hides it until the
- * next page load; a device left open simply shows it again after a reload
- * is skipped and the page is next opened.
+ * half-rung tab or a form may be half filled in. "Later" hides it for the
+ * rest of this page's life; the next time the page is loaded it runs the new
+ * version anyway, and a later deploy shows the banner again.
  *
  * `role="status"`, not `alert`: important, but not an error or a danger.
  */
