@@ -1,11 +1,35 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import process from 'node:process';
+
+// A new deploy must reach devices that stay open all day (a bar tablet, the
+// store's desktop): the app compares the build it is running with the one
+// the server now serves (`/version.json`) and offers a reload when they
+// differ (`shared/hooks/useNewVersionAvailable.js`). One id per build —
+// `APP_BUILD_ID` when the build supplies one, otherwise the build's own
+// timestamp. Docker's layer cache reuses an unchanged build, so an unchanged
+// frontend keeps its id and never prompts.
+const BUILD_ID = process.env.APP_BUILD_ID || new Date().toISOString();
+
+/** Writes `dist/version.json` (`{buildId}`) next to index.html on `vite build`. */
+function versionFile() {
+  return {
+    name: 'lodgekeep-version-file',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ buildId: BUILD_ID }) });
+    },
+  };
+}
 
 // Vitest config lives in the same file (Vite's own recommended pattern) so
 // dev/build/test all share one module-resolution setup — no separate config
 // to drift from this one.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), versionFile()],
+  define: {
+    'import.meta.env.VITE_APP_BUILD_ID': JSON.stringify(BUILD_ID),
+  },
   server: {
     // `shared/api/client.js` calls relative paths ("/api/v1/..."), which the
     // dev server needs somewhere real to go — the backend

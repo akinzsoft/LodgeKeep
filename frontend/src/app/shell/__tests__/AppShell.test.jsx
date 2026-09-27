@@ -71,6 +71,21 @@ describe('<AppShell>', () => {
     expect(screen.queryByText(/offline/i)).not.toBeInTheDocument();
   });
 
+  it('shows the new-version banner only while one is offered', () => {
+    const { rerender } = render(
+      <AppShell {...baseProps}>
+        <p>content</p>
+      </AppShell>
+    );
+    expect(screen.queryByText(/A new version of LodgeKeep is available/)).not.toBeInTheDocument();
+    rerender(
+      <AppShell {...baseProps} newVersion={{ onReload: () => {}, onDismiss: () => {} }}>
+        <p>content</p>
+      </AppShell>
+    );
+    expect(screen.getByRole('button', { name: 'Reload now' })).toBeInTheDocument();
+  });
+
   it('shows the offline banner when isOffline is true (DESIGN_SYSTEM.md §2\'s sixth state)', () => {
     render(
       <AppShell {...baseProps} isOffline>

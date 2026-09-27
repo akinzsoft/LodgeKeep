@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar.jsx';
 import { TopBar } from './TopBar.jsx';
 import { ImpersonationBanner } from './ImpersonationBanner.jsx';
 import { OfflineBanner } from './OfflineBanner.jsx';
+import { UpdateBanner } from './UpdateBanner.jsx';
 import { Footer } from './Footer.jsx';
 import { DEFAULT_NAV_GROUPS } from './nav-config.js';
 import styles from './AppShell.module.css';
@@ -63,6 +64,7 @@ import styles from './AppShell.module.css';
  * @param {(id: string) => void} [onMarkNotificationRead]
  * @param {() => void} [onMarkAllNotificationsRead]
  * @param {(notification: object) => void} [onOpenNotification]
+ * @param {{onReload: () => void, onDismiss: () => void}} [newVersion]      Set while a newer build is deployed than this page is running — shows the reload banner.
  * @param {boolean} [notificationSoundOn]                               Whether pop-up notifications beep on this device — see TopBar's own header.
  * @param {() => void} [onToggleNotificationSound]
  * @param {{tenantName: string, onExit: () => void}} [impersonation]     Present only while a platform-staff impersonation grant is active (SECURITY.md §2).
@@ -89,6 +91,7 @@ export function AppShell({
   onOpenNotification,
   notificationSoundOn,
   onToggleNotificationSound,
+  newVersion,
   impersonation,
   isOffline = false,
   onLogout,
@@ -116,6 +119,7 @@ export function AppShell({
   return (
     <div className={styles.shell}>
       {isOffline && <OfflineBanner />}
+      {newVersion && <UpdateBanner onReload={newVersion.onReload} onDismiss={newVersion.onDismiss} />}
       {impersonation && (
         <ImpersonationBanner tenantName={impersonation.tenantName} onExit={impersonation.onExit} />
       )}

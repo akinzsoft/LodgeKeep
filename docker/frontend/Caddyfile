@@ -127,6 +127,17 @@
 		# page's) makes whatever connections it needs internally.
 		header Content-Security-Policy "default-src 'self'; script-src 'self' https://js.paystack.co https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
+		# Caching, so a deploy actually reaches a reload (user-reported: a
+		# storekeeper's open browser kept the pre-deploy app): index.html —
+		# which every SPA route falls back to — and version.json (the build
+		# id `useNewVersionAvailable` compares) are always revalidated, so a
+		# reload after a deploy gets the new page. `/assets/*` names carry a
+		# content hash and never change, so the browser may keep them for good.
+		@hashedAssets path /assets/*
+		header @hashedAssets Cache-Control "public, max-age=31536000, immutable"
+		@notHashedAssets not path /assets/*
+		header @notHashedAssets Cache-Control "no-cache"
+
 		root * /srv
 		file_server
 		# Client-side routing (react-router-dom) — an unknown static path
