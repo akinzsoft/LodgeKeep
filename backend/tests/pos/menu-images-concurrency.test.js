@@ -17,6 +17,7 @@ const { db } = require('../helpers/db');
 const dbModule = require('../../src/db');
 const { createApp } = require('../../src/app');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { insertMenuItem } = require('../helpers/catalogue');
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 1)]);
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(32, 2)]);
@@ -46,13 +47,17 @@ describe('menu item photo uploads under real concurrent connections', () => {
     const perms = await db()('permissions').where({ permission_key: 'pos.manage' }).select('id');
     await db()('role_permissions').insert(perms.map((p) => ({ tenant_id: tenantId, role_id: roleId, permission_id: p.id })));
     const [outletId] = await db()('pos_outlets').insert({ tenant_id: tenantId, property_id: propertyId, code: 'RACE-IMG', name: 'Race Bar', type: 'bar' });
-    [menuItemId] = await db()('pos_menu_items').insert({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, name: 'Race Item', category: 'Drinks', price: '15.00' });
+    [menuItemId] = await insertMenuItem(db(), { tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, name: 'Race Item', category: 'Drinks', price: '15.00' });
     token = signAccessToken({ aud: 'staff', sub: String(userId), tenant_id: String(tenantId), property_id: String(propertyId) });
   });
 
   afterAll(async () => {
     await db()('audit_log').where({ tenant_id: tenantId }).delete();
+    await db()('pos_outlet_menu_items').where({ tenant_id: tenantId }).delete();
     await db()('pos_menu_items').where({ tenant_id: tenantId }).delete();
+    await db()('pos_outlet_categories').where({ tenant_id: tenantId }).delete();
+    await db()('pos_menu_categories').where({ tenant_id: tenantId }).delete();
+    await db()('stock_item_categories').where({ tenant_id: tenantId }).delete();
     await db()('pos_outlets').where({ tenant_id: tenantId }).delete();
     await db()('user_property_access').where({ tenant_id: tenantId }).delete();
     await db()('role_permissions').where({ tenant_id: tenantId }).delete();

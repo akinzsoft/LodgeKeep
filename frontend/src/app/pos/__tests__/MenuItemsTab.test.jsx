@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   uploadMenuItemImage: vi.fn(),
   removeMenuItemImage: vi.fn(),
   setMenuItemAvailability: vi.fn(),
+  setOutletMenuItemPrice: vi.fn(),
 }));
 
 const stockMocks = vi.hoisted(() => ({
@@ -297,17 +298,54 @@ describe('<MenuItemsTab>', () => {
       await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
       const editCard = screen.getByRole('heading', { name: 'Edit — Cocktail' }).closest('section');
 
-      expect(within(editCard).getByLabelText('Selling price')).toHaveValue(20);
+      // At an outlet: the main price (every outlet), and this outlet's own (blank = the main price).
+      expect(within(editCard).getByLabelText('Main price (every outlet)')).toHaveValue(20);
+      expect(within(editCard).getByLabelText('Price at Main Bar (optional)')).toHaveValue(null);
       expect(within(editCard).getByLabelText('Reorder level')).toHaveValue(5);
       expect(within(editCard).getByLabelText('Supplier name')).toHaveValue('Acme Beverages');
 
-      const priceInput = within(editCard).getByLabelText('Selling price');
+      const priceInput = within(editCard).getByLabelText('Main price (every outlet)');
       await userEvent.clear(priceInput);
       await userEvent.type(priceInput, '22');
       await userEvent.click(within(editCard).getByRole('button', { name: 'Save changes' }));
 
       await waitFor(() => expect(mocks.updateMenuItem).toHaveBeenCalledWith('5', expect.objectContaining({ price: '22' })));
-      expect(stockMocks.updateStockItem).toHaveBeenCalledWith('30', { supplier: 'Acme Beverages', reorderLevel: '5.000' });
+      // The reorder level shown is this outlet's own.
+      expect(stockMocks.updateStockItem).toHaveBeenCalledWith('30', { supplier: 'Acme Beverages', reorderLevel: '5.000', outletId: '1' });
+      // The outlet price was left blank and unchanged, so it is not touched.
+      expect(mocks.setOutletMenuItemPrice).not.toHaveBeenCalled();
+    });
+
+    it("sets this outlet's own price, and clearing it goes back to the main price", async () => {
+      mocks.listMenuItems.mockResolvedValue([menuItem({ price: '25.00', base_price: '20.00', outlet_price: '25.00' })]);
+      mocks.updateMenuItem.mockResolvedValue(menuItem());
+      mocks.setOutletMenuItemPrice.mockResolvedValue(menuItem());
+      renderTab();
+      const row = (await screen.findByText('Cocktail')).closest('tr');
+      expect(within(row).getByText(/own price/)).toBeInTheDocument();
+      await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+      const editCard = screen.getByRole('heading', { name: 'Edit — Cocktail' }).closest('section');
+      expect(within(editCard).getByLabelText('Main price (every outlet)')).toHaveValue(20);
+      const outletPrice = within(editCard).getByLabelText('Price at Main Bar (optional)');
+      expect(outletPrice).toHaveValue(25);
+
+      await userEvent.clear(outletPrice);
+      await userEvent.click(within(editCard).getByRole('button', { name: 'Save changes' }));
+      await waitFor(() => expect(mocks.setOutletMenuItemPrice).toHaveBeenCalledWith('5', '1', null));
+      expect(mocks.updateMenuItem).toHaveBeenCalledWith('5', expect.objectContaining({ price: '20.00' }));
+    });
+
+    it('in the catalogue (no outlet) there is one price, no availability toggle, and no restock', async () => {
+      mocks.listMenuItems.mockResolvedValue([menuItem()]);
+      renderTab({ outletId: null, outletName: null });
+      const row = (await screen.findByText('Cocktail')).closest('tr');
+      expect(within(row).queryByRole('button', { name: 'Mark stocked out' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /Restock/ })).not.toBeInTheDocument();
+      expect(mocks.listMenuItems).toHaveBeenCalledWith(null);
+      await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+      const editCard = screen.getByRole('heading', { name: 'Edit — Cocktail' }).closest('section');
+      expect(within(editCard).getByLabelText('Selling price')).toHaveValue(20);
+      expect(within(editCard).queryByLabelText(/Price at/)).not.toBeInTheDocument();
     });
 
     it('an item with no linked stock item has no reorder level/supplier fields to edit', async () => {
@@ -379,7 +417,8 @@ describe('<MenuItemsTab>', () => {
     mocks.setMenuItemAvailability.mockResolvedValue({});
     renderTab();
     await userEvent.click(await screen.findByRole('button', { name: 'Mark stocked out' }));
-    expect(mocks.setMenuItemAvailability).toHaveBeenCalledWith('5', false);
+    // Sold out at THIS outlet only.
+    expect(mocks.setMenuItemAvailability).toHaveBeenCalledWith('5', false, '1');
   });
 
   describe('restock', () => {
@@ -460,20 +499,20 @@ describe('<MenuItemsTab>', () => {
       );
       const { rerender } = renderTab();
       rerender(<MenuItemsTab activeProperty={{ base_currency: 'NGN' }} outletId="3" outletName="Supermarket" />);
-      const card = (await screen.findByRole('heading', { name: 'Menu categories — Supermarket' })).closest('section');
+      const card = (await screen.findByRole('heading', { name: 'Menu categories sold at Supermarket' })).closest('section');
       expect(await within(card).findByText('Groceries')).toBeInTheDocument();
 
       answerOld([CATEGORY]);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(within(card).getByText('Groceries')).toBeInTheDocument();
       expect(within(card).queryByText(CATEGORY.name)).not.toBeInTheDocument();
-      expect(within(card).getByText(/belong to this outlet only/)).toBeInTheDocument();
+      expect(within(card).getByText(/This outlet sells every item in these categories/)).toBeInTheDocument();
     });
 
     it('registers a new category from the Menu categories card', async () => {
       mocks.createMenuCategory.mockResolvedValue({ id: '3', name: 'Starters' });
       renderTab();
-      const card = (await screen.findByRole('heading', { name: 'Menu categories — Main Bar' })).closest('section');
+      const card = (await screen.findByRole('heading', { name: 'Menu categories sold at Main Bar' })).closest('section');
 
       await userEvent.type(within(card).getByLabelText('Menu category name'), 'Starters');
       mocks.listMenuCategories.mockResolvedValue([CATEGORY, { id: '3', name: 'Starters', sort_order: 0, item_count: 0 }]);
@@ -488,7 +527,7 @@ describe('<MenuItemsTab>', () => {
         new ApiError({ code: 'CONFLICT_POS_MENU_CATEGORY_IN_USE', message: '"Drinks" is still used by 1 menu item — move them to another category first.' })
       );
       renderTab();
-      const card = (await screen.findByRole('heading', { name: 'Menu categories — Main Bar' })).closest('section');
+      const card = (await screen.findByRole('heading', { name: 'Menu categories sold at Main Bar' })).closest('section');
       await userEvent.click(within(card).getByRole('button', { name: 'Archive' }));
       const dialog = await screen.findByRole('alertdialog');
       await userEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));

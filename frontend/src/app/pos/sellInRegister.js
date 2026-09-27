@@ -193,41 +193,15 @@ export async function stockCategoryForMenuCategory(menuCategoryName, outletId) {
   if (!wanted) return null;
   const findIn = (list) => (list ?? []).find((category) => nameKey(category.name) === nameKey(wanted))?.name ?? null;
 
-  const existing = findIn(await stockApi.listStockItemCategories({ outletId }));
+  // Stock categories are shared by the property (and mirror the menu
+  // categories), so the whole list is searched, not just this outlet's.
+  const existing = findIn(await stockApi.listStockItemCategories());
   if (existing) return existing;
   try {
     return (await stockApi.createStockItemCategory({ outletId, name: wanted })).name;
   } catch (caught) {
     if (!(caught instanceof ApiError && caught.status === 409)) throw caught;
-    const raced = findIn(await stockApi.listStockItemCategories({ outletId }));
-    if (raced) return raced;
-    throw caught;
-  }
-}
-
-/**
- * The forward bridge — stock to menu. User-requested: registering a stock
- * category for an outlet must also put it in that outlet's Setup category
- * list, so front-of-house staff and stock don't drift into two different
- * names for the same thing. Mirrors `stockCategoryForMenuCategory` exactly,
- * in the other direction: reuses an existing menu category at `outletId`
- * matching the name (case-insensitively), else creates one. A 409 from a
- * concurrent create is re-read, not an error. Never throws on its own
- * account of NOT finding a name to bridge — callers only call this once a
- * stock category genuinely has a name to mirror.
- */
-export async function menuCategoryForStockCategory(stockCategoryName, outletId) {
-  const wanted = String(stockCategoryName ?? '').trim();
-  if (!wanted) return null;
-  const findIn = (list) => (list ?? []).find((category) => nameKey(category.name) === nameKey(wanted))?.name ?? null;
-
-  const existing = findIn(await posApi.listMenuCategories({ outletId }));
-  if (existing) return existing;
-  try {
-    return (await posApi.createMenuCategory({ outletId, name: wanted })).name;
-  } catch (caught) {
-    if (!(caught instanceof ApiError && caught.status === 409)) throw caught;
-    const raced = findIn(await posApi.listMenuCategories({ outletId }));
+    const raced = findIn(await stockApi.listStockItemCategories());
     if (raced) return raced;
     throw caught;
   }

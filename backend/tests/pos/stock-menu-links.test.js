@@ -10,6 +10,7 @@
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
 
 describe('Stock ↔ Register menu links (gap closure)', () => {
   const t = useTestApp();
@@ -42,14 +43,17 @@ describe('Stock ↔ Register menu links (gap closure)', () => {
     return id;
   }
 
+  // Categories are shared by the property and an outlet sells what is in
+  // the categories it carries — so each outlet gets its own category here,
+  // keeping one test's items out of another outlet's list.
   async function newMenuItem(tenant, outletId, { status = 'active' } = {}) {
     counter += 1;
-    const [id] = await t.trx('pos_menu_items').insert({
+    const [id] = await insertMenuItem(t.trx, {
       tenant_id: tenant.id,
       property_id: tenant.properties[0].id,
       outlet_id: outletId,
       name: `Link menu ${counter}`,
-      category: 'Links',
+      category: `Links ${outletId}`,
       price: '5.00',
       status,
     });
@@ -58,7 +62,7 @@ describe('Stock ↔ Register menu links (gap closure)', () => {
 
   async function newStockItem(tenant, outletId) {
     counter += 1;
-    const [id] = await t.trx('stock_items').insert({
+    const [id] = await insertStockItem(t.trx, {
       tenant_id: tenant.id,
       property_id: tenant.properties[0].id,
       outlet_id: outletId,
@@ -104,7 +108,7 @@ describe('Stock ↔ Register menu links (gap closure)', () => {
 
     const forCocktail = res.body.data.filter((r) => String(r.menu_item_id) === String(cocktail));
     expect(forCocktail.map((r) => r.component_count)).toEqual([2, 2]);
-    expect(forCocktail[0]).toMatchObject({ menu_item_category: 'Links', menu_item_available: true });
+    expect(forCocktail[0]).toMatchObject({ menu_item_category: `Links ${outlet}`, menu_item_available: true });
   });
 
   it('excludes archived menu items, and filters by outlet when asked', async () => {

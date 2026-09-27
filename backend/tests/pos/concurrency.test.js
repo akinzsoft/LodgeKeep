@@ -41,6 +41,7 @@ const { db } = require('../helpers/db');
 const dbModule = require('../../src/db');
 const { createApp } = require('../../src/app');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { insertMenuItem } = require('../helpers/catalogue');
 
 describe('POS tab edit race under real concurrent connections', () => {
   let req;
@@ -84,7 +85,7 @@ describe('POS tab edit race under real concurrent connections', () => {
 
     [outletId] = await db()('pos_outlets').insert({ tenant_id: tenantId, property_id: propertyId, code: 'RACEBAR', name: 'Race Bar', type: 'bar' });
     [terminalId] = await db()('pos_terminals').insert({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, device_ref: 'RACE-TERM' });
-    [menuItemId] = await db()('pos_menu_items').insert({
+    [menuItemId] = await insertMenuItem(db(), {
       tenant_id: tenantId,
       property_id: propertyId,
       outlet_id: outletId,
@@ -118,8 +119,12 @@ describe('POS tab edit race under real concurrent connections', () => {
     await db()('pos_shifts').where({ tenant_id: tenantId }).delete();
     await db()('pos_order_items').where({ tenant_id: tenantId }).delete();
     await db()('pos_orders').where({ tenant_id: tenantId }).delete();
+    await db()('pos_outlet_menu_items').where({ tenant_id: tenantId }).delete();
     await db()('pos_menu_items').where({ tenant_id: tenantId }).delete();
     await db()('pos_terminals').where({ tenant_id: tenantId }).delete();
+    await db()('pos_outlet_categories').where({ tenant_id: tenantId }).delete();
+    await db()('pos_menu_categories').where({ tenant_id: tenantId }).delete();
+    await db()('stock_item_categories').where({ tenant_id: tenantId }).delete();
     await db()('pos_outlets').where({ tenant_id: tenantId }).delete();
     await db()('user_property_access').where({ tenant_id: tenantId }).delete();
     await db()('role_permissions').where({ tenant_id: tenantId }).delete();

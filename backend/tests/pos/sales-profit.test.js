@@ -11,6 +11,7 @@
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
 
 const BUSINESS_DATE = '2027-04-01';
 
@@ -35,7 +36,7 @@ describe('POS sales report — profit', () => {
 
   async function menuItem(name, price, costPrice = null) {
     const propertyId = ctx.a.properties[0].id;
-    const [id] = await t.trx('pos_menu_items').insert({
+    const [id] = await insertMenuItem(t.trx, {
       tenant_id: ctx.a.id,
       property_id: propertyId,
       outlet_id: outlet.outletId,
@@ -87,7 +88,7 @@ describe('POS sales report — profit', () => {
     const a = await menuItem('Item A', '20.00', '12.00');
     const b = await menuItem('Item B', '40.00');
     const c = await menuItem('Item C', '10.00');
-    const [stockItemId] = await t.trx('stock_items').insert({
+    const [stockItemId] = await insertStockItem(t.trx, {
       tenant_id: ctx.a.id,
       property_id: propertyId,
       outlet_id: outletId,
@@ -178,7 +179,7 @@ describe('POS sales report — profit', () => {
     const propertyId = ctx.a.properties[0].id;
     const [outletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: 'PROFIT-BAR2', name: 'Unpriced Bar', type: 'bar' });
     const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, device_ref: 'PROFIT-T2' });
-    const [unpricedId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Unpriced only', category: 'Profit', price: '15.00' });
+    const [unpricedId] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Unpriced only', category: 'Profit', price: '15.00' });
 
     const opened = await t.request.post('/api/v1/pos/orders').set('Authorization', `Bearer ${managerToken}`).send({ outlet_id: outletId, terminal_id: terminalId, table_label: 'U1' }).expect(201);
     await t.request.post(`/api/v1/pos/orders/${opened.body.data.id}/items`).set('Authorization', `Bearer ${managerToken}`).send({ menu_item_id: unpricedId, quantity: 1 }).expect(200);

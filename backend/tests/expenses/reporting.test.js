@@ -21,6 +21,7 @@ const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { sumMoney: sumMoneyForTest } = require('../../src/shared/money');
+const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
 
 describe('Expense report and profit summary', () => {
   const t = useTestApp();
@@ -71,7 +72,7 @@ describe('Expense report and profit summary', () => {
     // Real POS revenue: create an outlet/terminal/menu item and sell it.
     const [outletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, code: `EXPRPT-${Date.now()}`, name: 'Expense Report Outlet', type: 'bar' });
     const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, outlet_id: outletId, device_ref: `EXPRPT-TERM-${Date.now()}` });
-    const [menuItemId] = await t.trx('pos_menu_items').insert({
+    const [menuItemId] = await insertMenuItem(t.trx, {
       tenant_id: ctx.a.id,
       property_id: ctx.a.properties[0].id,
       outlet_id: outletId,
@@ -146,8 +147,8 @@ describe('Expense report and profit summary', () => {
     const propertyId = ctx.a.properties[0].id;
     const [outletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: `COGS-${suffix}`, name: 'COGS Outlet', type: 'bar' });
     const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, device_ref: `COGS-TERM-${suffix}` });
-    const [menuItemId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'COGS Item', category: 'Beverages', price: '10.00' });
-    const [stockItemId] = await t.trx('stock_items').insert({
+    const [menuItemId] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'COGS Item', category: 'Beverages', price: '10.00' });
+    const [stockItemId] = await insertStockItem(t.trx, {
       tenant_id: ctx.a.id,
       property_id: propertyId,
       outlet_id: outletId,

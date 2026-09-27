@@ -64,7 +64,8 @@ export function StockWastageTab({ isOffline = false }) {
     setValidationError(null);
     setSubmitting(true);
     try {
-      const item = await stockApi.recordWastage(selectedStockItemId, { quantity, reason: reason.trim() });
+      // Taken off THIS outlet's own quantity (stock is counted per outlet).
+      const item = await stockApi.recordWastage(selectedStockItemId, { outletId: selectedOutletId, quantity, reason: reason.trim() });
       setResult(item);
       setQuantity('');
       setReason('');
@@ -152,7 +153,7 @@ export function StockWastageTab({ isOffline = false }) {
       {result && (
         <Card title="Recorded">
           <p className={formStyles.hint}>
-            {selectedStockItem?.name ?? result.name} is now at {formatQuantity(result.current_quantity, result.unit)} on hand.
+            {selectedStockItem?.name ?? result.name} is now at {formatQuantity(result.current_quantity, result.unit)} on hand at this outlet.
           </p>
         </Card>
       )}

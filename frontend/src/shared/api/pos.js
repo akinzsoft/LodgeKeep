@@ -61,7 +61,10 @@ export function archiveTerminal(id) {
  * same param `listStockItemCategories`/`listExpenseCategories` both already
  * expose) — a real, previously-unflagged gap, not a deliberate omission.
  */
-/** Menu categories belong to one outlet — pass `outletId` for that outlet's list (every outlet's otherwise). */
+/**
+ * The property's shared menu categories, each with `outlet_ids` (the outlets
+ * that sell it). Pass `outletId` for just the categories that outlet carries.
+ */
 export function listMenuCategories({ includeArchived, outletId } = {}) {
   const params = new URLSearchParams();
   if (includeArchived) params.set('include_archived', 'true');
@@ -70,8 +73,14 @@ export function listMenuCategories({ includeArchived, outletId } = {}) {
   return request(`/pos/menu-categories${query ? `?${query}` : ''}`);
 }
 
+/** A shared category; `outletId` (optional) is the outlet it is added from, which then carries it. */
 export function createMenuCategory({ outletId, name, sortOrder }) {
   return request('/pos/menu-categories', { method: 'POST', body: { outlet_id: outletId, name, sort_order: sortOrder } });
+}
+
+/** The categories an outlet carries (replaces the whole set) — it sells every item in them. */
+export function setOutletCategories(outletId, categoryIds) {
+  return request(`/pos/outlets/${outletId}/categories`, { method: 'PUT', body: { category_ids: categoryIds } });
 }
 
 export function updateMenuCategory(id, { name, sortOrder }) {
@@ -82,6 +91,7 @@ export function archiveMenuCategory(id) {
   return request(`/pos/menu-categories/${id}/archive`, { method: 'POST' });
 }
 
+/** Without `outletId`: every item of the shared catalogue. With it: what that outlet sells, with its own `price`/`is_available` (`base_price`/`outlet_price` say which price applies). */
 export function listMenuItems(outletId) {
   const params = outletId ? `?${new URLSearchParams({ outlet_id: outletId })}` : '';
   return request(`/pos/menu-items${params}`);
@@ -107,8 +117,14 @@ export function updateMenuItem(id, changes) {
   return request(`/pos/menu-items/${id}`, { method: 'PATCH', body: changes });
 }
 
-export function setMenuItemAvailability(id, isAvailable) {
-  return request(`/pos/menu-items/${id}/set-availability`, { method: 'POST', body: { is_available: isAvailable } });
+/** Sold out / back on sale at ONE outlet. */
+export function setMenuItemAvailability(id, isAvailable, outletId) {
+  return request(`/pos/menu-items/${id}/set-availability`, { method: 'POST', body: { outlet_id: outletId, is_available: isAvailable } });
+}
+
+/** One outlet's own price for an item; `price: null` goes back to the main price. */
+export function setOutletMenuItemPrice(id, outletId, price) {
+  return request(`/pos/menu-items/${id}/outlet-price`, { method: 'PUT', body: { outlet_id: outletId, price } });
 }
 
 export function archiveMenuItem(id) {

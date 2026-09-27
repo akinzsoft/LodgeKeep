@@ -43,6 +43,7 @@ const { db } = require('../helpers/db');
 const dbModule = require('../../src/db');
 const { createApp } = require('../../src/app');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { insertMenuItem, insertStockItem, setOutletAvailability, setStockQuantity, outletMenuItem } = require('../helpers/catalogue');
 
 describe('POS inventory & stock: real concurrency', () => {
   let req;
@@ -95,6 +96,7 @@ describe('POS inventory & stock: real concurrency', () => {
     await db()('stock_take_lines').where({ tenant_id: tenantId }).delete();
     await db()('stock_takes').where({ tenant_id: tenantId }).delete();
     await db()('pos_menu_item_components').where({ tenant_id: tenantId }).delete();
+    await db()('stock_levels').where({ tenant_id: tenantId }).delete();
     await db()('stock_items').where({ tenant_id: tenantId }).delete();
     await db()('audit_log').where({ tenant_id: tenantId }).delete();
     await db()('idempotency_keys').where({ tenant_id: tenantId }).delete();
@@ -102,8 +104,12 @@ describe('POS inventory & stock: real concurrency', () => {
     await db()('pos_order_settlements').where({ tenant_id: tenantId }).delete();
     await db()('pos_order_items').where({ tenant_id: tenantId }).delete();
     await db()('pos_orders').where({ tenant_id: tenantId }).delete();
+    await db()('pos_outlet_menu_items').where({ tenant_id: tenantId }).delete();
     await db()('pos_menu_items').where({ tenant_id: tenantId }).delete();
     await db()('pos_terminals').where({ tenant_id: tenantId }).delete();
+    await db()('pos_outlet_categories').where({ tenant_id: tenantId }).delete();
+    await db()('pos_menu_categories').where({ tenant_id: tenantId }).delete();
+    await db()('stock_item_categories').where({ tenant_id: tenantId }).delete();
     await db()('pos_outlets').where({ tenant_id: tenantId }).delete();
     await db()('user_property_access').where({ tenant_id: tenantId }).delete();
     await db()('role_permissions').where({ tenant_id: tenantId }).delete();
@@ -123,7 +129,7 @@ describe('POS inventory & stock: real concurrency', () => {
   }
 
   async function createStockItem({ name, purchaseCost = '1.00' }) {
-    const [id] = await db()('stock_items').insert({
+    const [id] = await insertStockItem(db(), {
       tenant_id: tenantId,
       property_id: propertyId,
       outlet_id: outletId,
@@ -149,11 +155,11 @@ describe('POS inventory & stock: real concurrency', () => {
       business_date: businessDate,
       reference: 'Concurrency seed',
     });
-    await db()('stock_items').where({ id: stockItemId }).update({ current_quantity: quantity });
+    await setStockQuantity(db(), stockItemId, quantity);
   }
 
   async function createMenuItem({ name, price = '10.00' }) {
-    const [id] = await db()('pos_menu_items').insert({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, name, category: 'Drinks', price });
+    const [id] = await insertMenuItem(db(), { tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, name, category: 'Drinks', price });
     return id;
   }
 
@@ -369,7 +375,7 @@ describe('POS inventory & stock: real concurrency', () => {
         .post(`/api/v1/pos/stock/items/${stockItemBId}/wastage`)
         .set('Authorization', `Bearer ${token}`)
         .set('Idempotency-Key', idemKey('waste5'))
-        .send({ quantity: '1.000', reason: 'Concurrency test spill' });
+        .send({ outlet_id: outletId, quantity: '1.000', reason: 'Concurrency test spill' });
 
     const [settleRes, wasteRes] = await Promise.all([
       settleCash(soloOrderId, { stockOverrideReason: 'Last of this batch, confirmed by the bar' }),
@@ -383,7 +389,7 @@ describe('POS inventory & stock: real concurrency', () => {
     expect(itemA.current_quantity).toBe('0.000');
     expect(itemB.current_quantity).toBe('0.000');
 
-    const menuItem = await db()('pos_menu_items').where({ id: menuItemId }).first();
+    const menuItem = await outletMenuItem(db(), menuItemId, outletId);
     expect(menuItem.is_available).toBe(0);
     expect(menuItem.stock_auto_unavailable).toBe(1);
   });
@@ -411,7 +417,7 @@ describe('POS inventory & stock: real concurrency', () => {
     const menuItemId = await createMenuItem({ name: 'Race Menu 6' });
     await linkComponent(menuItemId, stockItemAId, '1.000');
     await linkComponent(menuItemId, stockItemBId, '1.000');
-    await db()('pos_menu_items').where({ id: menuItemId }).update({ is_available: false, stock_auto_unavailable: true });
+    await setOutletAvailability(db(), menuItemId, { is_available: false, stock_auto_unavailable: true });
 
     const receiveA = () =>
       req
@@ -440,7 +446,7 @@ describe('POS inventory & stock: real concurrency', () => {
     // Both components are genuinely positive now — the menu item must be
     // reactivated regardless of which of the two concurrent deliveries
     // happened to commit last.
-    const menuItem = await db()('pos_menu_items').where({ id: menuItemId }).first();
+    const menuItem = await outletMenuItem(db(), menuItemId, outletId);
     expect(menuItem.is_available).toBe(1);
     expect(menuItem.stock_auto_unavailable).toBe(0);
   });

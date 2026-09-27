@@ -69,7 +69,7 @@
  * `stock_items.current_quantity` is never trusted as an independently
  * updated running total — every mutation recomputes it from scratch as
  * `sumQuantity` of every `stock_movements` row for that item
- * (`recomputeStockItemQuantity`), then writes the result back. The
+ * (`recomputeStockLevel`), then writes the result back. The
  * identical "one source of truth, always re-derived" discipline
  * `recomputeFolioBalance`/`recomputeArAccountBalance` already establish,
  * applied to a quantity ledger instead of a money one.
@@ -100,12 +100,12 @@ const { ValidationError } = require('../../shared/errors');
 const { createCategoryCatalogue } = require('../../shared/category-catalogue');
 const { notifyStaff } = require('../notifications/staff-notifications');
 const { recordAuditEntry } = require('../../audit');
+const outletMenu = require('../../shared/outlet-menu');
 const { sumQuantity, negateQuantity, multiplyQuantityByInteger, compareQuantity, extendedCost } = require('../../shared/quantity');
 const {
   StockItemNotFoundError,
   OutletNotFoundError,
   MenuItemNotFoundError,
-  OutletMismatchError,
   MissingWastageReasonError,
   StockTakeNotFoundError,
   StockTakeNotOpenError,
@@ -177,137 +177,157 @@ async function resolveLockClosure({ trx, stockItemIds }) {
 }
 
 /**
- * The one writer of `stock_items.current_quantity` — always re-derived,
- * never incremented in place. See file header.
- *
- * A real two-connection concurrency bug, found and fixed by this pass's
- * own CONC-STOCK-1/CONC-STOCK-4 tests, not shipped: the read below MUST
- * be a LOCKING read (`.forUpdate()`), not a plain `SELECT` — the exact
- * bug class `ar/service.js`'s `applyPaymentApplications` header already
- * documents fixing once for `existingForPayment`/`existingForInvoice`.
- * By the time this function runs, the CALLER has already taken a
- * `SELECT ... FOR UPDATE` lock on this item's `stock_items` row
- * (`lockStockItemsSorted`) — but this transaction's own REPEATABLE READ
- * snapshot was already established much earlier (the very first plain
- * read anywhere in the surrounding transaction, e.g. `settleOrder`'s own
- * `pos_order_items` read), long before that lock was even acquired. A
- * plain `SELECT` here would silently reuse that STALE snapshot — missing
- * a concurrent transaction's own already-committed movement even though
- * the row lock genuinely serialized the two transactions in real time —
- * and overwrite `current_quantity` with a sum that drops the other
- * transaction's contribution entirely. `.forUpdate()` bypasses the
- * snapshot and reads what was actually just committed.
+ * An outlet's level row for a stock item, locked (ARCHITECTURE.md §5),
+ * or null when that outlet has never stocked it.
  */
-async function recomputeStockItemQuantity({ trx, stockItemId }) {
-  // A locking read (every caller already holds this row's lock via
-  // `lockStockItemsSorted`), so the "before" quantity is the latest
-  // committed value, not an older REPEATABLE READ snapshot.
-  const before = await trx.table('stock_items').where({ id: stockItemId }).forUpdate().first();
-  const movements = await trx.table('stock_movements').where({ stock_item_id: stockItemId }).forUpdate().select('quantity');
-  const currentQuantity = sumQuantity(movements.map((row) => row.quantity));
-  await trx.table('stock_items').where({ id: stockItemId }).update({ current_quantity: currentQuantity });
-  if (before) await notifyStockThresholdCrossings({ trx, item: before, currentQuantity });
+function lockedLevel(trx, outletId, stockItemId) {
+  return trx.table('stock_levels').where({ outlet_id: outletId, stock_item_id: stockItemId }).forUpdate().first();
+}
+
+/** Writes an outlet's level for a stock item, creating the row on first use. */
+async function upsertLevel(trx, outletId, stockItemId, changes) {
+  const existing = await lockedLevel(trx, outletId, stockItemId);
+  if (existing) {
+    await trx.table('stock_levels').where({ id: existing.id }).update(changes);
+    return;
+  }
+  const item = await trx.table('stock_items').where({ id: stockItemId }).first('reorder_level');
+  try {
+    await trx.table('stock_levels').insert({ outlet_id: outletId, stock_item_id: stockItemId, reorder_level: item?.reorder_level ?? ZERO_QTY, ...changes });
+  } catch (error) {
+    // A concurrent first write created the row — apply ours on top of it.
+    if (error?.code !== 'ER_DUP_ENTRY') throw error;
+    await trx.table('stock_levels').where({ outlet_id: outletId, stock_item_id: stockItemId }).update(changes);
+  }
+}
+
+/**
+ * The one writer of on-hand quantities — always re-derived, never
+ * incremented in place. See file header. Shared catalogue (migration
+ * 20261108090000): a stock item is shared by the property and each outlet
+ * keeps its own quantity (`stock_levels.current_quantity` = the sum of that
+ * outlet's movements); `stock_items.current_quantity` is the property-wide
+ * total of every movement.
+ *
+ * A real two-connection concurrency bug, found and fixed by the
+ * CONC-STOCK-1/CONC-STOCK-4 tests, not shipped: these reads MUST be
+ * LOCKING reads (`.forUpdate()`), not plain `SELECT`s. By the time this
+ * runs, the CALLER already holds this item's `stock_items` row lock
+ * (`lockStockItemsSorted`), but this transaction's REPEATABLE READ snapshot
+ * was taken earlier (its first plain read); a plain `SELECT` would reuse
+ * that stale snapshot, miss a concurrent transaction's committed movement,
+ * and overwrite the quantity with a sum that drops it. `.forUpdate()` reads
+ * what was actually committed.
+ */
+async function recomputeStockLevel({ trx, stockItemId, outletId }) {
+  const item = await trx.table('stock_items').where({ id: stockItemId }).forUpdate().first();
+  const before = await lockedLevel(trx, outletId, stockItemId);
+  const outletMovements = await trx.table('stock_movements').where({ stock_item_id: stockItemId, outlet_id: outletId }).forUpdate().select('quantity');
+  const currentQuantity = sumQuantity(outletMovements.map((row) => row.quantity));
+  await upsertLevel(trx, outletId, stockItemId, { current_quantity: currentQuantity });
+
+  const allMovements = await trx.table('stock_movements').where({ stock_item_id: stockItemId }).forUpdate().select('quantity');
+  await trx.table('stock_items').where({ id: stockItemId }).update({ current_quantity: sumQuantity(allMovements.map((row) => row.quantity)) });
+
+  if (item) {
+    await notifyStockThresholdCrossings({
+      trx,
+      item,
+      outletId,
+      beforeQuantity: before?.current_quantity ?? ZERO_QTY,
+      reorderLevel: before?.reorder_level ?? item.reorder_level,
+      currentQuantity,
+    });
+  }
   return currentQuantity;
 }
 
 /**
  * Gap closure (staff notifications): alert on the CROSSING only — the one
- * movement that takes an item from above its reorder level to at-or-below
- * it (or from above zero to at-or-below zero), never on every later
- * decrement while it stays low. A restock back above the line re-arms it.
- * This is the single writer of `current_quantity`, so every path (sales,
- * reversals, wastage, deliveries, stock takes) is covered here.
+ * movement that takes an item at an outlet from above its reorder level to
+ * at-or-below it (or from above zero to at-or-below zero), never on every
+ * later decrement while it stays low. A restock back above the line
+ * re-arms it. This is the single writer of on-hand quantities, so every
+ * path (sales, reversals, wastage, deliveries, stock takes) is covered here.
  */
-async function notifyStockThresholdCrossings({ trx, item, currentQuantity }) {
+async function notifyStockThresholdCrossings({ trx, item, outletId, beforeQuantity, reorderLevel, currentQuantity }) {
+  const outlet = await trx.table('pos_outlets').where({ id: outletId }).first('name');
   const payload = {
     stockItemId: item.id,
     name: item.name,
     unit: item.unit,
-    outletId: item.outlet_id,
+    outletId,
+    outletName: outlet?.name ?? null,
     quantity: currentQuantity,
-    reorderLevel: item.reorder_level,
+    reorderLevel,
   };
-  const wasOut = compareQuantity(item.current_quantity, ZERO_QTY) <= 0;
+  const wasOut = compareQuantity(beforeQuantity, ZERO_QTY) <= 0;
   const isOut = compareQuantity(currentQuantity, ZERO_QTY) <= 0;
   if (!wasOut && isOut) {
     await notifyStaff({ trx, eventType: 'stock.out_of_stock', payload });
     return; // out of stock already says more than "at reorder level"
   }
-  const reorderLevelSet = compareQuantity(item.reorder_level, ZERO_QTY) > 0;
-  if (
-    reorderLevelSet &&
-    !isOut &&
-    compareQuantity(item.current_quantity, item.reorder_level) > 0 &&
-    compareQuantity(currentQuantity, item.reorder_level) <= 0
-  ) {
+  const reorderLevelSet = compareQuantity(reorderLevel, ZERO_QTY) > 0;
+  if (reorderLevelSet && !isOut && compareQuantity(beforeQuantity, reorderLevel) > 0 && compareQuantity(currentQuantity, reorderLevel) <= 0) {
     await notifyStaff({ trx, eventType: 'stock.reorder_level_reached', payload });
   }
 }
 
 /**
- * The proactive oversell guard — see file header. Locks every menu item
- * that depends on any of `stockItemIds` (sorted ascending, AFTER every
- * stock_items lock already taken by the caller), then re-reads ALL of
- * that menu item's own recipe components' current quantities (not just
- * the ones that just changed — every component must be above zero for
- * the item to stay sellable) before deciding whether to flip
- * `is_available`.
+ * The proactive oversell guard — see file header — at ONE outlet: the menu
+ * items that depend on any of `stockItemIds` and are sold at `outletId` are
+ * switched off there when any recipe component is at or below zero AT THAT
+ * OUTLET, and back on when every component is above zero again (only if it
+ * was this mechanism that switched it off). Other outlets are untouched —
+ * selling out at the bar must not stop the restaurant.
+ *
+ * Locks every stock item any affected menu item needs, sorted ascending,
+ * BEFORE any `pos_menu_items` row (the file header's global lock order),
+ * then each menu item row, then its per-outlet setting row.
  *
  * Never touches a manually-disabled item (`stock_auto_unavailable: false`)
- * in either direction — an explicit staff action always wins over this
- * automatic mechanism's own bookkeeping.
+ * in either direction — an explicit staff action always wins.
  */
-async function applyStockAvailabilityEffects({ trx, stockItemIds }) {
+async function applyStockAvailabilityEffects({ trx, stockItemIds, outletId }) {
   const uniqueIds = [...new Set(stockItemIds.map((id) => Number(id)))];
-  if (uniqueIds.length === 0) return;
+  if (uniqueIds.length === 0 || !outletId) return;
 
   const componentRows = await trx.table('pos_menu_item_components').whereIn('stock_item_id', uniqueIds).select('menu_item_id');
   const menuItemIds = [...new Set(componentRows.map((row) => Number(row.menu_item_id)))].sort((a, b) => a - b);
   if (menuItemIds.length === 0) return;
 
-  // Every recipe component of every AFFECTED menu item — not just the ones
-  // in `stockItemIds` — must be locked before deciding availability, since
-  // a menu item needs ALL of its components above zero to stay sellable.
-  // A component this call didn't itself touch (a sibling changed by a
-  // *different*, concurrent transaction) still needs locking here, sorted
-  // into the SAME ascending global order as every other stock_items lock
-  // in this module (see file header) — and, critically, locked BEFORE any
-  // pos_menu_items row below, never after. Locking a sibling only once a
-  // pos_menu_items row is already held (the bug this replaces) inverts
-  // that global order for exactly this call path: a concurrent transaction
-  // that legitimately locks that same sibling stock item FIRST (via its
-  // own lockStockItemsSorted) and only reaches this same pos_menu_items
-  // row afterward would then deadlock against this one — each holding
-  // what the other waits for. Locking every needed stock_items row up
-  // front, before any pos_menu_items row, avoids that cycle entirely.
+  // Every component of every affected menu item is locked up front, before
+  // any pos_menu_items row, in the one global ascending order — see file
+  // header (locking a sibling only after a menu item row is held inverts
+  // that order and can deadlock).
   const allComponentRows = await trx.table('pos_menu_item_components').whereIn('menu_item_id', menuItemIds).select('stock_item_id');
   const allStockItemIds = [...new Set([...uniqueIds, ...allComponentRows.map((row) => Number(row.stock_item_id))])];
   await lockStockItemsSorted({ trx, stockItemIds: allStockItemIds });
 
+  const soldHere = new Set((await outletMenu.carriedCategoryNames(trx, outletId)).map((name) => name.trim().toLowerCase()));
+
   for (const menuItemId of menuItemIds) {
     const menuItem = await trx.table('pos_menu_items').where({ id: menuItemId }).forUpdate().first();
-    if (!menuItem) continue;
+    if (!menuItem || menuItem.status !== 'active' || !soldHere.has(String(menuItem.category).trim().toLowerCase())) continue;
 
     const components = await trx.table('pos_menu_item_components').where({ menu_item_id: menuItemId }).select('stock_item_id');
     const componentStockItemIds = components.map((row) => row.stock_item_id);
-    // Every id here was already locked, in the correct global order,
-    // above — re-asserting `.forUpdate()` is a no-op wait (this
-    // transaction already holds the lock) but still bypasses the
-    // transaction's own REPEATABLE READ snapshot, the same reason
-    // `recomputeStockItemQuantity`'s own header documents needing it: a
-    // plain SELECT here could still return data from a snapshot
-    // established earlier in this same transaction, predating whichever
-    // concurrent transaction's committed change this lock just serialized
-    // against.
-    const stockRows = componentStockItemIds.length
-      ? await trx.table('stock_items').whereIn('id', componentStockItemIds).forUpdate().select('current_quantity')
+    // Locking reads, for the same snapshot reason as `recomputeStockLevel`.
+    const levels = componentStockItemIds.length
+      ? await trx.table('stock_levels').where({ outlet_id: outletId }).whereIn('stock_item_id', componentStockItemIds).forUpdate().select('stock_item_id', 'current_quantity')
       : [];
-    const anyDepleted = stockRows.some((row) => compareQuantity(row.current_quantity, ZERO_QTY) <= 0);
+    const quantityByItem = new Map(levels.map((row) => [String(row.stock_item_id), row.current_quantity]));
+    // An outlet that has never stocked a component has none of it.
+    const anyDepleted = componentStockItemIds.some((id) => compareQuantity(quantityByItem.get(String(id)) ?? ZERO_QTY, ZERO_QTY) <= 0);
 
-    if (anyDepleted && menuItem.is_available) {
-      await trx.table('pos_menu_items').where({ id: menuItemId }).update({ is_available: false, stock_auto_unavailable: true });
-    } else if (!anyDepleted && !menuItem.is_available && menuItem.stock_auto_unavailable) {
-      await trx.table('pos_menu_items').where({ id: menuItemId }).update({ is_available: true, stock_auto_unavailable: false });
+    const setting = await trx.table('pos_outlet_menu_items').where({ outlet_id: outletId, menu_item_id: menuItemId }).forUpdate().first();
+    const available = setting ? Boolean(setting.is_available) : true;
+    const autoOff = setting ? Boolean(setting.stock_auto_unavailable) : false;
+
+    if (anyDepleted && available) {
+      await outletMenu.upsertOutletMenuSetting(trx, outletId, menuItemId, { is_available: false, stock_auto_unavailable: true });
+    } else if (!anyDepleted && !available && autoOff) {
+      await outletMenu.upsertOutletMenuSetting(trx, outletId, menuItemId, { is_available: true, stock_auto_unavailable: false });
     }
   }
 }
@@ -386,12 +406,17 @@ async function computeStockDeductionsForLines({ trx, lines }) {
  *
  * @returns {Promise<{affectedStockItemIds: number[]}>}
  */
-async function assertStockAvailableOrOverridden({ trx, lines, overrideReason, userId, propertyId, source = 'api' }) {
+async function assertStockAvailableOrOverridden({ trx, lines, overrideReason, userId, propertyId, outletId, source = 'api' }) {
+  if (!outletId) throw new Error('assertStockAvailableOrOverridden: outletId is required — stock is counted per outlet.');
   const deductionByStockItem = await computeStockDeductionsForLines({ trx, lines });
   if (deductionByStockItem.size === 0) return { affectedStockItemIds: [] };
 
   const stockItemIds = [...deductionByStockItem.keys()];
-  const stockRows = await trx.table('stock_items').whereIn('id', stockItemIds).select('id', 'name', 'unit', 'current_quantity');
+  // What THIS outlet has on hand (an outlet that never stocked it has none).
+  const items = await trx.table('stock_items').whereIn('id', stockItemIds).select('id', 'name', 'unit');
+  const levels = await trx.table('stock_levels').where({ outlet_id: outletId }).whereIn('stock_item_id', stockItemIds).select('stock_item_id', 'current_quantity');
+  const quantityByItem = new Map(levels.map((row) => [String(row.stock_item_id), row.current_quantity]));
+  const stockRows = items.map((item) => ({ ...item, current_quantity: quantityByItem.get(String(item.id)) ?? ZERO_QTY }));
 
   const affected = [];
   for (const row of stockRows) {
@@ -450,6 +475,8 @@ async function deductStockForSettlement({ trx, orderId, settlementId, items, bus
   if (deductionByStockItem.size === 0) return;
 
   const stockItemIds = [...deductionByStockItem.keys()];
+  // Deducted from the outlet where it was sold.
+  const { outlet_id: outletId } = await trx.table('pos_orders').where({ id: orderId }).first('outlet_id');
   const lockClosure = await resolveLockClosure({ trx, stockItemIds });
   const lockedById = await lockStockItemsSorted({ trx, stockItemIds: lockClosure });
 
@@ -460,7 +487,7 @@ async function deductStockForSettlement({ trx, orderId, settlementId, items, bus
     const totalCost = extendedCost(stockItem.purchase_cost, movementQuantity);
 
     await trx.table('stock_movements').insert({
-      outlet_id: stockItem.outlet_id,
+      outlet_id: outletId,
       stock_item_id: stockItemId,
       type: 'sold',
       quantity: movementQuantity,
@@ -472,10 +499,10 @@ async function deductStockForSettlement({ trx, orderId, settlementId, items, bus
       user_id: userId ?? null,
       reason: overrideReasonsByStockItemId?.get(stockItemId) ?? null,
     });
-    await recomputeStockItemQuantity({ trx, stockItemId });
+    await recomputeStockLevel({ trx, stockItemId, outletId });
   }
 
-  await applyStockAvailabilityEffects({ trx, stockItemIds });
+  await applyStockAvailabilityEffects({ trx, stockItemIds, outletId });
 }
 
 /**
@@ -493,16 +520,15 @@ async function reverseStockForSettlement({ trx, settlementId, userId }) {
 
   const stockItemIds = [...new Set(originalMovements.map((row) => Number(row.stock_item_id)))];
   const lockClosure = await resolveLockClosure({ trx, stockItemIds });
-  const lockedById = await lockStockItemsSorted({ trx, stockItemIds: lockClosure });
+  await lockStockItemsSorted({ trx, stockItemIds: lockClosure });
 
   for (const movement of originalMovements) {
     const stockItemId = Number(movement.stock_item_id);
-    const stockItem = lockedById.get(String(stockItemId));
     const reverseQuantity = negateQuantity(movement.quantity); // The original was negative; the reversal restores it.
     const totalCost = extendedCost(movement.unit_cost, reverseQuantity);
 
     await trx.table('stock_movements').insert({
-      outlet_id: stockItem.outlet_id,
+      outlet_id: movement.outlet_id, // Back to the outlet it was sold from.
       stock_item_id: stockItemId,
       type: 'sale_reversal',
       quantity: reverseQuantity,
@@ -514,37 +540,32 @@ async function reverseStockForSettlement({ trx, settlementId, userId }) {
       reversed_movement_id: movement.id,
       user_id: userId ?? null,
     });
-    await recomputeStockItemQuantity({ trx, stockItemId });
+    await recomputeStockLevel({ trx, stockItemId, outletId: movement.outlet_id });
   }
 
   // Reversal only ever increases quantity, so only the re-enable branch
   // of applyStockAvailabilityEffects can fire here — still routed through
   // the same shared function rather than a bespoke re-enable-only path.
-  await applyStockAvailabilityEffects({ trx, stockItemIds });
+  for (const outletId of [...new Set(originalMovements.map((row) => String(row.outlet_id)))]) {
+    const outletItemIds = originalMovements.filter((row) => String(row.outlet_id) === outletId).map((row) => Number(row.stock_item_id));
+    await applyStockAvailabilityEffects({ trx, stockItemIds: outletItemIds, outletId });
+  }
 }
 
 // ---------------------------------------------------------------------
-// Stock item categories — gap closure, mirroring `pos/service.js`'s
-// menu-category CRUD exactly: a registered list per OUTLET (20261105090000);
-// stock items pick one of their own outlet's instead of typing it (see the
-// stock_item_categories migration headers). `stock_items.category` keeps
-// holding the category name, so every reader is unchanged.
+// Stock item categories — the property's shared list (migration
+// 20261108090000), kept holding the same names as the menu categories
+// (user-requested; `mirror` in both configs). `stock_items.category` keeps
+// holding the category name, so every reader is unchanged. An outlet shows
+// the stock categories matching the menu categories it carries.
 // ---------------------------------------------------------------------
 
-// Gap closure — extracted into a shared factory once a third domain
-// (expense categories) needed the identical "registered catalogue" shape;
-// see `shared/category-catalogue.js`'s own header for the full reasoning
-// and which real divergences (stock's category being OPTIONAL, chief among
-// them) the factory expresses via config rather than flattening away.
 const stockCategoryCatalogue = createCategoryCatalogue({
   table: 'stock_item_categories',
   resolveMode: 'name',
   optional: true,
-  // Per outlet since 20261105090000 — one outlet's stock categories never
-  // show at, count, rename or block another's.
-  scopeColumn: 'outlet_id',
-  duplicateSuffix: ' at this outlet',
   cascadeRename: { table: 'stock_items', matchColumn: 'category' },
+  mirror: { table: 'pos_menu_categories', cascadeRename: { table: 'pos_menu_items', matchColumn: 'category' } },
   inUseChecks: [{ table: 'stock_items', matchColumn: 'category', matchBy: 'name', filter: (q) => q.where({ status: 'active' }) }],
   errors: {
     categoryNotFound: () =>
@@ -553,34 +574,85 @@ const stockCategoryCatalogue = createCategoryCatalogue({
   },
 });
 
-/** One outlet's stock categories when `outletId` is given; every outlet's otherwise (each row carries its `outlet_id`). */
-function listStockItemCategories({ context, includeArchived, outletId }) {
-  return stockCategoryCatalogue.listCategories({ context, includeArchived, scopeValue: outletId });
-}
-const getStockItemCategory = stockCategoryCatalogue.getCategory;
-async function createStockItemCategory({ context, outletId, name, sortOrder }) {
-  const db = scopedDb().for(context);
+const nameKey = (value) =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase();
+
+async function assertOutlet(db, outletId) {
   const outlet = await db.table('pos_outlets').where({ id: outletId }).first();
   if (!outlet || outlet.status !== 'active') throw new OutletNotFoundError();
-  return stockCategoryCatalogue.createCategory({ context, name, sortOrder, scopeValue: outletId });
+  return outlet;
 }
-// Rename/archive act on one row by id, which already belongs to one outlet.
+
+/** With `outletId`, only the categories that outlet carries (by name, from its menu categories). */
+async function listStockItemCategories({ context, includeArchived, outletId }) {
+  const rows = await stockCategoryCatalogue.listCategories({ context, includeArchived });
+  if (!outletId) return rows;
+  const db = scopedDb().for(context);
+  const carried = new Set((await outletMenu.carriedCategoryNames(db, outletId)).map(nameKey));
+  return rows.filter((row) => carried.has(nameKey(row.name)));
+}
+const getStockItemCategory = stockCategoryCatalogue.getCategory;
+
+/** Registers a shared stock category (and its matching menu category); `outletId` (optional) makes that outlet carry it. */
+async function createStockItemCategory({ context, outletId, name, sortOrder }) {
+  const db = scopedDb().for(context);
+  if (outletId) await assertOutlet(db, outletId);
+  const category = await stockCategoryCatalogue.createCategory({ context, name, sortOrder });
+  if (outletId) await carryCategoryByName(db, outletId, category.name);
+  return category;
+}
 const updateStockItemCategory = stockCategoryCatalogue.updateCategory;
 const archiveStockItemCategory = stockCategoryCatalogue.archiveCategory;
-/** THIS outlet's active stock category matching `name`; `null`/empty stays null — category is optional. */
-function resolveStockCategoryName({ db, name, outletId }) {
-  return stockCategoryCatalogue.resolveByName({ db, name, scopeValue: outletId });
+/** The active stock category matching `name`; `null`/empty stays null — category is optional. */
+function resolveStockCategoryName({ db, name }) {
+  return stockCategoryCatalogue.resolveByName({ db, name });
+}
+
+/** The outlet carries the menu category of this name (the stock list mirrors it), when one exists. */
+async function carryCategoryByName(db, outletId, categoryName) {
+  if (!categoryName) return;
+  const menuCategory = await db.table('pos_menu_categories').where({ name: String(categoryName).trim() }).first('id');
+  if (menuCategory) await outletMenu.carryCategory(db, outletId, menuCategory.id);
 }
 
 // ---------------------------------------------------------------------
-// Stock items — CRUD
+// Stock items — shared by the property; quantities and reorder levels are
+// per outlet (`stock_levels`).
 // ---------------------------------------------------------------------
 
+/** Adds `outlet_id`, and that outlet's `current_quantity`/`reorder_level` (0 / the item default when it has never stocked it). */
+function withLevel(item, level, outletId) {
+  return {
+    ...item,
+    outlet_id: outletId,
+    total_quantity: item.current_quantity,
+    current_quantity: level?.current_quantity ?? ZERO_QTY,
+    reorder_level: level?.reorder_level ?? item.reorder_level,
+  };
+}
+
+/**
+ * Without `outletId`: every active stock item, `current_quantity` being the
+ * property-wide total and `reorder_level` the default. With `outletId`: the
+ * items that outlet deals in — those filed under a category it carries,
+ * and any it already stocks (has a level for, e.g. an uncategorized item
+ * added from it) — each with that
+ * outlet's own quantity and reorder level.
+ */
 async function listStockItems({ context, outletId, lowStockOnly }) {
   const db = scopedDb().for(context);
-  let query = db.table('stock_items').where({ status: 'active' });
-  if (outletId) query = query.where({ outlet_id: outletId });
-  const rows = await query.orderBy('name');
+  const items = await db.table('stock_items').where({ status: 'active' }).orderBy('name');
+  let rows = items;
+  if (outletId) {
+    const carried = new Set((await outletMenu.carriedCategoryNames(db, outletId)).map(nameKey));
+    const levels = await db.table('stock_levels').where({ outlet_id: outletId });
+    const levelByItem = new Map(levels.map((row) => [String(row.stock_item_id), row]));
+    rows = items
+      .filter((item) => (item.category && carried.has(nameKey(item.category))) || levelByItem.has(String(item.id)))
+      .map((item) => withLevel(item, levelByItem.get(String(item.id)), outletId));
+  }
   if (!lowStockOnly) return rows;
   // Filtered in JS via the exact-decimal comparison helper, never a raw
   // SQL column-to-column comparison — the same "no floats, ever" rule
@@ -588,43 +660,76 @@ async function listStockItems({ context, outletId, lowStockOnly }) {
   return rows.filter((row) => compareQuantity(row.current_quantity, row.reorder_level) <= 0);
 }
 
-async function getStockItem({ context, id }) {
+/** Every outlet's level for the given items (or all active items). */
+async function listStockLevels({ context, stockItemId }) {
   const db = scopedDb().for(context);
-  return db.table('stock_items').where({ id }).first();
+  let query = db.table('stock_levels');
+  if (stockItemId) query = query.where({ stock_item_id: stockItemId });
+  return query.orderBy('stock_item_id').orderBy('outlet_id');
 }
 
+async function getStockItem({ context, id, outletId }) {
+  const db = scopedDb().for(context);
+  const item = await db.table('stock_items').where({ id }).first();
+  if (!item || !outletId) return item;
+  const level = await db.table('stock_levels').where({ outlet_id: outletId, stock_item_id: id }).first();
+  return withLevel(item, level, outletId);
+}
+
+/**
+ * A shared stock item. `outletId` (optional) is where it is being added
+ * from: that outlet gets a level for it (with `reorderLevel`) and carries
+ * its category, so it shows there straight away. `reorderLevel` is also
+ * the item's default for outlets that have none of their own yet.
+ */
 async function createStockItem({ context, outletId, name, unit, category, purchaseCost, supplier, reorderLevel }) {
   const db = scopedDb().for(context);
-  const outlet = await db.table('pos_outlets').where({ id: outletId }).first();
-  if (!outlet) throw new OutletNotFoundError();
-  const categoryName = await resolveStockCategoryName({ db, name: category, outletId });
-  const [id] = await db.table('stock_items').insert({
-    outlet_id: outletId,
-    name,
-    unit,
-    category: categoryName,
-    purchase_cost: purchaseCost ?? '0.00',
-    supplier: supplier ?? null,
-    reorder_level: reorderLevel ?? ZERO_QTY,
+  if (outletId) await assertOutlet(db, outletId);
+  const categoryName = await resolveStockCategoryName({ db, name: category });
+  return db.transaction(async (trx) => {
+    const [id] = await trx.table('stock_items').insert({
+      name,
+      unit,
+      category: categoryName,
+      purchase_cost: purchaseCost ?? '0.00',
+      supplier: supplier ?? null,
+      reorder_level: reorderLevel ?? ZERO_QTY,
+    });
+    if (outletId) {
+      await upsertLevel(trx, outletId, id, { reorder_level: reorderLevel ?? ZERO_QTY });
+      await carryCategoryByName(trx, outletId, categoryName);
+    }
+    const item = await trx.table('stock_items').where({ id }).first();
+    if (!outletId) return item;
+    return withLevel(item, await trx.table('stock_levels').where({ outlet_id: outletId, stock_item_id: id }).first(), outletId);
   });
-  return getStockItem({ context, id });
 }
 
-async function updateStockItem({ context, id, changes }) {
+/** With `outletId`, a `reorder_level` change is that outlet's own; without, it is the item default. */
+async function updateStockItem({ context, id, changes, outletId }) {
   const db = scopedDb().for(context);
   const next = { ...changes };
   if (next.category !== undefined) {
-    const current = await db.table('stock_items').where({ id }).first('category', 'outlet_id');
+    const current = await db.table('stock_items').where({ id }).first('category');
     const unchanged = current && typeof next.category === 'string' && next.category.trim() === current.category;
     // An item keeps its current category even if that category has since
     // been archived — editing only its cost/reorder level must not be
     // refused. Only a change of category has to name an active registered
     // one (or clear it entirely — resolveStockCategoryName's own null case).
     if (unchanged) delete next.category;
-    else next.category = await resolveStockCategoryName({ db, name: next.category, outletId: current?.outlet_id });
+    else next.category = await resolveStockCategoryName({ db, name: next.category });
   }
-  await db.table('stock_items').where({ id }).update(next);
-  return getStockItem({ context, id });
+  await db.transaction(async (trx) => {
+    if (outletId && next.reorder_level !== undefined) {
+      await assertOutlet(trx, outletId);
+      const exists = await trx.table('stock_items').where({ id }).forUpdate().first('id');
+      if (!exists) throw new StockItemNotFoundError();
+      await upsertLevel(trx, outletId, id, { reorder_level: next.reorder_level });
+      delete next.reorder_level;
+    }
+    if (Object.keys(next).length) await trx.table('stock_items').where({ id }).update(next);
+  });
+  return getStockItem({ context, id, outletId });
 }
 
 async function archiveStockItem({ context, id }) {
@@ -644,15 +749,14 @@ async function listMenuItemComponents({ context, menuItemId }) {
  * Which active Register menu items use which stock items — one row per
  * recipe component, so the Stock items screen can tell a stock item sold
  * directly (a menu item whose whole recipe is that one item) from one that
- * is only an ingredient, or not sold at all. Reads run sequentially and are
- * joined in JS, the same convention `stock/reporting.js` follows. `outletId`
- * is optional (omitted = every outlet at the property).
+ * is only an ingredient, or not sold at all. `outletId` (optional) narrows
+ * it to the menu items that outlet sells, with their availability there.
  */
 async function listMenuItemLinks({ context, outletId }) {
   const db = scopedDb().for(context);
-  const menuQuery = db.table('pos_menu_items').where({ status: 'active' });
-  if (outletId) menuQuery.where({ outlet_id: outletId });
-  const menuItems = await menuQuery.select('id', 'name', 'category', 'outlet_id', 'is_available');
+  const menuItems = outletId
+    ? await outletMenu.menuItemsForOutlet(db, outletId)
+    : (await db.table('pos_menu_items').where({ status: 'active' }).select('id', 'name', 'category')).map((row) => ({ ...row, is_available: true }));
   if (menuItems.length === 0) return [];
 
   const menuById = new Map(menuItems.map((row) => [String(row.id), row]));
@@ -679,7 +783,7 @@ async function listMenuItemLinks({ context, outletId }) {
   });
 }
 
-/** Full replace-all upsert for one menu item's recipe — plain config, no history to preserve (see `pos_menu_item_components`' own migration header). */
+/** Full replace-all upsert for one menu item's recipe — plain config, no history to preserve (see `pos_menu_item_components`' own migration header). Both are shared, so any stock item may be a component. */
 async function upsertMenuItemComponents({ context, menuItemId, components }) {
   const db = scopedDb().for(context);
   return db.transaction(async (trx) => {
@@ -691,11 +795,7 @@ async function upsertMenuItemComponents({ context, menuItemId, components }) {
     const stockItems = stockItemIds.length ? await trx.table('stock_items').whereIn('id', stockItemIds) : [];
     const stockItemsById = new Map(stockItems.map((row) => [Number(row.id), row]));
     for (const id of stockItemIds) {
-      const stockItem = stockItemsById.get(id);
-      if (!stockItem) throw new StockItemNotFoundError();
-      if (Number(stockItem.outlet_id) !== Number(menuItem.outlet_id)) {
-        throw new OutletMismatchError('The stock item and the menu item must belong to the same outlet.');
-      }
+      if (!stockItemsById.get(id)) throw new StockItemNotFoundError();
     }
 
     await trx.table('pos_menu_item_components').where({ menu_item_id: menuItemId }).delete();
@@ -718,37 +818,25 @@ async function upsertMenuItemComponents({ context, menuItemId, components }) {
 /**
  * `trx`-based, called from `runIdempotentMutation` — a real delivery,
  * financial in effect (it moves `purchase_cost`, ARCHITECTURE.md §7).
- * `lines`: `[{stockItemId, quantity, unitCost}]`. Every referenced stock
- * item must belong to `outletId` — checked against the locked rows
- * themselves, never a separate unlocked read.
+ * `lines`: `[{stockItemId, quantity, unitCost}]`, received INTO `outletId`
+ * (stock items are shared; the delivery adds to that outlet's quantity).
  */
 async function recordGoodsReceived({ trx, outletId, lines, reference, userId, businessDate }) {
   if (!Array.isArray(lines) || lines.length === 0) {
     throw new ValidationError('MISSING_FIELD', 'At least one line is required.', [{ field: 'lines', issue: 'missing' }]);
   }
+  await assertOutlet(trx, outletId);
 
   const stockItemIds = [...new Set(lines.map((line) => Number(line.stockItemId)))];
   const lockClosure = await resolveLockClosure({ trx, stockItemIds });
-  const lockedById = await lockStockItemsSorted({ trx, stockItemIds: lockClosure });
-
-  // Checked only against the lines actually being received, never the
-  // whole lock closure — a sibling stock item pulled in purely to keep the
-  // lock ordering deadlock-free may legitimately belong to a different
-  // outlet than this delivery; it is not itself part of this call.
-  for (const stockItemId of stockItemIds) {
-    const stockItem = lockedById.get(String(stockItemId));
-    if (Number(stockItem.outlet_id) !== Number(outletId)) {
-      throw new OutletMismatchError();
-    }
-  }
+  await lockStockItemsSorted({ trx, stockItemIds: lockClosure });
 
   for (const line of lines) {
     const stockItemId = Number(line.stockItemId);
-    const stockItem = lockedById.get(String(stockItemId));
     const totalCost = extendedCost(line.unitCost, line.quantity);
 
     await trx.table('stock_movements').insert({
-      outlet_id: stockItem.outlet_id,
+      outlet_id: outletId,
       stock_item_id: stockItemId,
       type: 'received',
       quantity: line.quantity,
@@ -761,20 +849,25 @@ async function recordGoodsReceived({ trx, outletId, lines, reference, userId, bu
     // Last-cost only, wholesale-replaced — never a weighted average (see
     // `stock_items` migration header).
     await trx.table('stock_items').where({ id: stockItemId }).update({ purchase_cost: line.unitCost });
-    await recomputeStockItemQuantity({ trx, stockItemId });
+    await recomputeStockLevel({ trx, stockItemId, outletId });
   }
 
-  await applyStockAvailabilityEffects({ trx, stockItemIds });
-  return trx.table('stock_items').whereIn('id', stockItemIds).orderBy('id');
+  await applyStockAvailabilityEffects({ trx, stockItemIds, outletId });
+  const items = await trx.table('stock_items').whereIn('id', stockItemIds).orderBy('id');
+  const levels = await trx.table('stock_levels').where({ outlet_id: outletId }).whereIn('stock_item_id', stockItemIds);
+  const levelByItem = new Map(levels.map((row) => [String(row.stock_item_id), row]));
+  return items.map((item) => withLevel(item, levelByItem.get(String(item.id)), outletId));
 }
 
 // ---------------------------------------------------------------------
 // Wastage
 // ---------------------------------------------------------------------
 
-/** `trx`-based, called from `runIdempotentMutation`. `quantity` is the caller's positive "amount lost" — always posts as a decrease. Reason is mandatory (PLAN.md Phase 6's confirmed `pos.stock_view` grant: "a floor action with a mandatory reason"). */
-async function recordWastage({ trx, stockItemId, quantity, reason, userId, businessDate }) {
+/** `trx`-based, called from `runIdempotentMutation`. `quantity` is the caller's positive "amount lost" at `outletId` — always posts as a decrease. Reason is mandatory (PLAN.md Phase 6's confirmed `pos.stock_view` grant: "a floor action with a mandatory reason"). */
+async function recordWastage({ trx, stockItemId, outletId, quantity, reason, userId, businessDate }) {
   if (!reason) throw new MissingWastageReasonError();
+  if (!outletId) throw new ValidationError('MISSING_FIELD', '"outlet_id" is required — say which outlet lost it.', [{ field: 'outlet_id', issue: 'missing' }]);
+  await assertOutlet(trx, outletId);
 
   const lockClosure = await resolveLockClosure({ trx, stockItemIds: [stockItemId] });
   const lockedById = await lockStockItemsSorted({ trx, stockItemIds: lockClosure });
@@ -784,7 +877,7 @@ async function recordWastage({ trx, stockItemId, quantity, reason, userId, busin
   const totalCost = extendedCost(stockItem.purchase_cost, movementQuantity);
 
   await trx.table('stock_movements').insert({
-    outlet_id: stockItem.outlet_id,
+    outlet_id: outletId,
     stock_item_id: stockItemId,
     type: 'wastage',
     quantity: movementQuantity,
@@ -794,15 +887,16 @@ async function recordWastage({ trx, stockItemId, quantity, reason, userId, busin
     reason,
     user_id: userId ?? null,
   });
-  await recomputeStockItemQuantity({ trx, stockItemId });
-  await applyStockAvailabilityEffects({ trx, stockItemIds: [stockItemId] });
+  await recomputeStockLevel({ trx, stockItemId, outletId });
+  await applyStockAvailabilityEffects({ trx, stockItemIds: [stockItemId], outletId });
 
-  return trx.table('stock_items').where({ id: stockItemId }).first();
+  const item = await trx.table('stock_items').where({ id: stockItemId }).first();
+  return withLevel(item, await trx.table('stock_levels').where({ outlet_id: outletId, stock_item_id: stockItemId }).first(), outletId);
 }
 
 // ---------------------------------------------------------------------
 // Stock takes — blind counting, the same structural guarantee
-// `pos_shifts`' own cash-up already establishes
+// `pos_shifts`' own cash-up already establishes. A take counts one outlet.
 // ---------------------------------------------------------------------
 
 async function listStockTakes({ context, outletId, status }) {
@@ -835,7 +929,8 @@ async function openStockTake({ context, outletId, userId }) {
  * `null` until `completeStockTake`). A plain upsert on the
  * `(stock_take_id, stock_item_id)` unique key, naturally idempotent on
  * retry — recounting the same item before completion is a normal
- * correction, not a duplicate.
+ * correction, not a duplicate. Any shared stock item may be counted: what
+ * matters is the take's outlet, whose quantity it is compared against.
  */
 async function recordStockTakeCount({ context, stockTakeId, stockItemId, countedQuantity }) {
   const db = scopedDb().for(context);
@@ -845,17 +940,10 @@ async function recordStockTakeCount({ context, stockTakeId, stockItemId, counted
     throw new StockTakeNotOpenError(stockTakeId, stockTake.status);
   }
 
-  // Same existence + outlet-match check `recordGoodsReceived`/
-  // `upsertMenuItemComponents` already make before writing — without it, a
-  // garbage id hits the raw FK constraint as a bare 500 instead of a
-  // friendly error, and a real-but-wrong-outlet stock item is silently
-  // accepted into a take that has no business counting it, contaminating
-  // this take's own variance report with another outlet's stock.
+  // Existence check first, so a garbage id is a friendly error rather than
+  // a bare FK-constraint 500.
   const stockItem = await db.table('stock_items').where({ id: stockItemId }).first();
   if (!stockItem) throw new StockItemNotFoundError();
-  if (Number(stockItem.outlet_id) !== Number(stockTake.outlet_id)) {
-    throw new OutletMismatchError();
-  }
 
   try {
     await db.table('stock_take_lines').insert({ stock_take_id: stockTakeId, stock_item_id: stockItemId, counted_quantity: countedQuantity });
@@ -868,17 +956,17 @@ async function recordStockTakeCount({ context, stockTakeId, stockItemId, counted
 
 /**
  * `trx`-based, called from `runIdempotentMutation`. Locks the take first,
- * then every counted item (shared lock-ordering helper), reads each
- * item's live `current_quantity` under that same lock as the
- * `theoretical_quantity`, and posts a `count_adjustment` movement for any
- * nonzero variance — the real "wholesale undo" for a discrepancy this
- * pass builds, not an automatic reflex to one anomalous line.
+ * then every counted item (shared lock-ordering helper), reads the take
+ * outlet's live quantity of each under that same lock as the
+ * `theoretical_quantity`, and posts a `count_adjustment` movement at that
+ * outlet for any nonzero variance.
  */
 async function completeStockTake({ trx, stockTakeId, userId }) {
   const stockTake = await trx.table('stock_takes').where({ id: stockTakeId }).forUpdate().first();
   if (!stockTake) throw new StockTakeNotFoundError();
   if (stockTake.status === 'completed') throw new StockTakeAlreadyCompletedError(stockTakeId);
   if (stockTake.status === 'cancelled') throw new StockTakeAlreadyCancelledError(stockTakeId);
+  const outletId = stockTake.outlet_id;
 
   const lines = await trx.table('stock_take_lines').where({ stock_take_id: stockTakeId }).select();
   const stockItemIds = [...new Set(lines.map((line) => Number(line.stock_item_id)))];
@@ -892,7 +980,8 @@ async function completeStockTake({ trx, stockTakeId, userId }) {
   for (const line of lines) {
     const stockItemId = Number(line.stock_item_id);
     const stockItem = lockedById.get(String(stockItemId));
-    const theoreticalQuantity = stockItem.current_quantity;
+    const level = await lockedLevel(trx, outletId, stockItemId);
+    const theoreticalQuantity = level?.current_quantity ?? ZERO_QTY;
     const variance = sumQuantity([line.counted_quantity, negateQuantity(theoreticalQuantity)]);
 
     await trx.table('stock_take_lines').where({ id: line.id }).update({ theoretical_quantity: theoreticalQuantity, variance });
@@ -900,7 +989,7 @@ async function completeStockTake({ trx, stockTakeId, userId }) {
     if (compareQuantity(variance, ZERO_QTY) !== 0) {
       const totalCost = extendedCost(stockItem.purchase_cost, variance);
       await trx.table('stock_movements').insert({
-        outlet_id: stockItem.outlet_id,
+        outlet_id: outletId,
         stock_item_id: stockItemId,
         type: 'count_adjustment',
         quantity: variance,
@@ -910,12 +999,12 @@ async function completeStockTake({ trx, stockTakeId, userId }) {
         stock_take_id: stockTakeId,
         user_id: userId ?? null,
       });
-      await recomputeStockItemQuantity({ trx, stockItemId });
+      await recomputeStockLevel({ trx, stockItemId, outletId });
       changedStockItemIds.push(stockItemId);
     }
   }
 
-  if (changedStockItemIds.length) await applyStockAvailabilityEffects({ trx, stockItemIds: changedStockItemIds });
+  if (changedStockItemIds.length) await applyStockAvailabilityEffects({ trx, stockItemIds: changedStockItemIds, outletId });
 
   await trx.table('stock_takes').where({ id: stockTakeId }).update({
     status: 'completed',
@@ -982,7 +1071,7 @@ async function listStockMovements({ context, stockItemId, outletId, type, dateFr
 module.exports = {
   lockStockItemsSorted,
   resolveLockClosure,
-  recomputeStockItemQuantity,
+  recomputeStockLevel,
   applyStockAvailabilityEffects,
   assertStockAvailableOrOverridden,
   AUTOMATIC_OVERRIDE_REASON_GUEST_ACKNOWLEDGED,
@@ -996,6 +1085,7 @@ module.exports = {
   updateStockItemCategory,
   archiveStockItemCategory,
   listStockItems,
+  listStockLevels,
   getStockItem,
   createStockItem,
   updateStockItem,

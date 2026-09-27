@@ -32,6 +32,7 @@ const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { sumMoney } = require('../../src/shared/money');
+const { insertMenuCategories, insertMenuItem, setOutletAvailability } = require('../helpers/catalogue');
 
 describe('POS (PLAN.md Phase 4)', () => {
   const t = useTestApp();
@@ -89,8 +90,8 @@ describe('POS (PLAN.md Phase 4)', () => {
       device_ref: `TERM-${suffix}`,
     });
     // Menu items may only use their own outlet's registered categories.
-    await t.trx('pos_menu_categories').insert(['Mains', 'Snacks'].map((name) => ({ tenant_id: tenant.id, property_id: propertyId, outlet_id: outletId, name })));
-    const [menuItemId] = await t.trx('pos_menu_items').insert({
+    await insertMenuCategories(t.trx, ['Mains', 'Snacks'].map((name) => ({ tenant_id: tenant.id, property_id: propertyId, outlet_id: outletId, name })));
+    const [menuItemId] = await insertMenuItem(t.trx, {
       tenant_id: tenant.id,
       property_id: propertyId,
       outlet_id: outletId,
@@ -255,9 +256,9 @@ describe('POS (PLAN.md Phase 4)', () => {
       const res = await t.request
         .post(`/api/v1/pos/menu-items/${setup.menuItemId}/set-availability`)
         .set('Authorization', `Bearer ${operatorToken}`)
-        .send({ is_available: false });
+        .send({ outlet_id: setup.outletId, is_available: false });
       expect(res.status).toBe(200);
-      expect(res.body.data.is_available).toBe(0);
+      expect(res.body.data.is_available).toBe(false); // at THIS outlet only (shared catalogue)
     });
 
     // Editing an outlet/terminal/menu item — this session's own broader POS
@@ -328,7 +329,9 @@ describe('POS (PLAN.md Phase 4)', () => {
         .send({ name: 'Real Item', status: 'archived', is_available: false });
       expect(menuItemEdit.status).toBe(200);
       expect(menuItemEdit.body.data.status).toBe('active');
-      expect(menuItemEdit.body.data.is_available).toBe(1);
+      // Availability lives per outlet now, and a plain edit cannot touch it.
+      const atOutlet = await t.request.get(`/api/v1/pos/menu-items?outlet_id=${setup.outletId}`).set('Authorization', `Bearer ${token}`);
+      expect(atOutlet.body.data.find((item) => String(item.id) === String(setup.menuItemId)).is_available).toBe(true);
     });
 
     // Gap closure: pos_menu_items.cost_price — a fallback cost for margin
@@ -431,7 +434,7 @@ describe('POS (PLAN.md Phase 4)', () => {
       await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
       const token = tokenFor({ userId: ctx.a.users[1].id });
       const setup = await freshOutletSetup();
-      await t.trx('pos_menu_items').where({ id: setup.menuItemId }).update({ is_available: false });
+      await setOutletAvailability(t.trx, setup.menuItemId, { is_available: false });
       const order = await openOrder(token, setup);
 
       const res = await t.request

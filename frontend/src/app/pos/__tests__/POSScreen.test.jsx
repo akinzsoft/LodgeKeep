@@ -64,6 +64,9 @@ describe('<POSScreen>', () => {
     expect(await screen.findByText(/Add an outlet under POS → Setup first/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Setup' }));
+    // Setup opens on the shared catalogue; outlets are one view along.
+    expect(await screen.findByRole('tab', { name: 'Catalogue (all outlets)', selected: true })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Outlets' }));
     expect(await screen.findByText('New outlet')).toBeInTheDocument();
   });
 

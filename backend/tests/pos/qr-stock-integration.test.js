@@ -51,6 +51,7 @@ const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
 const { rateLimitRedisConnection, destroyRateLimitRedisConnection } = require('../../src/shared/rate-limit-redis-connection');
+const { insertMenuItem, insertStockItem, setStockQuantity } = require('../helpers/catalogue');
 
 async function flushIpRateLimitKeys() {
   const redis = rateLimitRedisConnection();
@@ -117,7 +118,7 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
       guest_order_rate_limit_max: 100,
     });
 
-    const [menuId] = await t.trx('pos_menu_items').insert({
+    const [menuId] = await insertMenuItem(t.trx, {
       tenant_id: ctx.a.id,
       property_id: ctx.a.properties[0].id,
       outlet_id: outletId,
@@ -127,7 +128,7 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
     });
     menuItemId = menuId;
 
-    const [stockId] = await t.trx('stock_items').insert({
+    const [stockId] = await insertStockItem(t.trx, {
       tenant_id: ctx.a.id,
       property_id: ctx.a.properties[0].id,
       outlet_id: outletId,
@@ -152,7 +153,7 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
       business_date: '2027-08-01',
       reference: 'QR stock integration seed',
     });
-    await t.trx('stock_items').where({ id: stockItemId }).update({ current_quantity: '1000.000' });
+    await setStockQuantity(t.trx, stockItemId, '1000.000');
 
     await t.trx('pos_menu_item_components').insert({
       tenant_id: ctx.a.id,
@@ -253,7 +254,7 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
     // rejected, with the fixed AUTOMATIC_OVERRIDE_REASON_ROOM_CHARGE_OTP
     // reason genuinely recorded.
     it('a room-charge settlement that would deplete stock is auto-overridden, never rejected — the guest\'s already-claimed OTP cannot be stranded', async () => {
-      const [scarceId] = await t.trx('stock_items').insert({
+      const [scarceId] = await insertStockItem(t.trx, {
         tenant_id: ctx.a.id,
         property_id: ctx.a.properties[0].id,
         outlet_id: outletId,
@@ -277,8 +278,8 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
         business_date: '2027-08-01',
         reference: 'QR scarce room-charge seed',
       });
-      await t.trx('stock_items').where({ id: scarceId }).update({ current_quantity: '10.000' });
-      const [scarceMenuId] = await t.trx('pos_menu_items').insert({
+      await setStockQuantity(t.trx, scarceId, '10.000');
+      const [scarceMenuId] = await insertMenuItem(t.trx, {
         tenant_id: ctx.a.id,
         property_id: ctx.a.properties[0].id,
         outlet_id: outletId,
@@ -372,7 +373,7 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
     // 'integration'`, with the fixed AUTOMATIC_OVERRIDE_REASON_CARD_CAPTURE
     // reason genuinely recorded.
     it('a card settlement that would deplete stock is auto-overridden, never rejected — payment was already captured', async () => {
-      const [scarceId] = await t.trx('stock_items').insert({
+      const [scarceId] = await insertStockItem(t.trx, {
         tenant_id: ctx.a.id,
         property_id: ctx.a.properties[0].id,
         outlet_id: outletId,
@@ -393,8 +394,8 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
         business_date: '2027-08-01',
         reference: 'QR scarce card seed',
       });
-      await t.trx('stock_items').where({ id: scarceId }).update({ current_quantity: '10.000' });
-      const [scarceMenuId] = await t.trx('pos_menu_items').insert({
+      await setStockQuantity(t.trx, scarceId, '10.000');
+      const [scarceMenuId] = await insertMenuItem(t.trx, {
         tenant_id: ctx.a.id,
         property_id: ctx.a.properties[0].id,
         outlet_id: outletId,
@@ -458,7 +459,7 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
       const created = await createStaffToken({ type: 'table' });
       cartTableRaw = created.body.meta.rawToken;
 
-      const [id] = await t.trx('stock_items').insert({
+      const [id] = await insertStockItem(t.trx, {
         tenant_id: ctx.a.id,
         property_id: ctx.a.properties[0].id,
         outlet_id: outletId,
@@ -469,8 +470,8 @@ describe('QR self-ordering stock integration (PLAN.md Phase 6)', () => {
       });
       garnishId = id;
 
-      const [menuAId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, outlet_id: outletId, name: 'Cocktail A', category: 'Drinks', price: '15.00' });
-      const [menuBId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, outlet_id: outletId, name: 'Cocktail B', category: 'Drinks', price: '15.00' });
+      const [menuAId] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, outlet_id: outletId, name: 'Cocktail A', category: 'Drinks', price: '15.00' });
+      const [menuBId] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, outlet_id: outletId, name: 'Cocktail B', category: 'Drinks', price: '15.00' });
       menuA = menuAId;
       menuB = menuBId;
       await t.trx('pos_menu_item_components').insert([

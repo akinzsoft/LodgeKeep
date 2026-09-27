@@ -39,6 +39,7 @@ const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
+const { insertMenuItem } = require('../helpers/catalogue');
 
 const BUSINESS_DATE = '2027-06-01';
 const FEE_PERCENTAGE = '2.50';
@@ -158,7 +159,7 @@ describe('Payment reconciliation report', () => {
     const propertyId = ctx.a.properties[0].id;
     const [outletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: 'RECON-BAR', name: 'Reconciliation Bar', type: 'bar' });
     const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, device_ref: 'RECON-T1' });
-    const [beerId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Recon Beer', category: 'Drinks', price: '48.00' });
+    const [beerId] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Recon Beer', category: 'Drinks', price: '48.00' });
     outlet = { outletId, terminalId, beerId };
 
     paystack.initializeTransaction.mockImplementation(async ({ reference }) => ({ authorizationUrl: 'https://paystack.test/pay/recon', accessCode: 'recon-access', reference }));

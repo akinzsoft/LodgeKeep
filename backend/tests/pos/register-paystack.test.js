@@ -48,6 +48,7 @@ const paystack = paystackAdapterModule.__mockAdapter;
 const { scopedDb } = require('../../src/db');
 const { workerContext } = require('../../src/modules/tenancy/context');
 const cashieringService = require('../../src/modules/cashiering/service');
+const { insertMenuItem } = require('../helpers/catalogue');
 
 describe('POS Register — Paystack card/NQR checkout', () => {
   const t = useTestApp();
@@ -96,7 +97,7 @@ describe('POS Register — Paystack card/NQR checkout', () => {
     const propertyId = tenant.properties[0].id;
     const [outletId] = await t.trx('pos_outlets').insert({ tenant_id: tenant.id, property_id: propertyId, code: `REG-${suffix}`, name: 'Bar', type: 'bar' });
     const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: tenant.id, property_id: propertyId, outlet_id: outletId, device_ref: `T-${suffix}` });
-    const [menuItemId] = await t.trx('pos_menu_items').insert({
+    const [menuItemId] = await insertMenuItem(t.trx, {
       tenant_id: tenant.id,
       property_id: propertyId,
       outlet_id: outletId,

@@ -10,6 +10,7 @@
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { insertMenuItem } = require('../helpers/catalogue');
 
 describe('GET /api/v1/pos/tickets', () => {
   const t = useTestApp();
@@ -91,7 +92,7 @@ describe('GET /api/v1/pos/tickets', () => {
     terminalId = ctx.a.posTerminals[0].id;
     menuItemId = ctx.a.posMenuItems[0].id;
     [secondOutletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: property.id, code: 'TK-KITCHEN', name: 'Kitchen', type: 'restaurant' });
-    [secondMenuItemId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: property.id, outlet_id: secondOutletId, name: 'Jollof Rice', category: 'Mains', price: '30.00' });
+    [secondMenuItemId] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: property.id, outlet_id: secondOutletId, name: 'Jollof Rice', category: 'Mains', price: '30.00' });
   });
 
   // Tickets of the tabs this file created (fixtures seed a few of their own).

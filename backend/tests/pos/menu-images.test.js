@@ -13,6 +13,7 @@ const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { sniffImageType } = require('../../src/modules/pos/menu-images');
+const { insertMenuItem } = require('../helpers/catalogue');
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 1)]);
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(32, 2)]);
@@ -48,7 +49,7 @@ describe('POS menu item images', () => {
     operatorToken = tokenFor(ctx.a, ctx.a.users[1].id);
     const propertyId = ctx.a.properties[0].id;
     const [outletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: 'IMG-BAR', name: 'Image Bar', type: 'bar' });
-    [menuItemId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Chapman', category: 'Drinks', price: '15.00' });
+    [menuItemId] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Chapman', category: 'Drinks', price: '15.00' });
   });
 
   afterAll(() => {
