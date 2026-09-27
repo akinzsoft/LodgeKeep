@@ -45,7 +45,7 @@ describe('<WaitlistTab>', () => {
     mocks.listWaitlist.mockResolvedValue([]);
     render(<WaitlistTab />);
 
-    expect(await screen.findByText('No one is currently waitlisted.')).toBeInTheDocument();
+    expect(await screen.findByText(/No one is waiting/)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -54,7 +54,7 @@ describe('<WaitlistTab>', () => {
     render(<WaitlistTab />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The waitlist could not be loaded right now.');
-    expect(screen.queryByText('No one is currently waitlisted.')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No one is waiting/)).not.toBeInTheDocument();
   });
 
   it('shows who is waiting, their phone, room type and how long they have waited', async () => {
@@ -89,7 +89,7 @@ describe('<WaitlistTab>', () => {
     await userEvent.click(confirm);
 
     expect(mocks.cancelReservation).toHaveBeenCalledWith('26', 'Guest found another hotel.');
-    expect(await screen.findByText('No one is currently waitlisted.')).toBeInTheDocument();
+    expect(await screen.findByText(/No one is waiting/)).toBeInTheDocument();
   });
 
   it('disables Promote and Cancel while offline', async () => {

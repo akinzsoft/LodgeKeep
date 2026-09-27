@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { DataTable, Button, ConfirmDialog, StatusPill } from '../../shared/components/index.js';
 import { reservationsApi, ApiError } from '../../shared/api/index.js';
+import { formatDate, nightsBetween } from '../../shared/format/dates.js';
+import { ConfirmationRef } from './ConfirmationRef.jsx';
 import formStyles from './BookingForm.module.css';
+import styles from './BookingScreen.module.css';
 
 /**
  * PRODUCT_REQUIREMENTS.md §3.2: "Waitlist — separate queue view with
@@ -84,30 +87,39 @@ export function WaitlistTab({ isOffline = false } = {}) {
       <DataTable
         title="Waitlist"
         state={state}
-        emptyMessage="No one is currently waitlisted."
+        emptyMessage="No one is waiting. A booking joins the waitlist when “Add to waitlist if fully booked” is ticked and the dates are full."
         errorMessage={loadError}
         columns={[
-          { key: 'confirmation_number', label: 'Confirmation' },
-          { key: 'guest', label: 'Guest', render: (row) => [row.guest_first_name, row.guest_last_name].filter(Boolean).join(' ') || '—' },
-          { key: 'guest_phone', label: 'Phone', render: (row) => row.guest_phone || '—' },
+          { key: 'confirmation_number', label: 'Reference', render: (row) => <ConfirmationRef value={row.confirmation_number} /> },
+          {
+            key: 'guest',
+            label: 'Guest',
+            render: (row) => (
+              <span className={styles.guestCell}>
+                <span className={styles.guestName}>{[row.guest_first_name, row.guest_last_name].filter(Boolean).join(' ') || '—'}</span>
+                <span className={styles.subText}>{row.guest_phone || 'No phone on file'}</span>
+              </span>
+            ),
+          },
           { key: 'room_type', label: 'Room type', render: (row) => row.room_type_name || row.room_type_code || '—' },
           {
             key: 'arrival_date',
-            label: 'Arrival',
-            render: (row) => (
-              <>
-                {row.arrival_date}
-                {row.arrival_passed && (
-                  <>
-                    {' '}
-                    <StatusPill tone="warning" label="Arrival passed" />
-                  </>
-                )}
-              </>
-            ),
+            label: 'Stay',
+            render: (row) => {
+              const nights = nightsBetween(row.arrival_date, row.departure_date);
+              return (
+                <span className={styles.guestCell}>
+                  <span className={styles.nowrap}>
+                    {formatDate(row.arrival_date, { weekday: true, year: false })} → {formatDate(row.departure_date, { weekday: true })}
+                  </span>
+                  <span className={styles.subText}>
+                    {nights} {nights === 1 ? 'night' : 'nights'} · {row.adults} {row.adults === 1 ? 'adult' : 'adults'}
+                  </span>
+                  {row.arrival_passed && <StatusPill tone="warning" label="Arrival passed" />}
+                </span>
+              );
+            },
           },
-          { key: 'departure_date', label: 'Departure' },
-          { key: 'adults', label: 'Adults', align: 'right' },
           { key: 'created_at', label: 'Waiting since', render: (row) => formatWaitingSince(row.created_at) },
         ]}
         rows={entries ?? []}
