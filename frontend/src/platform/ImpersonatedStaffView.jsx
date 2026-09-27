@@ -10,6 +10,7 @@ import { CashieringScreen } from '../app/cashiering/CashieringScreen.jsx';
 import { NightAuditScreen } from '../app/night-audit/NightAuditScreen.jsx';
 import { ProfilesScreen } from '../app/profiles/ProfilesScreen.jsx';
 import { POSScreen } from '../app/pos/POSScreen.jsx';
+import { StaffScreen } from '../app/staff/StaffScreen.jsx';
 import { ARScreen } from '../app/ar/ARScreen.jsx';
 import { GroupBlocksScreen } from '../app/group-blocks/GroupBlocksScreen.jsx';
 import { usePlatformAuth } from './auth/PlatformAuthContext.jsx';
@@ -96,6 +97,11 @@ export function ImpersonatedStaffView() {
 
   const propertyName = property?.name ?? impersonation.tenantName;
   const businessDate = property?.current_business_date ?? null;
+  // The full property record, handed to every screen that needs it — the
+  // same `activePropertyRecord` main.jsx gives a real staff session.
+  // User-reported: POS said "Choose a property" under impersonation even
+  // though the top bar showed one, because it was never passed here.
+  const activeProperty = property;
 
   return (
     <AppShell
@@ -103,7 +109,7 @@ export function ImpersonatedStaffView() {
       permissions={PERMISSIONS}
       activeItemKey={activeItemKey}
       onNavigate={setActiveItemKey}
-      activeProperty={{ id: impersonation.propertyId, name: propertyName }}
+      activeProperty={{ id: impersonation.propertyId, name: propertyName, logoUrl: property?.logo_url ?? null }}
       properties={[{ id: impersonation.propertyId, name: propertyName }]}
       // No property switcher this pass — a grant is pinned to one property,
       // chosen at start (this session's confirmed simplification). Viewing
@@ -124,19 +130,21 @@ export function ImpersonatedStaffView() {
         // impersonating platform admin, who is no one's assignee. Matches
         // this file's own stated intent (above): show everything, let the
         // backend 403 a genuine mutation.
-        <HousekeepingScreen isOffline={isOffline} canManage />
+        <HousekeepingScreen activeProperty={activeProperty} isOffline={isOffline} canManage />
       ) : activeItemKey === 'rooms' ? (
-        <RoomsScreen activeProperty={{ id: impersonation.propertyId }} />
+        <RoomsScreen activeProperty={activeProperty} isOffline={isOffline} />
+      ) : activeItemKey === 'staff' ? (
+        <StaffScreen activeProperty={activeProperty} isOffline={isOffline} />
       ) : activeItemKey === 'reports' ? (
         <ReportingScreen activePropertyId={impersonation.propertyId} />
       ) : activeItemKey === 'cashiering' ? (
-        <CashieringScreen isOffline={isOffline} />
+        <CashieringScreen isOffline={isOffline} activeProperty={activeProperty} />
       ) : activeItemKey === 'night_audit' ? (
         <NightAuditScreen isOffline={isOffline} />
       ) : activeItemKey === 'profiles' ? (
-        <ProfilesScreen isOffline={isOffline} />
+        <ProfilesScreen isOffline={isOffline} activeProperty={activeProperty} />
       ) : activeItemKey === 'pos' ? (
-        <POSScreen isOffline={isOffline} />
+        <POSScreen activeProperty={activeProperty} isOffline={isOffline} currentUserLabel="Platform staff" />
       ) : activeItemKey === 'ar' ? (
         <ARScreen isOffline={isOffline} />
       ) : activeItemKey === 'group_blocks' ? (
@@ -145,8 +153,9 @@ export function ImpersonatedStaffView() {
         <HomeDashboard
           greetingName="Platform staff"
           businessDate={businessDate}
-          activePropertyId={impersonation.propertyId}
+          activeProperty={activeProperty}
           onNavigateToSetup={() => setActiveItemKey('setup')}
+          onNavigate={setActiveItemKey}
         />
       )}
     </AppShell>
