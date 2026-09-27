@@ -152,6 +152,14 @@ async function getEmailSettings(req, res, next) {
   }
 }
 
+async function getEmailDeliveryStatus(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.getEmailDeliveryStatus({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 function pickEmailSettingsChanges(body) {
   const provider = body?.provider === 'smtp' ? 'smtp' : 'console';
   return {
@@ -922,6 +930,7 @@ module.exports = {
   getEmailSettings,
   upsertEmailSettings,
   sendTestEmail,
+  getEmailDeliveryStatus,
   getPaymentSubaccount,
   resolvePaymentBankAccount,
   upsertPaymentSubaccount,

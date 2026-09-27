@@ -23,6 +23,7 @@
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const { decrypt } = require('../../shared/encryption');
+const { AppError } = require('../../shared/errors');
 
 /**
  * Gap closure (user-reported, live-tested): "the mail goin to my spam."
@@ -219,9 +220,52 @@ function __closeSmtpTransportForTesting() {
   }
 }
 
+/**
+ * Where a property's emails actually go — user-reported on production: a
+ * property with no email settings of its own fell back to the server's
+ * default, which was the `console` adapter, so its staff invitation was
+ * written to the server log, reported as sent, and never arrived.
+ *
+ * - `property`: its own SMTP mailbox (Setup → Email settings);
+ * - `server`: the server's default mailbox (`EMAIL_PROVIDER` in the env);
+ * - `none`: neither — emails only reach the server log.
+ *
+ * `db` as for `resolveEmailAdapter`.
+ */
+async function describeEmailDelivery({ db, propertyId }) {
+  const adapter = await resolveEmailAdapter({ db, propertyId });
+  if (adapter.name === 'console') return { sendsEmail: false, source: 'none' };
+  const row = propertyId && db ? await db.table('email_settings').where({ property_id: propertyId }).first() : null;
+  return { sendsEmail: true, source: row && row.provider === 'smtp' ? 'property' : 'server' };
+}
+
+/**
+ * True when "sending" through this adapter delivers nothing to anyone: the
+ * log-only `console` adapter in production. Outside production that adapter
+ * is the intended local-development stand-in (emails are read from the
+ * log), so it still counts as sent there.
+ */
+function isUndeliverable(adapter) {
+  return adapter.name === 'console' && process.env.NODE_ENV === 'production';
+}
+
+/** The message recorded when an email could not be sent because no mailbox is set up. */
+const NO_MAILBOX_REASON = 'Not sent: no email mailbox is set up for this property. Add one in Setup → Email settings, then resend.';
+
+/** Refusing to "send" through no mailbox at all (a resend, a test email). 422: a business rule, not bad input. */
+class NoMailboxConfiguredError extends AppError {
+  constructor() {
+    super('BUSINESS_RULE_EMAIL_NO_MAILBOX', NO_MAILBOX_REASON, 422);
+  }
+}
+
 module.exports = {
   getEmailAdapter,
   resolveEmailAdapter,
+  describeEmailDelivery,
+  isUndeliverable,
+  NO_MAILBOX_REASON,
+  NoMailboxConfiguredError,
   consoleAdapter,
   smtpAdapter,
   htmlToText,

@@ -97,6 +97,9 @@ describe('User management (PLAN.md Phase 1 gap closure)', () => {
       expect(invite.status).toBe(201);
       expect(invite.body.data.email).toBe('new-hire@example.com');
       expect(typeof invite.body.data.dev_only_token).toBe('string');
+      // Says whether the invitation email will actually be sent (this
+      // property's fixture mailbox is the log-only console adapter).
+      expect(invite.body.data.email_delivery).toEqual({ sendsEmail: false, source: 'none' });
 
       const pending = await t.request.get('/api/v1/users/pending-invitations').set('Authorization', `Bearer ${admin}`);
       expect(pending.body.data.some((row) => row.email === 'new-hire@example.com' && row.status === 'pending')).toBe(true);

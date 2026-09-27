@@ -64,6 +64,7 @@ function setupRouter() {
   // settings. `setup.view`/`setup.manage`, matching every other Setup screen;
   // no stricter gate was asked for, despite the SMTP password these carry.
   router.get('/email-settings', requirePermission('setup.view'), controller.getEmailSettings);
+  router.get('/email-settings/status', requirePermission('setup.view'), controller.getEmailDeliveryStatus);
   router.put('/email-settings', requirePermission('setup.manage'), controller.upsertEmailSettings);
   router.post('/email-settings/test', requirePermission('setup.manage'), controller.sendTestEmail);
 

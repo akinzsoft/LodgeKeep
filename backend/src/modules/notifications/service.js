@@ -17,7 +17,7 @@
 
 const { scopedDb } = require('../../db');
 const { workerContext } = require('../tenancy');
-const { resolveEmailAdapter } = require('./email-adapter');
+const { resolveEmailAdapter, isUndeliverable, NO_MAILBOX_REASON, NoMailboxConfiguredError } = require('./email-adapter');
 const { escapeHtml, heading, paragraph, note, details, button, codeBlock, loadEmailBranding, renderEmailShell, preheaderFrom } = require('./email-layout');
 
 const staffNotifications = require('./staff-notifications');
@@ -369,6 +369,25 @@ async function dispatchOne({ tenantDb, propertyDb, event }) {
     // adapter, the same override-else-default shape `renderTemplate` above
     // already uses for the template content itself.
     const adapter = await resolveEmailAdapter({ db: propertyDb, propertyId: event.property_id });
+    if (isUndeliverable(adapter)) {
+      // No mailbox at all (production, no property settings, no server
+      // default): recorded as NOT sent, straight away — retrying cannot
+      // help until someone sets one up, after which the delivery log's
+      // Resend sends it. It used to be logged and recorded as "sent".
+      await propertyDb.table('notification_log').insert({
+        recipient_email: recipientEmail,
+        template_key: templateKey,
+        channel: 'email',
+        status: 'failed',
+        failed_reason: NO_MAILBOX_REASON,
+        reservation_id: payload.reservationId ?? null,
+      });
+      await tenantDb
+        .table('outbox_events')
+        .where({ id: event.id })
+        .update({ status: 'failed', processed_at: new Date(), attempt_count: event.attempt_count + 1, last_error: NO_MAILBOX_REASON });
+      return;
+    }
     const { providerRef, status } = await adapter.send({ to: recipientEmail, subject, html, attachments });
 
     await propertyDb.table('notification_log').insert({
@@ -496,6 +515,7 @@ async function resendNotification({ context, id }) {
   // Consistency with `dispatchOne`: a resend honors the same property-level
   // `email_settings` override, not silently the process-level default.
   const adapter = await resolveEmailAdapter({ db, propertyId: context.propertyId });
+  if (isUndeliverable(adapter)) throw new NoMailboxConfiguredError();
   const { providerRef, status } = await adapter.send({ to: failed.recipient_email, subject, html, attachments });
 
   const [newId] = await db.table('notification_log').insert({

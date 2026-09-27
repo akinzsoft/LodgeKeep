@@ -3,6 +3,7 @@ import { Card, DataTable, Button, StatusPill, ConfirmDialog } from '../../shared
 import { usersApi, ApiError } from '../../shared/api/index.js';
 import styles from './SetupScreen.module.css';
 import formStyles from './SetupForm.module.css';
+import { EmailDeliveryNotice } from './EmailDeliveryNotice.jsx';
 
 /**
  * No `GET /roles` endpoint exists yet — `src/auth/roles.js`'s own header
@@ -151,12 +152,18 @@ export function UsersTab({ disabled, isOffline = false }) {
       />
 
       <Card title="Invite a user">
-        {inviteResult && (
+        <EmailDeliveryNotice where="invite" />
+        {inviteResult && inviteResult.email_delivery?.sendsEmail === false && (
+          <p className={formStyles.warningBanner} role="alert">
+            Invitation created for {inviteResult.email}, but no email was sent: this property has no mailbox set up. Set one up
+            in Setup → Email settings, then invite them again.
+          </p>
+        )}
+        {inviteResult && (inviteResult.email_delivery?.sendsEmail !== false || inviteResult.dev_only_token) && (
           <p className={formStyles.disabledNotice} role="status">
-            Invitation sent to {inviteResult.email}.
+            {inviteResult.email_delivery?.sendsEmail !== false && <>Invitation sent to {inviteResult.email}. </>}
             {inviteResult.dev_only_token && (
               <>
-                {' '}
                 Dev-only token (never present in production): <code>{inviteResult.dev_only_token}</code>
               </>
             )}

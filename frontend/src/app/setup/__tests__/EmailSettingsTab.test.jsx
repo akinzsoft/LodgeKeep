@@ -8,13 +8,14 @@ const mocks = vi.hoisted(() => ({
   getEmailSettings: vi.fn(),
   updateEmailSettings: vi.fn(),
   sendTestEmail: vi.fn(),
+  getEmailDeliveryStatus: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return {
     ...actual,
-    setupApi: { getEmailSettings: mocks.getEmailSettings, updateEmailSettings: mocks.updateEmailSettings, sendTestEmail: mocks.sendTestEmail },
+    setupApi: { getEmailSettings: mocks.getEmailSettings, updateEmailSettings: mocks.updateEmailSettings, sendTestEmail: mocks.sendTestEmail, getEmailDeliveryStatus: mocks.getEmailDeliveryStatus },
   };
 });
 
@@ -22,6 +23,7 @@ describe('<EmailSettingsTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.getEmailSettings.mockResolvedValue(null);
+    mocks.getEmailDeliveryStatus.mockResolvedValue({ sendsEmail: true, source: 'server' });
   });
 
   it('shows a real message when a property has not been created yet', () => {
@@ -106,6 +108,33 @@ describe('<EmailSettingsTab>', () => {
 
     expect(mocks.sendTestEmail).toHaveBeenCalledWith('me@example.com');
     expect(await screen.findByText(/sent via "smtp"/i)).toBeInTheDocument();
+  });
+
+  it("warns when this property's emails are not being sent, and re-checks after a save", async () => {
+    mocks.getEmailDeliveryStatus.mockResolvedValueOnce({ sendsEmail: false, source: 'none' }).mockResolvedValue({ sendsEmail: true, source: 'property' });
+    mocks.updateEmailSettings.mockResolvedValue({ provider: 'smtp', smtp_host: 'mail.example.com', smtp_password_set: true });
+    render(<EmailSettingsTab disabled={false} />);
+    expect(await screen.findByText('Emails from this property are not being sent.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await vi.waitFor(() => expect(screen.queryByText('Emails from this property are not being sent.')).not.toBeInTheDocument());
+    expect(mocks.getEmailDeliveryStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows no warning when emails are sent', async () => {
+    render(<EmailSettingsTab disabled={false} />);
+    await screen.findByRole('combobox');
+    await vi.waitFor(() => expect(mocks.getEmailDeliveryStatus).toHaveBeenCalled());
+    expect(screen.queryByText('Emails from this property are not being sent.')).not.toBeInTheDocument();
+  });
+
+  it('says a test that only reached the server log was not delivered', async () => {
+    mocks.sendTestEmail.mockResolvedValue({ sent: true, provider: 'console', providerRef: 'console-1' });
+    render(<EmailSettingsTab disabled={false} />);
+    await screen.findByRole('combobox');
+    await userEvent.type(screen.getByPlaceholderText('you@example.com'), 'me@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Send test email' }));
+    expect(await screen.findByText(/written to the server log only/i)).toBeInTheDocument();
   });
 
   it('surfaces a real test-send failure', async () => {

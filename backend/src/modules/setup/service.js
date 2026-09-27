@@ -14,7 +14,7 @@ const imageStore = require('../../shared/image-store');
 const { withDuplicateMapping, ValidationError } = require('../../shared/errors');
 const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError } = require('./errors');
 const { encrypt } = require('../../shared/encryption');
-const { resolveEmailAdapter } = require('../notifications/email-adapter');
+const { resolveEmailAdapter, describeEmailDelivery, isUndeliverable, NoMailboxConfiguredError } = require('../notifications/email-adapter');
 const paystackAdapter = require('../cashiering/paystack-adapter');
 const emailLayout = require('../notifications/email-layout');
 
@@ -275,6 +275,16 @@ async function upsertEmailSettings({ context, provider, smtpHost, smtpPort, smtp
 }
 
 /**
+ * Whether this property's emails actually get sent, and through which
+ * mailbox — see `describeEmailDelivery`. Drives the warning on Setup →
+ * Email settings and next to staff invitations.
+ */
+async function getEmailDeliveryStatus({ context }) {
+  const db = scopedDb().for(context);
+  return describeEmailDelivery({ db, propertyId: context.propertyId });
+}
+
+/**
  * Sends a real test message through the property's currently-SAVED
  * configuration — via the exact same `resolveEmailAdapter` a real outbox
  * dispatch uses, so a passing test genuinely proves what a real send would
@@ -287,6 +297,8 @@ async function upsertEmailSettings({ context, provider, smtpHost, smtpPort, smtp
 async function sendTestEmail({ context, to }) {
   const db = scopedDb().for(context);
   const adapter = await resolveEmailAdapter({ db, propertyId: context.propertyId });
+  // No mailbox at all: say so, rather than "sending" into the server log.
+  if (isUndeliverable(adapter)) throw new NoMailboxConfiguredError();
   try {
     // Sent in the same branded shell as every real email, so the test also
     // shows how the property's logo and footer will look in an inbox.
@@ -922,6 +934,7 @@ module.exports = {
   getProperty,
   listProperties,
   getEmailSettings,
+  getEmailDeliveryStatus,
   upsertEmailSettings,
   sendTestEmail,
   getPaymentSubaccount,

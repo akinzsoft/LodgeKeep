@@ -152,6 +152,60 @@ describe('Email settings (gap closure: mail setup in Setup menu)', () => {
     });
   });
 
+  // Bug fix, user-reported on production: a property with no mailbox of its
+  // own "sent" a staff invitation into the server log (the server default
+  // was the console adapter) and reported success.
+  describe('GET /api/v1/email-settings/status', () => {
+    it('says emails are not sent when neither the property nor the server has a mailbox', async () => {
+      const res = await t.request.get('/api/v1/email-settings/status').set('Authorization', `Bearer ${tokenFor({ tenant: ctx.b })}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ sendsEmail: false, source: 'none' });
+    });
+
+    it("reports the property's own SMTP mailbox once it is set up", async () => {
+      const token = await adminToken();
+      await t.request
+        .put('/api/v1/email-settings')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ provider: 'smtp', smtp_host: 'mail.example.com', smtp_port: 587, smtp_user: 'u', smtp_password: 'p', smtp_from: 'hotel@example.com' });
+      const res = await t.request.get('/api/v1/email-settings/status').set('Authorization', `Bearer ${token}`);
+      expect(res.body.data).toEqual({ sendsEmail: true, source: 'property' });
+    });
+
+    it("reports the server's default mailbox when the property has none of its own", async () => {
+      const original = process.env.EMAIL_PROVIDER;
+      process.env.EMAIL_PROVIDER = 'smtp';
+      try {
+        const res = await t.request.get('/api/v1/email-settings/status').set('Authorization', `Bearer ${tokenFor({ tenant: ctx.b })}`);
+        expect(res.body.data).toEqual({ sendsEmail: true, source: 'server' });
+      } finally {
+        process.env.EMAIL_PROVIDER = original;
+      }
+    });
+  });
+
+  describe('in production with no mailbox anywhere', () => {
+    let originalEnv;
+    beforeEach(() => {
+      originalEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+    });
+    afterEach(() => {
+      process.env.NODE_ENV = originalEnv;
+    });
+
+    it('refuses the test email with a clear reason instead of "sending" it into the server log', async () => {
+      await grantRoleToUser({ tenant: ctx.b, userIndex: 1, propertyIndex: 1, role: 'admin' });
+      const res = await t.request
+        .post('/api/v1/email-settings/test')
+        .set('Authorization', `Bearer ${tokenFor({ tenant: ctx.b, userIndex: 1 })}`)
+        .send({ to: 'someone@example.com' });
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('BUSINESS_RULE_EMAIL_NO_MAILBOX');
+      expect(res.body.error.message).toMatch(/Setup → Email settings/);
+    });
+  });
+
   describe('POST /api/v1/email-settings/test', () => {
     it('rejects a setup.view-only caller with a real 403', async () => {
       const res = await t.request

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   inviteUser: vi.fn(),
   deactivateUser: vi.fn(),
   changeUserRole: vi.fn(),
+  getEmailDeliveryStatus: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -23,6 +24,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       deactivateUser: mocks.deactivateUser,
       changeUserRole: mocks.changeUserRole,
     },
+    setupApi: { ...actual.setupApi, getEmailDeliveryStatus: mocks.getEmailDeliveryStatus },
   };
 });
 
@@ -39,6 +41,7 @@ const USER = {
 describe('<UsersTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
+    mocks.getEmailDeliveryStatus.mockResolvedValue({ sendsEmail: true, source: 'property' });
   });
 
   it('shows a disabled notice with no active property, and never calls the API', () => {
@@ -70,6 +73,29 @@ describe('<UsersTab>', () => {
     expect(mocks.inviteUser).toHaveBeenCalledWith({ email: 'new@example.com', role: 'front_desk' });
     expect(await screen.findByText(/invitation sent to new@example.com/i)).toBeInTheDocument();
     expect(screen.getByText('dev-token-123')).toBeInTheDocument();
+  });
+
+  it('warns before inviting when this property has no mailbox', async () => {
+    mocks.getEmailDeliveryStatus.mockResolvedValue({ sendsEmail: false, source: 'none' });
+    mocks.listUsers.mockResolvedValue([]);
+    mocks.listPendingInvitations.mockResolvedValue([]);
+    render(<UsersTab disabled={false} />);
+    expect(await screen.findByText('Emails from this property are not being sent.')).toBeInTheDocument();
+    expect(screen.getByText(/invitation from this property will not reach/i)).toBeInTheDocument();
+  });
+
+  it('says the invitation email was not sent, instead of "sent", when the property has no mailbox', async () => {
+    mocks.listUsers.mockResolvedValue([]);
+    mocks.listPendingInvitations.mockResolvedValue([]);
+    mocks.inviteUser.mockResolvedValue({ id: '9', email: 'new@example.com', email_delivery: { sendsEmail: false, source: 'none' } });
+    render(<UsersTab disabled={false} />);
+    await screen.findByText(/no users at this property yet/i);
+
+    await userEvent.type(screen.getByPlaceholderText('new.hire@example.com'), 'new@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Send invitation' }));
+
+    expect(await screen.findByText(/invitation created for new@example.com, but no email was sent/i)).toBeInTheDocument();
+    expect(screen.queryByText(/invitation sent to/i)).not.toBeInTheDocument();
   });
 
   it('deactivates a user after confirming', async () => {

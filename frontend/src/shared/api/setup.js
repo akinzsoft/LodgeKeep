@@ -48,6 +48,17 @@ export function getEmailSettings() {
   return request('/email-settings');
 }
 
+/**
+ * Whether this property's emails actually get sent: `source` is `property`
+ * (its own SMTP mailbox), `server` (the server's default) or `none` (emails
+ * only reach the server log).
+ *
+ * @returns {Promise<{sendsEmail: boolean, source: 'property'|'server'|'none'}>}
+ */
+export function getEmailDeliveryStatus() {
+  return request('/email-settings/status');
+}
+
 export function updateEmailSettings(body) {
   return request('/email-settings', { method: 'PUT', body });
 }

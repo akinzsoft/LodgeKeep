@@ -37,7 +37,7 @@ async function inviteUser(req, res, next) {
   try {
     const email = require_(req.body, 'email');
     const role = require_(req.body, 'role');
-    const { invitation, devOnlyToken } = await service.inviteUser({
+    const { invitation, devOnlyToken, emailDelivery } = await service.inviteUser({
       context: req.context,
       email,
       role,
@@ -46,7 +46,7 @@ async function inviteUser(req, res, next) {
     await req.audit({ entityType: 'user_invitations', entityId: invitation.id, action: 'create', afterState: invitation });
     // dev_only_token: never present outside development/test — the exact
     // shape `POST /auth/password/forgot`'s response already established.
-    res.status(201).json(ok({ ...invitation, dev_only_token: devOnlyToken }));
+    res.status(201).json(ok({ ...invitation, dev_only_token: devOnlyToken, email_delivery: emailDelivery }));
   } catch (error) {
     next(error);
   }
