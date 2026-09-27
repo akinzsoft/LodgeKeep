@@ -154,6 +154,8 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   // underlying data actually changes, not on every unrelated re-render
   // (e.g. typing into the Add/Edit form) — `computeSections` otherwise
   // returns a fresh array/object identity every single call.
+  // Nothing to show until the property has an outlet — stock always belongs to one.
+  const noOutlets = outlets !== null && outlets.length === 0;
   const selectedOutletName = (outlets ?? []).find((outlet) => String(outlet.id) === String(outletFilter))?.name ?? null;
 
   const sections = useMemo(() => (items === null || categories === null ? null : computeCategorySections(categories, items, { noun: 'stock category' })), [items, categories]);
@@ -577,11 +579,11 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
         Stock categories and stock items below belong to this outlet only — each outlet keeps its own. To see every outlet at once, use Reorder report or Reports.
       </p>
 
-      {outlets !== null && outlets.length === 0 && <p className={formStyles.hint}>Add an outlet under POS → Setup first — stock belongs to an outlet.</p>}
+      {noOutlets && <p className={formStyles.hint}>Add an outlet under POS → Setup first — stock belongs to an outlet.</p>}
 
-      <StockCategoriesCard outletId={outletFilter} outletName={selectedOutletName} categories={categories} onChanged={handleCategoriesChanged} extraRows={extraRows} selectedRowKey={selectedRowKey} onSelectRow={selectSection} />
+      {!noOutlets && <StockCategoriesCard outletId={outletFilter} outletName={selectedOutletName} categories={categories} onChanged={handleCategoriesChanged} extraRows={extraRows} selectedRowKey={selectedRowKey} onSelectRow={selectSection} />}
 
-      {currentSection === null ? (
+      {noOutlets ? null : currentSection === null ? (
         <DataTable state="loading" columns={[]} rows={[]} rowKey={(row) => row.id} />
       ) : (
         (() => {

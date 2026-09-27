@@ -238,6 +238,15 @@ describe('<StockItemsTab>', () => {
     expect(mocks.listStockItems).toHaveBeenLastCalledWith({ outletId: '3', lowStockOnly: false });
   });
 
+  it('with no outlet yet, says to add one and shows no stock categories or items at all', async () => {
+    mocks.listOutlets.mockResolvedValue([]);
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+    expect(await screen.findByText(/Add an outlet under POS → Setup first/)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Stock categories/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(mocks.listStockItemCategories).not.toHaveBeenCalled();
+  });
+
   it('the Add form has no Outlet field of its own — a new stock item always goes to the selected outlet', async () => {
     mocks.listOutlets.mockResolvedValue([outlet(), outlet({ id: '3', name: 'Supermarket' })]);
     mocks.listStockItemCategories.mockResolvedValue([{ id: '6', name: 'Beverages', sort_order: 0, item_count: 0 }]);
