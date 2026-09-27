@@ -108,7 +108,7 @@ describe('POST /api/v1/signup', () => {
 
     const roles = await t.trx('roles').where({ tenant_id: tenant.id });
     expect(roles.map((r) => r.code).sort()).toEqual(
-      ['admin', 'cashier', 'front_desk', 'housekeeping', 'manager', 'pos_operator', 'super_admin'].sort()
+      ['admin', 'cashier', 'front_desk', 'housekeeping', 'manager', 'pos_operator', 'storekeeper', 'super_admin'].sort()
     );
 
     // The complete SECURITY.md §5 matrix, not the dev seed script's

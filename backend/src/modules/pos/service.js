@@ -93,7 +93,10 @@ const {
   OrderHasCapturedPaymentError,
   SettlementPaidByGatewayError,
   MenuCategoryInUseError,
+  StoreOutletNotAPointOfSaleError,
+  StoreOutletConversionBlockedError,
 } = require('./errors');
+const { STORE_OUTLET_TYPE, isPointOfSaleOutlet } = require('../../shared/outlet-types');
 
 // ---------------------------------------------------------------------
 // Outlets
@@ -119,8 +122,29 @@ async function createOutlet({ context, code, name, type }) {
 
 async function updateOutlet({ context, id, changes }) {
   const db = scopedDb().for(context);
-  await db.table('pos_outlets').where({ id }).update(changes);
-  return getOutlet({ context, id });
+  if (changes.type !== STORE_OUTLET_TYPE) {
+    await db.table('pos_outlets').where({ id }).update(changes);
+    return getOutlet({ context, id });
+  }
+  // Becoming a store: refused while the outlet is still selling. The outlet
+  // row is locked so two edits can't interleave; an order opened in the
+  // instant between this check and the commit is not blocked (`openOrder`
+  // takes no outlet lock — making every ordinary tab wait on one to guard a
+  // rare admin edit is not worth it). Such a tab stays settleable.
+  return db.transaction(async (trx) => {
+    const before = await trx.table('pos_outlets').where({ id }).forUpdate().first();
+    if (!before) return null;
+    if (before.type !== STORE_OUTLET_TYPE) {
+      const openOrderCount = await trx.table('pos_orders').where({ outlet_id: id, status: 'open' }).count();
+      const activeTokenCount = await trx.table('pos_order_tokens').where({ outlet_id: id, active: true }).count();
+      const guestOrderingEnabled = Boolean(before.guest_ordering_enabled);
+      if (openOrderCount > 0 || activeTokenCount > 0 || guestOrderingEnabled) {
+        throw new StoreOutletConversionBlockedError({ openOrderCount, guestOrderingEnabled, activeTokenCount });
+      }
+    }
+    await trx.table('pos_outlets').where({ id }).update(changes);
+    return trx.table('pos_outlets').where({ id }).first();
+  });
 }
 
 async function archiveOutlet({ context, id }) {
@@ -146,6 +170,7 @@ async function createTerminal({ context, outletId, deviceRef, supportsContactles
   const db = scopedDb().for(context);
   const outlet = await getOutlet({ context, id: outletId });
   if (!outlet) throw new OutletNotFoundError();
+  if (!isPointOfSaleOutlet(outlet)) throw new StoreOutletNotAPointOfSaleError(outlet.name);
   return withDuplicateMapping('pos_terminals', `A terminal with device ref "${deviceRef}" already exists at this outlet.`, async () => {
     const [id] = await db.table('pos_terminals').insert({ outlet_id: outletId, device_ref: deviceRef, supports_contactless: !!supportsContactless });
     return getTerminal({ context, id });
@@ -554,6 +579,7 @@ async function openOrder({ context, outletId, terminalId = null, openedByUserId 
   const db = scopedDb().for(context);
   const outlet = await getOutlet({ context, id: outletId });
   if (!outlet) throw new OutletNotFoundError();
+  if (!isPointOfSaleOutlet(outlet)) throw new StoreOutletNotAPointOfSaleError(outlet.name);
 
   if (terminalId) {
     // Matched in the WHERE clause, not fetched-then-compared in JS — a

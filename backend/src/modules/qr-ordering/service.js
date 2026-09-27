@@ -64,7 +64,8 @@ const { writeOutboxEvent } = require('../../shared/outbox');
 const { enqueueOutboxDispatch } = require('../../jobs/outbox-dispatcher');
 
 const posService = require('../pos/service');
-const { OutletNotFoundError, MenuItemNotFoundError, OrderNotOpenError } = require('../pos/errors');
+const { OutletNotFoundError, MenuItemNotFoundError, OrderNotOpenError, StoreOutletNotAPointOfSaleError } = require('../pos/errors');
+const { isPointOfSaleOutlet } = require('../../shared/outlet-types');
 const cashieringService = require('../cashiering/service');
 const reservationsService = require('../reservations/service');
 // Gap closure — the stock-out override guard. A new one-way edge only:
@@ -181,7 +182,7 @@ async function createGuestOrder({ context, token, cart, paymentMethod, guestCont
       if (!lockedToken || !lockedToken.active) throw new GuestOrderingDisabledError();
 
       const outlet = await trx.table('pos_outlets').where({ id: lockedToken.outlet_id }).first();
-      if (!outlet || !outlet.guest_ordering_enabled) throw new GuestOrderingDisabledError();
+      if (!outlet || !outlet.guest_ordering_enabled || !isPointOfSaleOutlet(outlet)) throw new GuestOrderingDisabledError();
 
       const resolvedItems = [];
       let cartTotal = '0.00';
@@ -693,6 +694,7 @@ async function createToken({ context, outletId, type, tableLabel, roomId, baseUr
   const db = scopedDb().for(context);
   const outlet = await db.table('pos_outlets').where({ id: outletId }).first();
   if (!outlet) throw new OutletNotFoundError();
+  if (!isPointOfSaleOutlet(outlet)) throw new StoreOutletNotAPointOfSaleError(outlet.name);
   if (type === 'room' && !roomId) {
     throw new ValidationError('MISSING_FIELD', '"room_id" is required for a room token.', [{ field: 'room_id', issue: 'missing' }]);
   }
@@ -730,6 +732,8 @@ async function regenerateToken({ context, id, baseUrl }) {
   const db = scopedDb().for(context);
   const existing = await db.table('pos_order_tokens').where({ id }).first();
   if (!existing) return null;
+  const outlet = await db.table('pos_outlets').where({ id: existing.outlet_id }).first();
+  if (!isPointOfSaleOutlet(outlet)) throw new StoreOutletNotAPointOfSaleError(outlet?.name);
 
   const raw = generateRawToken();
   return db.transaction(async (trx) => {
@@ -753,6 +757,10 @@ async function setTokenActive({ context, id, active }) {
   const db = scopedDb().for(context);
   const existing = await db.table('pos_order_tokens').where({ id }).first();
   if (!existing) return null;
+  if (active) {
+    const outlet = await db.table('pos_outlets').where({ id: existing.outlet_id }).first();
+    if (!isPointOfSaleOutlet(outlet)) throw new StoreOutletNotAPointOfSaleError(outlet?.name);
+  }
   await db.table('pos_order_tokens').where({ id }).update({ active });
   return db.table('pos_order_tokens').where({ id }).first();
 }
@@ -761,6 +769,7 @@ async function toggleGuestOrdering({ context, outletId, enabled }) {
   const db = scopedDb().for(context);
   const outlet = await db.table('pos_outlets').where({ id: outletId }).first();
   if (!outlet) throw new OutletNotFoundError();
+  if (enabled && !isPointOfSaleOutlet(outlet)) throw new StoreOutletNotAPointOfSaleError(outlet.name);
   await db.table('pos_outlets').where({ id: outletId }).update({ guest_ordering_enabled: !!enabled });
   return db.table('pos_outlets').where({ id: outletId }).first();
 }

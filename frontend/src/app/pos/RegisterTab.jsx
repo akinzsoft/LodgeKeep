@@ -7,6 +7,7 @@ import { openPaystackPopup } from '../../shared/paystack.js';
 import { CategoryIcon, AllCategoriesIcon, PaymentMethodIcon, TrashIcon } from './registerCategoryIcons.jsx';
 import formStyles from './POSForm.module.css';
 import styles from './RegisterTab.module.css';
+import { pointOfSaleOutlets } from './outletTypes.js';
 
 const AUTH_METHODS = [
   { value: 'signature', label: 'Signature' },
@@ -250,7 +251,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   useEffect(() => {
     posApi
       .listOutlets()
-      .then(setOutlets)
+      .then((rows) => setOutlets(pointOfSaleOutlets(rows)))
       .catch((caught) => {
         setOutlets([]);
         setError(caught instanceof ApiError ? caught.message : 'Could not load outlets.');

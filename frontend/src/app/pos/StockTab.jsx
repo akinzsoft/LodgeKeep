@@ -6,44 +6,44 @@ import { StockTakesTab } from './StockTakesTab.jsx';
 import { StockWastageTab } from './StockWastageTab.jsx';
 import { StockReportsTab } from './StockReportsTab.jsx';
 import { StockReorderReportTab } from './StockReorderReportTab.jsx';
+import { StockTransferTab } from './StockTransferTab.jsx';
 import styles from './POSScreen.module.css';
 
 /**
  * StockTab — PLAN.md Phase 6's "POS inventory & stock control"
- * (PRODUCT_REQUIREMENTS.md §3.4). A thin container over seven inner tabs,
+ * (PRODUCT_REQUIREMENTS.md §3.4). A thin container over its inner tabs,
  * the same second-level `role="tablist"` composition `POSScreen.jsx`'s own
- * outer tablist already establishes one level up — a natural nesting, not
- * a new pattern.
+ * outer tablist already establishes one level up.
  *
- * No client-side permission check hides any of the seven inner tabs, even
- * though the real backend (`stock/routes.js`) splits them across
- * `pos.stock_view` (Stock items' own read, Wastage — a floor action
- * reachable by `pos_operator`) and `pos.stock_manage` (everything else:
- * item CRUD, recipes, goods received, stock takes, reporting) — the same
- * "always reachable, the real 403 is what a lower-tier account sees"
- * convention every other tab on this screen already follows
- * (`SetupTab.jsx`'s own header). This app has no endpoint yet that would
- * tell a screen which of the two keys the signed-in user actually holds,
- * so faking that split client-side would be inventing information this
- * screen doesn't have, not a real RBAC check.
+ * Each inner tab names the key its endpoints need (`stock/routes.js`):
+ * `pos.stock_view` (stock items read, wastage, reorder), `pos.stock_transfer`
+ * (transfers) and `pos.stock_manage` (everything else). When `permissions`
+ * is given — the signed-in role's real grants, from the same endpoint the
+ * sidebar filters by — only the tabs that role can use are shown, so a
+ * Storekeeper sees Stock items, Wastage, Transfer and Reorder rather than a
+ * row of screens that answer 403. Without it every tab shows, as before;
+ * the server's own check is the real enforcement either way.
  */
 const STOCK_TABS = [
-  { key: 'items', label: 'Stock items' },
-  { key: 'recipes', label: 'Recipes' },
-  { key: 'goods_received', label: 'Goods received' },
-  { key: 'takes', label: 'Stock takes' },
-  { key: 'wastage', label: 'Wastage' },
-  { key: 'reorder', label: 'Reorder report' },
-  { key: 'reports', label: 'Reports' },
+  { key: 'items', label: 'Stock items', permission: 'pos.stock_view' },
+  { key: 'recipes', label: 'Recipes', permission: 'pos.stock_manage' },
+  { key: 'goods_received', label: 'Goods received', permission: 'pos.stock_manage' },
+  { key: 'transfer', label: 'Transfer', permission: 'pos.stock_transfer' },
+  { key: 'takes', label: 'Stock takes', permission: 'pos.stock_manage' },
+  { key: 'wastage', label: 'Wastage', permission: 'pos.stock_view' },
+  { key: 'reorder', label: 'Reorder report', permission: 'pos.stock_view' },
+  { key: 'reports', label: 'Reports', permission: 'pos.stock_manage' },
 ];
 
-export function StockTab({ activeProperty, isOffline = false }) {
-  const [tab, setTab] = useState('items');
+export function StockTab({ activeProperty, isOffline = false, permissions }) {
+  const tabs = permissions ? STOCK_TABS.filter((t) => permissions.has(t.permission)) : STOCK_TABS;
+  const [chosen, setTab] = useState(null);
+  const tab = tabs.some((t) => t.key === chosen) ? chosen : tabs[0]?.key;
 
   return (
     <div>
       <div className={styles.tabs} role="tablist" aria-label="Stock sections">
-        {STOCK_TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.key}
             type="button"
@@ -63,6 +63,7 @@ export function StockTab({ activeProperty, isOffline = false }) {
         {tab === 'goods_received' && <StockGoodsReceivedTab activeProperty={activeProperty} isOffline={isOffline} />}
         {tab === 'takes' && <StockTakesTab isOffline={isOffline} />}
         {tab === 'wastage' && <StockWastageTab isOffline={isOffline} />}
+        {tab === 'transfer' && <StockTransferTab isOffline={isOffline} />}
         {tab === 'reorder' && <StockReorderReportTab activeProperty={activeProperty} />}
         {tab === 'reports' && <StockReportsTab activeProperty={activeProperty} />}
       </div>

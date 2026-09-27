@@ -44,7 +44,7 @@ const { hashPassword } = require('../src/auth/password');
 const DEV_PASSWORD = 'LodgeKeepDev123!';
 
 /** SECURITY.md §5's seven system roles, seeded per tenant like fixtures.js does. */
-const SYSTEM_ROLES = ['front_desk', 'cashier', 'housekeeping', 'pos_operator', 'manager', 'admin', 'super_admin'];
+const SYSTEM_ROLES = ['front_desk', 'cashier', 'housekeeping', 'pos_operator', 'storekeeper', 'manager', 'admin', 'super_admin'];
 
 const TENANTS = [
   {
@@ -289,10 +289,22 @@ exports.seed = async function seed(knex) {
     await grantManagerKeys(tenantId, ['reconciliation.view']);
   }
 
-  async function grantManagerKeys(tenantId, keys) {
+  /**
+   * Stock transfer (gap closure): manager holds `pos.stock_transfer`; the
+   * storekeeper role holds it plus `pos.stock_view` (admin/super_admin get
+   * it via `ensureAdminSuperAdminFullAccess`). The migration backfills
+   * tenants that existed when it ran; this covers a tenant this script
+   * creates afterwards.
+   */
+  async function ensureStockTransferAccess(tenantId) {
+    await grantManagerKeys(tenantId, ['pos.stock_transfer']);
+    await grantManagerKeys(tenantId, ['pos.stock_view', 'pos.stock_transfer'], 'storekeeper');
+  }
+
+  async function grantManagerKeys(tenantId, keys, roleCode = 'manager') {
     const permissions = await knex('permissions').whereIn('permission_key', keys).select('id', 'permission_key');
     if (permissions.length !== keys.length) return; // migrations not yet run — nothing to grant
-    const managerRole = await knex('roles').where({ tenant_id: tenantId, code: 'manager' }).first('id');
+    const managerRole = await knex('roles').where({ tenant_id: tenantId, code: roleCode }).first('id');
     if (!managerRole) return;
 
     const existingGrants = await knex('role_permissions')
@@ -529,6 +541,7 @@ exports.seed = async function seed(knex) {
       await ensureManagerExpensesAccess(existingTenant.id);
       await ensureManagerReconciliationAccess(existingTenant.id);
       await ensurePosOperatorRoleAccess(existingTenant.id);
+      await ensureStockTransferAccess(existingTenant.id);
       // src/auth/mfa.js's dev-only bypass: backfill the admin account and
       // its full-access grant onto a pre-existing dev tenant too, same
       // reasoning as the manager grants above.
@@ -612,6 +625,7 @@ exports.seed = async function seed(knex) {
     // PLAN.md Phase 4's POS core — see `ensureManagerPosAccess`'s own header.
     await ensureManagerPosAccess(tenantId);
     await ensurePosOperatorRoleAccess(tenantId);
+    await ensureStockTransferAccess(tenantId);
     await ensurePosOperatorAccount(tenantId, propertyId, spec);
     await ensurePosReferenceData(tenantId, propertyId);
 

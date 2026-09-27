@@ -113,7 +113,10 @@ const {
   StockTakeAlreadyCancelledError,
   StockCategoryInUseError,
   InsufficientStockOverrideRequiredError,
+  InsufficientStockForTransferError,
+  SameOutletTransferError,
 } = require('./errors');
+const { generateUlid } = require('../../shared/ulid');
 
 const ZERO_QTY = '0.000';
 
@@ -895,6 +898,156 @@ async function recordWastage({ trx, stockItemId, outletId, quantity, reason, use
 }
 
 // ---------------------------------------------------------------------
+// Transfers between outlets
+// ---------------------------------------------------------------------
+
+/**
+ * `trx`-based, called from `runIdempotentMutation`. Moves `quantity` of one
+ * shared stock item from `fromOutletId` to `toOutletId` as two
+ * `stock_movements` rows of type `transfer` — minus at the source, plus at
+ * the destination — written in the caller's one transaction, so there is no
+ * state in which one leg exists without the other. Both legs carry the
+ * item's current `purchase_cost` (stock items are shared property-wide, so
+ * there is one cost, not a source cost and a destination cost) and the two
+ * legs' `total_cost` are exact mirrors: property-wide, a transfer nets to
+ * zero quantity and zero cost. It is a relocation, never a loss or a
+ * receipt — which is the whole point of recording it as its own type
+ * rather than as wastage at one outlet plus goods received at another.
+ *
+ * DELIBERATELY DEPARTS from this module's "negative stock is allowed, never
+ * blocked" rule (file header). A sale or wastage records something that
+ * already happened on the floor, so refusing it would only make the ledger
+ * lie; a transfer is a decision to move stock that must physically exist at
+ * the source for the destination's gain to be real. So it is refused
+ * outright — no override reason can push it through — when the source holds
+ * less than `quantity` (an outlet with no level row at all holds zero).
+ * The check is a locking read taken AFTER the `stock_items` lock every
+ * writer of this item queues on, so a concurrent sale, wastage, delivery,
+ * stock take or another transfer of the same item cannot slip between the
+ * check and the write.
+ *
+ * Lock order is the one every writer here uses: closure resolved first,
+ * locked ascending in one call, then `stock_levels`, then (inside
+ * `applyStockAvailabilityEffects`) menu items. Arrives immediately — there
+ * is no confirm-on-receipt step, and no request/approve paper trail (both
+ * deliberately out of scope for this first version). The two legs share a
+ * system-generated `reference` (`TRF-<ulid>`) so a reader can pair them;
+ * `note` (optional, the user's own words) goes in `reason` on both.
+ */
+async function transferStock({ trx, stockItemId, fromOutletId, toOutletId, quantity, note, userId, businessDate }) {
+  if (String(fromOutletId) === String(toOutletId)) throw new SameOutletTransferError();
+  const fromOutlet = await assertOutlet(trx, fromOutletId);
+  const toOutlet = await assertOutlet(trx, toOutletId);
+
+  const lockClosure = await resolveLockClosure({ trx, stockItemIds: [stockItemId] });
+  const lockedById = await lockStockItemsSorted({ trx, stockItemIds: lockClosure });
+  const stockItem = lockedById.get(String(Number(stockItemId)));
+  if (!stockItem || stockItem.status !== 'active') throw new StockItemNotFoundError();
+
+  const sourceLevel = await lockedLevel(trx, fromOutletId, stockItemId);
+  const available = sourceLevel?.current_quantity ?? ZERO_QTY;
+  if (compareQuantity(available, quantity) < 0) {
+    throw new InsufficientStockForTransferError({
+      stockItemId: Number(stockItemId),
+      name: stockItem.name,
+      unit: stockItem.unit,
+      fromOutletId: Number(fromOutletId),
+      available,
+      requested: quantity,
+    });
+  }
+
+  const reference = `TRF-${generateUlid()}`;
+  const outQuantity = negateQuantity(quantity);
+  const shared = {
+    stock_item_id: stockItemId,
+    type: 'transfer',
+    unit_cost: stockItem.purchase_cost,
+    business_date: businessDate,
+    reference,
+    reason: note || null,
+    user_id: userId ?? null,
+  };
+  await trx.table('stock_movements').insert({ ...shared, outlet_id: fromOutletId, quantity: outQuantity, total_cost: extendedCost(stockItem.purchase_cost, outQuantity) });
+  await trx.table('stock_movements').insert({ ...shared, outlet_id: toOutletId, quantity, total_cost: extendedCost(stockItem.purchase_cost, quantity) });
+
+  const fromQuantity = await recomputeStockLevel({ trx, stockItemId, outletId: fromOutletId });
+  const toQuantity = await recomputeStockLevel({ trx, stockItemId, outletId: toOutletId });
+  // The same reactive availability flip a sale or delivery triggers, at
+  // both ends: draining the source may make a menu item unavailable there;
+  // stocking the destination may make one available again.
+  await applyStockAvailabilityEffects({ trx, stockItemIds: [stockItemId], outletId: fromOutletId });
+  await applyStockAvailabilityEffects({ trx, stockItemIds: [stockItemId], outletId: toOutletId });
+
+  return {
+    reference,
+    stockItem: { id: stockItem.id, name: stockItem.name, unit: stockItem.unit },
+    quantity,
+    note: note || null,
+    businessDate,
+    from: { outletId: fromOutlet.id, outletName: fromOutlet.name, newQuantity: fromQuantity },
+    to: { outletId: toOutlet.id, outletName: toOutlet.name, newQuantity: toQuantity },
+  };
+}
+
+/**
+ * Recent transfers, one row per transfer (its two legs paired by
+ * `reference`), for the Transfer screen's history. Quantities, outlets and
+ * who/when only — no cost: this list is readable with `pos.stock_transfer`,
+ * which a Storekeeper holds, and cost reporting stays `pos.stock_manage`.
+ * With `outletId`, only transfers in or out of that outlet.
+ */
+async function listTransfers({ context, outletId, limit = 50 }) {
+  const db = scopedDb().for(context);
+  // Newest legs first; each transfer has two legs (one per outlet), so
+  // twice the limit always reaches `limit` distinct transfers.
+  let recentLegs = db.table('stock_movements').where({ type: 'transfer' });
+  if (outletId) recentLegs = recentLegs.where({ outlet_id: outletId });
+  const recent = await recentLegs.orderBy('id', 'desc').limit(limit * 2).select('reference');
+  const references = [...new Set(recent.map((row) => row.reference).filter(Boolean))].slice(0, limit);
+  if (!references.length) return [];
+
+  const legs = await db
+    .table('stock_movements')
+    .joinScoped('stock_items', (join) => join.on('stock_items.id', '=', 'stock_movements.stock_item_id'))
+    .joinScoped('pos_outlets', (join) => join.on('pos_outlets.id', '=', 'stock_movements.outlet_id'))
+    .where({ 'stock_movements.type': 'transfer' })
+    .whereIn('stock_movements.reference', references)
+    .select(
+      'stock_movements.id',
+      'stock_movements.reference',
+      'stock_movements.stock_item_id',
+      'stock_movements.outlet_id',
+      'stock_movements.quantity',
+      'stock_movements.business_date',
+      'stock_movements.reason',
+      'stock_movements.user_id',
+      'stock_movements.created_at',
+      'stock_items.name as stock_item_name',
+      'stock_items.unit as stock_item_unit',
+      'pos_outlets.name as outlet_name',
+    );
+
+  const byReference = new Map();
+  for (const leg of legs) {
+    const entry = byReference.get(leg.reference) ?? { reference: leg.reference, lastId: 0 };
+    entry.lastId = Math.max(entry.lastId, Number(leg.id));
+    entry.stockItemId = leg.stock_item_id;
+    entry.stockItemName = leg.stock_item_name;
+    entry.unit = leg.stock_item_unit;
+    entry.businessDate = leg.business_date;
+    entry.note = leg.reason;
+    entry.userId = leg.user_id;
+    entry.createdAt = leg.created_at;
+    const side = compareQuantity(leg.quantity, ZERO_QTY) < 0 ? 'from' : 'to';
+    entry[side] = { outletId: leg.outlet_id, outletName: leg.outlet_name };
+    if (side === 'to') entry.quantity = leg.quantity;
+    byReference.set(leg.reference, entry);
+  }
+  return [...byReference.values()].sort((a, b) => b.lastId - a.lastId).map(({ lastId, ...rest }) => rest);
+}
+
+// ---------------------------------------------------------------------
 // Stock takes — blind counting, the same structural guarantee
 // `pos_shifts`' own cash-up already establishes. A take counts one outlet.
 // ---------------------------------------------------------------------
@@ -1095,6 +1248,8 @@ module.exports = {
   upsertMenuItemComponents,
   recordGoodsReceived,
   recordWastage,
+  transferStock,
+  listTransfers,
   listStockTakes,
   getStockTake,
   openStockTake,

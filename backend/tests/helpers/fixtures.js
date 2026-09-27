@@ -43,6 +43,7 @@ const SYSTEM_ROLES = [
   'cashier',
   'housekeeping',
   'pos_operator',
+  'storekeeper',
   'manager',
   'admin',
   'super_admin',
@@ -1890,6 +1891,7 @@ async function seedTwoTenants(trx) {
     ['reports.view_chain', 'reports'],
     ['pos.stock_view', 'pos'],
     ['pos.stock_manage', 'pos'],
+    ['pos.stock_transfer', 'pos'],
     ['door_access.view', 'door_access'],
     ['door_access.manage', 'door_access'],
     ['expenses.view', 'expenses'],
@@ -2084,6 +2086,19 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.stock_manage'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.stock_view'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.stock_manage'] },
+    ]);
+  }
+
+  // Stock transfer between outlets: `pos.stock_transfer` for the
+  // storekeeper (who also gets `pos.stock_view`) and manager/admin/
+  // super_admin. POS operators do not transfer.
+  for (const t of both) {
+    await trx('role_permissions').insert([
+      { tenant_id: t.id, role_id: t.roles.storekeeper, permission_id: permissions['pos.stock_view'] },
+      { tenant_id: t.id, role_id: t.roles.storekeeper, permission_id: permissions['pos.stock_transfer'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['pos.stock_transfer'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.stock_transfer'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.stock_transfer'] },
     ]);
   }
 

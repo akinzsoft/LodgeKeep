@@ -95,14 +95,14 @@ const NOTIFICATION_EVENTS = Object.freeze([
     group: 'Inventory',
     label: 'Stock at reorder level',
     description: 'A stock item dropped to or below its reorder level.',
-    defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
+    defaultRoles: ['pos_operator', 'storekeeper', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'stock.out_of_stock',
     group: 'Inventory',
     label: 'Stock out of stock',
     description: 'A stock item ran out. Menu items that use it become unavailable.',
-    defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
+    defaultRoles: ['pos_operator', 'storekeeper', 'manager', 'admin', 'super_admin'],
   },
   {
     eventType: 'pos.stock_override_applied',
@@ -158,9 +158,11 @@ const NOTIFICATION_EVENTS = Object.freeze([
     group: 'Housekeeping',
     label: 'Room status discrepancy',
     description: "A housekeeper's occupancy report disagrees with the front desk.",
-    // Every role — exactly who this event notified before it moved onto the
-    // role grid, so nothing changes for an unconfigured property.
-    defaultRoles: [...SYSTEM_ROLES],
+    // Every role that existed when this event moved onto the role grid —
+    // exactly who it notified before, so nothing changes for an unconfigured
+    // property. The later Storekeeper role (stock only) is not added by
+    // default; a property can tick it in the grid.
+    defaultRoles: SYSTEM_ROLES.filter((role) => role !== 'storekeeper'),
   },
   {
     eventType: 'door_access.critical_alert_raised',

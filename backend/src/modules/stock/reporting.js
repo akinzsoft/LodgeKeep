@@ -9,7 +9,7 @@
 
 const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, toCents, fromCents } = require('../../shared/money');
-const { sumQuantity, negateQuantity, extendedCost } = require('../../shared/quantity');
+const { sumQuantity, negateQuantity, compareQuantity, extendedCost } = require('../../shared/quantity');
 const { computeMenuItemSalesTotals } = require('../pos/sales-report');
 const stockService = require('./service');
 
@@ -288,7 +288,7 @@ async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
   const totals = new Map();
   const bucket = (id) => {
     const key = String(id);
-    if (!totals.has(key)) totals.set(key, { sold: [], soldCost: [], received: [], wastage: [], wastageCost: [], adjustment: [] });
+    if (!totals.has(key)) totals.set(key, { sold: [], soldCost: [], received: [], wastage: [], wastageCost: [], adjustment: [], transferIn: [], transferInCost: [], transferOut: [], transferOutCost: [] });
     return totals.get(key);
   };
   for (const row of movements) {
@@ -305,6 +305,19 @@ async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
       entry.wastageCost.push(cost);
     } else if (row.type === 'count_adjustment') {
       entry.adjustment.push(quantity);
+    } else if (row.type === 'transfer') {
+      // Its own line, never wastage or received: a transfer only moves stock
+      // between outlets. The leg's sign says which way — the outgoing leg is
+      // negative. Across all outlets both legs of every transfer land here,
+      // so transferred in equals transferred out and the costs cancel; one
+      // outlet's report shows its own real in/out.
+      if (compareQuantity(quantity, '0.000') < 0) {
+        entry.transferOut.push(quantity);
+        entry.transferOutCost.push(cost);
+      } else {
+        entry.transferIn.push(quantity);
+        entry.transferInCost.push(cost);
+      }
     }
   }
 
@@ -328,6 +341,10 @@ async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
       wastageQty: negateQuantity(sumQuantity(entry.wastage)),
       wastageCost: negateMoney(sumMoney(entry.wastageCost)),
       adjustmentQty: sumQuantity(entry.adjustment),
+      transferInQty: sumQuantity(entry.transferIn),
+      transferInCost: sumMoney(entry.transferInCost),
+      transferOutQty: negateQuantity(sumQuantity(entry.transferOut)),
+      transferOutCost: negateMoney(sumMoney(entry.transferOutCost)),
     };
   });
 
@@ -347,6 +364,8 @@ async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
       lowStockCount: rows.filter((row) => row.atOrBelowReorder).length,
       soldCost: sumMoney(rows.map((row) => row.soldCost)),
       wastageCost: sumMoney(rows.map((row) => row.wastageCost)),
+      transferInCost: sumMoney(rows.map((row) => row.transferInCost)),
+      transferOutCost: sumMoney(rows.map((row) => row.transferOutCost)),
     };
   });
 
@@ -356,7 +375,13 @@ async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
     dateFrom,
     dateTo,
     outletId: outletId ?? null,
-    totals: { itemCount: itemRows.length, soldCost: sumMoney(itemRows.map((row) => row.soldCost)), wastageCost: sumMoney(itemRows.map((row) => row.wastageCost)) },
+    totals: {
+      itemCount: itemRows.length,
+      soldCost: sumMoney(itemRows.map((row) => row.soldCost)),
+      wastageCost: sumMoney(itemRows.map((row) => row.wastageCost)),
+      transferInCost: sumMoney(itemRows.map((row) => row.transferInCost)),
+      transferOutCost: sumMoney(itemRows.map((row) => row.transferOutCost)),
+    },
     byCategory,
     items: itemRows,
   };

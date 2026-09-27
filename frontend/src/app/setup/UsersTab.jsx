@@ -7,12 +7,12 @@ import { EmailDeliveryNotice } from './EmailDeliveryNotice.jsx';
 
 /**
  * No `GET /roles` endpoint exists yet — `src/auth/roles.js`'s own header
- * names these as "the seven roles in SECURITY.md §5," seeded into every
+ * names these as "the system roles in SECURITY.md §5," seeded into every
  * tenant at provisioning, so this list is hardcoded here rather than
  * fetched. A tenant that ever renames or adds a custom role would need a
  * real roles-listing endpoint first; flagged, not silently assumed away.
  */
-const ROLES = ['front_desk', 'cashier', 'housekeeping', 'pos_operator', 'manager', 'admin', 'super_admin'];
+const ROLES = ['front_desk', 'cashier', 'housekeeping', 'pos_operator', 'storekeeper', 'manager', 'admin', 'super_admin'];
 
 /**
  * UsersTab — PLAN.md Phase 1 gap closure, PRODUCT_REQUIREMENTS.md §3.19's

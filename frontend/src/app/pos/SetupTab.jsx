@@ -5,6 +5,7 @@ import formStyles from './POSForm.module.css';
 import styles from './SetupTab.module.css';
 import { MenuItemsTab } from './MenuItemsTab.jsx';
 import { OutletCategoriesCard } from './OutletCategoriesCard.jsx';
+import { STORE_OUTLET_TYPE, isStoreOutlet } from './outletTypes.js';
 
 /**
  * SetupTab — PLAN.md Phase 4's POS core: outlets, terminals. Menu
@@ -35,7 +36,8 @@ import { OutletCategoriesCard } from './OutletCategoriesCard.jsx';
  * own sibling `create*` form's fields — `status` stays reachable only
  * through Archive, matching `RoomTypesTab.jsx`'s own precedent.
  */
-const OUTLET_TYPE_LABELS = { bar: 'Bar', restaurant: 'Restaurant', room_service: 'Room service', spa: 'Spa', poolside: 'Poolside' };
+const OUTLET_TYPE_LABELS = { bar: 'Bar', restaurant: 'Restaurant', room_service: 'Room service', spa: 'Spa', poolside: 'Poolside', [STORE_OUTLET_TYPE]: 'Store' };
+const STORE_HINT = 'A store holds and issues stock. It never appears in the Register and takes no orders, terminals or QR codes.';
 
 /**
  * The shared catalogue (user-requested): categories and items are created
@@ -250,7 +252,9 @@ export function SetupTab({ activeProperty, isOffline = false }) {
                 <option value="room_service">Room service</option>
                 <option value="spa">Spa</option>
                 <option value="poolside">Poolside</option>
+                <option value={STORE_OUTLET_TYPE}>Store (stock only)</option>
               </select>
+              {outletForm.type === STORE_OUTLET_TYPE && <span className={formStyles.hint}>{STORE_HINT}</span>}
             </label>
           </div>
           <div className={formStyles.actionsRow}>
@@ -268,7 +272,7 @@ export function SetupTab({ activeProperty, isOffline = false }) {
         columns={[
           { key: 'code', label: 'Code' },
           { key: 'name', label: 'Name' },
-          { key: 'type', label: 'Type' },
+          { key: 'type', label: 'Type', render: (row) => OUTLET_TYPE_LABELS[row.type] ?? row.type },
         ]}
         rows={outlets ?? []}
         rowKey={(row) => row.id}
@@ -312,7 +316,9 @@ export function SetupTab({ activeProperty, isOffline = false }) {
                 <option value="room_service">Room service</option>
                 <option value="spa">Spa</option>
                 <option value="poolside">Poolside</option>
+                <option value={STORE_OUTLET_TYPE}>Store (stock only)</option>
               </select>
+              {outletEditForm.type === STORE_OUTLET_TYPE && <span className={formStyles.hint}>{STORE_HINT}</span>}
             </label>
             <div className={formStyles.actionsRow}>
               <Button type="submit" loading={outletEditSubmitting}>
@@ -375,6 +381,10 @@ export function SetupTab({ activeProperty, isOffline = false }) {
 
           {outletSection === 'terminals' && (
             <Card title={`Terminals — ${selectedOutlet.name}`}>
+              {isStoreOutlet(selectedOutlet) ? (
+                <p className={formStyles.hint}>{STORE_HINT}</p>
+              ) : (
+              <>
               {terminalError && (
                 <p role="alert" className={formStyles.errorBanner}>
                   {terminalError}
@@ -425,7 +435,8 @@ export function SetupTab({ activeProperty, isOffline = false }) {
                   </>
                 )}
               />
-
+              </>
+              )}
             </Card>
 
           )}

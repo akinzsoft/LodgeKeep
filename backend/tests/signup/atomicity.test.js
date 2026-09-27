@@ -135,7 +135,7 @@ describe('signup atomicity on real MySQL connections (ARCHITECTURE.md §4)', () 
       expect(await db()('tenants').where({ id: result.tenantId })).toHaveLength(1);
       expect(await db()('properties').where({ id: result.propertyId })).toHaveLength(1);
       expect(await db()('users').where({ id: result.userId })).toHaveLength(1);
-      expect(await db()('roles').where({ tenant_id: result.tenantId })).toHaveLength(7);
+      expect(await db()('roles').where({ tenant_id: result.tenantId })).toHaveLength(8);
       expect(await db()('user_property_access').where({ user_id: result.userId, property_id: result.propertyId })).toHaveLength(1);
       expect(await db()('tenant_signups').where({ email: input.adminEmail.toLowerCase() })).toHaveLength(1);
     } finally {

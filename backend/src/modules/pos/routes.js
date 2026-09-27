@@ -21,12 +21,14 @@
 const { Router } = require('express');
 const controller = require('./controller');
 const { receiveImage } = require('../../shared/image-store');
-const { requirePermission } = require('../../auth');
+const { requirePermission, requireAnyPermission } = require('../../auth');
 
 function posRouter() {
   const router = Router();
 
-  router.get('/pos/outlets', requirePermission('pos.operate'), controller.listOutlets);
+  // Also readable with `pos.stock_view`: a Storekeeper (no Register access)
+  // still has to name the outlets stock moves between.
+  router.get('/pos/outlets', requireAnyPermission(['pos.operate', 'pos.stock_view']), controller.listOutlets);
   router.post('/pos/outlets', requirePermission('pos.manage'), controller.createOutlet);
   router.patch('/pos/outlets/:id', requirePermission('pos.manage'), controller.updateOutlet);
   router.post('/pos/outlets/:id/archive', requirePermission('pos.manage'), controller.archiveOutlet);

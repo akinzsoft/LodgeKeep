@@ -5,6 +5,7 @@ import { posApi, cashieringApi, ApiError } from '../../shared/api/index.js';
 import { triggerDownload } from '../../shared/download.js';
 import formStyles from './POSForm.module.css';
 import styles from './SalesTab.module.css';
+import { pointOfSaleOutlets } from './outletTypes.js';
 
 const TENDER_LABELS = { cash: 'Cash', card: 'Card', nqr: 'NQR', room_charge: 'Charge to room' };
 
@@ -76,7 +77,7 @@ export function SalesTab({ activeProperty, isOffline = false }) {
   useEffect(() => {
     posApi
       .listOutlets()
-      .then(setOutlets)
+      .then((rows) => setOutlets(pointOfSaleOutlets(rows)))
       .catch(() => setOutlets([]));
   }, []);
 

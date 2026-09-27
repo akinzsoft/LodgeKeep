@@ -18,6 +18,12 @@ const MOVEMENT_LABEL = {
   transfer: 'Transfer',
 };
 
+/** A transfer is one type with two legs; the leg's sign says which way it went at this outlet. */
+function movementLabel(row) {
+  if (row.type === 'transfer') return String(row.quantity).startsWith('-') ? 'Transfer out' : 'Transfer in';
+  return MOVEMENT_LABEL[row.type] ?? row.type;
+}
+
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -179,6 +185,8 @@ export function StockReportsTab({ activeProperty }) {
           { key: 'lowStockCount', label: 'Low / out of stock', align: 'right' },
           { key: 'soldCost', label: 'Cost of sales', align: 'right', render: (row) => <Money amount={row.soldCost} currencyCode={activeProperty.base_currency} /> },
           { key: 'wastageCost', label: 'Wastage', align: 'right', render: (row) => <Money amount={row.wastageCost} currencyCode={activeProperty.base_currency} /> },
+          { key: 'transferInCost', label: 'Transferred in', align: 'right', render: (row) => <Money amount={row.transferInCost} currencyCode={activeProperty.base_currency} /> },
+          { key: 'transferOutCost', label: 'Transferred out', align: 'right', render: (row) => <Money amount={row.transferOutCost} currencyCode={activeProperty.base_currency} /> },
         ]}
         rows={overview?.byCategory ?? []}
         rowKey={(row) => row.category ?? '__none__'}
@@ -196,6 +204,8 @@ export function StockReportsTab({ activeProperty }) {
           { key: 'soldCost', label: 'Cost of sales', align: 'right', render: (row) => <Money amount={row.soldCost} currencyCode={activeProperty.base_currency} /> },
           { key: 'receivedQty', label: 'Received', align: 'right', render: (row) => formatQuantity(row.receivedQty, row.unit) },
           { key: 'wastageQty', label: 'Wasted', align: 'right', render: (row) => formatQuantity(row.wastageQty, row.unit) },
+          { key: 'transferInQty', label: 'Transferred in', align: 'right', render: (row) => formatQuantity(row.transferInQty, row.unit) },
+          { key: 'transferOutQty', label: 'Transferred out', align: 'right', render: (row) => formatQuantity(row.transferOutQty, row.unit) },
           { key: 'adjustmentQty', label: 'Count adjustment', align: 'right', render: (row) => formatQuantity(row.adjustmentQty, row.unit) },
         ]}
         rows={overview?.items ?? []}
@@ -216,7 +226,7 @@ export function StockReportsTab({ activeProperty }) {
             { key: 'business_date', label: 'Date' },
             { key: 'category', label: 'Stock category', render: (row) => row.stock_item_category?.trim() || UNCATEGORIZED_LABEL },
             { key: 'stock_item_name', label: 'Stock item' },
-            { key: 'type', label: 'Type', render: (row) => MOVEMENT_LABEL[row.type] ?? row.type },
+            { key: 'type', label: 'Type', render: movementLabel },
             { key: 'quantity', label: 'Quantity', align: 'right', render: (row) => formatQuantity(row.quantity, row.stock_item_unit) },
           ]}
           rows={movements}

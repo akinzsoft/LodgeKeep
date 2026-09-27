@@ -92,6 +92,28 @@ class InsufficientStockOverrideRequiredError extends AppError {
   }
 }
 
+/**
+ * A transfer asked for more than the source outlet holds. Unlike a sale or
+ * wastage (which may take stock negative), a transfer is refused outright —
+ * see `transferStock`'s own header for why there is no override path.
+ */
+class InsufficientStockForTransferError extends AppError {
+  constructor({ stockItemId, name, unit, fromOutletId, available, requested }) {
+    super(
+      'BUSINESS_RULE_INSUFFICIENT_STOCK_FOR_TRANSFER',
+      `Only ${available} ${unit} of "${name}" is on hand at this outlet — cannot transfer ${requested} ${unit}. A transfer can never take stock below zero.`,
+      422,
+      { stockItemId, fromOutletId, available, requested },
+    );
+  }
+}
+
+class SameOutletTransferError extends ValidationError {
+  constructor() {
+    super('SAME_OUTLET_TRANSFER', 'Choose two different outlets — a transfer cannot go from an outlet to itself.', [{ field: 'to_outlet_id', issue: 'same_as_from' }]);
+  }
+}
+
 module.exports = {
   StockItemNotFoundError,
   OutletNotFoundError,
@@ -104,4 +126,6 @@ module.exports = {
   StockTakeAlreadyCancelledError,
   StockCategoryInUseError,
   InsufficientStockOverrideRequiredError,
+  InsufficientStockForTransferError,
+  SameOutletTransferError,
 };

@@ -11,6 +11,13 @@
  * record wastage with a mandatory reason) and `pos.stock_manage`
  * (manager/admin/super_admin only — stock item CRUD, recipe/BOM, goods
  * received, the full stock-take lifecycle, cost/variance reporting).
+ *
+ * A third, `pos.stock_transfer` (storekeeper/manager/admin/super_admin):
+ * issue stock from one outlet to another, and read the transfer history
+ * (quantities only, no cost). Its own key, not either of the two above,
+ * so a Storekeeper can move stock without selling at the Register
+ * (`pos.operate`) or editing items and seeing cost reports
+ * (`pos.stock_manage`).
  */
 
 const { Router } = require('express');
@@ -41,6 +48,9 @@ function stockRouter() {
   // pos.stock_view: a movement row carries unit_cost/total_cost, real cost
   // data — gap closure, backing Goods Received's own "recent deliveries".
   router.get('/pos/stock/movements', requirePermission('pos.stock_manage'), controller.listStockMovements);
+
+  router.post('/pos/stock/transfers', requirePermission('pos.stock_transfer'), controller.transferStock);
+  router.get('/pos/stock/transfers', requirePermission('pos.stock_transfer'), controller.listTransfers);
 
   router.get('/pos/stock/takes', requirePermission('pos.stock_manage'), controller.listStockTakes);
   router.get('/pos/stock/takes/:id', requirePermission('pos.stock_manage'), controller.getStockTake);

@@ -32,6 +32,7 @@ import { CashieringScreen } from './app/cashiering/CashieringScreen.jsx';
 import { NightAuditScreen } from './app/night-audit/NightAuditScreen.jsx';
 import { ProfilesScreen } from './app/profiles/ProfilesScreen.jsx';
 import { POSScreen } from './app/pos/POSScreen.jsx';
+import { StockScreen } from './app/pos/StockScreen.jsx';
 import { ARScreen } from './app/ar/ARScreen.jsx';
 import { GroupBlocksScreen } from './app/group-blocks/GroupBlocksScreen.jsx';
 import { BillingScreen } from './app/billing/BillingScreen.jsx';
@@ -235,7 +236,10 @@ function Demo() {
   // role can see that screen, and is marked read either way.
   function handleOpenNotification(notification) {
     staffNotifications.markRead(notification.id);
-    const target = notificationTarget(notification.type);
+    let target = notificationTarget(notification.type);
+    // A stock alert opens POS for anyone who can sell; a Storekeeper has the
+    // Stock screen instead.
+    if (target === 'pos' && notification.type.startsWith('stock.') && !isNavItemAllowed('pos', grantedPermissions)) target = 'stock';
     if (target && isNavItemAllowed(target, grantedPermissions)) setActiveItemKey(target);
   }
 
@@ -323,7 +327,9 @@ function Demo() {
       ) : screenKey === 'profiles' ? (
         <ProfilesScreen isOffline={!isOnline} activeProperty={activePropertyRecord} />
       ) : screenKey === 'pos' ? (
-        <POSScreen activeProperty={activePropertyRecord} isOffline={!isOnline} currentUserLabel={displayName} />
+        <POSScreen activeProperty={activePropertyRecord} isOffline={!isOnline} currentUserLabel={displayName} permissions={grantedPermissions} />
+      ) : screenKey === 'stock' ? (
+        <StockScreen activeProperty={activePropertyRecord} isOffline={!isOnline} permissions={grantedPermissions} />
       ) : screenKey === 'ar' ? (
         <ARScreen isOffline={!isOnline} />
       ) : screenKey === 'group_blocks' ? (

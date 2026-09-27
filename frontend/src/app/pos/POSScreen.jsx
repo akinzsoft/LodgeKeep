@@ -64,7 +64,7 @@ const TABS = [
   { key: 'setup', label: 'Setup' },
 ];
 
-export function POSScreen({ activeProperty, isOffline = false, currentUserLabel }) {
+export function POSScreen({ activeProperty, isOffline = false, currentUserLabel, permissions }) {
   const [tab, setTab] = useState('register');
 
   return (
@@ -97,7 +97,7 @@ export function POSScreen({ activeProperty, isOffline = false, currentUserLabel 
             {tab === 'shifts' && <ShiftsTab isOffline={isOffline} />}
             {tab === 'sales' && <SalesTab activeProperty={activeProperty} isOffline={isOffline} />}
             {tab === 'qr_codes' && <QrTokensTab />}
-            {tab === 'stock' && <StockTab activeProperty={activeProperty} isOffline={isOffline} />}
+            {tab === 'stock' && <StockTab activeProperty={activeProperty} isOffline={isOffline} permissions={permissions} />}
             {tab === 'setup' && <SetupTab activeProperty={activeProperty} isOffline={isOffline} />}
           </div>
         </>
