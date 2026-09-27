@@ -1,0 +1,17 @@
+/* Printing a single document (shared/components/Print/PrintDocument.jsx):
+   the document sits directly under <body>, hidden on screen; while it is
+   mounted, printing hides everything else and shows only it. */
+
+.lk-print-document {
+  display: none;
+}
+
+@media print {
+  body.lk-printing-document > *:not(.lk-print-document) {
+    display: none !important;
+  }
+
+  body.lk-printing-document > .lk-print-document {
+    display: block;
+  }
+}

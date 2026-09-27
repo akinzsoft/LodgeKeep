@@ -19,3 +19,5 @@ export { ConfirmDialog } from './ConfirmDialog/ConfirmDialog.jsx';
 export { Skeleton } from './Skeleton/Skeleton.jsx';
 export { Turnstile } from './Turnstile/Turnstile.jsx';
 export { CategoryCatalogueCard } from './CategoryCatalogueCard/CategoryCatalogueCard.jsx';
+export { PrintLetterhead } from './Print/PrintLetterhead.jsx';
+export { PrintDocument } from './Print/PrintDocument.jsx';

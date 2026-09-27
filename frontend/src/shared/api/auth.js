@@ -26,6 +26,17 @@ export function login({ email, password }) {
 }
 
 /**
+ * The tenant's name and logo for the sign-in screen, before anyone is
+ * signed in — public, resolved from the Host header like login itself.
+ * The logo is the first active property's Setup → Branding logo, or null.
+ *
+ * @returns {Promise<{tenantName: string|null, logoUrl: string|null}>}
+ */
+export function getLoginBranding() {
+  return request('/auth/branding', { auth: false });
+}
+
+/**
  * Resumes a login `mfa_challenge_required` paused. The only code this can
  * ever succeed with is `src/auth/mfa.js`'s dev-only bypass value, and only
  * outside a production backend — see that file's own header. Any other

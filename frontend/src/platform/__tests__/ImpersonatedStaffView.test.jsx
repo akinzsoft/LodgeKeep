@@ -13,7 +13,8 @@ vi.mock('../../app/dashboard/HomeDashboard.jsx', () => ({ HomeDashboard: ({ busi
 describe('impersonated property context', () => {
   it('uses the property name and business date and responds to connectivity changes', async () => {
     render(<ImpersonatedStaffView />);
-    expect(await screen.findByText('Riverside Lodge')).toBeInTheDocument();
+    // Shown in the top bar's property switcher and at the top of the sidebar.
+    expect((await screen.findAllByText('Riverside Lodge')).length).toBeGreaterThan(0);
     expect(screen.getByText('Dashboard date: 2026-08-31')).toBeInTheDocument();
     fireEvent(window, new Event('offline'));
     expect(screen.getByText(/You’re offline|You are offline|You.re offline/i)).toBeInTheDocument();

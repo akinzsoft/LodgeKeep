@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { DataTable, Button, Card } from '../../shared/components/index.js';
+import { DataTable, Button, Card, PrintLetterhead } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { expensesApi, ApiError } from '../../shared/api/index.js';
 import { triggerDownload } from '../../shared/download.js';
@@ -110,20 +110,17 @@ export function ReportsTab({ activeProperty }) {
 
       {statement && (
         <Card title={`Profit & Loss statement — ${statement.dateFrom} to ${statement.dateTo}`}>
-          {/* Printed-only letterhead — the app chrome (Sidebar/TopBar, and
-              this screen's own title/tab bar) is hidden on print, so the
-              exported document needs its own property identity. The logo is
-              whatever's already configured via Setup → Branding; a property
-              with none set simply omits the <img>. */}
-          <div className={`${formStyles.letterhead} ${formStyles.printOnly}`.trim()}>
-            {activeProperty?.logo_url && (
-              <img className={formStyles.letterheadLogo} src={activeProperty.logo_url} alt="" />
-            )}
-            <div className={formStyles.letterheadText}>
-              <h2>{activeProperty?.name ?? 'Profit & Loss Statement'}</h2>
-              <p>Profit &amp; Loss Statement — {statement.dateFrom} to {statement.dateTo}</p>
-              <p>Printed {new Date().toLocaleString()}</p>
-            </div>
+          {/* Printed-only letterhead and watermark — the app chrome (Sidebar/
+              TopBar, and this screen's own title/tab bar) is hidden on
+              print, so the exported document carries its own property
+              identity: the Setup → Branding logo, when one is set. */}
+          <div className={formStyles.printOnly}>
+            <PrintLetterhead
+              logoUrl={activeProperty?.logo_url}
+              organisation={activeProperty?.name}
+              title="Profit & Loss Statement"
+              details={[`${statement.dateFrom} to ${statement.dateTo}`, `Printed ${new Date().toLocaleString()}`]}
+            />
           </div>
 
           <table className={formStyles.statementTable}>

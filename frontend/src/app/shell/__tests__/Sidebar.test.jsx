@@ -82,7 +82,7 @@ describe('<Sidebar>', () => {
     expect(screen.getAllByRole('button')).toHaveLength(3);
   });
 
-  it("shows LodgeKeep's own platform mark, never a tenant logo — properties.logo_url is a separate concept", () => {
+  it("shows LodgeKeep's own platform mark as the product brand row", () => {
     render(<Sidebar user={user} navGroups={navGroups} permissions={new Set()} />);
     expect(screen.getByAltText('LodgeKeep')).toBeInTheDocument();
     expect(screen.getByText('LodgeKeep')).toBeInTheDocument();
@@ -92,5 +92,23 @@ describe('<Sidebar>', () => {
     render(<Sidebar user={user} navGroups={navGroups} permissions={new Set()} collapsed />);
     expect(screen.getByAltText('LodgeKeep')).toBeInTheDocument();
     expect(screen.queryByText('LodgeKeep')).not.toBeInTheDocument();
+  });
+
+  it("shows the active property's logo and name under the product mark", () => {
+    render(<Sidebar user={user} navGroups={navGroups} property={{ name: 'Diamond Age Hotel', logoUrl: '/logo.png' }} />);
+    expect(screen.getByAltText('Diamond Age Hotel logo')).toHaveAttribute('src', '/logo.png');
+    expect(screen.getByText('Diamond Age Hotel')).toBeInTheDocument();
+  });
+
+  it('shows the property name alone when it has no logo', () => {
+    render(<Sidebar user={user} navGroups={navGroups} property={{ name: 'Diamond Age Hotel', logoUrl: null }} />);
+    expect(screen.getByText('Diamond Age Hotel')).toBeInTheDocument();
+    expect(screen.queryByAltText(/logo/)).not.toBeInTheDocument();
+  });
+
+  it('keeps only the property logo when collapsed', () => {
+    render(<Sidebar user={user} navGroups={navGroups} collapsed property={{ name: 'Diamond Age Hotel', logoUrl: '/logo.png' }} />);
+    expect(screen.getByAltText('Diamond Age Hotel logo')).toBeInTheDocument();
+    expect(screen.queryByText('Diamond Age Hotel')).not.toBeInTheDocument();
   });
 });

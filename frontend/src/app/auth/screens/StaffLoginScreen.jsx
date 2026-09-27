@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../AuthContext.jsx';
 import { Button } from '../../../shared/components/index.js';
-import { ApiError } from '../../../shared/api/index.js';
+import { ApiError, authApi } from '../../../shared/api/index.js';
 import { Footer } from '../../shell/Footer.jsx';
 import { deriveTenantLabelFromHost } from './tenant-label.js';
 import lodgekeepIcon from '../../../assets/brand/lodgekeep-icon.png';
@@ -65,7 +65,25 @@ export function StaffLoginScreen({ isOffline = false }) {
   const [resetCompleteError, setResetCompleteError] = useState(null);
   const [resetDone, setResetDone] = useState(false);
 
-  const tenantLabel = deriveTenantLabelFromHost();
+  // The tenant's own name and logo (GET /auth/branding, public). Until it
+  // answers — or if it fails — the subdomain-derived label stands in, so
+  // the screen never waits on it or breaks without it.
+  const [branding, setBranding] = useState(null);
+  const [logoFailed, setLogoFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    authApi
+      .getLoginBranding()
+      .then((result) => {
+        if (!cancelled) setBranding(result);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const tenantLabel = branding?.tenantName || deriveTenantLabelFromHost();
+  const tenantLogoUrl = !logoFailed ? branding?.logoUrl : null;
   const isSubmitting = status === 'authenticating';
   const isLocked = error?.code === 'LOCKED_ACCOUNT';
 
@@ -156,6 +174,17 @@ export function StaffLoginScreen({ isOffline = false }) {
               <p className={styles.offlineBanner} role="status">
                 You&rsquo;re offline. Reconnect to sign in.
               </p>
+            )}
+
+            {tenantLogoUrl && (
+              <div className={styles.tenantLogoRow}>
+                <img
+                  src={tenantLogoUrl}
+                  alt={tenantLabel ? `${tenantLabel} logo` : 'Hotel logo'}
+                  className={styles.tenantLogo}
+                  onError={() => setLogoFailed(true)}
+                />
+              </div>
             )}
 
             {view === 'signin' && (

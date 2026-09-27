@@ -3,6 +3,7 @@ import { Card, Button, Toast } from '../../shared/components/index.js';
 import { setupApi, ApiError } from '../../shared/api/index.js';
 import formStyles from './SetupForm.module.css';
 import styles from './BrandingTab.module.css';
+import { imageHasSolidBackground } from './logoBackground.js';
 
 const LOGO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
@@ -29,6 +30,8 @@ export function BrandingTab({ activeProperty, onPropertiesChanged, isOffline = f
   const [toast, setToast] = useState(null);
   const [inputKey, setInputKey] = useState(0);
   const [naturalSize, setNaturalSize] = useState(null);
+  // true = the uploaded logo has a solid (not transparent) background.
+  const [solidBackground, setSolidBackground] = useState(null);
 
   if (!activeProperty) {
     return <p className={formStyles.hint}>Select an active property to set its branding.</p>;
@@ -53,6 +56,7 @@ export function BrandingTab({ activeProperty, onPropertiesChanged, isOffline = f
     try {
       await setupApi.uploadPropertyLogo(activeProperty.id, file);
       setNaturalSize(null);
+      setSolidBackground(null);
       setToast('Logo updated');
       await onPropertiesChanged();
     } catch (caught) {
@@ -69,6 +73,7 @@ export function BrandingTab({ activeProperty, onPropertiesChanged, isOffline = f
     try {
       await setupApi.removePropertyLogo(activeProperty.id);
       setNaturalSize(null);
+      setSolidBackground(null);
       setToast('Logo removed');
       await onPropertiesChanged();
     } catch (caught) {
@@ -84,7 +89,9 @@ export function BrandingTab({ activeProperty, onPropertiesChanged, isOffline = f
     <div className={styles.layout}>
       <Card title={`Logo — ${activeProperty.name}`}>
         <p className={formStyles.hint}>
-          Your logo appears at the top of every printed POS receipt and every email guests and staff receive from {activeProperty.name}.
+          Your logo appears on the staff sign-in page and at the top of the sidebar, on every printed POS receipt, folio, guest list and
+          profit &amp; loss statement (with a faint copy as a watermark on the page), and in every email guests and staff receive from{' '}
+          {activeProperty.name}.
         </p>
         {error && (
           <p role="alert" className={formStyles.errorBanner}>
@@ -98,7 +105,11 @@ export function BrandingTab({ activeProperty, onPropertiesChanged, isOffline = f
               className={styles.currentLogo}
               src={logoUrl}
               alt={`${activeProperty.name} logo`}
-              onLoad={(event) => setNaturalSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+              onLoad={(event) => {
+                const img = event.currentTarget;
+                setNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
+                setSolidBackground(imageHasSolidBackground(img));
+              }}
             />
           ) : (
             <span className={formStyles.hint}>No logo yet — your property name is used in its place.</span>
@@ -108,6 +119,12 @@ export function BrandingTab({ activeProperty, onPropertiesChanged, isOffline = f
           <p className={formStyles.hint}>
             {naturalSize.width} × {naturalSize.height} px
             {lowResolution ? ' — this is small and may look soft; a logo at least 480 px wide prints and displays crisply.' : ''}
+          </p>
+        )}
+        {logoUrl && solidBackground && (
+          <p className={formStyles.hint} role="status">
+            This logo has a solid background, not a transparent one. It looks fine on white paper, but on the sign-in page and in the
+            sidebar its background shows as a box around it — a PNG with a transparent background blends in everywhere.
           </p>
         )}
 
@@ -134,6 +151,10 @@ export function BrandingTab({ activeProperty, onPropertiesChanged, isOffline = f
 
         <ul className={styles.tips}>
           <li>PNG with a transparent background works best; JPG and WebP are accepted too (up to 2 MB).</li>
+          <li>
+            Use a version without a tagline or small print: the logo is shown small in the sidebar and on the sign-in page, where fine
+            text can&rsquo;t be read.
+          </li>
           <li>A wide, landscape logo at least 480 px wide fits both receipts and emails best.</li>
           <li>Receipts print in black and white, so check the logo still reads clearly in grey below.</li>
         </ul>

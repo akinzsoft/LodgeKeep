@@ -145,10 +145,13 @@ describe('ReportsTab', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
 
-    expect(await screen.findByRole('heading', { name: 'Alpha Hotels' })).toBeInTheDocument();
-    expect(screen.getByText(/Profit & Loss Statement — 2027-01-01 to 2027-01-01/)).toBeInTheDocument();
-    const logo = container.querySelector('img');
+    expect(await screen.findByRole('heading', { name: 'Profit & Loss Statement', hidden: true })).not.toBeVisible();
+    expect(screen.getByText('Alpha Hotels')).toBeInTheDocument();
+    expect(screen.getByText('2027-01-01 to 2027-01-01')).toBeInTheDocument();
+    const [logo] = container.querySelectorAll('img');
     expect(logo).toHaveAttribute('src', 'https://example.com/logo.png');
+    // The same logo, faint, as the printed page's watermark.
+    expect(screen.getByTestId('print-watermark')).toHaveAttribute('src', 'https://example.com/logo.png');
   });
 
   it('omits the logo image when the property has none configured', async () => {
@@ -158,7 +161,9 @@ describe('ReportsTab', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
 
-    expect(await screen.findByRole('heading', { name: 'Alpha Hotels' })).toBeInTheDocument();
+    // Print-only: hidden on screen (it used to show there too — its flex
+    // rule overrode .printOnly), so query including hidden elements.
+    expect(await screen.findByRole('heading', { name: 'Profit & Loss Statement', hidden: true })).not.toBeVisible();
     expect(container.querySelector('img')).not.toBeInTheDocument();
   });
 

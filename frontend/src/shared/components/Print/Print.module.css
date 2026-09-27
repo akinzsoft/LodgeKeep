@@ -1,0 +1,58 @@
+/* A printed document's letterhead and watermark — see PrintLetterhead.jsx. */
+
+.letterhead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-5);
+  padding-bottom: var(--space-4);
+  border-bottom: 2px solid var(--text-primary);
+}
+
+.logo {
+  max-height: 64px;
+  max-width: 180px;
+  object-fit: contain;
+}
+
+.text {
+  min-width: 0;
+}
+
+.organisation {
+  margin: 0;
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.title {
+  margin: 2px 0;
+  font-size: var(--text-h2-size);
+  line-height: var(--text-h2-line);
+  font-weight: var(--text-h2-weight);
+  color: var(--text-primary);
+}
+
+.detail {
+  margin: 0;
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
+/* Fixed, so the browser repeats it on every printed page; faint enough that
+   figures printed over it stay easy to read. */
+.watermark {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 60%;
+  max-width: 420px;
+  transform: translate(-50%, -50%);
+  opacity: 0.06;
+  pointer-events: none;
+  z-index: 0;
+  print-color-adjust: exact;
+}
