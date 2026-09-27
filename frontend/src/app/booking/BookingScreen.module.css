@@ -60,3 +60,111 @@
 .panel {
   min-width: 0;
 }
+
+/* ---- shared cell formats (Reservations, Waitlist, Front Desk) ---- */
+
+/* The short booking reference — tabular, spaced so it reads out loud. */
+.reference {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--text-primary);
+  cursor: help;
+}
+
+.guestCell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.guestName {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.subText {
+  font-size: var(--text-caption-size);
+  color: var(--text-muted);
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+/* ---- list toolbar + pager ---- */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.toolbarSearch {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.toolbarFilter {
+  flex: 0 1 14rem;
+  min-width: 10rem;
+}
+
+.pager {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
+.pagerButtons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ---- stay summary on the booking form ---- */
+
+.staySummary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-page);
+}
+
+.summaryItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.summaryLabel {
+  font-size: var(--text-caption-size);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.summaryValue {
+  font-size: var(--text-body-size);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.summaryTotal {
+  font-size: var(--text-h3-size);
+  font-weight: 700;
+  color: var(--text-primary);
+}

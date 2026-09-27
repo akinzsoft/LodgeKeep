@@ -201,15 +201,30 @@ async function getReservation(req, res, next) {
 
 async function listReservations(req, res, next) {
   try {
-    const reservations = await service.listReservations({
+    // Paging is opt-in: with `limit`, one page plus the matching total; without it, every row (the original behaviour).
+    let limit;
+    let offset;
+    if (req.query?.limit !== undefined) {
+      limit = Number(req.query.limit);
+      offset = req.query.offset === undefined ? 0 : Number(req.query.offset);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) {
+        throw new ValidationError('INVALID_PAGE', '"limit" must be 1-200 and "offset" a whole number from 0.', [{ field: 'limit', issue: 'invalid' }]);
+      }
+    }
+    const result = await service.listReservations({
       context: req.context,
       status: req.query?.status,
       arrivalDateFrom: req.query?.arrival_date_from,
       arrivalDateTo: req.query?.arrival_date_to,
       roomTypeId: req.query?.room_type_id,
       groupBlockId: req.query?.group_block_id,
+      search: req.query?.search,
+      sort: req.query?.sort,
+      limit,
+      offset,
     });
-    res.status(200).json(ok(reservations));
+    if (limit === undefined) return res.status(200).json(ok(result));
+    res.status(200).json(ok(result.rows, { total: result.total, limit, offset }));
   } catch (error) {
     next(error);
   }

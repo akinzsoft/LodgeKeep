@@ -98,6 +98,19 @@ export function listReservations(filters = {}) {
   return request(`/reservations${query ? `?${query}` : ''}`);
 }
 
+/**
+ * One page of reservations for the Reservations list — newest first, each
+ * row with its guest, room type and open-folio balance. `search` matches the
+ * confirmation number, guest name or phone. Returns `{ rows, total }`.
+ */
+export async function searchReservations({ status, search, limit = 25, offset = 0 } = {}) {
+  const params = new URLSearchParams({ sort: 'newest', limit: String(limit), offset: String(offset) });
+  if (status) params.set('status', status);
+  if (search && search.trim()) params.set('search', search.trim());
+  const { data, meta } = await requestWithMeta(`/reservations?${params.toString()}`);
+  return { rows: data, total: meta?.total ?? data.length };
+}
+
 export function listWaitlist() {
   return request('/reservations/waitlist');
 }

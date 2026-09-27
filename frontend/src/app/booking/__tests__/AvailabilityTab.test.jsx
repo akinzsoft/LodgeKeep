@@ -97,7 +97,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
 
-    expect(await screen.findByText('2027-01-01')).toBeInTheDocument();
+    expect(await screen.findByText('Fri 1 Jan 2027')).toBeInTheDocument();
     expect(mocks.checkAvailability).toHaveBeenCalledWith({
       roomTypeId: '1',
       arrivalDate: '2027-01-01',
@@ -128,7 +128,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     const rateCodeSelect = screen.getByLabelText('Rate code');
     expect(within(rateCodeSelect).getByText(/^BAR —/)).toBeInTheDocument();
@@ -158,7 +158,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     expect(mocks.resolveRate).toHaveBeenCalledWith({ rateCodeId: '1', roomTypeId: '1', stayDate: '2027-01-01' });
     const rateCodeSelect = screen.getByLabelText('Rate code');
@@ -189,7 +189,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     const rateCodeSelect = await screen.findByLabelText('Rate code');
     expect(within(rateCodeSelect).getByText(/^BAR — ₦5,000\.00\/night$/)).toBeInTheDocument();
@@ -219,7 +219,7 @@ describe('<AvailabilityTab>', () => {
       await userEvent.type(dateInputs[0], '2027-01-01');
       await userEvent.type(dateInputs[1], '2027-01-02');
       await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-      await screen.findByText('2027-01-01');
+      await screen.findByText('Fri 1 Jan 2027');
     }
 
     it('auto-selects just that one rate code — the select shows its price as its own closed-state text, the other code not offered', async () => {
@@ -347,7 +347,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     expect(
       await within(screen.getByLabelText('Rate code')).findByText(/^BAR — ₦200\.00\/night \(room override\)$/)
@@ -370,7 +370,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     expect(
       await within(screen.getByLabelText('Rate code')).findByText(/^BAR — ₦150\.00\/night$/)
@@ -395,7 +395,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     const rateCodeSelect = screen.getByLabelText('Rate code');
     expect(within(rateCodeSelect).getByText(/^OLDPROMO —/)).toBeInTheDocument();
@@ -425,13 +425,13 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2026-06-15');
     await userEvent.type(dateInputs[1], '2026-06-18');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2026-06-15');
+    await screen.findByText('Mon 15 Jun 2026');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
     expect(screen.getByLabelText('Rate code')).toHaveValue('1');
 
     // Re-run the identical search (unchanged dates) — the selection survives.
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2026-06-15');
+    await screen.findByText('Mon 15 Jun 2026');
     expect(screen.getByLabelText('Rate code')).toHaveValue('1');
 
     // Now search dates the code no longer covers — the stale selection is cleared.
@@ -446,7 +446,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.clear(dateInputs[1]);
     await userEvent.type(dateInputs[1], '2026-09-12');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2026-09-10');
+    await screen.findByText('Thu 10 Sep 2026');
 
     expect(screen.getByLabelText('Rate code')).toHaveValue('');
   });
@@ -468,7 +468,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
@@ -493,7 +493,9 @@ describe('<AvailabilityTab>', () => {
 
     await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
     const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.clear(dateInputs[0]);
     await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.clear(dateInputs[1]);
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
 
@@ -515,11 +517,13 @@ describe('<AvailabilityTab>', () => {
 
     await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
     const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.clear(dateInputs[0]);
     await userEvent.type(dateInputs[0], '2027-06-01');
+    await userEvent.clear(dateInputs[1]);
     await userEvent.type(dateInputs[1], '2027-06-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
 
-    await screen.findByText('2027-06-01');
+    await screen.findByText('Tue 1 Jun 2027');
     expect(screen.queryByText('Rooms free right now')).not.toBeInTheDocument();
     expect(mocks.listFreeRooms).not.toHaveBeenCalled();
   });
@@ -541,7 +545,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
@@ -570,7 +574,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
@@ -599,7 +603,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
@@ -626,7 +630,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     expect(mocks.listEligiblePreferredRooms).toHaveBeenCalledWith({
       roomTypeId: '1',
@@ -655,7 +659,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
 
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
@@ -687,7 +691,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
   }
 
   it('finds a guest by phone number and auto-selects them in the Guest dropdown', async () => {
@@ -709,7 +713,7 @@ describe('<AvailabilityTab>', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Register new guest' }));
 
-    const detailsEl = screen.getByText('New guest').closest('details');
+    const detailsEl = screen.getByText('Guest not on file? Add a new guest').closest('details');
     expect(detailsEl).toHaveAttribute('open');
     expect(screen.getByLabelText('Phone')).toHaveValue('09999999999');
   });
@@ -742,7 +746,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
     await userEvent.click(screen.getByRole('button', { name: 'Book' }));
@@ -778,7 +782,7 @@ describe('<AvailabilityTab>', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
 
-    expect(await screen.findByText('2027-01-01')).toBeInTheDocument();
+    expect(await screen.findByText('Fri 1 Jan 2027')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Book' })).not.toBeDisabled();
     expect(screen.queryByText(/₦150\.00/)).not.toBeInTheDocument();
   });
@@ -799,7 +803,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
     await userEvent.click(screen.getByRole('button', { name: 'Book' }));
@@ -878,7 +882,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '2'); // GUEST_WITH_EMAIL
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
     await userEvent.click(screen.getByRole('button', { name: 'Book' }));
@@ -932,7 +936,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '2');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
     await userEvent.click(screen.getByRole('button', { name: 'Book' }));
@@ -973,7 +977,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.type(dateInputs[0], '2027-01-01');
     await userEvent.type(dateInputs[1], '2027-01-02');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('2027-01-01');
+    await screen.findByText('Fri 1 Jan 2027');
     await userEvent.selectOptions(screen.getByLabelText('Guest'), '2');
     await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
     await userEvent.click(screen.getByRole('button', { name: 'Book' }));

@@ -1,15 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, Button } from '../../shared/components/index.js';
 import { setupApi, reservationsApi, ApiError } from '../../shared/api/index.js';
+import { addDays, formatDate, weekdayOf } from '../../shared/format/dates.js';
 import formStyles from './BookingForm.module.css';
 import styles from './TapeChartTab.module.css';
 
 const WINDOW_NIGHTS = 14;
+const STEP_NIGHTS = 7;
 
-function addDays(dateStr, days) {
-  const d = new Date(`${dateStr}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
+/**
+ * Available / tight / full for one room type on one night. "Tight" means at
+ * most a fifth of the type is still free AND something has sold — a type
+ * with a single room is simply available or full, never "tight" while its
+ * only room is free (the old rule flagged 1 of 1 free as tight).
+ */
+export function nightTone(night) {
+  if (night.sellable <= 0) return 'full';
+  if (night.physicalCount > 0 && night.sellable < night.physicalCount && night.sellable / night.physicalCount <= 0.2) return 'tight';
+  return 'available';
 }
 
 /**
@@ -54,14 +62,18 @@ function addDays(dateStr, days) {
  * established rather than crashing on a null date string.
  */
 export function TapeChartTab({ activeProperty }) {
+  const businessDate = activeProperty?.current_business_date ?? new Date().toISOString().slice(0, 10);
   const [roomTypes, setRoomTypes] = useState(null);
-  const [windowStart, setWindowStart] = useState(
-    activeProperty?.current_business_date ?? new Date().toISOString().slice(0, 10)
-  );
+  const [windowStart, setWindowStart] = useState(businessDate);
   const [grid, setGrid] = useState(null);
   const [error, setError] = useState(null);
 
+  // Week buttons can be clicked faster than the grid loads — only the latest request's answer may land.
+  const requestSeq = useRef(0);
+
   async function reloadGrid(start) {
+    requestSeq.current += 1;
+    const seq = requestSeq.current;
     try {
       const types = roomTypes ?? (await setupApi.listRoomTypes());
       if (!roomTypes) setRoomTypes(types);
@@ -70,6 +82,8 @@ export function TapeChartTab({ activeProperty }) {
       const results = await Promise.all(
         types.map((rt) => reservationsApi.checkAvailability({ roomTypeId: rt.id, arrivalDate: start, departureDate: end }))
       );
+      if (seq !== requestSeq.current) return;
+      setError(null);
       setGrid(
         types.map((rt, index) => ({
           roomType: rt,
@@ -77,6 +91,7 @@ export function TapeChartTab({ activeProperty }) {
         }))
       );
     } catch (caught) {
+      if (seq !== requestSeq.current) return;
       setGrid([]);
       setError(caught instanceof ApiError ? caught.message : 'Could not load the tape chart.');
     }
@@ -88,10 +103,12 @@ export function TapeChartTab({ activeProperty }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- windowStart changes are handled by the Button below, not by re-running this effect
   }, []);
 
-  function cellClass(night) {
-    if (night.sellable === 0) return styles.full;
-    if (night.sellable <= Math.max(1, Math.round(night.physicalCount * 0.2))) return styles.tight;
-    return styles.available;
+  const TONE_CLASS = { full: styles.full, tight: styles.tight, available: styles.available };
+  const TONE_WORD = { full: 'fully sold', tight: 'nearly full', available: 'available' };
+
+  function showWindow(start) {
+    setWindowStart(start);
+    reloadGrid(start);
   }
 
   const dates = grid && grid[0] ? grid[0].nights.map((n) => n.stayDate) : [];
@@ -104,19 +121,32 @@ export function TapeChartTab({ activeProperty }) {
         </p>
       )}
 
-      <div className={`${formStyles.actionsRow} ${styles.controls}`}>
-        <label className={formStyles.field}>
-          <span className={formStyles.label}>Window start</span>
+      <div className={styles.controls}>
+        <div className={styles.navButtons} role="group" aria-label="Move the chart">
+          <Button type="button" variant="secondary" size="compact" onClick={() => showWindow(addDays(windowStart, -STEP_NIGHTS))}>
+            ◀ Previous week
+          </Button>
+          <Button type="button" variant="secondary" size="compact" onClick={() => showWindow(businessDate)} disabled={windowStart === businessDate}>
+            Today
+          </Button>
+          <Button type="button" variant="secondary" size="compact" onClick={() => showWindow(addDays(windowStart, STEP_NIGHTS))}>
+            Next week ▶
+          </Button>
+        </div>
+        <p className={styles.range}>
+          {formatDate(windowStart, { weekday: true, year: false })} – {formatDate(addDays(windowStart, WINDOW_NIGHTS - 1), { weekday: true })}
+        </p>
+        <label className={`${formStyles.field} ${styles.jump}`}>
+          <span className={formStyles.label}>Jump to date</span>
           <input
             type="date"
             className={formStyles.input}
             value={windowStart}
-            onChange={(event) => setWindowStart(event.target.value)}
+            onChange={(event) => {
+              if (event.target.value) showWindow(event.target.value);
+            }}
           />
         </label>
-        <Button type="button" onClick={() => reloadGrid(windowStart)}>
-          Go
-        </Button>
       </div>
 
       {grid === null ? (
@@ -127,27 +157,35 @@ export function TapeChartTab({ activeProperty }) {
         <div className={styles.wrapper}>
           <div
             className={styles.grid}
-            style={{ gridTemplateColumns: `10rem repeat(${dates.length}, minmax(2.5rem, 1fr))` }}
+            style={{ gridTemplateColumns: `minmax(8rem, 10rem) repeat(${dates.length}, minmax(2.75rem, 1fr))` }}
           >
             <div className={styles.headerCell}>Room type</div>
             {dates.map((date) => (
-              <div key={date} className={styles.headerCell}>
-                {date.slice(5)}
+              <div
+                key={date}
+                className={`${styles.headerCell} ${styles.dateHeader} ${date === businessDate ? styles.todayHeader : ''}`}
+                aria-current={date === businessDate ? 'date' : undefined}
+              >
+                <span className={styles.headerWeekday}>{weekdayOf(date)}</span>
+                <span>{Number(date.slice(8, 10))}</span>
               </div>
             ))}
 
             {grid.map((row) => (
               <div key={row.roomType.id} style={{ display: 'contents' }}>
                 <div className={styles.rowLabel}>{row.roomType.name}</div>
-                {row.nights.map((night) => (
-                  <div
-                    key={night.stayDate}
-                    className={`${styles.cell} ${cellClass(night)}`}
-                    title={`${row.roomType.name}, ${night.stayDate}: ${night.sellable} of ${night.physicalCount} sellable`}
-                  >
-                    {night.sellable}
-                  </div>
-                ))}
+                {row.nights.map((night) => {
+                  const tone = nightTone(night);
+                  return (
+                    <div
+                      key={night.stayDate}
+                      className={`${styles.cell} ${TONE_CLASS[tone]} ${night.stayDate === businessDate ? styles.todayCell : ''}`}
+                      title={`${row.roomType.name}, ${formatDate(night.stayDate, { weekday: true })}: ${night.sellable} of ${night.physicalCount} rooms free (${TONE_WORD[tone]})`}
+                    >
+                      {night.sellable}
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </div>
@@ -155,11 +193,12 @@ export function TapeChartTab({ activeProperty }) {
       )}
 
       <p className={styles.legend}>
+        <span>Each cell shows how many rooms of that type are still free that night.</span>
         <span>
           <span className={`${styles.legendSwatch} ${styles.legendSwatchAvailable}`} /> Available
         </span>
         <span>
-          <span className={`${styles.legendSwatch} ${styles.legendSwatchTight}`} /> Tight (≤20%)
+          <span className={`${styles.legendSwatch} ${styles.legendSwatchTight}`} /> Nearly full (a fifth or less free)
         </span>
         <span>
           <span className={`${styles.legendSwatch} ${styles.legendSwatchFull}`} /> Fully sold

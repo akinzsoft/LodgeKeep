@@ -1309,14 +1309,79 @@ async function getReservation({ context, id }) {
 }
 
 /** Allow-listed filters only (API.md's own rule): status, arrival date range, room type, group block. */
-async function listReservations({ context, status, arrivalDateFrom, arrivalDateTo, roomTypeId, groupBlockId }) {
+/**
+ * Reservations, each with its guest's name and phone and its room type's
+ * name (so a list can say whose booking it is — user-reported: the
+ * Reservations tab showed only a 26-character confirmation code).
+ *
+ * Optional, all backward compatible (no option = the original behaviour):
+ * - `search`: every whitespace-separated term must match the confirmation
+ *   number, guest first/last name, or phone (so "ada obi" finds Ada Obi).
+ * - `sort: 'newest'`: latest arrival first; otherwise arrival ascending.
+ * - `limit`/`offset`: one page, returned as `{ rows, total }` rather than
+ *   an array — and only then is each row's open-folio balance added
+ *   (`folio_balance`, null with no open folio), since a whole-history list
+ *   (the dashboard's) has no use for it and would only pay for the lookup.
+ */
+async function listReservations({ context, status, arrivalDateFrom, arrivalDateTo, roomTypeId, groupBlockId, search, sort, limit, offset }) {
   const db = scopedDb().for(context);
-  let query = db.table('reservations');
-  if (status) query = query.where({ status });
-  if (roomTypeId) query = query.where({ room_type_id: roomTypeId });
-  if (groupBlockId) query = query.where({ group_block_id: groupBlockId });
-  if (arrivalDateFrom && arrivalDateTo) query = query.whereBetween('arrival_date', [arrivalDateFrom, arrivalDateTo]);
-  return query.orderBy('arrival_date');
+  const terms = typeof search === 'string' ? search.trim().split(/\s+/).filter(Boolean).slice(0, 5) : [];
+  const filtered = (query) => {
+    let next = query;
+    if (status) next = next.where({ 'reservations.status': status });
+    if (roomTypeId) next = next.where({ 'reservations.room_type_id': roomTypeId });
+    if (groupBlockId) next = next.where({ 'reservations.group_block_id': groupBlockId });
+    if (arrivalDateFrom && arrivalDateTo) next = next.whereBetween('reservations.arrival_date', [arrivalDateFrom, arrivalDateTo]);
+    for (const term of terms) {
+      const pattern = `%${term.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+      next = next.where((group) =>
+        group
+          .where('reservations.confirmation_number', 'like', pattern)
+          .orWhere('guests.first_name', 'like', pattern)
+          .orWhere('guests.last_name', 'like', pattern)
+          .orWhere('guests.phone', 'like', pattern)
+      );
+    }
+    return next;
+  };
+  let query = filtered(
+    selectReservationWithGuest(db.table('reservations'))
+      .joinScoped('room_types', (join) => join.on('room_types.id', '=', 'reservations.room_type_id'))
+      .select('room_types.code as room_type_code', 'room_types.name as room_type_name')
+  );
+  query =
+    sort === 'newest'
+      ? query.orderBy('reservations.arrival_date', 'desc').orderBy('reservations.id', 'desc')
+      : query.orderBy('reservations.arrival_date').orderBy('reservations.id');
+  if (limit === undefined) return query;
+
+  // One page read with LIMIT/OFFSET, and the matching total from its own
+  // count — a long reservation history is never loaded whole for a page.
+  const start = Math.max(Number(offset) || 0, 0);
+  const total = await filtered(
+    db.table('reservations').joinScoped('guests', (join) => join.on('guests.id', '=', 'reservations.guest_id'))
+  ).count('reservations.id');
+  const page = await query.limit(limit).offset(start);
+  if (page.length === 0) return { rows: page, total };
+  const folios = await db
+    .table('folios')
+    .whereIn('reservation_id', page.map((row) => row.id))
+    .where({ status: 'open' })
+    .select('reservation_id', 'balance', 'currency');
+  const balances = new Map();
+  for (const folio of folios) {
+    const key = String(folio.reservation_id);
+    const entry = balances.get(key) ?? { amounts: [], currency: folio.currency };
+    entry.amounts.push(folio.balance);
+    balances.set(key, entry);
+  }
+  return {
+    rows: page.map((row) => {
+      const entry = balances.get(String(row.id));
+      return { ...row, folio_balance: entry ? sumMoney(entry.amounts) : null, folio_currency: entry?.currency ?? null };
+    }),
+    total,
+  };
 }
 
 /**

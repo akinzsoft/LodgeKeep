@@ -4,6 +4,8 @@ import { setupApi, reservationsApi, cashieringApi, groupBlocksApi, ApiError } fr
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { filterRateCodesForStay, resolvePrimaryRateCodeForStay } from './rate-code-eligibility.js';
 import { Money, formatMoney, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
+import { multiplyMoney } from '../../shared/money.js';
+import { addDays, formatDate } from '../../shared/format/dates.js';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
 
@@ -135,7 +137,11 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   // enhancement to booking, not a required field.
   const [groupBlocks, setGroupBlocks] = useState(null);
 
-  const [search, setSearch] = useState({ room_type_id: '', arrival_date: '', departure_date: '' });
+  // Starts on tonight, one night — the most common search at a front desk (business date, never the wall clock).
+  const [search, setSearch] = useState(() => {
+    const start = activeProperty?.current_business_date ?? '';
+    return { room_type_id: '', arrival_date: start, departure_date: start ? addDays(start, 1) : '' };
+  });
   const [availability, setAvailability] = useState(null);
   const [freeRoomsNow, setFreeRoomsNow] = useState(null);
   const [eligiblePreferredRooms, setEligiblePreferredRooms] = useState(null);
@@ -206,6 +212,8 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
       setRoomTypes(rt);
       setRateCodes(rc);
       setGuests(g);
+      // A single sensible default so Search works straight away; staff change it as needed.
+      setSearch((current) => (current.room_type_id || rt.length === 0 ? current : { ...current, room_type_id: String(rt[0].id) }));
     } catch (caught) {
       setSearchError(caught instanceof ApiError ? caught.message : 'Could not load room types, rate codes, or guests.');
     }
@@ -471,6 +479,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const selectedRoomType = (roomTypes ?? []).find((rt) => String(rt.id) === String(search.room_type_id));
   const primaryRateCode = resolvePrimaryRateCodeForStay(selectedRoomType, rateCodes, search.arrival_date, search.departure_date);
   const visibleRateCodes = primaryRateCode && !showAllRateCodes ? [primaryRateCode] : eligibleRateCodes;
+  const selectedRateCode = (rateCodes ?? []).find((rc) => String(rc.id) === String(booking.rate_code_id)) ?? null;
   /**
    * Gap closure (user-reported): "when Room type is selected it shld show
    * the Rate/cost per night on the Rate code drop box." Prefers the
@@ -654,10 +663,10 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
             title="Availability"
             state="success"
             columns={[
-              { key: 'stayDate', label: 'Date' },
-              { key: 'physicalCount', label: 'Physical', align: 'right' },
-              { key: 'roomsSold', label: 'Sold', align: 'right' },
-              { key: 'sellable', label: 'Sellable', align: 'right' },
+              { key: 'stayDate', label: 'Night', render: (row) => formatDate(row.stayDate, { weekday: true }) },
+              { key: 'physicalCount', label: 'Rooms of this type', align: 'right' },
+              { key: 'roomsSold', label: 'Booked', align: 'right' },
+              { key: 'sellable', label: 'Available to sell', align: 'right' },
               {
                 key: 'status',
                 label: 'Status',
@@ -693,7 +702,16 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
           columns={[
             { key: 'room_number', label: 'Room' },
             { key: 'floor', label: 'Floor' },
-            { key: 'housekeeping_reported_status', label: 'Housekeeping' },
+            {
+              key: 'housekeeping_reported_status',
+              label: 'Housekeeping',
+              render: (row) => {
+                const value = row.housekeeping_reported_status;
+                if (!value) return '—';
+                const tone = value === 'clean' ? 'success' : value === 'dirty' ? 'warning' : 'neutral';
+                return <StatusPill tone={tone} label={value.charAt(0).toUpperCase() + value.slice(1)} />;
+              },
+            },
           ]}
           rows={freeRoomsNow}
           rowKey={(row) => row.id}
@@ -709,6 +727,56 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
             </p>
           )}
           {bookSuccess && <p className={formStyles.disabledNotice}>{bookSuccess}</p>}
+
+          <details ref={newGuestPanelRef} open={newGuestPanelOpen} onToggle={(event) => setNewGuestPanelOpen(event.target.open)}>
+            <summary className={formStyles.label}>Guest not on file? Add a new guest</summary>
+            <form className={formStyles.form} onSubmit={handleAddGuest}>
+              <div className={formStyles.row}>
+                <label className={formStyles.field}>
+                  <span className={formStyles.label}>First name</span>
+                  <input
+                    className={formStyles.input}
+                    value={newGuest.first_name}
+                    onChange={(event) => setNewGuest({ ...newGuest, first_name: event.target.value })}
+                    required
+                  />
+                </label>
+                <label className={formStyles.field}>
+                  <span className={formStyles.label}>Last name</span>
+                  <input
+                    className={formStyles.input}
+                    value={newGuest.last_name}
+                    onChange={(event) => setNewGuest({ ...newGuest, last_name: event.target.value })}
+                    required
+                  />
+                </label>
+              </div>
+              <div className={formStyles.row}>
+                <label className={formStyles.field}>
+                  <span className={formStyles.label}>Email</span>
+                  <input
+                    type="email"
+                    className={formStyles.input}
+                    value={newGuest.email}
+                    onChange={(event) => setNewGuest({ ...newGuest, email: event.target.value })}
+                  />
+                </label>
+                <label className={formStyles.field}>
+                  <span className={formStyles.label}>Phone</span>
+                  <input
+                    className={formStyles.input}
+                    value={newGuest.phone}
+                    onChange={(event) => setNewGuest({ ...newGuest, phone: event.target.value })}
+                  />
+                </label>
+              </div>
+              <div className={formStyles.actionsRow}>
+                <Button type="submit" variant="secondary" loading={addingGuest}>
+                  Add guest
+                </Button>
+              </div>
+            </form>
+          </details>
 
           <form className={formStyles.form} onSubmit={handleBook}>
             <div className={formStyles.row}>
@@ -912,6 +980,13 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                 You&rsquo;re offline — booking is disabled until the connection returns.
               </p>
             )}
+            <StaySummary
+              roomType={selectedRoomType}
+              arrival={availability.nights[0]?.stayDate}
+              nights={availability.nights.length}
+              rateCode={selectedRateCode}
+              perNight={selectedRateCode ? describeRatePerNight(selectedRateCode).amount : null}
+            />
             <div className={formStyles.actionsRow}>
               <Button
                 type="submit"
@@ -920,6 +995,11 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
               >
                 Book
               </Button>
+              {!bookSuccess && !isOffline && (!booking.guest_id || !booking.rate_code_id) && (
+                <span className={formStyles.fieldHint}>
+                  {!booking.guest_id ? 'Select a guest to book.' : 'Select a rate code to book.'}
+                </span>
+              )}
             </div>
             {/*
               Gap closure (user-reported): "disable the book button ... wen
@@ -934,55 +1014,6 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
             )}
           </form>
 
-          <details ref={newGuestPanelRef} open={newGuestPanelOpen} onToggle={(event) => setNewGuestPanelOpen(event.target.open)}>
-            <summary className={formStyles.label}>New guest</summary>
-            <form className={formStyles.form} onSubmit={handleAddGuest}>
-              <div className={formStyles.row}>
-                <label className={formStyles.field}>
-                  <span className={formStyles.label}>First name</span>
-                  <input
-                    className={formStyles.input}
-                    value={newGuest.first_name}
-                    onChange={(event) => setNewGuest({ ...newGuest, first_name: event.target.value })}
-                    required
-                  />
-                </label>
-                <label className={formStyles.field}>
-                  <span className={formStyles.label}>Last name</span>
-                  <input
-                    className={formStyles.input}
-                    value={newGuest.last_name}
-                    onChange={(event) => setNewGuest({ ...newGuest, last_name: event.target.value })}
-                    required
-                  />
-                </label>
-              </div>
-              <div className={formStyles.row}>
-                <label className={formStyles.field}>
-                  <span className={formStyles.label}>Email</span>
-                  <input
-                    type="email"
-                    className={formStyles.input}
-                    value={newGuest.email}
-                    onChange={(event) => setNewGuest({ ...newGuest, email: event.target.value })}
-                  />
-                </label>
-                <label className={formStyles.field}>
-                  <span className={formStyles.label}>Phone</span>
-                  <input
-                    className={formStyles.input}
-                    value={newGuest.phone}
-                    onChange={(event) => setNewGuest({ ...newGuest, phone: event.target.value })}
-                  />
-                </label>
-              </div>
-              <div className={formStyles.actionsRow}>
-                <Button type="submit" variant="secondary" loading={addingGuest}>
-                  Add guest
-                </Button>
-              </div>
-            </form>
-          </details>
         </Card>
       )}
 
@@ -1080,5 +1111,42 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
         </Card>
       )}
     </div>
+  );
+}
+
+/**
+ * What is being booked, before the Book button — user-reported: staff booked
+ * without seeing the nights or the price. The total is the selected rate ×
+ * nights, before tax; the reservation itself snapshots each night's own
+ * rate, so this is labelled an estimate.
+ */
+function StaySummary({ roomType, arrival, nights, rateCode, perNight }) {
+  if (!arrival || nights < 1) return null;
+  const departure = addDays(arrival, nights);
+  return (
+    <section className={styles.staySummary} aria-label="Stay summary">
+      <div className={styles.summaryItem}>
+        <span className={styles.summaryLabel}>Room type</span>
+        <span className={styles.summaryValue}>{roomType ? roomType.name : '—'}</span>
+      </div>
+      <div className={styles.summaryItem}>
+        <span className={styles.summaryLabel}>Stay</span>
+        <span className={styles.summaryValue}>
+          {formatDate(arrival, { weekday: true, year: false })} → {formatDate(departure, { weekday: true, year: false })}
+        </span>
+      </div>
+      <div className={styles.summaryItem}>
+        <span className={styles.summaryLabel}>Nights</span>
+        <span className={styles.summaryValue}>{nights}</span>
+      </div>
+      <div className={styles.summaryItem}>
+        <span className={styles.summaryLabel}>Rate per night</span>
+        <span className={styles.summaryValue}>{rateCode && perNight ? <Money amount={perNight} currencyCode={rateCode.currency} /> : 'Select a rate code'}</span>
+      </div>
+      <div className={styles.summaryItem}>
+        <span className={styles.summaryLabel}>Estimated total (before tax)</span>
+        <span className={styles.summaryTotal}>{rateCode && perNight ? <Money amount={multiplyMoney(perNight, nights)} currencyCode={rateCode.currency} /> : '—'}</span>
+      </div>
+    </section>
   );
 }

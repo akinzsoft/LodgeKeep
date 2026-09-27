@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Card, DataTable, Button, StatusPill } from '../../shared/components/index.js';
 import { reservationsApi, ApiError } from '../../shared/api/index.js';
 import { Money } from '../../shared/format/money.jsx';
+import { formatDate, nightsBetween } from '../../shared/format/dates.js';
+import { ConfirmationRef } from './ConfirmationRef.jsx';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
 
@@ -220,13 +222,19 @@ export function FrontDeskTab({ isOffline = false } = {}) {
         state={rows === null ? 'loading' : rows.length === 0 ? 'empty' : 'success'}
         emptyMessage="Nothing on this board today."
         columns={[
-          { key: 'confirmation_number', label: 'Confirmation' },
+          { key: 'confirmation_number', label: 'Reference', render: (row) => <ConfirmationRef value={row.confirmation_number} /> },
+          // Name and phone share one column — the board is scanned by guest,
+          // and a separate Phone column pushed the actions off the screen.
           {
             key: 'guest_name',
             label: 'Guest',
-            render: (row) => `${row.guest_first_name ?? ''} ${row.guest_last_name ?? ''}`.trim() || '—',
+            render: (row) => (
+              <span className={styles.guestCell}>
+                <span className={styles.guestName}>{`${row.guest_first_name ?? ''} ${row.guest_last_name ?? ''}`.trim() || '—'}</span>
+                <span className={styles.subText}>{row.guest_phone ?? 'No phone on file'}</span>
+              </span>
+            ),
           },
-          { key: 'guest_phone', label: 'Phone', render: (row) => row.guest_phone ?? '—' },
           // Gap closure (user-reported): a real physical room only exists
           // once checked in — Departures/In-House, never Arrivals (see
           // `service.js`'s own `selectReservationWithGuestAndRoom` header).
@@ -278,9 +286,23 @@ export function FrontDeskTab({ isOffline = false } = {}) {
           ...(board === 'arrivals'
             ? [{ key: 'preferred_room_number', label: 'Preferred room', render: (row) => row.preferred_room_number ?? '—' }]
             : []),
-          { key: 'arrival_date', label: 'Arrival' },
-          { key: 'departure_date', label: 'Departure' },
-          { key: 'adults', label: 'Adults', align: 'right' },
+          {
+            key: 'stay',
+            label: 'Stay',
+            render: (row) => {
+              const nights = nightsBetween(row.arrival_date, row.departure_date);
+              return (
+                <span className={styles.guestCell}>
+                  <span className={styles.nowrap}>
+                    {formatDate(row.arrival_date, { weekday: true, year: false })} → {formatDate(row.departure_date, { weekday: true, year: false })}
+                  </span>
+                  <span className={styles.subText}>
+                    {nights} {nights === 1 ? 'night' : 'nights'} · {row.adults} {row.adults === 1 ? 'adult' : 'adults'}
+                  </span>
+                </span>
+              );
+            },
+          },
         ]}
         rows={rows ?? []}
         rowKey={(row) => row.id}

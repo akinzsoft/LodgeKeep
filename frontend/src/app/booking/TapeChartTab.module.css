@@ -13,12 +13,12 @@
   position: sticky;
   top: 0;
   padding: var(--space-2) var(--space-3);
-  background: var(--surface-sunken);
-  color: var(--text-secondary);
+  background: var(--table-head-bg);
+  color: var(--table-head-text);
   font-size: var(--text-label-size);
   font-weight: var(--text-label-weight);
   border-bottom: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid color-mix(in srgb, var(--table-head-text) 20%, transparent);
   white-space: nowrap;
 }
 
@@ -68,6 +68,7 @@
   margin-top: var(--space-3);
   font-size: var(--text-label-size);
   color: var(--text-secondary);
+  flex-wrap: wrap;
 }
 
 .legendSwatch {
@@ -92,5 +93,47 @@
 }
 
 .controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
   margin-bottom: var(--space-4);
+}
+
+.navButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.range {
+  margin: 0;
+  font-size: var(--text-body-size);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.jump {
+  flex: 0 1 12rem;
+}
+
+.dateHeader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.3;
+}
+
+.headerWeekday {
+  font-size: var(--text-caption-size);
+  opacity: 0.85;
+}
+
+.todayHeader {
+  background: var(--accent-navy);
+}
+
+.todayCell {
+  box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent);
 }
