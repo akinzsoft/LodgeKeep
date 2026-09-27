@@ -53,7 +53,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   const [outletFilter, setOutletFilter] = useState('');
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [error, setError] = useState(null);
-  // Registered stock categories (shared by every outlet) — one section per row.
+  // The selected outlet's registered stock categories (per outlet since 20261105090000) — one section per row.
   const [categories, setCategories] = useState(null);
 
   // Which single section (a real category, "Uncategorized", or an
@@ -115,12 +115,20 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   const [addPhotoKey, setAddPhotoKey] = useState(0);
   const [addSellForm, setAddSellForm] = useState(EMPTY_ADD_SELL_FORM);
 
+  // Everything on this screen belongs to the selected outlet. A slow answer
+  // for an outlet the user has since switched away from must not land.
+  const outletRef = useRef(outletFilter);
+
   async function reloadCategories() {
+    const requestedFor = outletFilter;
+    if (!requestedFor) return;
+    let list;
     try {
-      setCategories(await stockApi.listStockItemCategories());
+      list = await stockApi.listStockItemCategories({ outletId: requestedFor });
     } catch {
-      setCategories([]);
+      list = [];
     }
+    if (outletRef.current === requestedFor) setCategories(list);
   }
 
   /** A category renamed or archived changes which stock items show it, so refresh both. */
@@ -146,6 +154,8 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   // underlying data actually changes, not on every unrelated re-render
   // (e.g. typing into the Add/Edit form) — `computeSections` otherwise
   // returns a fresh array/object identity every single call.
+  const selectedOutletName = (outlets ?? []).find((outlet) => String(outlet.id) === String(outletFilter))?.name ?? null;
+
   const sections = useMemo(() => (items === null || categories === null ? null : computeCategorySections(categories, items, { noun: 'stock category' })), [items, categories]);
   const currentSection = sections ? (sections.find((section) => section.selectId === selectedRowKey) ?? null) : null;
 
@@ -187,28 +197,38 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   useEffect(() => {
     posApi
       .listOutlets()
-      .then(setOutlets)
+      .then((list) => {
+        setOutlets(list);
+        // Stock is managed one outlet at a time — start on the first.
+        setOutletFilter((current) => current || (list[0] ? String(list[0].id) : ''));
+      })
       .catch(() => setOutlets([]));
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
-    reloadCategories();
   }, []);
 
   async function reloadItems() {
+    const requestedFor = outletFilter;
+    if (!requestedFor) return;
+    let nextItems;
+    let nextError = null;
     try {
-      setItems(await stockApi.listStockItems({ outletId: outletFilter || undefined, lowStockOnly }));
-      setError(null);
+      nextItems = await stockApi.listStockItems({ outletId: requestedFor, lowStockOnly });
     } catch (caught) {
-      setItems([]);
-      setError(caught instanceof ApiError ? caught.message : 'Could not load stock items.');
+      nextItems = [];
+      nextError = caught instanceof ApiError ? caught.message : 'Could not load stock items.';
     }
-    // Deliberately not part of the try above: a role that can view stock
+    // Deliberately separate from the items read: a role that can view stock
     // but not manage recipes (403) must still see the list — only the
     // Register column/button go away.
+    let nextLinks;
     try {
-      setLinks(await stockApi.listMenuItemLinks({ outletId: outletFilter || undefined }));
+      nextLinks = await stockApi.listMenuItemLinks({ outletId: requestedFor });
     } catch {
-      setLinks('unavailable');
+      nextLinks = 'unavailable';
     }
+    if (outletRef.current !== requestedFor) return;
+    setItems(nextItems);
+    setError(nextError);
+    setLinks(nextLinks);
   }
 
   /** One outlet's menu categories — fetched lazily, the first time a sell form for that outlet opens. Returns the list so a caller can derive a default from it immediately. */
@@ -254,6 +274,16 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   }
 
   useEffect(() => {
+    outletRef.current = outletFilter;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate: a different outlet has different stock categories and items, so both reset before refetching
+    setCategories(null);
+    setItems(null);
+    setSelectedRowKey(null);
+    reloadCategories();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the outlet changing only
+  }, [outletFilter]);
+
+  useEffect(() => {
     reloadItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- outletFilter/lowStockOnly drive this refetch directly
   }, [outletFilter, lowStockOnly]);
@@ -277,7 +307,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
 
   function openAdd(section) {
     setActivePanel({ type: 'add', sectionKey: section.key, categoryName: section.categoryName, sectionTitle: section.title });
-    setAddForm((current) => ({ ...EMPTY_ADD_FORM, outlet_id: outletFilter || current.outlet_id }));
+    setAddForm({ ...EMPTY_ADD_FORM, outlet_id: outletFilter });
     setAddError(null);
     setAddSell(false);
     setAddSellForm(EMPTY_ADD_SELL_FORM);
@@ -312,19 +342,6 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
       return;
     }
     setAddSellForm(EMPTY_ADD_SELL_FORM);
-    sellOutletRef.current = String(outletId ?? '');
-    setOutletMenuNames([]);
-    if (outletId) loadOutletMenuNames(outletId);
-    const list = await loadMenuCategories(outletId);
-    if (sellOutletRef.current !== String(outletId ?? '')) return;
-    setAddSellForm((current) => (current.category === '' ? { ...current, category: defaultCategorySelection(categoryName, list) } : current));
-  }
-
-  /** The Add form's outlet changed while "Also sell in Register" is ticked — the menu category picked belongs to the old outlet, so re-pick from the new one's list, keeping the name/price/photo already typed. */
-  async function handleAddOutletChange(outletId, categoryName) {
-    setAddForm((current) => ({ ...current, outlet_id: outletId }));
-    if (!addSell) return;
-    setAddSellForm((current) => ({ ...current, category: '' }));
     sellOutletRef.current = String(outletId ?? '');
     setOutletMenuNames([]);
     if (outletId) loadOutletMenuNames(outletId);
@@ -536,9 +553,9 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
           control should never vanish because of that. */}
       <div className={formStyles.row}>
         <label className={formStyles.field}>
-          <span className={formStyles.label}>Filter by outlet</span>
+          <span className={formStyles.label}>Outlet</span>
           <select className={formStyles.select} value={outletFilter} aria-describedby="stock-items-outlet-filter-hint" onChange={(event) => handleFilterChange(() => setOutletFilter(event.target.value))}>
-            <option value="">All outlets</option>
+            {outlets !== null && outlets.length === 0 && <option value="">No outlets yet</option>}
             {(outlets ?? []).map((outlet) => (
               <option key={outlet.id} value={outlet.id}>
                 {outlet.name}
@@ -557,10 +574,12 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
         </label>
       </div>
       <p id="stock-items-outlet-filter-hint" className={formStyles.hint}>
-        Filters items only — stock categories are shared by every outlet.
+        Stock categories and stock items below belong to this outlet only — each outlet keeps its own. To see every outlet at once, use Reorder report or Reports.
       </p>
 
-      <StockCategoriesCard categories={categories} onChanged={handleCategoriesChanged} extraRows={extraRows} selectedRowKey={selectedRowKey} onSelectRow={selectSection} />
+      {outlets !== null && outlets.length === 0 && <p className={formStyles.hint}>Add an outlet under POS → Setup first — stock belongs to an outlet.</p>}
+
+      <StockCategoriesCard outletId={outletFilter} outletName={selectedOutletName} categories={categories} onChanged={handleCategoriesChanged} extraRows={extraRows} selectedRowKey={selectedRowKey} onSelectRow={selectSection} />
 
       {currentSection === null ? (
         <DataTable state="loading" columns={[]} rows={[]} rowKey={(row) => row.id} />
@@ -678,19 +697,6 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                     </p>
                   )}
                   <form className={formStyles.row} onSubmit={handleAddSubmit}>
-                    <label className={formStyles.field}>
-                      <span className={formStyles.label}>Outlet</span>
-                      <select className={formStyles.select} value={addForm.outlet_id} onChange={(e) => handleAddOutletChange(e.target.value, section.categoryName)} required disabled={isOffline}>
-                        <option value="" disabled>
-                          Select an outlet
-                        </option>
-                        {(outlets ?? []).map((outlet) => (
-                          <option key={outlet.id} value={outlet.id}>
-                            {outlet.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
                     <label className={formStyles.field}>
                       <span className={formStyles.label}>Name</span>
                       <input className={formStyles.input} value={addForm.name} onChange={(e) => setAddForm({ ...addForm, name: e.target.value })} required disabled={isOffline} />

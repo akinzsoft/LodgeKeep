@@ -525,9 +525,9 @@ async function reverseStockForSettlement({ trx, settlementId, userId }) {
 
 // ---------------------------------------------------------------------
 // Stock item categories — gap closure, mirroring `pos/service.js`'s
-// menu-category CRUD exactly: a registered list shared by every outlet at
-// the property; stock items pick one instead of typing it (see the
-// stock_item_categories migration header). `stock_items.category` keeps
+// menu-category CRUD exactly: a registered list per OUTLET (20261105090000);
+// stock items pick one of their own outlet's instead of typing it (see the
+// stock_item_categories migration headers). `stock_items.category` keeps
 // holding the category name, so every reader is unchanged.
 // ---------------------------------------------------------------------
 
@@ -540,6 +540,10 @@ const stockCategoryCatalogue = createCategoryCatalogue({
   table: 'stock_item_categories',
   resolveMode: 'name',
   optional: true,
+  // Per outlet since 20261105090000 — one outlet's stock categories never
+  // show at, count, rename or block another's.
+  scopeColumn: 'outlet_id',
+  duplicateSuffix: ' at this outlet',
   cascadeRename: { table: 'stock_items', matchColumn: 'category' },
   inUseChecks: [{ table: 'stock_items', matchColumn: 'category', matchBy: 'name', filter: (q) => q.where({ status: 'active' }) }],
   errors: {
@@ -549,13 +553,24 @@ const stockCategoryCatalogue = createCategoryCatalogue({
   },
 });
 
-const listStockItemCategories = stockCategoryCatalogue.listCategories;
+/** One outlet's stock categories when `outletId` is given; every outlet's otherwise (each row carries its `outlet_id`). */
+function listStockItemCategories({ context, includeArchived, outletId }) {
+  return stockCategoryCatalogue.listCategories({ context, includeArchived, scopeValue: outletId });
+}
 const getStockItemCategory = stockCategoryCatalogue.getCategory;
-const createStockItemCategory = stockCategoryCatalogue.createCategory;
+async function createStockItemCategory({ context, outletId, name, sortOrder }) {
+  const db = scopedDb().for(context);
+  const outlet = await db.table('pos_outlets').where({ id: outletId }).first();
+  if (!outlet || outlet.status !== 'active') throw new OutletNotFoundError();
+  return stockCategoryCatalogue.createCategory({ context, name, sortOrder, scopeValue: outletId });
+}
+// Rename/archive act on one row by id, which already belongs to one outlet.
 const updateStockItemCategory = stockCategoryCatalogue.updateCategory;
 const archiveStockItemCategory = stockCategoryCatalogue.archiveCategory;
-/** `null`/empty stays null: category is optional (migration header). */
-const resolveStockCategoryName = stockCategoryCatalogue.resolveByName;
+/** THIS outlet's active stock category matching `name`; `null`/empty stays null — category is optional. */
+function resolveStockCategoryName({ db, name, outletId }) {
+  return stockCategoryCatalogue.resolveByName({ db, name, scopeValue: outletId });
+}
 
 // ---------------------------------------------------------------------
 // Stock items — CRUD
@@ -582,7 +597,7 @@ async function createStockItem({ context, outletId, name, unit, category, purcha
   const db = scopedDb().for(context);
   const outlet = await db.table('pos_outlets').where({ id: outletId }).first();
   if (!outlet) throw new OutletNotFoundError();
-  const categoryName = await resolveStockCategoryName({ db, name: category });
+  const categoryName = await resolveStockCategoryName({ db, name: category, outletId });
   const [id] = await db.table('stock_items').insert({
     outlet_id: outletId,
     name,
@@ -599,14 +614,14 @@ async function updateStockItem({ context, id, changes }) {
   const db = scopedDb().for(context);
   const next = { ...changes };
   if (next.category !== undefined) {
-    const current = await db.table('stock_items').where({ id }).first('category');
+    const current = await db.table('stock_items').where({ id }).first('category', 'outlet_id');
     const unchanged = current && typeof next.category === 'string' && next.category.trim() === current.category;
     // An item keeps its current category even if that category has since
     // been archived — editing only its cost/reorder level must not be
     // refused. Only a change of category has to name an active registered
     // one (or clear it entirely — resolveStockCategoryName's own null case).
     if (unchanged) delete next.category;
-    else next.category = await resolveStockCategoryName({ db, name: next.category });
+    else next.category = await resolveStockCategoryName({ db, name: next.category, outletId: current?.outlet_id });
   }
   await db.table('stock_items').where({ id }).update(next);
   return getStockItem({ context, id });

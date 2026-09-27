@@ -31,11 +31,8 @@ describe('<StockTab>', () => {
   it('defaults to Stock items and switches between all seven inner tabs, none hidden by any client-side permission check', async () => {
     render(<StockTab activeProperty={{ base_currency: 'NGN' }} />);
     expect(screen.getByRole('tab', { name: 'Stock items', selected: true })).toBeInTheDocument();
-    // The redesigned Stock items screen (gap closure) has no single global
-    // "New stock item" card any more — the permanent "Uncategorized"
-    // section is the one thing always present regardless of how many
-    // registered categories exist.
-    expect(await screen.findByRole('heading', { name: 'Uncategorized' })).toBeInTheDocument();
+    // Stock is managed one outlet at a time; with no outlet yet, Stock items says where to add one.
+    expect(await screen.findByText(/Add an outlet under POS → Setup first/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Recipes' }));
     expect(await screen.findByLabelText('Outlet')).toBeInTheDocument();

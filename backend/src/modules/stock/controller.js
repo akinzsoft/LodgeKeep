@@ -43,7 +43,8 @@ function optionalSortOrder(body) {
 async function listStockItemCategories(req, res, next) {
   try {
     const includeArchived = req.query.include_archived === 'true';
-    res.status(200).json(ok(await service.listStockItemCategories({ context: req.context, includeArchived })));
+    const outletId = req.query.outlet_id || undefined;
+    res.status(200).json(ok(await service.listStockItemCategories({ context: req.context, includeArchived, outletId })));
   } catch (error) {
     next(error);
   }
@@ -51,7 +52,8 @@ async function listStockItemCategories(req, res, next) {
 
 async function createStockItemCategory(req, res, next) {
   try {
-    const category = await service.createStockItemCategory({ context: req.context, name: req.body?.name, sortOrder: optionalSortOrder(req.body) });
+    const outletId = require_(req.body, 'outlet_id');
+    const category = await service.createStockItemCategory({ context: req.context, outletId, name: req.body?.name, sortOrder: optionalSortOrder(req.body) });
     await req.audit({ entityType: 'stock_item_categories', entityId: category.id, action: 'create', afterState: category });
     res.status(201).json(ok(category));
   } catch (error) {

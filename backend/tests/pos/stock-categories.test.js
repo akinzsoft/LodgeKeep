@@ -3,10 +3,10 @@
 /**
  * Stock item categories (gap closure) — mirrors `tests/pos/menu-categories.test.js`
  * exactly, for the parallel `stock_item_categories` mechanism: a registered
- * list shared by every outlet. Stock items pick a registered, active
- * category (or none at all — category is optional, unlike menu items');
- * renaming a category renames it on its items; a category still in use
- * cannot be archived.
+ * list per OUTLET (20261105090000). Stock items pick a registered, active
+ * category of their own outlet (or none at all — category is optional,
+ * unlike menu items'); renaming a category renames it on that outlet's
+ * items; a category still in use there cannot be archived.
  */
 
 const { useTestApp } = require('../helpers/app');
@@ -40,12 +40,22 @@ describe('Stock item categories (gap closure)', () => {
     outletId = ctx.a.posOutlets[0].id;
   });
 
-  const createCategory = (body, token = manager()) => t.request.post('/api/v1/pos/stock/categories').set('Authorization', `Bearer ${token}`).send(body);
-  const createItem = (category) =>
+  const createCategory = (body, token = manager()) =>
+    t.request.post('/api/v1/pos/stock/categories').set('Authorization', `Bearer ${token}`).send({ outlet_id: outletId, ...body });
+  const createItem = (category, atOutlet = outletId) =>
     t.request
       .post('/api/v1/pos/stock/items')
       .set('Authorization', `Bearer ${manager()}`)
-      .send({ outlet_id: outletId, name: `Stock ${Date.now()}-${Math.random()}`, unit: 'each', category });
+      .send({ outlet_id: atOutlet, name: `Stock ${Date.now()}-${Math.random()}`, unit: 'each', category });
+  const listFor = (id) => t.request.get(`/api/v1/pos/stock/categories?outlet_id=${id}`).set('Authorization', `Bearer ${manager()}`);
+
+  let outletCounter = 0;
+  /** Another outlet at tenant A's property. */
+  async function secondOutlet() {
+    outletCounter += 1;
+    const [id] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, code: `STK-${Date.now()}-${outletCounter}`, name: 'Shop', type: 'bar' });
+    return id;
+  }
 
   it('registers a category, trimmed, and lists categories in display order with how many items use each', async () => {
     const wine = await createCategory({ name: '  Wine ', sort_order: 1 });
@@ -157,5 +167,67 @@ describe('Stock item categories (gap closure)', () => {
       .set('Authorization', `Bearer ${tokenFor(ctx.b, ctx.b.users[0].id)}`)
       .send({ name: 'Hijacked' });
     expect(cross.status).toBe(404);
+  });
+
+  describe('per outlet', () => {
+    it("lists only the requested outlet's stock categories, and lets two outlets each have one with the same name", async () => {
+      const shopId = await secondOutlet();
+      const bar = await createCategory({ name: 'Dry goods' });
+      const shop = await createCategory({ name: 'Dry goods', outlet_id: shopId });
+      expect(bar.status).toBe(201);
+      expect(shop.status).toBe(201);
+
+      expect((await listFor(shopId)).body.data.map((c) => c.id)).toEqual([shop.body.data.id]);
+      const barIds = (await listFor(outletId)).body.data.map((c) => c.id);
+      expect(barIds).toContain(bar.body.data.id);
+      expect(barIds).not.toContain(shop.body.data.id);
+
+      const dup = await createCategory({ name: 'DRY GOODS' });
+      expect(dup.status).toBe(409);
+      expect(dup.body.error.message).toMatch(/at this outlet/);
+    });
+
+    it('requires an active outlet of this property to register a stock category', async () => {
+      const missing = await t.request.post('/api/v1/pos/stock/categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'No outlet' });
+      expect(missing.status).toBe(400);
+      expect((await createCategory({ name: 'Ghost', outlet_id: '999999999' })).body.error.code).toBe('VALIDATION_OUTLET_NOT_FOUND');
+      expect((await createCategory({ name: 'Foreign', outlet_id: ctx.b.posOutlets[0].id })).body.error.code).toBe('VALIDATION_OUTLET_NOT_FOUND');
+    });
+
+    it("a stock item can only use its own outlet's stock categories, on create and on edit", async () => {
+      const shopId = await secondOutlet();
+      await createCategory({ name: 'Footwear', outlet_id: shopId });
+      const refused = await createItem('Footwear');
+      expect(refused.status).toBe(400);
+      expect(refused.body.error.code).toBe('VALIDATION_CATEGORY_NOT_FOUND');
+      expect((await createItem('Footwear', shopId)).status).toBe(201);
+
+      const barItem = await createItem('Beverages');
+      const moved = await t.request.patch(`/api/v1/pos/stock/items/${barItem.body.data.id}`).set('Authorization', `Bearer ${manager()}`).send({ category: 'Footwear' });
+      expect(moved.status).toBe(400);
+    });
+
+    it("counts, archives and renames only against the stock category's own outlet", async () => {
+      const shopId = await secondOutlet();
+      const barCat = await createCategory({ name: 'Linen' });
+      const shopCat = await createCategory({ name: 'Linen', outlet_id: shopId });
+      const barItem = await createItem('Linen');
+      const shopItem = await createItem('Linen', shopId);
+      await createItem('Linen', shopId);
+
+      expect((await listFor(outletId)).body.data.find((c) => c.id === barCat.body.data.id).item_count).toBe(1);
+      expect((await listFor(shopId)).body.data.find((c) => c.id === shopCat.body.data.id).item_count).toBe(2);
+
+      await t.request.patch(`/api/v1/pos/stock/categories/${barCat.body.data.id}`).set('Authorization', `Bearer ${manager()}`).send({ name: 'Towels' });
+      expect((await t.trx('stock_items').where({ id: barItem.body.data.id }).first()).category).toBe('Towels');
+      expect((await t.trx('stock_items').where({ id: shopItem.body.data.id }).first()).category).toBe('Linen');
+
+      const refused = await t.request.post(`/api/v1/pos/stock/categories/${shopCat.body.data.id}/archive`).set('Authorization', `Bearer ${manager()}`);
+      expect(refused.status).toBe(409);
+      const otherId = await secondOutlet();
+      const empty = await createCategory({ name: 'Linen', outlet_id: otherId });
+      const archived = await t.request.post(`/api/v1/pos/stock/categories/${empty.body.data.id}/archive`).set('Authorization', `Bearer ${manager()}`);
+      expect(archived.status).toBe(200);
+    });
   });
 });
