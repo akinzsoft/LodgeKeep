@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeNotification, notificationTarget, parsePayload, summarizeItems, timeAgo } from '../notificationText.js';
+import { describeNotification, notificationIntent, notificationTarget, parsePayload, summarizeItems, timeAgo } from '../notificationText.js';
 
 describe('describeNotification', () => {
   it('describes a new guest QR order with who, where, what, and the exact total', () => {
@@ -98,6 +98,14 @@ describe('helpers', () => {
   it('summarizeItems caps the list', () => {
     const items = [1, 2, 3, 4, 5].map((n) => ({ name: `Item ${n}`, quantity: 1 }));
     expect(summarizeItems(items)).toBe('1× Item 1, 1× Item 2, 1× Item 3 +2 more');
+  });
+
+  it('notificationIntent sends a stock-request notification to Stock → Requests with that request, and nothing else anywhere', () => {
+    expect(notificationIntent({ type: 'stock.transfer_requested', payload: { requestId: 5 } })).toEqual({ posTab: 'stock', stockTab: 'requests', requestId: '5' });
+    expect(notificationIntent({ type: 'stock.transfer_request_rejected', payload: JSON.stringify({ requestId: 7 }) }).requestId).toBe('7');
+    expect(notificationIntent({ type: 'stock.transfer_request_issued', payload: {} }).requestId).toBeNull();
+    expect(notificationIntent({ type: 'stock.out_of_stock', payload: { name: 'Gin' } })).toBeNull();
+    expect(notificationIntent({ type: 'guest.checked_in', payload: {} })).toBeNull();
   });
 
   it('notificationTarget maps each family to its screen', () => {

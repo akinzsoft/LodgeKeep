@@ -64,8 +64,16 @@ const TABS = [
   { key: 'setup', label: 'Setup' },
 ];
 
-export function POSScreen({ activeProperty, isOffline = false, currentUserLabel, permissions }) {
-  const [tab, setTab] = useState('register');
+export function POSScreen({ activeProperty, isOffline = false, currentUserLabel, permissions, intent }) {
+  const [tab, setTab] = useState(intent?.posTab ?? 'register');
+  // A notification click while POS is already open lands on its tab too —
+  // applied once per click (its `nonce`), adjusted during render rather than
+  // in an effect so there is no flash of the old tab.
+  const [appliedNonce, setAppliedNonce] = useState(intent?.nonce);
+  if (intent && intent.nonce !== appliedNonce) {
+    setAppliedNonce(intent.nonce);
+    if (intent.posTab) setTab(intent.posTab);
+  }
 
   return (
     <div className={styles.page}>
@@ -97,7 +105,7 @@ export function POSScreen({ activeProperty, isOffline = false, currentUserLabel,
             {tab === 'shifts' && <ShiftsTab isOffline={isOffline} />}
             {tab === 'sales' && <SalesTab activeProperty={activeProperty} isOffline={isOffline} />}
             {tab === 'qr_codes' && <QrTokensTab />}
-            {tab === 'stock' && <StockTab activeProperty={activeProperty} isOffline={isOffline} permissions={permissions} />}
+            {tab === 'stock' && <StockTab activeProperty={activeProperty} isOffline={isOffline} permissions={permissions} intent={intent} />}
             {tab === 'setup' && <SetupTab activeProperty={activeProperty} isOffline={isOffline} />}
           </div>
         </>

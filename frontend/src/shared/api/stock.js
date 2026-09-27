@@ -132,6 +132,11 @@ export function listTransferRequests({ status, outletId, limit } = {}) {
   return request(`/pos/stock/transfer-requests?${params}`);
 }
 
+/** One request by id — what a stock-request notification opens. */
+export function getTransferRequest(requestId) {
+  return request(`/pos/stock/transfer-requests/${requestId}`);
+}
+
 export function createTransferRequest({ fromOutletId, toOutletId, lines, note }) {
   return request('/pos/stock/transfer-requests', {
     method: 'POST',

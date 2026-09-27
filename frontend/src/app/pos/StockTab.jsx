@@ -42,10 +42,16 @@ const STOCK_TABS = [
   { key: 'reports', label: 'Reports', permission: 'pos.stock_manage' },
 ];
 
-export function StockTab({ activeProperty, isOffline = false, permissions }) {
+export function StockTab({ activeProperty, isOffline = false, permissions, intent }) {
   const allowed = (t) => [t.permission].flat().some((key) => permissions.has(key));
   const tabs = permissions ? STOCK_TABS.filter(allowed) : STOCK_TABS;
-  const [chosen, setTab] = useState(null);
+  const [chosen, setTab] = useState(intent?.stockTab ?? null);
+  // A notification click (e.g. a stock request) lands on its inner tab — once per click, as in POSScreen.
+  const [appliedNonce, setAppliedNonce] = useState(intent?.nonce);
+  if (intent && intent.nonce !== appliedNonce) {
+    setAppliedNonce(intent.nonce);
+    if (intent.stockTab) setTab(intent.stockTab);
+  }
   const tab = tabs.some((t) => t.key === chosen) ? chosen : tabs[0]?.key;
 
   return (
@@ -71,7 +77,7 @@ export function StockTab({ activeProperty, isOffline = false, permissions }) {
         {tab === 'goods_received' && <StockGoodsReceivedTab activeProperty={activeProperty} isOffline={isOffline} />}
         {tab === 'takes' && <StockTakesTab isOffline={isOffline} />}
         {tab === 'wastage' && <StockWastageTab isOffline={isOffline} />}
-        {tab === 'requests' && <StockRequestsTab isOffline={isOffline} permissions={permissions} />}
+        {tab === 'requests' && <StockRequestsTab isOffline={isOffline} permissions={permissions} intent={intent} />}
         {tab === 'transfer' && <StockTransferTab isOffline={isOffline} />}
         {tab === 'reorder' && <StockReorderReportTab activeProperty={activeProperty} />}
         {tab === 'reports' && <StockReportsTab activeProperty={activeProperty} />}

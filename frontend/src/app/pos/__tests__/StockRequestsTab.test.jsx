@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   createTransferRequest: vi.fn(),
   issueTransferRequest: vi.fn(),
   rejectTransferRequest: vi.fn(),
+  getTransferRequest: vi.fn(),
   cancelTransferRequest: vi.fn(),
 }));
 
@@ -226,6 +227,33 @@ describe('<StockRequestsTab>', () => {
       await userEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Withdraw request' }));
       expect(mocks.cancelTransferRequest).toHaveBeenCalledWith('5');
       expect(await screen.findByText('Request #5 withdrawn.')).toBeInTheDocument();
+    });
+
+    it('a notification opens its request even when the list is filtered away from it', async () => {
+      const issued = pendingRequest({ status: 'issued', lines: [{ stockItemId: '20', name: 'Coke', unit: 'bottle', archived: false, quantityRequested: '12.000', quantityIssued: '12.000', availableAtSource: null }] });
+      mocks.getTransferRequest.mockResolvedValue(issued);
+      render(<StockRequestsTab permissions={STOREKEEPER} intent={{ requestId: '5', nonce: 1 }} />);
+
+      expect(await screen.findByRole('heading', { name: 'Request #5 — Main Store → Main Bar' })).toBeInTheDocument();
+      expect(mocks.listTransferRequests).toHaveBeenCalledWith({ status: 'pending', limit: 100 }); // the list is still Pending; the request opens anyway
+      expect(screen.getByText('No pending requests.')).toBeInTheDocument();
+    });
+
+    it('a pending request opened from a notification can be issued, and closes once the refreshed list no longer has it', async () => {
+      mocks.getTransferRequest.mockResolvedValue(pendingRequest());
+      mocks.issueTransferRequest.mockResolvedValue(pendingRequest({ status: 'issued' }));
+      render(<StockRequestsTab permissions={STOREKEEPER} intent={{ requestId: '5', nonce: 1 }} />);
+
+      expect(await screen.findByLabelText('Send Coke')).toHaveValue('12.000');
+      await userEvent.click(screen.getByRole('button', { name: 'Issue stock' }));
+      expect(await screen.findByText('Request #5 issued — the stock is now at Main Bar.')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Request #5 — Main Store → Main Bar' })).not.toBeInTheDocument();
+    });
+
+    it('says so when the request a notification pointed at is gone', async () => {
+      mocks.getTransferRequest.mockRejectedValue(new ApiError({ status: 404, code: null, message: 'Not found.' }));
+      render(<StockRequestsTab permissions={STOREKEEPER} intent={{ requestId: '99', nonce: 1 }} />);
+      expect(await screen.findByRole('alert')).toHaveTextContent('Request #99 could not be found.');
     });
 
     it('a slow answer for an earlier filter never replaces the current one', async () => {
