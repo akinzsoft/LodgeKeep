@@ -30,3 +30,24 @@ export function stockLevelTone(currentQuantity, reorderLevel) {
   if (quantity <= Number(reorderLevel)) return { tone: 'warning', label: 'Low stock' };
   return null;
 }
+
+function toQtyUnits(quantity) {
+  const [whole, fraction = ''] = String(quantity ?? '0').split('.');
+  const negative = whole.startsWith('-');
+  const wholeAbs = negative ? whole.slice(1) : whole;
+  const units = BigInt(wholeAbs || '0') * 1000n + BigInt(`${fraction}000`.slice(0, 3) || '0');
+  return negative ? -units : units;
+}
+
+/**
+ * How much is needed to get back up to the reorder level (`reorderLevel -
+ * currentQuantity`, never below zero), as an exact 3-decimal string — the
+ * same fixed precision `stock_items` stores, computed in BigInt, never a
+ * float subtraction.
+ */
+export function quantityShortfall(reorderLevel, currentQuantity) {
+  const diff = toQtyUnits(reorderLevel) - toQtyUnits(currentQuantity);
+  const units = diff > 0n ? diff : 0n;
+  return `${units / 1000n}.${(units % 1000n).toString().padStart(3, '0')}`;
+}
+
