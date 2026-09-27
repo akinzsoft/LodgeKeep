@@ -7,11 +7,14 @@ import { ApiError } from '../../../shared/api/index.js';
 const mocks = vi.hoisted(() => ({
   uploadPropertyLogo: vi.fn(),
   removePropertyLogo: vi.fn(),
+  imageHasSolidBackground: vi.fn(),
 }));
+
+vi.mock('../logoBackground.js', () => ({ imageHasSolidBackground: mocks.imageHasSolidBackground }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
-  return { ...actual, setupApi: mocks };
+  return { ...actual, setupApi: { uploadPropertyLogo: mocks.uploadPropertyLogo, removePropertyLogo: mocks.removePropertyLogo } };
 });
 
 const PROPERTY = { id: '3', name: 'Harbour View Hotel', address: '12 Marina Road, Lagos', logo_url: null };
@@ -66,6 +69,30 @@ describe('<BrandingTab>', () => {
     Object.defineProperty(img, 'naturalHeight', { value: 60 });
     fireEvent.load(img);
     expect(screen.getByText(/200 × 60 px — this is small and may look soft/)).toBeInTheDocument();
+  });
+
+  it('suggests a transparent PNG when the logo has a solid background', () => {
+    mocks.imageHasSolidBackground.mockReturnValue(true);
+    render(<BrandingTab activeProperty={{ ...PROPERTY, logo_url: '/logo.jpg' }} onPropertiesChanged={vi.fn()} />);
+    fireEvent.load(screen.getByAltText('Harbour View Hotel logo'));
+    expect(screen.getByText(/has a solid background, not a transparent one/)).toBeInTheDocument();
+  });
+
+  it('says nothing about the background when it is transparent, or cannot be read', () => {
+    mocks.imageHasSolidBackground.mockReturnValue(false);
+    const { unmount } = render(<BrandingTab activeProperty={{ ...PROPERTY, logo_url: '/logo.png' }} onPropertiesChanged={vi.fn()} />);
+    fireEvent.load(screen.getByAltText('Harbour View Hotel logo'));
+    expect(screen.queryByText(/solid background/)).not.toBeInTheDocument();
+    unmount();
+    mocks.imageHasSolidBackground.mockReturnValue(null);
+    render(<BrandingTab activeProperty={{ ...PROPERTY, logo_url: '/logo.png' }} onPropertiesChanged={vi.fn()} />);
+    fireEvent.load(screen.getByAltText('Harbour View Hotel logo'));
+    expect(screen.queryByText(/solid background/)).not.toBeInTheDocument();
+  });
+
+  it('asks for a version without the tagline', () => {
+    render(<BrandingTab activeProperty={PROPERTY} onPropertiesChanged={vi.fn()} />);
+    expect(screen.getByText(/without a tagline or small print/)).toBeInTheDocument();
   });
 
   it('refuses a non-image or oversized file before uploading', async () => {

@@ -52,12 +52,45 @@ describe('<CashieringScreen>', () => {
   // The screen now defaults to the Balances tab (PRODUCT_REQUIREMENTS.md's
   // own "Open folios list" landing screen for Cashier) — every existing
   // lookup-form test switches to "Folio Lookup" first.
-  async function loadReservation() {
-    render(<CashieringScreen />);
+  async function loadReservation(props = {}) {
+    render(<CashieringScreen {...props} />);
     await userEvent.click(await screen.findByRole('tab', { name: 'Folio Lookup' }));
     await userEvent.type(screen.getByPlaceholderText('e.g. 42'), '7');
     await userEvent.click(screen.getByRole('button', { name: 'Load folios' }));
   }
+
+  it('Print folio prints the folio alone, with the letterhead and without voided lines', async () => {
+    const voided = { ...LINE_ITEM, id: '11', description: 'Wrong charge', voided_at: '2027-01-01T10:00:00Z' };
+    mocks.getFolio.mockResolvedValue({ ...FOLIO, lineItems: [LINE_ITEM, voided], payments: [] });
+    mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+    let printed = null;
+    const printSpy = vi.spyOn(window, 'print').mockImplementation(() => {
+      const doc = document.querySelector('[data-testid="print-document"]');
+      printed = {
+        bodyMarked: document.body.classList.contains('lk-printing-document'),
+        underBody: doc?.parentElement === document.body,
+        text: doc?.textContent ?? '',
+        logo: doc?.querySelector('img')?.getAttribute('src'),
+      };
+    });
+    await loadReservation({ activeProperty: { name: 'Alpha Hotels', logo_url: '/logo.png' } });
+    await screen.findByText('Room 101');
+    await userEvent.click(screen.getByRole('button', { name: 'Print folio' }));
+
+    expect(printSpy).toHaveBeenCalledTimes(1);
+    expect(printed.bodyMarked).toBe(true);
+    expect(printed.underBody).toBe(true);
+    expect(printed.logo).toBe('/logo.png');
+    expect(printed.text).toContain('Alpha Hotels');
+    expect(printed.text).toContain('Guest folio');
+    expect(printed.text).toContain('Folio F1');
+    expect(printed.text).toContain('Room 101');
+    expect(printed.text).not.toContain('Wrong charge');
+    // Gone again once the print dialog closes.
+    expect(screen.queryByTestId('print-document')).not.toBeInTheDocument();
+    expect(document.body.classList.contains('lk-printing-document')).toBe(false);
+    printSpy.mockRestore();
+  });
 
   it('shows an empty state when a reservation has no folios yet', async () => {
     mocks.listFoliosForReservation.mockResolvedValue([]);

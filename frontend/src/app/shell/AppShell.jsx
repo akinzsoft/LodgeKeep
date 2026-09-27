@@ -54,7 +54,7 @@ import styles from './AppShell.module.css';
  * @param {Set<string>} [permissions]
  * @param {string} [activeItemKey]
  * @param {(key: string) => void} [onNavigate]
- * @param {{id: string, name: string}} activeProperty
+ * @param {{id: string, name: string, logoUrl?: string|null}} activeProperty   Also shown at the top of the sidebar (its logo and name).
  * @param {Array<{id: string, name: string}>} properties
  * @param {(propertyId: string) => void} onSwitchProperty
  * @param {string} businessDate
@@ -126,6 +126,7 @@ export function AppShell({
           onNavigate={handleNavigate}
           collapsed={!sidebarOpen}
           mobileOpen={sidebarOpen}
+          property={activeProperty}
         />
 
         {/* Below 640px, an open drawer needs a way to close by tapping

@@ -87,6 +87,28 @@ function defaultActiveProperty(access) {
  * `tenantId` comes from `resolveTenant` middleware (the request's Host
  * header), never from the request body.
  */
+/**
+ * What the sign-in page may show before anyone signs in (user-requested:
+ * the hotel's own logo on its login page): the tenant's name and one
+ * logo — the logo of its first active property (lowest id) that has one,
+ * since logos belong to properties and the sign-in page cannot know which
+ * property the visitor works at yet. Both are already public: the name is
+ * on the page and a logo is served by the public media route. Nothing else
+ * is exposed.
+ */
+async function loginBranding({ tenantId }) {
+  const db = scopedDb().for(contextFromSession({ tenantId }));
+  const tenant = await db.table('tenants').first('name');
+  const property = await db
+    .acrossProperties()
+    .table('properties')
+    .where({ status: 'active' })
+    .whereNotNull('logo_url')
+    .orderBy('id')
+    .first('logo_url');
+  return { tenantName: tenant?.name ?? null, logoUrl: property?.logo_url ?? null };
+}
+
 async function staffLogin({ tenantId, email, password, ip, userAgent, requestId }) {
   const db = scopedDb();
   // No userId yet — see the nullable-userId note in context.js. tenant_id is
@@ -1496,6 +1518,7 @@ async function verifyPlatformMfa({ challengeToken, ...args }) {
 }
 
 module.exports = {
+  loginBranding,
   staffLogin,
   staffRefresh,
   staffLogout,

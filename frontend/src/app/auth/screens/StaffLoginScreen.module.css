@@ -153,6 +153,21 @@
   }
 }
 
+/* The tenant's own logo, shown as uploaded at the top of the card — never
+   faded behind the form: a logo exported on a solid background shows its
+   box as a stray rectangle there, and a watermark competes with the fields. */
+.tenantLogoRow {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-4);
+}
+
+.tenantLogo {
+  max-height: 72px;
+  max-width: 200px;
+  object-fit: contain;
+}
+
 .title {
   margin: 0 0 var(--space-2);
   font-size: var(--text-h1-size);

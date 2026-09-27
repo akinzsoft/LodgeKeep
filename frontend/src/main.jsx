@@ -9,6 +9,7 @@ import '@fontsource/inter/600.css';
 import '@fontsource/inter/700.css';
 // Display serif — only the Home greeting and the sidebar wordmark use it.
 import './styles/tokens.css';
+import './styles/print.css';
 import styles from './main.module.css';
 import { AuthProvider, useAuth } from './app/auth/index.js';
 import { StaffLoginScreen } from './app/auth/screens/StaffLoginScreen.jsx';
@@ -263,6 +264,7 @@ function Demo() {
       activeProperty={{
         id: user.activePropertyId,
         name: activePropertyRecord?.name ?? `Property ${user.activePropertyId}`,
+        logoUrl: activePropertyRecord?.logo_url ?? null,
       }}
       properties={user.properties.map((property) => ({
         id: property.propertyId,
@@ -315,11 +317,11 @@ function Demo() {
       ) : screenKey === 'reports' ? (
         <ReportingScreen activePropertyId={user.activePropertyId} />
       ) : screenKey === 'cashiering' ? (
-        <CashieringScreen isOffline={!isOnline} />
+        <CashieringScreen isOffline={!isOnline} activeProperty={activePropertyRecord} />
       ) : screenKey === 'night_audit' ? (
         <NightAuditScreen isOffline={!isOnline} />
       ) : screenKey === 'profiles' ? (
-        <ProfilesScreen isOffline={!isOnline} />
+        <ProfilesScreen isOffline={!isOnline} activeProperty={activePropertyRecord} />
       ) : screenKey === 'pos' ? (
         <POSScreen activeProperty={activePropertyRecord} isOffline={!isOnline} currentUserLabel={displayName} />
       ) : screenKey === 'ar' ? (

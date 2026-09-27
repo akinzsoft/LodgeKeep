@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Card, DataTable, Button, StatusPill, ConfirmDialog } from '../../shared/components/index.js';
+import { Card, DataTable, Button, StatusPill, ConfirmDialog, PrintDocument } from '../../shared/components/index.js';
 import { Money, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import { cashieringApi, arApi, profilesApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { OutstandingBalancesTab } from './OutstandingBalancesTab.jsx';
+import { PrintedFolio } from './PrintedFolio.jsx';
 import formStyles from './CashieringForm.module.css';
 import styles from './CashieringScreen.module.css';
 
@@ -40,7 +41,7 @@ const TABS = [
  * §3.5's own explicit requirement, and ARCHITECTURE.md §8's "void, never
  * delete" made visible).
  */
-export function CashieringScreen({ isOffline = false }) {
+export function CashieringScreen({ isOffline = false, activeProperty = null }) {
   const [tab, setTab] = useState('balances');
   const [reservationIdInput, setReservationIdInput] = useState('');
   const [reservationId, setReservationId] = useState(null);
@@ -167,6 +168,7 @@ export function CashieringScreen({ isOffline = false }) {
                   isOffline={isOffline}
                   submitting={submitting}
                   onAction={withSubmitting}
+                  property={activeProperty}
                 />
               ))}
 
@@ -184,7 +186,7 @@ export function CashieringScreen({ isOffline = false }) {
   );
 }
 
-function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAction }) {
+function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAction, property }) {
   const [lineItems, setLineItems] = useState(null);
   const [payments, setPayments] = useState(null);
   const [showChargeForm, setShowChargeForm] = useState(false);
@@ -198,6 +200,15 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
   const [checkoutAccessCode, setCheckoutAccessCode] = useState(null);
   const [checkoutPaymentId, setCheckoutPaymentId] = useState(null);
   const [openingPopup, setOpeningPopup] = useState(false);
+  // "Print folio": the printable folio is mounted only for the print, then
+  // the browser's print dialog opens (it blocks until closed) and it goes.
+  const [printing, setPrinting] = useState(false);
+  useEffect(() => {
+    if (!printing) return;
+    window.print();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the print dialog has closed; unmount the printable copy
+    setPrinting(false);
+  }, [printing]);
   const isSettled = isBalanceSettled(folio.balance);
   const balanceState = describeBalanceState(folio.balance);
 
@@ -262,7 +273,15 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
         <span className={styles.balance}>
           Balance: <Money amount={folio.balance} currencyCode={folio.currency} />
         </span>
+        <Button size="compact" variant="secondary" disabled={lineItems === null} onClick={() => setPrinting(true)}>
+          Print folio
+        </Button>
       </div>
+      {printing && (
+        <PrintDocument>
+          <PrintedFolio folio={folio} lineItems={lineItems} property={property} />
+        </PrintDocument>
+      )}
 
       {/*
         Gap closure (PLAN.md Phase 4, Accounts Receivable): replaces the

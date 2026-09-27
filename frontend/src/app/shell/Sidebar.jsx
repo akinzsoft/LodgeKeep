@@ -41,6 +41,7 @@ import styles from './Sidebar.module.css';
  * @param {(key: string) => void} [onNavigate]
  * @param {boolean} [collapsed]
  * @param {boolean} [mobileOpen]
+ * @param {{name?: string, logoUrl?: string|null}} [property]   The active property, shown under the product mark: its Setup → Branding logo on a white tile (a logo made for white paper stays legible on the dark sidebar) and its name. Logo only when collapsed; nothing at all when there is neither.
  */
 export function Sidebar({
   user,
@@ -51,6 +52,7 @@ export function Sidebar({
   onNavigate,
   collapsed = false,
   mobileOpen = false,
+  property,
 }) {
   const visibleGroups = navGroups
     .map((group) => ({
@@ -64,16 +66,26 @@ export function Sidebar({
       className={`${styles.sidebar} ${collapsed ? styles.collapsed : ''} ${mobileOpen ? styles.mobileOpen : ''}`.trim()}
       aria-label="Main"
     >
-      {/* LodgeKeep's own platform mark — never the tenant's own branding.
-          A property's logo (properties.logo_url) is a separate, per-tenant
-          concept (PRODUCT_REQUIREMENTS.md) that has no read endpoint yet;
-          this is the product's own identity, shown the same way to every
+      {/* LodgeKeep's own platform mark — never the tenant's own branding
+          (the property's logo is the block just below it). This is the
+          product's own identity, shown the same way to every
           tenant's staff regardless of theming (DESIGN_SYSTEM.md §1: "the
           admin shell keeps the product's own identity"). */}
       <div className={styles.brand}>
         <img src={lodgekeepIcon} alt="LodgeKeep" className={styles.brandIcon} />
         {!collapsed && <span className={styles.brandWordmark}>LodgeKeep</span>}
       </div>
+
+      {(property?.logoUrl || (!collapsed && property?.name)) && (
+        <div className={styles.property} title={collapsed ? property.name : undefined}>
+          {property.logoUrl && (
+            <span className={styles.propertyLogoTile}>
+              <img src={property.logoUrl} alt={property.name ? `${property.name} logo` : 'Property logo'} className={styles.propertyLogo} />
+            </span>
+          )}
+          {!collapsed && property.name && <p className={styles.propertyName}>{property.name}</p>}
+        </div>
+      )}
 
       <div className={styles.userPanel}>
         {user.avatarUrl ? (

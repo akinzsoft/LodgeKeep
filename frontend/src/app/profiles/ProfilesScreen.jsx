@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, DataTable, Button, StatusPill } from '../../shared/components/index.js';
+import { Card, DataTable, Button, StatusPill, PrintLetterhead } from '../../shared/components/index.js';
 import { profilesApi, reservationsApi, ApiError } from '../../shared/api/index.js';
 import { CompanyProfilesTab } from './CompanyProfilesTab.jsx';
 import styles from './ProfilesScreen.module.css';
@@ -54,7 +54,7 @@ const TABS = [
  * (`aria-pressed`), the third view alongside "all guests" and "search",
  * mutually exclusive with both (`filterMode`).
  */
-export function ProfilesScreen({ isOffline = false } = {}) {
+export function ProfilesScreen({ isOffline = false, activeProperty = null } = {}) {
   const [tab, setTab] = useState('guests');
   const [allGuests, setAllGuests] = useState(null);
   const [allGuestsError, setAllGuestsError] = useState(null);
@@ -285,8 +285,12 @@ export function ProfilesScreen({ isOffline = false } = {}) {
           chrome and business date aren't visible there once Sidebar/TopBar
           hide themselves, so the exported document needs its own label. */}
       <div className={styles.printOnly}>
-        <h1>Guest List — {tableTitle}</h1>
-        <p>Printed {new Date().toLocaleString()}</p>
+        <PrintLetterhead
+          logoUrl={activeProperty?.logo_url}
+          organisation={activeProperty?.name}
+          title={`Guest List — ${tableTitle}`}
+          details={[`Printed ${new Date().toLocaleString()}`]}
+        />
       </div>
 
       {allGuestsError && !isFiltered && (

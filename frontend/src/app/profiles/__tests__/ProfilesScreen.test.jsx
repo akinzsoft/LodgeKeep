@@ -138,6 +138,15 @@ describe('<ProfilesScreen>', () => {
     printSpy.mockRestore();
   });
 
+  it("prints the property's logo, name and a watermark on the guest list", async () => {
+    mocks.listGuests.mockResolvedValue([GUEST]);
+    render(<ProfilesScreen activeProperty={{ name: 'Alpha Hotels', logo_url: '/logo.png' }} />);
+    await screen.findByText('jordan@example.com');
+    expect(screen.getByRole('heading', { name: /Guest List/, hidden: true })).not.toBeVisible();
+    expect(screen.getByText('Alpha Hotels')).toBeInTheDocument();
+    expect(screen.getByTestId('print-watermark')).toHaveAttribute('src', '/logo.png');
+  });
+
   it('does not show an Export to PDF button when the guest list is empty', async () => {
     mocks.listGuests.mockResolvedValue([]);
     render(<ProfilesScreen />);

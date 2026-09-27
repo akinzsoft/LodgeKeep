@@ -56,6 +56,15 @@ function requestMeta(req) {
   return { ip: req.ip, userAgent: req.get('User-Agent'), requestId: req.requestId };
 }
 
+/** GET /api/v1/auth/branding — the sign-in page's name and logo for this address (public). */
+async function loginBranding(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.loginBranding({ tenantId: req.tenantId })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 /** POST /api/v1/auth/login */
 async function staffLogin(req, res, next) {
   try {
@@ -418,6 +427,7 @@ async function verifyPlatformMfa(req, res, next) {
 }
 
 module.exports = {
+  loginBranding,
   staffLogin,
   staffRefresh,
   staffLogout,

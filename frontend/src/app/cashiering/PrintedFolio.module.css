@@ -1,0 +1,46 @@
+/* The printed guest folio — see PrintedFolio.jsx. */
+
+.folio {
+  position: relative;
+  z-index: 1;
+  font-size: var(--text-body-size);
+  color: var(--text-primary);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.table th {
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  border-bottom: 2px solid var(--text-primary);
+}
+
+.table .amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.total td {
+  font-weight: 700;
+  border-top: 2px solid var(--text-primary);
+  border-bottom: none;
+}

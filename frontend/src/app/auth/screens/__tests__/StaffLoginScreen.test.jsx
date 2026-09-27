@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AuthProvider } from '../../AuthContext.jsx';
 import { StaffLoginScreen } from '../StaffLoginScreen.jsx';
@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   requestPasswordResetCode: vi.fn(),
   completePasswordResetWithCode: vi.fn(),
   configureApiClient: vi.fn(),
+  getLoginBranding: vi.fn(),
 }));
 
 vi.mock('../../../../shared/api/index.js', async () => {
@@ -26,6 +27,7 @@ vi.mock('../../../../shared/api/index.js', async () => {
       refresh: mocks.refresh,
       requestPasswordResetCode: mocks.requestPasswordResetCode,
       completePasswordResetWithCode: mocks.completePasswordResetWithCode,
+      getLoginBranding: mocks.getLoginBranding,
     },
     configureApiClient: mocks.configureApiClient,
   };
@@ -42,6 +44,7 @@ function renderScreen(props = {}) {
 describe('<StaffLoginScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
+    mocks.getLoginBranding.mockResolvedValue({ tenantName: null, logoUrl: null });
   });
 
   it('renders the sign-in form', () => {
@@ -50,6 +53,36 @@ describe('<StaffLoginScreen>', () => {
     expect(screen.getByLabelText('Email')).toBeInTheDocument();
     expect(screen.getByLabelText('Password')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+  });
+
+  it("shows the tenant's own logo and name on the sign-in card when branding has one", async () => {
+    mocks.getLoginBranding.mockResolvedValue({ tenantName: 'Diamond Age Hotels', logoUrl: '/api/v1/media/property-logos/logo.png' });
+    renderScreen();
+    const logo = await screen.findByRole('img', { name: 'Diamond Age Hotels logo' });
+    expect(logo).toHaveAttribute('src', '/api/v1/media/property-logos/logo.png');
+    expect(screen.getByText('Sign in to Diamond Age Hotels')).toBeInTheDocument();
+  });
+
+  it('shows no logo (and still the form) when the tenant has none', async () => {
+    renderScreen();
+    await vi.waitFor(() => expect(mocks.getLoginBranding).toHaveBeenCalled());
+    expect(screen.queryByRole('img', { name: /logo/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+  });
+
+  it('keeps working when the branding request fails', async () => {
+    mocks.getLoginBranding.mockRejectedValue(new Error('network'));
+    renderScreen();
+    await vi.waitFor(() => expect(mocks.getLoginBranding).toHaveBeenCalled());
+    expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+  });
+
+  it('drops a logo that fails to load rather than showing a broken image', async () => {
+    mocks.getLoginBranding.mockResolvedValue({ tenantName: 'Alpha', logoUrl: '/missing.png' });
+    renderScreen();
+    const logo = await screen.findByRole('img', { name: 'Alpha logo' });
+    fireEvent.error(logo);
+    expect(screen.queryByRole('img', { name: 'Alpha logo' })).not.toBeInTheDocument();
   });
 
   it('links to the real /signup screen, PLAN.md Phase 5 gap closure', () => {

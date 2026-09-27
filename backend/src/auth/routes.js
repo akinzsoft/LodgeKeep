@@ -107,6 +107,8 @@ const tokenActionIpRateLimiter = (prefix) =>
 function staffAuthRouter({ resolveTenant }) {
   const router = Router();
   // Public, tenant resolved from the Host header (or the dev override).
+  // Public: the sign-in page's hotel name and logo (both already public — see service.loginBranding).
+  router.get('/branding', resolveTenant, controller.loginBranding);
   router.post('/login', resolveTenant, ...loginRateLimiters('auth-staff-login:'), controller.staffLogin);
   // Security-review finding: CSRF defense-in-depth for the one action
   // authenticated by the refresh cookie alone — `same-origin-guard.js`'s
