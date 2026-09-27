@@ -44,6 +44,7 @@ import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { useStaffNotifications } from './shared/hooks/useStaffNotifications.js';
 import { useNotificationSound } from './shared/hooks/useNotificationSound.js';
+import { useNewVersionAvailable } from './shared/hooks/useNewVersionAvailable.js';
 import { playAlertBeep, unlockAlertSound } from './shared/sound/alertBeep.js';
 import { authApi, setupApi } from './shared/api/index.js';
 import { PortalApp } from './portal/PortalApp.jsx';
@@ -186,6 +187,11 @@ function Demo() {
       if (soundOn) playAlertBeep();
     }, [soundOn]),
   });
+  // A device left open all day keeps running the build it loaded; when a
+  // newer one is deployed, offer a reload (never forced — see UpdateBanner).
+  const newVersionAvailable = useNewVersionAvailable({ enabled: import.meta.env.PROD, currentBuildId: import.meta.env.VITE_APP_BUILD_ID });
+  const [newVersionDismissed, setNewVersionDismissed] = useState(false);
+
   // Browsers only allow sound after the page has been touched; resume the
   // audio on the first click or key press so the first alert is not silent.
   useEffect(() => {
@@ -323,6 +329,9 @@ function Demo() {
       onMarkAllNotificationsRead={staffNotifications.markAllRead}
       onOpenNotification={handleOpenNotification}
       notificationSoundOn={soundOn}
+      newVersion={
+        newVersionAvailable && !newVersionDismissed ? { onReload: () => window.location.reload(), onDismiss: () => setNewVersionDismissed(true) } : undefined
+      }
       onToggleNotificationSound={notificationSound.toggle}
       isOffline={!isOnline}
       onLogout={logout}
