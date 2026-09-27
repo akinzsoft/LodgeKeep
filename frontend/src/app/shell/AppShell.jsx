@@ -63,6 +63,8 @@ import styles from './AppShell.module.css';
  * @param {(id: string) => void} [onMarkNotificationRead]
  * @param {() => void} [onMarkAllNotificationsRead]
  * @param {(notification: object) => void} [onOpenNotification]
+ * @param {boolean} [notificationSoundOn]                               Whether pop-up notifications beep on this device — see TopBar's own header.
+ * @param {() => void} [onToggleNotificationSound]
  * @param {{tenantName: string, onExit: () => void}} [impersonation]     Present only while a platform-staff impersonation grant is active (SECURITY.md §2).
  * @param {boolean} [isOffline]                                          DESIGN_SYSTEM.md §2's sixth state — typically fed by `src/shared/hooks/useOnlineStatus.js`.
  * @param {() => void} [onLogout]                                       Renders the top bar's user chip as a menu with a "Log out" item — see TopBar's own header.
@@ -85,6 +87,8 @@ export function AppShell({
   onMarkNotificationRead,
   onMarkAllNotificationsRead,
   onOpenNotification,
+  notificationSoundOn,
+  onToggleNotificationSound,
   impersonation,
   isOffline = false,
   onLogout,
@@ -145,6 +149,8 @@ export function AppShell({
             onMarkNotificationRead={onMarkNotificationRead}
             onMarkAllNotificationsRead={onMarkAllNotificationsRead}
             onOpenNotification={onOpenNotification}
+            notificationSoundOn={notificationSoundOn}
+            onToggleNotificationSound={onToggleNotificationSound}
             user={user}
             activeProperty={activeProperty}
             properties={properties}

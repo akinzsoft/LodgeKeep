@@ -1210,6 +1210,7 @@ async function createTransferRequest({ trx, fromOutletId, toOutletId, lines, not
   await notifyStaff({
     trx,
     eventType: 'stock.transfer_requested',
+    popup: true, // user-requested: a stock request pops up (and beeps) rather than only counting in the bell
     payload: { requestId: Number(requestId), fromOutletName: fromOutlet.name, toOutletName: toOutlet.name, lineCount: lines.length },
   });
   const [request] = await loadTransferRequests(trx, { ids: [requestId] });
@@ -1318,6 +1319,7 @@ async function issueTransferRequest({ trx, requestId, lines, note, userId, busin
   await notifyStaff({
     trx,
     eventType: 'stock.transfer_request_issued',
+    popup: true, // user-requested: a stock request pops up (and beeps) rather than only counting in the bell
     payload: {
       requestId: Number(request.id),
       fromOutletName: issued.fromOutlet.name,
@@ -1342,6 +1344,7 @@ async function rejectTransferRequest({ trx, requestId, reason, userId }) {
   await notifyStaff({
     trx,
     eventType: 'stock.transfer_request_rejected',
+    popup: true, // user-requested: a stock request pops up (and beeps) rather than only counting in the bell
     payload: { requestId: Number(request.id), fromOutletName: rejected.fromOutlet.name, toOutletName: rejected.toOutlet.name, reason },
   });
   return rejected;

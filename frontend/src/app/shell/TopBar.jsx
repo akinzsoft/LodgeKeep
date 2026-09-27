@@ -23,6 +23,8 @@ import styles from './TopBar.module.css';
  * @param {(id: string) => void} [onMarkNotificationRead]
  * @param {() => void} [onMarkAllNotificationsRead]
  * @param {(notification: object) => void} [onOpenNotification]   Clicking a row calls this (e.g. mark read and open the related screen).
+ * @param {boolean} [notificationSoundOn]   Whether pop-up notifications (QR orders, stock requests) beep on this device.
+ * @param {() => void} [onToggleNotificationSound]   Renders a speaker toggle beside the bell; omit to hide it.
  * @param {{name: string, avatarUrl?: string}} user
  * @param {{id: string, name: string}} activeProperty
  * @param {Array<{id: string, name: string}>} properties
@@ -39,6 +41,8 @@ export function TopBar({
   onMarkNotificationRead,
   onMarkAllNotificationsRead,
   onOpenNotification,
+  notificationSoundOn = true,
+  onToggleNotificationSound,
   user,
   activeProperty,
   properties,
@@ -121,6 +125,19 @@ export function TopBar({
           aria-label="Toggle fullscreen"
         >
           ⛶
+        </button>
+      )}
+
+      {onToggleNotificationSound && (
+        <button
+          type="button"
+          className={styles.iconButton}
+          onClick={onToggleNotificationSound}
+          aria-pressed={notificationSoundOn}
+          aria-label="Notification sound"
+          title={notificationSoundOn ? 'Alert sound on — click to mute on this device' : 'Alert sound off — click to turn on'}
+        >
+          {notificationSoundOn ? '🔊' : '🔇'}
         </button>
       )}
 

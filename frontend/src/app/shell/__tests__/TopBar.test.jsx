@@ -173,4 +173,21 @@ describe('<TopBar>', () => {
       expect(onOpenNotification).not.toHaveBeenCalled();
     });
   });
+
+  it('shows a sound toggle beside the bell that reports and flips its state', async () => {
+    const onToggleNotificationSound = vi.fn();
+    const { rerender } = render(<TopBar {...baseProps} notificationSoundOn onToggleNotificationSound={onToggleNotificationSound} />);
+    const toggle = screen.getByRole('button', { name: 'Notification sound' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(toggle);
+    expect(onToggleNotificationSound).toHaveBeenCalledTimes(1);
+
+    rerender(<TopBar {...baseProps} notificationSoundOn={false} onToggleNotificationSound={onToggleNotificationSound} />);
+    expect(screen.getByRole('button', { name: 'Notification sound' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('has no sound toggle when none is wired up', () => {
+    render(<TopBar {...baseProps} />);
+    expect(screen.queryByRole('button', { name: 'Notification sound' })).not.toBeInTheDocument();
+  });
 });

@@ -52,6 +52,47 @@ describe('useStaffNotifications', () => {
     expect(result.current.popups.map((p) => p.id)).toEqual(['7']);
   });
 
+  it('calls onNewPopups once for each batch of fresh pop-ups — never for the sign-in backlog', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const onNewPopups = vi.fn();
+    mocks.listBellNotifications.mockResolvedValueOnce({ notifications: [row(1)], unreadCount: 1 });
+    renderHook(() => useStaffNotifications({ enabled: true, sessionKey: 'u1', onNewPopups }));
+    await waitFor(() => expect(mocks.listBellNotifications).toHaveBeenCalledTimes(1));
+    expect(onNewPopups).not.toHaveBeenCalled();
+
+    mocks.listBellNotifications.mockResolvedValue({
+      notifications: [row(1), row(2, { type: 'stock.transfer_requested' }), row(3, { popup: false })],
+      unreadCount: 3,
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(NOTIFICATION_POLL_MS);
+    });
+    await waitFor(() => expect(onNewPopups).toHaveBeenCalledTimes(1));
+    expect(onNewPopups.mock.calls[0][0].map((r) => r.id)).toEqual(['2']);
+
+    await act(async () => {
+      vi.advanceTimersByTime(NOTIFICATION_POLL_MS);
+    });
+    await waitFor(() => expect(mocks.listBellNotifications).toHaveBeenCalledTimes(3));
+    expect(onNewPopups).toHaveBeenCalledTimes(1); // the same row never beeps twice
+  });
+
+  it('keeps polling while the tab is in the background, so an alert still arrives (and beeps)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    const onNewPopups = vi.fn();
+    mocks.listBellNotifications.mockResolvedValueOnce({ notifications: [], unreadCount: 0 });
+    renderHook(() => useStaffNotifications({ enabled: true, sessionKey: 'u1', onNewPopups }));
+    await waitFor(() => expect(mocks.listBellNotifications).toHaveBeenCalledTimes(1));
+
+    mocks.listBellNotifications.mockResolvedValue({ notifications: [row(9, { type: 'stock.transfer_requested' })], unreadCount: 1 });
+    await act(async () => {
+      vi.advanceTimersByTime(NOTIFICATION_POLL_MS);
+    });
+    await waitFor(() => expect(onNewPopups).toHaveBeenCalledTimes(1));
+    hidden.mockRestore();
+  });
+
   it('ignores a slow older response that lands after a newer one', async () => {
     let resolveFirst;
     mocks.listBellNotifications

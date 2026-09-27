@@ -8,9 +8,13 @@ export const NOTIFICATION_POLL_MS = 20_000;
  * The signed-in staff member's live bell feed (gap closure: the bell used to
  * fetch once at login and never again).
  *
- * - Polls every `NOTIFICATION_POLL_MS` while `enabled` and the browser tab is
- *   visible, and immediately when the tab becomes visible again. No push
- *   transport exists in this stack, so polling is the mechanism.
+ * - Polls every `NOTIFICATION_POLL_MS` while `enabled` — in a background tab
+ *   too — and immediately when the tab becomes visible again. No push
+ *   transport exists in this stack, so polling is the mechanism. It used to
+ *   skip polls while the tab was hidden; user-reported, a storekeeper with
+ *   the app behind another window never saw (or, now, heard) a stock
+ *   request until switching back. Browsers already throttle a hidden tab's
+ *   timers (Chrome to about once a minute), which bounds the extra load.
  * - A slow response from an older poll never overwrites a newer one.
  * - A failed poll keeps the last good data — the bell is a convenience, not
  *   a critical path.
@@ -19,16 +23,26 @@ export const NOTIFICATION_POLL_MS = 20_000;
  *   there, so signing in never replays a backlog of cards; each row pops up
  *   at most once per page load.
  *
- * @param {{enabled: boolean, sessionKey?: string}} options  `sessionKey`
+ * - `onNewPopups(rows)` is called once per batch of fresh pop-up rows — the
+ *   same rows that become cards, so the app beeps exactly when a card
+ *   appears, never for the sign-in backlog.
+ *
+ * @param {{enabled: boolean, sessionKey?: string, onNewPopups?: (rows: object[]) => void}} options  `sessionKey`
  *   (e.g. user id) resets the feed when a different user signs in.
  */
-export function useStaffNotifications({ enabled, sessionKey }) {
+export function useStaffNotifications({ enabled, sessionKey, onNewPopups }) {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [popups, setPopups] = useState([]);
   const requestIdRef = useRef(0);
   const baselinedRef = useRef(false);
   const seenPopupIdsRef = useRef(new Set());
+  // The latest callback, read when a poll lands, so a changed callback (e.g.
+  // sound switched off) never re-creates `reload` or restarts polling.
+  const onNewPopupsRef = useRef(onNewPopups);
+  useEffect(() => {
+    onNewPopupsRef.current = onNewPopups;
+  }, [onNewPopups]);
 
   const reload = useCallback(async () => {
     const requestId = ++requestIdRef.current;
@@ -49,6 +63,7 @@ export function useStaffNotifications({ enabled, sessionKey }) {
         fresh.forEach((row) => seenPopupIdsRef.current.add(String(row.id)));
         // Oldest first, so the newest card lands at the top of the stack.
         setPopups((current) => [...fresh.reverse(), ...current]);
+        onNewPopupsRef.current?.(fresh);
       }
     } catch {
       // Keep the last good data.
@@ -66,10 +81,7 @@ export function useStaffNotifications({ enabled, sessionKey }) {
     if (!enabled) return undefined;
 
     reload();
-    const timer = setInterval(() => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      reload();
-    }, NOTIFICATION_POLL_MS);
+    const timer = setInterval(reload, NOTIFICATION_POLL_MS);
     function onVisibilityChange() {
       if (!document.hidden) reload();
     }

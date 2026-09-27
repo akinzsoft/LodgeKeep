@@ -79,6 +79,12 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
   // whatever the list is filtered to (an issued request is not "Pending").
   const [focused, setFocused] = useState(null);
   const focusRequest = useRef(0);
+  // User-reported: "the storekeeper could not issue the request". The
+  // review panel (with Issue) renders below the request form and the list —
+  // off-screen — so opening a request looked like nothing happened. Each
+  // open bumps this, and the panel is scrolled into view and focused.
+  const [revealTick, setRevealTick] = useState(0);
+  const detailRef = useRef(null);
 
   const selected =
     (requests ?? []).find((row) => String(row.id) === String(selectedId)) ?? (focused && String(focused.id) === String(selectedId) ? focused : null);
@@ -157,6 +163,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
       .then((row) => {
         if (requestId !== focusRequest.current) return;
         setFocused(row);
+        setRevealTick((tick) => tick + 1);
         setSelectedId(row.id);
         setIssueNote('');
         setIssueQuantities(Object.fromEntries(row.lines.map((line) => [String(line.stockItemId), defaultIssueQuantity(line)])));
@@ -165,6 +172,12 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
         if (requestId === focusRequest.current) setError(`Request #${focusId} could not be found.`);
       });
   }, [focusId, focusNonce]);
+
+  useEffect(() => {
+    if (!revealTick || !detailRef.current) return;
+    detailRef.current.scrollIntoView?.({ block: 'start' });
+    detailRef.current.focus?.({ preventScroll: true });
+  }, [revealTick]);
 
   function chooseFrom(outletId) {
     setFromOutletId(outletId);
@@ -207,6 +220,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
   }
 
   function openRequest(row) {
+    setRevealTick((tick) => tick + 1);
     setSelectedId(row.id);
     setIssueNote('');
     setIssueQuantities(Object.fromEntries(row.lines.map((line) => [String(line.stockItemId), defaultIssueQuantity(line)])));
@@ -263,6 +277,96 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
         </p>
       )}
       {isOffline && <p className={formStyles.disabledNotice}>You are offline. Requests cannot be sent or issued until connectivity returns.</p>}
+
+      {/* The open request sits above the form and the list, so it is where the
+          eye already is — and nothing that loads later (the list) can push it
+          off screen, which is what hid the Issue button. */}
+      {selected && (
+        <section ref={detailRef} tabIndex={-1} className={formStyles.scrollTarget} aria-label={`Request #${selected.id}`}>
+          <Card title={`Request #${selected.id} — ${selected.fromOutlet.name} → ${selected.toOutlet.name}`}>
+            <p className={formStyles.hint}>
+              <StatusPill tone={STATUS[selected.status].tone} label={STATUS[selected.status].label} /> Requested by {selected.requestedBy.name ?? 'a staff member'},{' '}
+              {formatWhen(selected.requestedAt)}
+              {selected.note ? ` — “${selected.note}”` : ''}
+            </p>
+            {selected.decidedBy && (
+              <p className={formStyles.hint}>
+                {STATUS[selected.status].label} by {selected.decidedBy.name ?? 'a staff member'}, {formatWhen(selected.decidedAt)}
+                {selected.decisionNote ? ` — “${selected.decisionNote}”` : ''}
+              </p>
+            )}
+
+            <DataTable
+              title="Items"
+              columns={[
+                { key: 'name', label: 'Stock item', render: (line) => (line.archived ? `${line.name} (archived)` : line.name) },
+                { key: 'requested', label: 'Requested', align: 'right', render: (line) => formatQuantity(line.quantityRequested, line.unit) },
+                ...(pending
+                  ? [
+                      { key: 'available', label: `At ${selected.fromOutlet.name}`, align: 'right', render: (line) => formatQuantity(line.availableAtSource, line.unit) },
+                      ...(canIssue
+                        ? [
+                            {
+                              key: 'send',
+                              label: 'Send',
+                              align: 'right',
+                              render: (line) => {
+                                const key = String(line.stockItemId);
+                                return (
+                                  <input
+                                    className={formStyles.input}
+                                    inputMode="decimal"
+                                    aria-label={`Send ${line.name}`}
+                                    value={issueQuantities[key] ?? ''}
+                                    onChange={(event) => setIssueQuantities((current) => ({ ...current, [key]: event.target.value }))}
+                                    aria-invalid={issueProblems.includes(key) || undefined}
+                                    disabled={isOffline || acting}
+                                  />
+                                );
+                              },
+                            },
+                          ]
+                        : []),
+                    ]
+                  : [{ key: 'issued', label: 'Sent', align: 'right', render: (line) => (line.quantityIssued == null ? '—' : formatQuantity(line.quantityIssued, line.unit)) }]),
+              ]}
+              rows={selected.lines}
+              rowKey={(line) => line.stockItemId}
+              state="success"
+            />
+
+            {pending && canIssue && (
+              <div className={formStyles.form}>
+                {issueProblems.length > 0 && (
+                  <p role="alert" className={formStyles.errorBanner}>
+                    Each amount to send must be 0 or more, no more than was requested, and no more than {selected.fromOutlet.name} holds.
+                  </p>
+                )}
+                <label className={formStyles.field}>
+                  <span className={formStyles.label}>Issue note (optional)</span>
+                  <input className={formStyles.input} value={issueNote} onChange={(event) => setIssueNote(event.target.value)} maxLength={255} disabled={isOffline || acting} />
+                </label>
+                <div className={formStyles.actionsRow}>
+                  <Button type="button" loading={acting} disabled={!canSendIssue} onClick={handleIssue}>
+                    Issue stock
+                  </Button>
+                  <Button type="button" variant="danger" disabled={isOffline || acting} onClick={() => setDialog('reject')}>
+                    Reject request
+                  </Button>
+                </div>
+                <p className={formStyles.hint}>Set an item to 0 to send none of it. The stock moves as soon as you issue.</p>
+              </div>
+            )}
+            {pending && canRequest && !canIssue && (
+              <div className={formStyles.actionsRow}>
+                <Button type="button" variant="secondary" disabled={isOffline || acting} onClick={() => setDialog('cancel')}>
+                  Withdraw request
+                </Button>
+              </div>
+            )}
+          </Card>
+        </section>
+      )}
 
       {canRequest && (
         <Card title="Request stock">
@@ -397,91 +501,6 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
           </Button>
         )}
       />
-
-      {selected && (
-        <Card title={`Request #${selected.id} — ${selected.fromOutlet.name} → ${selected.toOutlet.name}`}>
-          <p className={formStyles.hint}>
-            <StatusPill tone={STATUS[selected.status].tone} label={STATUS[selected.status].label} /> Requested by {selected.requestedBy.name ?? 'a staff member'},{' '}
-            {formatWhen(selected.requestedAt)}
-            {selected.note ? ` — “${selected.note}”` : ''}
-          </p>
-          {selected.decidedBy && (
-            <p className={formStyles.hint}>
-              {STATUS[selected.status].label} by {selected.decidedBy.name ?? 'a staff member'}, {formatWhen(selected.decidedAt)}
-              {selected.decisionNote ? ` — “${selected.decisionNote}”` : ''}
-            </p>
-          )}
-
-          <DataTable
-            title="Items"
-            columns={[
-              { key: 'name', label: 'Stock item', render: (line) => (line.archived ? `${line.name} (archived)` : line.name) },
-              { key: 'requested', label: 'Requested', align: 'right', render: (line) => formatQuantity(line.quantityRequested, line.unit) },
-              ...(pending
-                ? [
-                    { key: 'available', label: `At ${selected.fromOutlet.name}`, align: 'right', render: (line) => formatQuantity(line.availableAtSource, line.unit) },
-                    ...(canIssue
-                      ? [
-                          {
-                            key: 'send',
-                            label: 'Send',
-                            align: 'right',
-                            render: (line) => {
-                              const key = String(line.stockItemId);
-                              return (
-                                <input
-                                  className={formStyles.input}
-                                  inputMode="decimal"
-                                  aria-label={`Send ${line.name}`}
-                                  value={issueQuantities[key] ?? ''}
-                                  onChange={(event) => setIssueQuantities((current) => ({ ...current, [key]: event.target.value }))}
-                                  aria-invalid={issueProblems.includes(key) || undefined}
-                                  disabled={isOffline || acting}
-                                />
-                              );
-                            },
-                          },
-                        ]
-                      : []),
-                  ]
-                : [{ key: 'issued', label: 'Sent', align: 'right', render: (line) => (line.quantityIssued == null ? '—' : formatQuantity(line.quantityIssued, line.unit)) }]),
-            ]}
-            rows={selected.lines}
-            rowKey={(line) => line.stockItemId}
-            state="success"
-          />
-
-          {pending && canIssue && (
-            <div className={formStyles.form}>
-              {issueProblems.length > 0 && (
-                <p role="alert" className={formStyles.errorBanner}>
-                  Each amount to send must be 0 or more, no more than was requested, and no more than {selected.fromOutlet.name} holds.
-                </p>
-              )}
-              <label className={formStyles.field}>
-                <span className={formStyles.label}>Issue note (optional)</span>
-                <input className={formStyles.input} value={issueNote} onChange={(event) => setIssueNote(event.target.value)} maxLength={255} disabled={isOffline || acting} />
-              </label>
-              <div className={formStyles.actionsRow}>
-                <Button type="button" loading={acting} disabled={!canSendIssue} onClick={handleIssue}>
-                  Issue stock
-                </Button>
-                <Button type="button" variant="danger" disabled={isOffline || acting} onClick={() => setDialog('reject')}>
-                  Reject request
-                </Button>
-              </div>
-              <p className={formStyles.hint}>Set an item to 0 to send none of it. The stock moves as soon as you issue.</p>
-            </div>
-          )}
-          {pending && canRequest && !canIssue && (
-            <div className={formStyles.actionsRow}>
-              <Button type="button" variant="secondary" disabled={isOffline || acting} onClick={() => setDialog('cancel')}>
-                Withdraw request
-              </Button>
-            </div>
-          )}
-        </Card>
-      )}
 
       {dialog === 'reject' && selected && (
         <ConfirmDialog
