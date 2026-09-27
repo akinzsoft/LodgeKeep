@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useRef, useState } from 'react';
+import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 // Inter was always named first in `--font-sans` but never actually loaded,
 // so every screen silently rendered in the OS fallback. Self-hosted (no
@@ -43,6 +43,8 @@ import { ChainOverviewScreen } from './app/chain-overview/ChainOverviewScreen.js
 import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { useStaffNotifications } from './shared/hooks/useStaffNotifications.js';
+import { useNotificationSound } from './shared/hooks/useNotificationSound.js';
+import { playAlertBeep, unlockAlertSound } from './shared/sound/alertBeep.js';
 import { authApi, setupApi } from './shared/api/index.js';
 import { PortalApp } from './portal/PortalApp.jsx';
 import { PlatformApp } from './platform/PlatformApp.jsx';
@@ -173,10 +175,28 @@ function Demo() {
   // Gap closure (staff notifications): the bell polls for new activity
   // instead of loading once at sign-in, and new guest QR orders also raise
   // an on-screen card (`useStaffNotifications`' own header).
+  // Pop-up cards (new QR orders, stock requests) also beep, unless this
+  // device has the sound switched off (user-requested, remembered per device).
+  const notificationSound = useNotificationSound();
+  const soundOn = notificationSound.enabled;
   const staffNotifications = useStaffNotifications({
     enabled: status === 'authenticated',
     sessionKey: status === 'authenticated' ? `${user?.userId}:${user?.activePropertyId}` : null,
+    onNewPopups: useCallback(() => {
+      if (soundOn) playAlertBeep();
+    }, [soundOn]),
   });
+  // Browsers only allow sound after the page has been touched; resume the
+  // audio on the first click or key press so the first alert is not silent.
+  useEffect(() => {
+    const unlock = () => unlockAlertSound();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
 
   // No router exists in this app yet — an invitation link's `?invite_token=`
   // query parameter is this screen's only "route," checked ahead of the
@@ -240,13 +260,19 @@ function Demo() {
 
   // A bell row or QR card opens the screen it's about, when this user's
   // role can see that screen, and is marked read either way.
-  function handleOpenNotification(notification) {
-    staffNotifications.markRead(notification.id);
+  // Which screen a notification opens for THIS user, or null when their role cannot see it.
+  function notificationScreenFor(notification) {
     let target = notificationTarget(notification.type);
     // A stock alert opens POS for anyone who can sell; a Storekeeper has the
     // Stock screen instead.
     if (target === 'pos' && notification.type.startsWith('stock.') && !isNavItemAllowed('pos', grantedPermissions)) target = 'stock';
-    if (target && isNavItemAllowed(target, grantedPermissions)) {
+    return target && isNavItemAllowed(target, grantedPermissions) ? target : null;
+  }
+
+  function handleOpenNotification(notification) {
+    staffNotifications.markRead(notification.id);
+    const target = notificationScreenFor(notification);
+    if (target) {
       const intent = notificationIntent(notification);
       setScreenIntent(intent ? { ...intent, nonce: (intentNonce.current += 1) } : null);
       setActiveItemKey(target);
@@ -296,13 +322,16 @@ function Demo() {
       onMarkNotificationRead={staffNotifications.markRead}
       onMarkAllNotificationsRead={staffNotifications.markAllRead}
       onOpenNotification={handleOpenNotification}
+      notificationSoundOn={soundOn}
+      onToggleNotificationSound={notificationSound.toggle}
       isOffline={!isOnline}
       onLogout={logout}
       onOpenProfile={() => setProfileOpen(true)}
     >
       <NotificationPopups
         popups={staffNotifications.popups}
-        onView={isNavItemAllowed('pos', grantedPermissions) ? handleOpenNotification : undefined}
+        onOpen={handleOpenNotification}
+        canOpen={(notification) => notificationScreenFor(notification) !== null}
         onDismiss={staffNotifications.dismissPopup}
       />
       {profileOpen && <MyAccountModal isOffline={!isOnline} onClose={() => setProfileOpen(false)} />}

@@ -1,6 +1,6 @@
 import { Button } from '../../shared/components/index.js';
 import { formatMoney } from '../../shared/format/money.jsx';
-import { parsePayload, timeAgo } from './notificationText.js';
+import { describeNotification, parsePayload, timeAgo } from './notificationText.js';
 import styles from './NotificationPopups.module.css';
 
 const MAX_VISIBLE = 3;
@@ -23,11 +23,18 @@ function paymentLabel(method) {
  * "View orders" opens the POS screen and marks it read; "Dismiss" only hides
  * the card, leaving it unread in the bell.
  *
+ *
+ * Stock requests pop up too (user-requested, with a beep — the storekeeper
+ * missed a request that only counted in the bell): raised, sent, or
+ * rejected, each with "Open request", which lands on Stock → Requests with
+ * that request open.
+ *
  * @param {Array<object>} popups           newest first
- * @param {(notification: object) => void} [onView]   omitted when the user can't open POS
+ * @param {(notification: object) => void} [onOpen]   opens the screen a card is about (and marks it read)
+ * @param {(notification: object) => boolean} [canOpen]   whether this user can open that screen; no button when false
  * @param {(id: string) => void} onDismiss
  */
-export function NotificationPopups({ popups, onView, onDismiss }) {
+export function NotificationPopups({ popups, onOpen, canOpen = () => true, onDismiss }) {
   if (!popups || popups.length === 0) return null;
   const visible = popups.slice(0, MAX_VISIBLE);
   const hiddenCount = popups.length - visible.length;
@@ -35,6 +42,34 @@ export function NotificationPopups({ popups, onView, onDismiss }) {
   return (
     <div className={styles.stack} aria-live="assertive" aria-relevant="additions">
       {visible.map((notification) => {
+        const openable = Boolean(onOpen) && canOpen(notification);
+        if (notification.type.startsWith('stock.transfer_request')) {
+          const { title, detail } = describeNotification(notification);
+          return (
+            <section key={notification.id} className={styles.card} role="alert" aria-label={title}>
+              <header className={styles.header}>
+                <span className={styles.badge} aria-hidden="true">
+                  Stock
+                </span>
+                <div className={styles.headingText}>
+                  <h2 className={styles.title}>{title}</h2>
+                  {detail && <p className={styles.where}>{detail}</p>}
+                </div>
+                <span className={styles.time}>{timeAgo(notification.created_at)}</span>
+              </header>
+              <div className={styles.actions}>
+                <Button variant="secondary" size="compact" onClick={() => onDismiss(notification.id)}>
+                  Dismiss
+                </Button>
+                {openable && (
+                  <Button size="compact" onClick={() => onOpen(notification)}>
+                    Open request
+                  </Button>
+                )}
+              </div>
+            </section>
+          );
+        }
         const p = parsePayload(notification);
         const items = Array.isArray(p.items) ? p.items : [];
         const where = [p.tableLabel, p.outletName].filter(Boolean).join(' · ');
@@ -76,8 +111,8 @@ export function NotificationPopups({ popups, onView, onDismiss }) {
               <Button variant="secondary" size="compact" onClick={() => onDismiss(notification.id)}>
                 Dismiss
               </Button>
-              {onView && (
-                <Button size="compact" onClick={() => onView(notification)}>
+              {openable && (
+                <Button size="compact" onClick={() => onOpen(notification)}>
                   View orders
                 </Button>
               )}
@@ -85,7 +120,7 @@ export function NotificationPopups({ popups, onView, onDismiss }) {
           </section>
         );
       })}
-      {hiddenCount > 0 && <p className={styles.overflow}>+{hiddenCount} more new orders in the bell</p>}
+      {hiddenCount > 0 && <p className={styles.overflow}>+{hiddenCount} more in the bell</p>}
     </div>
   );
 }

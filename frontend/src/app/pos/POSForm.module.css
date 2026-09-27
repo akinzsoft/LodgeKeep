@@ -150,3 +150,12 @@
 .stockPill {
   margin-left: var(--space-2);
 }
+
+/* A panel scrolled into view on open (Stock → Requests' open request): land below the sticky top bar, not under it. */
+.scrollTarget {
+  scroll-margin-top: calc(var(--topbar-h) + var(--space-4));
+}
+
+.scrollTarget:focus {
+  outline: none;
+}

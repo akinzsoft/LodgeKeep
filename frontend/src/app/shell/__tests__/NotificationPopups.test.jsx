@@ -33,7 +33,7 @@ describe('<NotificationPopups>', () => {
   });
 
   it('shows who ordered, where, what, how it was paid, and the total', () => {
-    render(<NotificationPopups popups={[order('1')]} onView={() => {}} onDismiss={() => {}} />);
+    render(<NotificationPopups popups={[order('1')]} onOpen={() => {}} onDismiss={() => {}} />);
     const card = screen.getByRole('alert', { name: 'New QR order' });
     expect(card).toHaveTextContent('Table 4 · Main Bar');
     expect(card).toHaveTextContent('Ordered by John');
@@ -45,7 +45,7 @@ describe('<NotificationPopups>', () => {
   it('View orders and Dismiss call back with the right notification', async () => {
     const onView = vi.fn();
     const onDismiss = vi.fn();
-    render(<NotificationPopups popups={[order('9')]} onView={onView} onDismiss={onDismiss} />);
+    render(<NotificationPopups popups={[order('9')]} onOpen={onView} onDismiss={onDismiss} />);
     await userEvent.click(screen.getByRole('button', { name: 'View orders' }));
     expect(onView).toHaveBeenCalledWith(expect.objectContaining({ id: '9' }));
     await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
@@ -60,11 +60,37 @@ describe('<NotificationPopups>', () => {
   it('shows at most three cards and counts the rest', () => {
     render(<NotificationPopups popups={['1', '2', '3', '4', '5'].map((id) => order(id))} onDismiss={() => {}} />);
     expect(screen.getAllByRole('alert')).toHaveLength(3);
-    expect(screen.getByText('+2 more new orders in the bell')).toBeInTheDocument();
+    expect(screen.getByText('+2 more in the bell')).toBeInTheDocument();
   });
 
   it('falls back to "a guest" when no name was given', () => {
     render(<NotificationPopups popups={[order('1', { guestName: null })]} onDismiss={() => {}} />);
     expect(screen.getByRole('alert')).toHaveTextContent('Ordered by a guest');
+  });
+
+  describe('stock requests', () => {
+    const requested = {
+      id: '21',
+      type: 'stock.transfer_requested',
+      created_at: new Date().toISOString(),
+      popup: true,
+      read_at: null,
+      payload: { requestId: 5, fromOutletName: 'Main Store', toOutletName: 'Main Bar', lineCount: 3 },
+    };
+
+    it('pops up who asked and for how much, and Open request opens it', async () => {
+      const onOpen = vi.fn();
+      render(<NotificationPopups popups={[requested]} onOpen={onOpen} onDismiss={() => {}} />);
+      const card = screen.getByRole('alert', { name: 'Stock requested — Main Bar' });
+      expect(card).toHaveTextContent('Request #5: 3 items from Main Store');
+      await userEvent.click(screen.getByRole('button', { name: 'Open request' }));
+      expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: '21' }));
+    });
+
+    it('offers no Open button when this user cannot open that screen', () => {
+      render(<NotificationPopups popups={[requested]} onOpen={() => {}} canOpen={() => false} onDismiss={() => {}} />);
+      expect(screen.queryByRole('button', { name: 'Open request' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+    });
   });
 });

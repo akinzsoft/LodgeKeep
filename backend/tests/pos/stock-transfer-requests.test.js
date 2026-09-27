@@ -142,7 +142,9 @@ describe('Stock transfer requests', () => {
       expect(byName.Coke).toMatchObject({ quantityRequested: '12.000', quantityIssued: null, availableAtSource: '30.000' });
       expect(byName.Gin).toMatchObject({ quantityRequested: '2.500', availableAtSource: '0.000' }); // asking for more than the store holds is allowed
 
-      expect(await bell(users.storekeeper, 'stock.transfer_requested')).toHaveLength(1);
+      const told = await bell(users.storekeeper, 'stock.transfer_requested');
+      expect(told).toHaveLength(1);
+      expect(Boolean(told[0].popup)).toBe(true); // pops up on screen, not only a bell count
       expect(await bell(users.pos_operator, 'stock.transfer_requested')).toHaveLength(0);
       // Nothing moves until it is issued.
       expect(await transferLegs(coke)).toHaveLength(0);
@@ -239,6 +241,7 @@ describe('Stock transfer requests', () => {
 
       const note = await t.trx('in_app_notifications').where({ user_id: users.pos_operator, type: 'stock.transfer_request_issued' }).orderBy('id', 'desc').first();
       expect(note.payload).toMatchObject({ requestId: Number(request.id), shortLineCount: 2 });
+      expect(Boolean(note.popup)).toBe(true);
     });
 
     test('refuses more than the source holds, naming the item — and nothing on the request moves', async () => {
@@ -344,6 +347,7 @@ describe('Stock transfer requests', () => {
       expect(await transferLegs(item)).toHaveLength(0);
       const note = await t.trx('in_app_notifications').where({ user_id: users.pos_operator, type: 'stock.transfer_request_rejected' }).orderBy('id', 'desc').first();
       expect(note.payload).toMatchObject({ requestId: Number(request.id), reason: 'Stock is being counted tonight' });
+      expect(Boolean(note.popup)).toBe(true);
     });
 
     test('a requester withdraws a pending request; it can no longer be issued', async () => {

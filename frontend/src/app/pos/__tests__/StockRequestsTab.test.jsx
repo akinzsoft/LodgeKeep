@@ -142,6 +142,23 @@ describe('<StockRequestsTab>', () => {
       expect(await screen.findByText('Request #5 issued — the stock is now at Main Bar.')).toBeInTheDocument();
     });
 
+    it('opening a request brings its panel (and the Issue button) into view and focus', async () => {
+      const scrollIntoView = vi.fn();
+      window.Element.prototype.scrollIntoView = scrollIntoView;
+      mocks.listTransferRequests.mockResolvedValue([pendingRequest()]);
+      render(<StockRequestsTab permissions={STOREKEEPER} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Review #5' }));
+
+      const panel = screen.getByRole('region', { name: 'Request #5' });
+      // Above the list, so the list (re)loading can never push it off screen.
+      const list = screen.getByRole('heading', { name: 'Stock requests' });
+      expect(panel.compareDocumentPosition(list) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(panel);
+      expect(panel).toHaveFocus();
+      delete window.Element.prototype.scrollIntoView;
+    });
+
     it('will not send more than was asked or more than the store holds', async () => {
       mocks.listTransferRequests.mockResolvedValue([pendingRequest()]);
       render(<StockRequestsTab permissions={STOREKEEPER} />);
@@ -248,6 +265,17 @@ describe('<StockRequestsTab>', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Issue stock' }));
       expect(await screen.findByText('Request #5 issued — the stock is now at Main Bar.')).toBeInTheDocument();
       expect(screen.queryByRole('heading', { name: 'Request #5 — Main Store → Main Bar' })).not.toBeInTheDocument();
+    });
+
+    it('a notification brings the opened request into view too', async () => {
+      const scrollIntoView = vi.fn();
+      window.Element.prototype.scrollIntoView = scrollIntoView;
+      mocks.getTransferRequest.mockResolvedValue(pendingRequest());
+      render(<StockRequestsTab permissions={STOREKEEPER} intent={{ requestId: '5', nonce: 1 }} />);
+      const panel = await screen.findByRole('region', { name: 'Request #5' });
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+      expect(panel).toHaveFocus();
+      delete window.Element.prototype.scrollIntoView;
     });
 
     it('says so when the request a notification pointed at is gone', async () => {
