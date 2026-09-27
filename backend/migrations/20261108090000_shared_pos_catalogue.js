@@ -47,6 +47,17 @@
  * down() restores the per-outlet schema (each category, item and stock item
  * back to one outlet: the lowest outlet carrying or stocking it). It cannot
  * un-merge, and categories at a property with no outlet are dropped.
+ *
+ * Bug fix, found in production: this migration originally failed partway
+ * through (a data insert hit a column that hadn't been dropped yet — see
+ * the fix's own comment further down). MySQL commits CREATE TABLE/ALTER
+ * TABLE immediately regardless of a surrounding transaction, so everything
+ * up to that point was already permanent even though the migration itself
+ * was never recorded as applied. up() now guards every schema-only step
+ * (never a data write) with an existence check, so re-running it against a
+ * database that already carries some of these changes — exactly what a
+ * failed prior attempt leaves behind — is a genuine no-op for whatever
+ * already happened, not a second, colliding attempt at it.
  */
 
 const T = {
@@ -260,57 +271,92 @@ function sumQuantities(values) {
   return `${negative ? '-' : ''}${abs / 1000n}.${String(abs % 1000n).padStart(3, '0')}`;
 }
 
+/**
+ * Whether an index/unique key of this exact name already exists on a
+ * table — checked directly against information_schema rather than
+ * relying on a specific SQL error code, so every guard below reads the
+ * same way.
+ */
+async function indexExists(knex, table, indexName) {
+  const rows = await knex('information_schema.statistics').where({ table_schema: knex.client.database(), table_name: table, index_name: indexName }).count('* as n').first();
+  return Number(rows.n) > 0;
+}
+
+async function foreignKeyExists(knex, table, constraintName) {
+  const rows = await knex('information_schema.table_constraints')
+    .where({ table_schema: knex.client.database(), table_name: table, constraint_name: constraintName, constraint_type: 'FOREIGN KEY' })
+    .count('* as n')
+    .first();
+  return Number(rows.n) > 0;
+}
+
 exports.up = async function up(knex) {
-  await knex.schema.alterTable('pos_menu_categories', (table) => {
-    table.unique(['tenant_id', 'property_id', 'id'], { indexName: 'pos_menu_categories_tenant_property_id_unique' });
-  });
+  // Bug fix, found in production: this migration failed partway through —
+  // MySQL commits CREATE TABLE/ALTER TABLE immediately, so everything
+  // before the failure point was already permanent even though the
+  // migration itself was never recorded as applied. Every schema-only step
+  // below (create/drop, never a data write) is guarded so a retry against
+  // a database already carrying some of these changes — exactly what a
+  // failed prior attempt leaves behind — is a genuine no-op for whatever
+  // already happened, not a second, colliding attempt at it.
+  if (!(await indexExists(knex, 'pos_menu_categories', 'pos_menu_categories_tenant_property_id_unique'))) {
+    await knex.schema.alterTable('pos_menu_categories', (table) => {
+      table.unique(['tenant_id', 'property_id', 'id'], { indexName: 'pos_menu_categories_tenant_property_id_unique' });
+    });
+  }
 
-  await knex.schema.createTable(T.outletCategories, (table) => {
-    table.bigIncrements('id').primary();
-    table.bigInteger('tenant_id').unsigned().notNullable();
-    table.bigInteger('property_id').unsigned().notNullable();
-    table.bigInteger('outlet_id').unsigned().notNullable();
-    table.bigInteger('category_id').unsigned().notNullable();
-    table.timestamps(true, true);
-    table.unique(['outlet_id', 'category_id'], { indexName: 'pos_outlet_categories_outlet_category_unique' });
-    table.foreign(['tenant_id', 'property_id'], 'pos_outlet_categories_property_foreign').references(['tenant_id', 'id']).inTable('properties').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
-    table.foreign(['tenant_id', 'property_id', 'outlet_id'], 'pos_outlet_categories_outlet_foreign').references(['tenant_id', 'property_id', 'id']).inTable('pos_outlets').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
-    table.foreign(['tenant_id', 'property_id', 'category_id'], 'pos_outlet_categories_category_foreign').references(['tenant_id', 'property_id', 'id']).inTable('pos_menu_categories').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
-    table.comment('Which shared menu categories each outlet carries; it sells every active item in them. Scope: PROPERTY_SCOPED.');
-  });
+  if (!(await knex.schema.hasTable(T.outletCategories))) {
+    await knex.schema.createTable(T.outletCategories, (table) => {
+      table.bigIncrements('id').primary();
+      table.bigInteger('tenant_id').unsigned().notNullable();
+      table.bigInteger('property_id').unsigned().notNullable();
+      table.bigInteger('outlet_id').unsigned().notNullable();
+      table.bigInteger('category_id').unsigned().notNullable();
+      table.timestamps(true, true);
+      table.unique(['outlet_id', 'category_id'], { indexName: 'pos_outlet_categories_outlet_category_unique' });
+      table.foreign(['tenant_id', 'property_id'], 'pos_outlet_categories_property_foreign').references(['tenant_id', 'id']).inTable('properties').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
+      table.foreign(['tenant_id', 'property_id', 'outlet_id'], 'pos_outlet_categories_outlet_foreign').references(['tenant_id', 'property_id', 'id']).inTable('pos_outlets').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
+      table.foreign(['tenant_id', 'property_id', 'category_id'], 'pos_outlet_categories_category_foreign').references(['tenant_id', 'property_id', 'id']).inTable('pos_menu_categories').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
+      table.comment('Which shared menu categories each outlet carries; it sells every active item in them. Scope: PROPERTY_SCOPED.');
+    });
+  }
 
-  await knex.schema.createTable(T.outletItems, (table) => {
-    table.bigIncrements('id').primary();
-    table.bigInteger('tenant_id').unsigned().notNullable();
-    table.bigInteger('property_id').unsigned().notNullable();
-    table.bigInteger('outlet_id').unsigned().notNullable();
-    table.bigInteger('menu_item_id').unsigned().notNullable();
-    table.decimal('price', 12, 2).nullable().comment("This outlet's own price; null = the item's main price.");
-    table.boolean('is_available').notNullable().defaultTo(true).comment('False = not selling at this outlet right now.');
-    table.boolean('stock_auto_unavailable').notNullable().defaultTo(false).comment('Switched off automatically because a recipe stock item ran out at this outlet.');
-    table.timestamps(true, true);
-    table.unique(['outlet_id', 'menu_item_id'], { indexName: 'pos_outlet_menu_items_outlet_item_unique' });
-    table.foreign(['tenant_id', 'property_id'], 'pos_outlet_menu_items_property_foreign').references(['tenant_id', 'id']).inTable('properties').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
-    table.foreign(['tenant_id', 'property_id', 'outlet_id'], 'pos_outlet_menu_items_outlet_foreign').references(['tenant_id', 'property_id', 'id']).inTable('pos_outlets').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
-    table.foreign(['tenant_id', 'property_id', 'menu_item_id'], 'pos_outlet_menu_items_item_foreign').references(['tenant_id', 'property_id', 'id']).inTable('pos_menu_items').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
-    table.comment('Per-outlet price and availability of a shared menu item, only where it differs from the item defaults. Scope: PROPERTY_SCOPED.');
-  });
+  if (!(await knex.schema.hasTable(T.outletItems))) {
+    await knex.schema.createTable(T.outletItems, (table) => {
+      table.bigIncrements('id').primary();
+      table.bigInteger('tenant_id').unsigned().notNullable();
+      table.bigInteger('property_id').unsigned().notNullable();
+      table.bigInteger('outlet_id').unsigned().notNullable();
+      table.bigInteger('menu_item_id').unsigned().notNullable();
+      table.decimal('price', 12, 2).nullable().comment("This outlet's own price; null = the item's main price.");
+      table.boolean('is_available').notNullable().defaultTo(true).comment('False = not selling at this outlet right now.');
+      table.boolean('stock_auto_unavailable').notNullable().defaultTo(false).comment('Switched off automatically because a recipe stock item ran out at this outlet.');
+      table.timestamps(true, true);
+      table.unique(['outlet_id', 'menu_item_id'], { indexName: 'pos_outlet_menu_items_outlet_item_unique' });
+      table.foreign(['tenant_id', 'property_id'], 'pos_outlet_menu_items_property_foreign').references(['tenant_id', 'id']).inTable('properties').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
+      table.foreign(['tenant_id', 'property_id', 'outlet_id'], 'pos_outlet_menu_items_outlet_foreign').references(['tenant_id', 'property_id', 'id']).inTable('pos_outlets').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
+      table.foreign(['tenant_id', 'property_id', 'menu_item_id'], 'pos_outlet_menu_items_item_foreign').references(['tenant_id', 'property_id', 'id']).inTable('pos_menu_items').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
+      table.comment('Per-outlet price and availability of a shared menu item, only where it differs from the item defaults. Scope: PROPERTY_SCOPED.');
+    });
+  }
 
-  await knex.schema.createTable(T.levels, (table) => {
-    table.bigIncrements('id').primary();
-    table.bigInteger('tenant_id').unsigned().notNullable();
-    table.bigInteger('property_id').unsigned().notNullable();
-    table.bigInteger('outlet_id').unsigned().notNullable();
-    table.bigInteger('stock_item_id').unsigned().notNullable();
-    table.decimal('current_quantity', 14, 3).notNullable().defaultTo('0.000').comment("Re-derived from this outlet's stock_movements; never a running total.");
-    table.decimal('reorder_level', 14, 3).notNullable().defaultTo('0.000');
-    table.timestamps(true, true);
-    table.unique(['outlet_id', 'stock_item_id'], { indexName: 'stock_levels_outlet_item_unique' });
-    table.foreign(['tenant_id', 'property_id'], 'stock_levels_property_foreign').references(['tenant_id', 'id']).inTable('properties').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
-    table.foreign(['tenant_id', 'property_id', 'outlet_id'], 'stock_levels_outlet_foreign').references(['tenant_id', 'property_id', 'id']).inTable('pos_outlets').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
-    table.foreign(['tenant_id', 'property_id', 'stock_item_id'], 'stock_levels_item_foreign').references(['tenant_id', 'property_id', 'id']).inTable('stock_items').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
-    table.comment('Each outlet on-hand quantity and reorder level for a shared stock item. Scope: PROPERTY_SCOPED.');
-  });
+  if (!(await knex.schema.hasTable(T.levels))) {
+    await knex.schema.createTable(T.levels, (table) => {
+      table.bigIncrements('id').primary();
+      table.bigInteger('tenant_id').unsigned().notNullable();
+      table.bigInteger('property_id').unsigned().notNullable();
+      table.bigInteger('outlet_id').unsigned().notNullable();
+      table.bigInteger('stock_item_id').unsigned().notNullable();
+      table.decimal('current_quantity', 14, 3).notNullable().defaultTo('0.000').comment("Re-derived from this outlet's stock_movements; never a running total.");
+      table.decimal('reorder_level', 14, 3).notNullable().defaultTo('0.000');
+      table.timestamps(true, true);
+      table.unique(['outlet_id', 'stock_item_id'], { indexName: 'stock_levels_outlet_item_unique' });
+      table.foreign(['tenant_id', 'property_id'], 'stock_levels_property_foreign').references(['tenant_id', 'id']).inTable('properties').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
+      table.foreign(['tenant_id', 'property_id', 'outlet_id'], 'stock_levels_outlet_foreign').references(['tenant_id', 'property_id', 'id']).inTable('pos_outlets').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
+      table.foreign(['tenant_id', 'property_id', 'stock_item_id'], 'stock_levels_item_foreign').references(['tenant_id', 'property_id', 'id']).inTable('stock_items').onDelete(RESTRICT.onDelete).onUpdate(RESTRICT.onUpdate);
+      table.comment('Each outlet on-hand quantity and reorder level for a shared stock item. Scope: PROPERTY_SCOPED.');
+    });
+  }
 
   // Category names become unique per property before the merge can rely on it — dropped first, re-added after.
   //
@@ -335,14 +381,33 @@ exports.up = async function up(knex) {
   // changes what a FUTURE insert may omit), and the column is dropped
   // outright a few dozen lines below regardless, once the whole loop is
   // done reading from it.
+  if (await foreignKeyExists(knex, 'pos_menu_categories', 'pos_menu_categories_outlet_foreign')) {
+    await knex.schema.alterTable('pos_menu_categories', (table) => {
+      table.dropForeign(['tenant_id', 'property_id', 'outlet_id'], 'pos_menu_categories_outlet_foreign');
+    });
+  }
+  if (await indexExists(knex, 'pos_menu_categories', 'pos_menu_categories_outlet_id_name_unique')) {
+    await knex.schema.alterTable('pos_menu_categories', (table) => {
+      table.dropUnique(['outlet_id', 'name'], 'pos_menu_categories_outlet_id_name_unique');
+    });
+  }
+  // Safe to re-run even if outlet_id is already nullable — MySQL treats an
+  // identical column redefinition as a legal no-op.
   await knex.schema.alterTable('pos_menu_categories', (table) => {
-    table.dropForeign(['tenant_id', 'property_id', 'outlet_id'], 'pos_menu_categories_outlet_foreign');
-    table.dropUnique(['outlet_id', 'name'], 'pos_menu_categories_outlet_id_name_unique');
     table.bigInteger('outlet_id').unsigned().nullable().alter();
   });
+
+  if (await foreignKeyExists(knex, 'stock_item_categories', 'stock_item_categories_outlet_foreign')) {
+    await knex.schema.alterTable('stock_item_categories', (table) => {
+      table.dropForeign(['tenant_id', 'property_id', 'outlet_id'], 'stock_item_categories_outlet_foreign');
+    });
+  }
+  if (await indexExists(knex, 'stock_item_categories', 'stock_item_categories_outlet_id_name_unique')) {
+    await knex.schema.alterTable('stock_item_categories', (table) => {
+      table.dropUnique(['outlet_id', 'name'], 'stock_item_categories_outlet_id_name_unique');
+    });
+  }
   await knex.schema.alterTable('stock_item_categories', (table) => {
-    table.dropForeign(['tenant_id', 'property_id', 'outlet_id'], 'stock_item_categories_outlet_foreign');
-    table.dropUnique(['outlet_id', 'name'], 'stock_item_categories_outlet_id_name_unique');
     table.bigInteger('outlet_id').unsigned().nullable().alter();
   });
 
