@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ApiError } from '../../../shared/api/index.js';
-import { photoProblem, choiceFromSelection, classifyStockItem, defaultCategorySelection, CREATE_CATEGORY_VALUE, menuCategoryChoiceFor, sellStockItemInRegister, validateSellFields } from '../sellInRegister.js';
+import { photoProblem, choiceFromSelection, classifyStockItem, defaultCategorySelection, CREATE_CATEGORY_VALUE, menuCategoryChoiceFor, sellStockItemInRegister, stockCategoryForMenuCategory, validateSellFields } from '../sellInRegister.js';
 
 const mocks = vi.hoisted(() => ({
   createMenuCategory: vi.fn(),
   createMenuItem: vi.fn(),
   upsertMenuItemComponents: vi.fn(),
   uploadMenuItemImage: vi.fn(),
+  listStockItemCategories: vi.fn(),
+  createStockItemCategory: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -14,7 +16,7 @@ vi.mock('../../../shared/api/index.js', async () => {
   return {
     ...actual,
     posApi: { createMenuCategory: mocks.createMenuCategory, createMenuItem: mocks.createMenuItem, uploadMenuItemImage: mocks.uploadMenuItemImage },
-    stockApi: { upsertMenuItemComponents: mocks.upsertMenuItemComponents },
+    stockApi: { upsertMenuItemComponents: mocks.upsertMenuItemComponents, listStockItemCategories: mocks.listStockItemCategories, createStockItemCategory: mocks.createStockItemCategory },
   };
 });
 
@@ -208,3 +210,39 @@ describe('sellStockItemInRegister', () => {
     });
   });
 });
+
+describe('stockCategoryForMenuCategory', () => {
+  beforeEach(() => {
+    mocks.listStockItemCategories.mockReset();
+    mocks.createStockItemCategory.mockReset();
+  });
+
+  it('reuses a stock category matching the menu category, case-insensitively', async () => {
+    mocks.listStockItemCategories.mockResolvedValue([{ id: '1', name: 'Shirts' }]);
+    expect(await stockCategoryForMenuCategory(' SHIRTS ')).toBe('Shirts');
+    expect(mocks.createStockItemCategory).not.toHaveBeenCalled();
+  });
+
+  it('creates one named like the menu category when none matches', async () => {
+    mocks.listStockItemCategories.mockResolvedValue([]);
+    mocks.createStockItemCategory.mockResolvedValue({ id: '2', name: 'SHIRT' });
+    expect(await stockCategoryForMenuCategory('SHIRT')).toBe('SHIRT');
+    expect(mocks.createStockItemCategory).toHaveBeenCalledWith({ name: 'SHIRT' });
+  });
+
+  it('re-reads after a 409 from a concurrent create, and rethrows anything else', async () => {
+    mocks.listStockItemCategories.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: '3', name: 'Shirt' }]);
+    mocks.createStockItemCategory.mockRejectedValue(new ApiError({ code: 'CONFLICT_DUPLICATE_ENTRY', message: 'Exists.', status: 409 }));
+    expect(await stockCategoryForMenuCategory('SHIRT')).toBe('Shirt');
+
+    mocks.listStockItemCategories.mockResolvedValue([]);
+    mocks.createStockItemCategory.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'No.', status: 403 }));
+    await expect(stockCategoryForMenuCategory('SHIRT')).rejects.toThrow('No.');
+  });
+
+  it('asks for nothing when there is no menu category', async () => {
+    expect(await stockCategoryForMenuCategory('  ')).toBeNull();
+    expect(mocks.listStockItemCategories).not.toHaveBeenCalled();
+  });
+});
+
