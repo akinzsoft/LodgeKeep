@@ -272,6 +272,145 @@ async function listTransfers(req, res, next) {
 }
 
 // ---------------------------------------------------------------------
+// Transfer requests — an outlet asks, the storekeeper issues
+// ---------------------------------------------------------------------
+
+const MAX_REQUEST_LINES = 100;
+const REQUEST_STATUSES = ['pending', 'issued', 'rejected', 'cancelled'];
+
+function optionalNote(body, field = 'note') {
+  const value = body?.[field];
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 255) : null;
+}
+
+/** `lines: [{stock_item_id, quantity}]` → `[{stockItemId, quantity}]`; `allowZero` for an issue (a line the store cannot supply). */
+function parseLines(body, { allowZero }) {
+  const lines = body?.lines;
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw new ValidationError('MISSING_FIELD', '"lines" must list at least one stock item.', [{ field: 'lines', issue: 'missing' }]);
+  }
+  if (lines.length > MAX_REQUEST_LINES) {
+    throw new ValidationError('TOO_MANY_LINES', `A request can list at most ${MAX_REQUEST_LINES} items.`, [{ field: 'lines', issue: 'too_many' }]);
+  }
+  return lines.map((line, index) => {
+    const stockItemId = require_(line, 'stock_item_id');
+    const quantity = String(line?.quantity ?? '').trim();
+    const shapeOk = /^\d+(\.\d{1,3})?$/.test(quantity);
+    const zero = /^0+(\.0+)?$/.test(quantity);
+    if (!shapeOk || (zero && !allowZero)) {
+      throw new ValidationError(
+        'INVALID_QUANTITY',
+        `Line ${index + 1}: the quantity must be ${allowZero ? 'zero or more' : 'more than zero'}, with at most 3 decimal places.`,
+        [{ field: `lines[${index}].quantity`, issue: 'invalid' }],
+      );
+    }
+    return { stockItemId, quantity };
+  });
+}
+
+async function withBusinessDate(trx) {
+  const property = await trx.table('properties').first('current_business_date');
+  return property?.current_business_date;
+}
+
+async function listTransferRequests(req, res, next) {
+  try {
+    const status = REQUEST_STATUSES.includes(req.query.status) ? req.query.status : undefined;
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+    res.status(200).json(ok(await service.listTransferRequests({ context: req.context, status, outletId: req.query.outlet_id || undefined, limit })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getTransferRequest(req, res, next) {
+  try {
+    const request = await service.getTransferRequest({ context: req.context, id: req.params.id });
+    if (!request) return notFound(res);
+    res.status(200).json(ok(request));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createTransferRequest(req, res, next) {
+  try {
+    const fromOutletId = require_(req.body, 'from_outlet_id');
+    const toOutletId = require_(req.body, 'to_outlet_id');
+    const lines = parseLines(req.body, { allowZero: false });
+    const note = optionalNote(req.body);
+    await runIdempotentMutation(req, res, {
+      operationType: 'stock.transfer_request.create',
+      entityType: 'stock_transfer_requests',
+      action: 'create',
+      handler: async (trx) => {
+        const request = await service.createTransferRequest({ trx, fromOutletId, toOutletId, lines, note, userId: req.context.userId });
+        return { status: 201, body: ok(request) };
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function issueTransferRequest(req, res, next) {
+  try {
+    const lines = parseLines(req.body, { allowZero: true });
+    const note = optionalNote(req.body);
+    await runIdempotentMutation(req, res, {
+      operationType: 'stock.transfer_request.issue',
+      entityType: 'stock_transfer_requests',
+      entityId: req.params.id,
+      action: 'issue',
+      handler: async (trx) => {
+        const request = await service.issueTransferRequest({
+          trx,
+          requestId: req.params.id,
+          lines,
+          note,
+          userId: req.context.userId,
+          businessDate: await withBusinessDate(trx),
+        });
+        return { status: 200, body: ok(request) };
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function rejectTransferRequest(req, res, next) {
+  try {
+    const reason = optionalNote(req.body, 'reason');
+    if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to reject a request — the outlet sees it.', [{ field: 'reason', issue: 'missing' }]);
+    await runIdempotentMutation(req, res, {
+      operationType: 'stock.transfer_request.reject',
+      entityType: 'stock_transfer_requests',
+      entityId: req.params.id,
+      action: 'reject',
+      handler: async (trx) => ({ status: 200, body: ok(await service.rejectTransferRequest({ trx, requestId: req.params.id, reason, userId: req.context.userId })) }),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function cancelTransferRequest(req, res, next) {
+  try {
+    const reason = optionalNote(req.body, 'reason');
+    await runIdempotentMutation(req, res, {
+      operationType: 'stock.transfer_request.cancel',
+      entityType: 'stock_transfer_requests',
+      entityId: req.params.id,
+      action: 'cancel',
+      handler: async (trx) => ({ status: 200, body: ok(await service.cancelTransferRequest({ trx, requestId: req.params.id, reason, userId: req.context.userId })) }),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ---------------------------------------------------------------------
 // Recipe / BOM
 // ---------------------------------------------------------------------
 
@@ -504,6 +643,12 @@ module.exports = {
   recordWastage,
   transferStock,
   listTransfers,
+  listTransferRequests,
+  getTransferRequest,
+  createTransferRequest,
+  issueTransferRequest,
+  rejectTransferRequest,
+  cancelTransferRequest,
   listStockLevels,
   listMenuItemComponents,
   listMenuItemLinks,

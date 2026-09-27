@@ -29,6 +29,22 @@ describe('describeNotification', () => {
     expect(detail).toMatch(/^Room 204 · owes .*15,000\.00$/);
   });
 
+  it('describes each step of a stock request — asked, sent (short or not), rejected', () => {
+    expect(
+      describeNotification({ type: 'stock.transfer_requested', payload: { requestId: 5, fromOutletName: 'Main Store', toOutletName: 'Main Bar', lineCount: 3 } }),
+    ).toEqual({ title: 'Stock requested — Main Bar', detail: 'Request #5: 3 items from Main Store' });
+    expect(
+      describeNotification({ type: 'stock.transfer_request_issued', payload: { requestId: 5, fromOutletName: 'Main Store', toOutletName: 'Main Bar', lineCount: 3, shortLineCount: 1 } }),
+    ).toEqual({ title: 'Stock sent — Main Bar', detail: 'Request #5 from Main Store · 1 item sent short' });
+    expect(
+      describeNotification({ type: 'stock.transfer_request_issued', payload: { requestId: 6, fromOutletName: 'Main Store', toOutletName: 'Main Bar', lineCount: 1, shortLineCount: 0 } }).detail,
+    ).toBe('Request #6 from Main Store');
+    expect(
+      describeNotification({ type: 'stock.transfer_request_rejected', payload: { requestId: 7, fromOutletName: 'Main Store', toOutletName: 'Main Bar', reason: 'Counting tonight' } }),
+    ).toEqual({ title: 'Stock request rejected — Main Bar', detail: 'Request #7 · Counting tonight' });
+    expect(notificationTarget('stock.transfer_requested')).toBe('pos');
+  });
+
   it('shows stock quantities without trailing zeros', () => {
     const { title, detail } = describeNotification({
       type: 'stock.reorder_level_reached',

@@ -114,7 +114,49 @@ class SameOutletTransferError extends ValidationError {
   }
 }
 
+/** 404, never 400: an unknown or other-tenant request id must not read as a validation problem (SECURITY.md — cross-tenant access is 404), the shift precedent in pos/errors.js. */
+class StockTransferRequestNotFoundError extends AppError {
+  constructor() {
+    super('VALIDATION_STOCK_TRANSFER_REQUEST_NOT_FOUND', 'The specified stock request does not exist.', 404);
+  }
+}
+
+/** A request is decided once: issuing, rejecting or cancelling one that is no longer pending is refused (a second storekeeper, a double click, a requester withdrawing what was just issued). */
+class StockTransferRequestNotPendingError extends AppError {
+  constructor(requestId, status) {
+    super('CONFLICT_STOCK_TRANSFER_REQUEST_NOT_PENDING', `Stock request ${requestId} has already been ${status}.`, 409, { requestId, status });
+  }
+}
+
+/** An issue sent nothing on every line — that is a rejection, which needs a reason, not an empty issue. */
+class NothingIssuedError extends ValidationError {
+  constructor() {
+    super('NOTHING_ISSUED', 'Issue at least one item, or reject the request with a reason instead.', [{ field: 'lines', issue: 'all_zero' }]);
+  }
+}
+
+/**
+ * An issue asked for more than the supplying outlet holds on one or more
+ * lines. The same code as a direct transfer's refusal, but every short
+ * line is named at once — the storekeeper lowers them all, then issues.
+ */
+class InsufficientStockForIssueError extends AppError {
+  constructor(shortLines) {
+    const parts = shortLines.map((line) => `"${line.name}" (${line.available} ${line.unit} on hand, ${line.requested} ${line.unit} to send)`);
+    super(
+      'BUSINESS_RULE_INSUFFICIENT_STOCK_FOR_TRANSFER',
+      `Not enough stock to send: ${parts.join('; ')}. Lower ${shortLines.length === 1 ? 'that line' : 'those lines'} and issue again — nothing was sent.`,
+      422,
+      { lines: shortLines },
+    );
+  }
+}
+
 module.exports = {
+  InsufficientStockForIssueError,
+  StockTransferRequestNotFoundError,
+  StockTransferRequestNotPendingError,
+  NothingIssuedError,
   StockItemNotFoundError,
   OutletNotFoundError,
   MenuItemNotFoundError,

@@ -2413,6 +2413,82 @@ const ENTITIES = [
     ],
   },
 
+  {
+    table: 'stock_transfer_requests',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      from_outlet_id: t.posOutlets[0].id,
+      to_outlet_id: t.posOutlets[0].id,
+      requested_by_user_id: t.users[0].id,
+    }),
+    crossTenant: [
+      {
+        name: "asks another tenant's outlet for stock",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          from_outlet_id: other.posOutlets[0].id,
+          to_outlet_id: own.posOutlets[0].id,
+          requested_by_user_id: own.users[0].id,
+        }),
+      },
+      {
+        name: "raises a request as another tenant's user",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          from_outlet_id: own.posOutlets[0].id,
+          to_outlet_id: own.posOutlets[0].id,
+          requested_by_user_id: other.users[0].id,
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'stock_transfer_request_lines',
+    uniqueKeys: [['tenant_id', 'property_id', 'request_id', 'stock_item_id']],
+    // `stockItems[1]` is a new (request, item) pair — the fixture's own line asks for `stockItems[0]`.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      request_id: t.stockTransferRequests[0].id,
+      stock_item_id: t.stockItems[1].id,
+      quantity_requested: '2.000',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      request_id: t.stockTransferRequests[0].id,
+      stock_item_id: t.stockItems[0].id, // Matches seedTwoTenants' own fixture line.
+      quantity_requested: '1.000',
+    }),
+    crossTenant: [
+      {
+        name: "adds a line to another tenant's request",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          request_id: other.stockTransferRequests[0].id,
+          stock_item_id: own.stockItems[1].id,
+          quantity_requested: '2.000',
+        }),
+      },
+      {
+        name: "asks for another tenant's stock item",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          request_id: own.stockTransferRequests[0].id,
+          stock_item_id: other.stockItems[1].id,
+          quantity_requested: '2.000',
+        }),
+      },
+    ],
+  },
+
   // -----------------------------------------------------------------
   // Accounts Receivable — PLAN.md Phase 4
   // -----------------------------------------------------------------

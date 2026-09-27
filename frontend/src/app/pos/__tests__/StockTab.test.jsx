@@ -12,6 +12,7 @@ const stockMocks = vi.hoisted(() => ({
   listStockItems: vi.fn(),
   listStockTakes: vi.fn(),
   listTransfers: vi.fn(),
+  listTransferRequests: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -28,9 +29,10 @@ describe('<StockTab>', () => {
     stockMocks.listStockItems.mockResolvedValue([]);
     stockMocks.listStockTakes.mockResolvedValue([]);
     stockMocks.listTransfers.mockResolvedValue([]);
+    stockMocks.listTransferRequests.mockResolvedValue([]);
   });
 
-  it('defaults to Stock items and, with no permissions given, switches between all eight inner tabs', async () => {
+  it('defaults to Stock items and, with no permissions given, switches between all nine inner tabs', async () => {
     render(<StockTab activeProperty={{ base_currency: 'NGN' }} />);
     expect(screen.getByRole('tab', { name: 'Stock items', selected: true })).toBeInTheDocument();
     // Stock is managed one outlet at a time; with no outlet yet, Stock items says where to add one.
@@ -48,6 +50,9 @@ describe('<StockTab>', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Wastage' }));
     expect(await screen.findByRole('heading', { name: 'Record wastage' })).toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole('tab', { name: 'Requests' }));
+    expect(await screen.findByRole('heading', { name: 'Request stock' })).toBeInTheDocument();
+
     await userEvent.click(screen.getByRole('tab', { name: 'Transfer' }));
     expect(await screen.findByRole('heading', { name: 'Transfer stock' })).toBeInTheDocument();
 
@@ -58,9 +63,19 @@ describe('<StockTab>', () => {
     expect(await screen.findByRole('button', { name: 'Run reports' })).toBeInTheDocument();
   });
 
-  it('shows only the tabs the role can use — a Storekeeper sees stock, wastage, transfer and reorder', async () => {
+  it('shows only the tabs the role can use — a Storekeeper sees stock, requests, transfer, wastage and reorder', async () => {
     render(<StockTab activeProperty={{ base_currency: 'NGN' }} permissions={new Set(['pos.stock_view', 'pos.stock_transfer'])} />);
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Stock items', 'Transfer', 'Wastage', 'Reorder report']);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Stock items', 'Requests', 'Transfer', 'Wastage', 'Reorder report']);
+  });
+
+  it('a POS operator who can request stock gets Requests but no Transfer tab', async () => {
+    render(<StockTab activeProperty={{ base_currency: 'NGN' }} permissions={new Set(['pos.operate', 'pos.stock_view', 'pos.stock_request'])} />);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Stock items', 'Requests', 'Wastage', 'Reorder report']);
+  });
+
+  it('a role with neither request key gets no Requests tab', async () => {
+    render(<StockTab activeProperty={{ base_currency: 'NGN' }} permissions={new Set(['pos.stock_view'])} />);
+    expect(screen.queryByRole('tab', { name: 'Requests' })).not.toBeInTheDocument();
   });
 
   it('a POS operator (view only) gets no Transfer tab', async () => {

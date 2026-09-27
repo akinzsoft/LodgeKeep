@@ -389,6 +389,10 @@ const TABLE_SCOPES = Object.freeze({
   stock_movements: { scope: SCOPES.PROPERTY },
   stock_takes: { scope: SCOPES.PROPERTY },
   stock_take_lines: { scope: SCOPES.PROPERTY },
+  // Stock transfer requests (20261110090000): an outlet asking the store
+  // for stock, and what was sent against each line.
+  stock_transfer_requests: { scope: SCOPES.PROPERTY },
+  stock_transfer_request_lines: { scope: SCOPES.PROPERTY },
   // Gap closure: registered stock-item categories, mirroring
   // `pos_menu_categories` exactly (same table, same reasoning).
   stock_item_categories: { scope: SCOPES.PROPERTY },

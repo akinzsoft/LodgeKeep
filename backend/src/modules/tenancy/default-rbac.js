@@ -63,6 +63,7 @@ const ALL_PERMISSION_KEYS = Object.freeze([
   'pos.stock_view',
   'pos.stock_manage',
   'pos.stock_transfer',
+  'pos.stock_request',
   'door_access.view',
   'door_access.manage',
   'expenses.view',
@@ -97,6 +98,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
   pos_operator: [
     'pos.operate',
     'pos.stock_view',
+    'pos.stock_request',
   ],
   // Runs the store: sees stock, records wastage, issues stock to other
   // outlets. Never sells (no pos.operate), never edits items or sees cost
@@ -111,7 +113,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'cashiering.post_charge', 'cashiering.void_line',
     'housekeeping.view', 'housekeeping.operate', 'housekeeping.manage',
     'pos.operate', 'pos.manage',
-    'pos.stock_view', 'pos.stock_manage', 'pos.stock_transfer',
+    'pos.stock_view', 'pos.stock_manage', 'pos.stock_transfer', 'pos.stock_request',
     'reports.view', 'reports.view_financial',
     'setup.view',
     'notifications.view',

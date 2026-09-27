@@ -74,6 +74,21 @@ export function describeNotification(notification) {
       };
     case 'stock.out_of_stock':
       return { title: `Out of stock: ${p.name ?? 'stock item'}`, detail: 'Menu items that use it are now unavailable.' };
+    case 'stock.transfer_requested':
+      return {
+        title: `Stock requested — ${p.toOutletName ?? 'an outlet'}`,
+        detail: `Request #${p.requestId}: ${p.lineCount} ${p.lineCount === 1 ? 'item' : 'items'} from ${p.fromOutletName ?? 'the store'}`,
+      };
+    case 'stock.transfer_request_issued':
+      return {
+        title: `Stock sent — ${p.toOutletName ?? 'an outlet'}`,
+        detail: join(
+          `Request #${p.requestId} from ${p.fromOutletName ?? 'the store'}`,
+          p.shortLineCount ? `${p.shortLineCount} ${p.shortLineCount === 1 ? 'item' : 'items'} sent short` : null,
+        ),
+      };
+    case 'stock.transfer_request_rejected':
+      return { title: `Stock request rejected — ${p.toOutletName ?? 'an outlet'}`, detail: join(`Request #${p.requestId}`, p.reason) };
     case 'reservation.created':
       return { title: `New booking — ${guest}`, detail: join(`${p.arrivalDate} to ${p.departureDate}`, p.confirmationNumber) };
     case 'reservation.cancelled':

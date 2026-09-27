@@ -299,6 +299,9 @@ exports.seed = async function seed(knex) {
   async function ensureStockTransferAccess(tenantId) {
     await grantManagerKeys(tenantId, ['pos.stock_transfer']);
     await grantManagerKeys(tenantId, ['pos.stock_view', 'pos.stock_transfer'], 'storekeeper');
+    // Stock transfer requests: raised by POS operators and managers.
+    await grantManagerKeys(tenantId, ['pos.stock_request']);
+    await grantManagerKeys(tenantId, ['pos.stock_request'], 'pos_operator');
   }
 
   async function grantManagerKeys(tenantId, keys, roleCode = 'manager') {
