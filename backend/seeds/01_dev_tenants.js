@@ -383,20 +383,26 @@ exports.seed = async function seed(knex) {
       { name: 'House Cocktail', category: 'Cocktails', price: '20.00' },
       { name: 'Bottled Water', category: 'Soft Drinks', price: '3.00' },
     ];
-    // Menu items may only use their own outlet's registered categories
-    // (20261005090000, per outlet since 20261104090000).
+    // Shared catalogue (20261108090000): categories and items belong to the
+    // property; the bar carries these categories, so it sells their items.
+    const where = { tenant_id: tenantId, property_id: propertyId };
     for (const name of [...new Set(menuItems.map((item) => item.category))]) {
-      const existingCategory = await knex('pos_menu_categories').where({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, name }).first('id');
-      if (!existingCategory) {
-        await knex('pos_menu_categories').insert({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, name });
+      let category = await knex('pos_menu_categories').where({ ...where, name }).first('id');
+      if (!category) {
+        const [id] = await knex('pos_menu_categories').insert({ ...where, name });
+        category = { id };
+      }
+      if (!(await knex('stock_item_categories').where({ ...where, name }).first('id'))) {
+        await knex('stock_item_categories').insert({ ...where, name });
+      }
+      if (!(await knex('pos_outlet_categories').where({ outlet_id: outletId, category_id: category.id }).first('id'))) {
+        await knex('pos_outlet_categories').insert({ ...where, outlet_id: outletId, category_id: category.id });
       }
     }
     for (const item of menuItems) {
-      const existingItem = await knex('pos_menu_items')
-        .where({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, name: item.name })
-        .first('id');
+      const existingItem = await knex('pos_menu_items').where({ ...where, name: item.name }).first('id');
       if (!existingItem) {
-        await knex('pos_menu_items').insert({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, ...item });
+        await knex('pos_menu_items').insert({ ...where, ...item });
       }
     }
   }

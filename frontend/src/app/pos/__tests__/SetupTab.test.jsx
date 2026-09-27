@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   // on directly in this file.
   listMenuItems: vi.fn(),
   listMenuCategories: vi.fn(),
+  setOutletCategories: vi.fn(),
 }));
 
 const stockMocks = vi.hoisted(() => ({
@@ -31,6 +32,12 @@ vi.mock('../../../shared/api/index.js', async () => {
 });
 
 const OUTLET = { id: '1', code: 'BAR', name: 'Main Bar', type: 'bar' };
+
+/** Setup opens on the shared Catalogue; the outlet list is under the Outlets view. */
+async function renderOutlets() {
+  render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+  await userEvent.click(screen.getByRole('tab', { name: 'Outlets' }));
+}
 
 describe('<SetupTab>', () => {
   beforeEach(() => {
@@ -45,7 +52,7 @@ describe('<SetupTab>', () => {
 
   it('lists outlets and creates a new one', async () => {
     mocks.createOutlet.mockResolvedValue({ id: '2', code: 'REST', name: 'Restaurant', type: 'restaurant' });
-    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+    await renderOutlets();
 
     expect(await screen.findByText('Main Bar')).toBeInTheDocument();
 
@@ -58,7 +65,7 @@ describe('<SetupTab>', () => {
 
   it('selecting an outlet loads its terminals, and creating a terminal calls the API', async () => {
     mocks.createTerminal.mockResolvedValue({ id: '9' });
-    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+    await renderOutlets();
 
     await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
     await userEvent.click(screen.getByRole('tab', { name: 'Terminals' }));
@@ -73,13 +80,13 @@ describe('<SetupTab>', () => {
   it('shows a real error rather than an empty list on load failure', async () => {
     mocks.listOutlets.mockReset();
     mocks.listOutlets.mockRejectedValue(new Error('boom'));
-    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+    await renderOutlets();
     expect(await screen.findByText('No outlets yet — add one above.')).toBeInTheDocument();
   });
 
   it('gap closure: edits an outlet through the real update endpoint, pre-filled with its current values', async () => {
     mocks.updateOutlet.mockResolvedValue({ ...OUTLET, name: 'Renamed Bar' });
-    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+    await renderOutlets();
 
     await userEvent.click(within((await screen.findByText('Main Bar')).closest('tr')).getByRole('button', { name: 'Edit' }));
     const editCard = (await screen.findByRole('heading', { name: 'Edit outlet' })).closest('section');
@@ -96,7 +103,7 @@ describe('<SetupTab>', () => {
   it('gap closure: edits a terminal through the real update endpoint', async () => {
     mocks.listTerminals.mockResolvedValue([{ id: '9', device_ref: 'TERM-1', supports_contactless: false }]);
     mocks.updateTerminal.mockResolvedValue({ id: '9', device_ref: 'TERM-1-RENAMED', supports_contactless: true });
-    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+    await renderOutlets();
 
     await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
     await userEvent.click(screen.getByRole('tab', { name: 'Terminals' }));
@@ -114,7 +121,7 @@ describe('<SetupTab>', () => {
 
   it('gap closure: a real backend 403 editing an outlet renders in the error banner, not a silent failure', async () => {
     mocks.updateOutlet.mockRejectedValue(new Error('You do not have this permission.'));
-    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+    await renderOutlets();
 
     await userEvent.click(within((await screen.findByText('Main Bar')).closest('tr')).getByRole('button', { name: 'Edit' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -123,7 +130,7 @@ describe('<SetupTab>', () => {
   });
 
   it('Cancel discards an outlet edit without submitting', async () => {
-    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+    await renderOutlets();
 
     await userEvent.click(within((await screen.findByText('Main Bar')).closest('tr')).getByRole('button', { name: 'Edit' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
@@ -132,11 +139,42 @@ describe('<SetupTab>', () => {
     expect(mocks.updateOutlet).not.toHaveBeenCalled();
   });
 
-  it('renders MenuItemsTab once an outlet is selected — its own behavior is covered by MenuItemsTab.test.jsx', async () => {
+  it('opens on the shared Catalogue, which lists every category and item — no outlet', async () => {
     render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+    expect(await screen.findByRole('heading', { name: 'Menu categories — all outlets' })).toBeInTheDocument();
+    expect(mocks.listMenuCategories).toHaveBeenCalledWith({ outletId: null });
+    expect(mocks.listMenuItems).toHaveBeenCalledWith(null);
+  });
+
+  it('managing an outlet starts on the categories it sells; ticking some and saving sets them', async () => {
+    mocks.listMenuCategories.mockResolvedValue([
+      { id: '5', name: 'Drinks', status: 'active', item_count: 3, outlet_ids: ['1'] },
+      { id: '6', name: 'Snacks', status: 'active', item_count: 2, outlet_ids: [] },
+    ]);
+    mocks.setOutletCategories.mockResolvedValue({ category_ids: ['5', '6'] });
+    await renderOutlets();
     await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
-    expect(await screen.findByRole('heading', { name: 'Menu categories — Main Bar' })).toBeInTheDocument();
+
+    const card = (await screen.findByRole('heading', { name: 'Categories sold at Main Bar' })).closest('section');
+    expect(within(card).getByRole('checkbox', { name: /Drinks/ })).toBeChecked();
+    expect(within(card).getByRole('checkbox', { name: /Snacks/ })).not.toBeChecked();
+    await userEvent.click(within(card).getByRole('checkbox', { name: /Snacks/ }));
+    await userEvent.click(within(card).getByRole('button', { name: 'Save categories' }));
+    expect(mocks.setOutletCategories).toHaveBeenCalledWith('1', ['5', '6']);
+    // Then on to what it sells, with its own prices.
+    expect(await screen.findByRole('heading', { name: 'Menu categories sold at Main Bar' })).toBeInTheDocument();
     expect(mocks.listMenuCategories).toHaveBeenCalledWith({ outletId: '1' });
+  });
+
+  it('a new outlet opens straight on choosing its categories', async () => {
+    mocks.createOutlet.mockResolvedValue({ id: '2', code: 'REST', name: 'Restaurant', type: 'restaurant' });
+    mocks.listOutlets.mockResolvedValueOnce([OUTLET]).mockResolvedValue([OUTLET, { id: '2', code: 'REST', name: 'Restaurant', type: 'restaurant' }]);
+    await renderOutlets();
+    await screen.findByText('Main Bar');
+    await userEvent.type(screen.getByLabelText('Code'), 'REST');
+    await userEvent.type(screen.getByLabelText('Name'), 'Restaurant');
+    await userEvent.click(screen.getByRole('button', { name: 'Add outlet' }));
+    expect(await screen.findByRole('heading', { name: 'Categories sold at Restaurant' })).toBeInTheDocument();
   });
 
   it('shows which outlet is being managed, and the switcher moves everything below to the other outlet', async () => {
@@ -144,17 +182,18 @@ describe('<SetupTab>', () => {
       { id: '1', code: 'BAR', name: 'Main Bar', type: 'bar' },
       { id: '3', code: 'SHOP', name: 'Supermarket', type: 'restaurant' },
     ]);
-    render(<SetupTab activeProperty={{ base_currency: 'NGN' }} />);
+    await renderOutlets();
     expect(await screen.findByText(/Choose an outlet with Manage/)).toBeInTheDocument();
     await userEvent.click((await screen.findAllByRole('button', { name: 'Manage' }))[0]);
 
     const bar = screen.getByRole('region', { name: 'Outlet being managed' });
     expect(within(bar).getByRole('heading', { name: 'Main Bar' })).toBeInTheDocument();
-    expect(await screen.findByRole('heading', { name: 'Menu categories — Main Bar' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Menu & prices here' }));
+    expect(await screen.findByRole('heading', { name: 'Menu categories sold at Main Bar' })).toBeInTheDocument();
 
     await userEvent.selectOptions(within(bar).getByLabelText('Switch outlet'), '3');
     expect(within(bar).getByRole('heading', { name: 'Supermarket' })).toBeInTheDocument();
-    expect(await screen.findByRole('heading', { name: 'Menu categories — Supermarket' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Menu categories sold at Supermarket' })).toBeInTheDocument();
     expect(mocks.listMenuCategories).toHaveBeenLastCalledWith({ outletId: '3' });
     expect(mocks.listTerminals).toHaveBeenLastCalledWith('3');
   });

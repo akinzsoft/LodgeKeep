@@ -392,6 +392,12 @@ const TABLE_SCOPES = Object.freeze({
   // Gap closure: registered stock-item categories, mirroring
   // `pos_menu_categories` exactly (same table, same reasoning).
   stock_item_categories: { scope: SCOPES.PROPERTY },
+  // The shared POS catalogue (20261108090000_shared_pos_catalogue): which
+  // categories each outlet carries, per-outlet price/availability of a
+  // shared menu item, and each outlet's quantity of a shared stock item.
+  pos_outlet_categories: { scope: SCOPES.PROPERTY },
+  pos_outlet_menu_items: { scope: SCOPES.PROPERTY },
+  stock_levels: { scope: SCOPES.PROPERTY },
 
   // Door access monitoring — PLAN.md Phase 7,
   // 20261020090000_create_lock_system_config.js through

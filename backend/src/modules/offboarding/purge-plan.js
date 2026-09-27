@@ -140,6 +140,7 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'stock_movements',
   'stock_takes',
   'pos_menu_item_components',
+  'stock_levels',
   'stock_items',
   'stock_item_categories',
   // POS orders and the money behind them
@@ -152,7 +153,9 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'pos_orders',
   'pos_shifts',
   'pos_terminals',
+  'pos_outlet_menu_items',
   'pos_menu_items',
+  'pos_outlet_categories',
   'pos_menu_categories',
   'pos_outlets',
   // night audit and reservations

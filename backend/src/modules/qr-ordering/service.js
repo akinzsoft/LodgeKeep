@@ -53,6 +53,7 @@
  */
 
 const { withImageUrl } = require('../pos/menu-images');
+const outletMenu = require('../../shared/outlet-menu');
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { sumMoney, compareMoney } = require('../../shared/money');
@@ -118,11 +119,9 @@ async function getMenuForToken({ context, token }) {
   const db = scopedDb().for(context);
   const outlet = await db.table('pos_outlets').where({ id: token.outlet_id }).first();
   if (!outlet || !outlet.guest_ordering_enabled) throw new GuestOrderingDisabledError();
-  const items = await db
-    .table('pos_menu_items')
-    .where({ outlet_id: token.outlet_id, status: 'active', is_available: true })
-    .orderBy('category')
-    .orderBy('name');
+  // What this outlet sells from the shared catalogue, at its own prices,
+  // leaving out anything switched off there.
+  const items = (await outletMenu.menuItemsForOutlet(db, token.outlet_id)).filter((item) => item.is_available);
   return { outlet: { id: outlet.id, name: outlet.name, type: outlet.type }, items: items.map(withImageUrl) };
 }
 
@@ -190,7 +189,9 @@ async function createGuestOrder({ context, token, cart, paymentMethod, guestCont
         // Matched in the WHERE clause, not fetched-then-compared in JS —
         // `pos/service.js`'s own `openOrder`/`addItem` comment explains
         // why (a BIGINT id can round-trip as a string or a number).
-        const menuItem = await trx.table('pos_menu_items').where({ id: line.menu_item_id, outlet_id: outlet.id }).first();
+        // The item as sold at this outlet (its own price and availability);
+        // one the outlet does not sell is not found.
+        const menuItem = await outletMenu.menuItemAtOutlet(trx, outlet.id, line.menu_item_id);
         if (!menuItem) throw new MenuItemNotFoundError();
         if (!menuItem.is_available) {
           throw new ValidationError('POS_ITEM_UNAVAILABLE', `"${menuItem.name}" is currently marked unavailable.`);
@@ -216,6 +217,7 @@ async function createGuestOrder({ context, token, cart, paymentMethod, guestCont
         overrideReason: acknowledgeLowStock ? stockService.AUTOMATIC_OVERRIDE_REASON_GUEST_ACKNOWLEDGED : null,
         userId: null,
         propertyId: context.propertyId,
+        outletId: outlet.id,
       });
 
       // A pre-tax guarding value, not the final charged total (tax is

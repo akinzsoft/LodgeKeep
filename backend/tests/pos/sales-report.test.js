@@ -39,6 +39,7 @@ const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
+const { insertMenuItem } = require('../helpers/catalogue');
 
 const BUSINESS_DATE = '2027-03-01';
 
@@ -79,8 +80,8 @@ describe('POS sales report', () => {
     const propertyId = ctx.a.properties[0].id;
     const [outletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: 'SALES-BAR', name: 'Sales Bar', type: 'bar' });
     const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, device_ref: 'SALES-T1' });
-    const [beerId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Beer', category: 'Drinks', price: '20.00' });
-    const [wineId] = await t.trx('pos_menu_items').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Wine, red', category: 'Drinks', price: '40.00' });
+    const [beerId] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Beer', category: 'Drinks', price: '20.00' });
+    const [wineId] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Wine, red', category: 'Drinks', price: '40.00' });
     outlet = { outletId, terminalId, beerId, wineId };
   });
 

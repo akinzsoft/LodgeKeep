@@ -30,6 +30,7 @@ function stockRouter() {
   router.patch('/pos/stock/items/:id', requirePermission('pos.stock_manage'), controller.updateStockItem);
   router.post('/pos/stock/items/:id/archive', requirePermission('pos.stock_manage'), controller.archiveStockItem);
   router.post('/pos/stock/items/:id/wastage', requirePermission('pos.stock_view'), controller.recordWastage);
+  router.get('/pos/stock/items/:id/levels', requirePermission('pos.stock_view'), controller.listStockLevels);
 
   router.get('/pos/stock/menu-links', requirePermission('pos.stock_manage'), controller.listMenuItemLinks);
   router.get('/pos/stock/menu-items/:menuItemId/components', requirePermission('pos.stock_manage'), controller.listMenuItemComponents);

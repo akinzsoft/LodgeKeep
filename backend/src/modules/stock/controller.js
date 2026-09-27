@@ -52,7 +52,8 @@ async function listStockItemCategories(req, res, next) {
 
 async function createStockItemCategory(req, res, next) {
   try {
-    const outletId = require_(req.body, 'outlet_id');
+    // Optional: the outlet it is being added from carries it straight away.
+    const outletId = req.body?.outlet_id || undefined;
     const category = await service.createStockItemCategory({ context: req.context, outletId, name: req.body?.name, sortOrder: optionalSortOrder(req.body) });
     await req.audit({ entityType: 'stock_item_categories', entityId: category.id, action: 'create', afterState: category });
     res.status(201).json(ok(category));
@@ -100,9 +101,21 @@ async function listStockItems(req, res, next) {
   }
 }
 
+/** Every outlet's quantity and reorder level for one stock item. */
+async function listStockLevels(req, res, next) {
+  try {
+    const before = await service.getStockItem({ context: req.context, id: req.params.id });
+    if (!before) return notFound(res);
+    res.status(200).json(ok(await service.listStockLevels({ context: req.context, stockItemId: req.params.id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function createStockItem(req, res, next) {
   try {
-    const outletId = require_(req.body, 'outlet_id');
+    // Optional: the outlet it is being added from gets a level for it.
+    const outletId = req.body?.outlet_id || undefined;
     const name = require_(req.body, 'name');
     const unit = require_(req.body, 'unit');
     const item = await service.createStockItem({
@@ -147,9 +160,11 @@ function pickStockItemChanges(body) {
 
 async function updateStockItem(req, res, next) {
   try {
-    const before = await service.getStockItem({ context: req.context, id: req.params.id });
+    // With an outlet, a reorder level change is that outlet's own.
+    const outletId = req.body?.outlet_id || req.query.outlet_id || undefined;
+    const before = await service.getStockItem({ context: req.context, id: req.params.id, outletId });
     if (!before) return notFound(res);
-    const item = await service.updateStockItem({ context: req.context, id: req.params.id, changes: pickStockItemChanges(req.body) });
+    const item = await service.updateStockItem({ context: req.context, id: req.params.id, changes: pickStockItemChanges(req.body), outletId });
     await req.audit({ entityType: 'stock_items', entityId: req.params.id, action: 'update', beforeState: before, afterState: item });
     res.status(200).json(ok(item));
   } catch (error) {
@@ -177,6 +192,7 @@ async function recordWastage(req, res, next) {
   try {
     const quantity = require_(req.body, 'quantity');
     const reason = require_(req.body, 'reason');
+    const outletId = require_(req.body, 'outlet_id');
     await runIdempotentMutation(req, res, {
       operationType: 'stock.record_wastage',
       entityType: 'stock_items',
@@ -187,6 +203,7 @@ async function recordWastage(req, res, next) {
         const item = await service.recordWastage({
           trx,
           stockItemId: req.params.id,
+          outletId,
           quantity,
           reason,
           userId: req.context.userId,
@@ -431,6 +448,7 @@ module.exports = {
   updateStockItem,
   archiveStockItem,
   recordWastage,
+  listStockLevels,
   listMenuItemComponents,
   listMenuItemLinks,
   upsertMenuItemComponents,

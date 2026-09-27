@@ -57,6 +57,7 @@ const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
 const { rateLimitRedisConnection, destroyRateLimitRedisConnection } = require('../../src/shared/rate-limit-redis-connection');
+const { insertMenuItem } = require('../helpers/catalogue');
 
 /**
  * This file's own order-creation volume (dozens of real `POST .../orders`
@@ -161,7 +162,7 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
       guest_order_rate_limit_max: 100,
     });
 
-    const [menuId] = await t.trx('pos_menu_items').insert({
+    const [menuId] = await insertMenuItem(t.trx, {
       tenant_id: ctx.a.id,
       property_id: ctx.a.properties[0].id,
       outlet_id: outletId,
@@ -171,7 +172,7 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
     });
     menuItemId = menuId;
 
-    const [unavailableId] = await t.trx('pos_menu_items').insert({
+    const [unavailableId] = await insertMenuItem(t.trx, {
       tenant_id: ctx.a.id,
       property_id: ctx.a.properties[0].id,
       outlet_id: outletId,

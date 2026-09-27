@@ -822,6 +822,7 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
     overrideReason: stockService.AUTOMATIC_OVERRIDE_REASON_CARD_CAPTURE,
     userId: userId ?? null,
     propertyId: order.property_id,
+    outletId: order.outlet_id,
     source: 'integration',
   });
 

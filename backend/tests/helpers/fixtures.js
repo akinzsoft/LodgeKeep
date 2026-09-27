@@ -149,6 +149,9 @@ async function seedTwoTenants(trx) {
     posTerminals: [],
     posMenuItems: [],
     posMenuCategories: [],
+    posOutletCategories: [],
+    posOutletMenuItems: [],
+    stockLevels: [],
     posOrders: [],
     posOrderItems: [],
     posOrderSettlements: [],
@@ -832,8 +835,29 @@ async function seedTwoTenants(trx) {
       id: await insertReturningId(trx, 'pos_menu_categories', {
         tenant_id: t.id,
         property_id: property.id,
-        outlet_id: t.posOutlets[0].id,
         name: 'Cocktails',
+      }),
+      property_id: property.id,
+    });
+    // A second, deliberately NOT carried category (shared catalogue,
+    // 20261108090000): the generic isolation suite's "accepts a valid new
+    // row" for pos_outlet_categories needs a category the outlet doesn't
+    // carry yet, and its item below one the outlet doesn't sell.
+    t.posMenuCategories.push({
+      id: await insertReturningId(trx, 'pos_menu_categories', {
+        tenant_id: t.id,
+        property_id: property.id,
+        name: 'Mocktails',
+      }),
+      property_id: property.id,
+    });
+    // The fixture bar carries Cocktails, so it sells the fixture cocktail.
+    t.posOutletCategories.push({
+      id: await insertReturningId(trx, 'pos_outlet_categories', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: t.posOutlets[0].id,
+        category_id: t.posMenuCategories[0].id,
       }),
       property_id: property.id,
     });
@@ -847,13 +871,34 @@ async function seedTwoTenants(trx) {
       id: await insertReturningId(trx, 'pos_menu_items', {
         tenant_id: t.id,
         property_id: property.id,
-        outlet_id: outlet.id,
         name: 'Fixture Cocktail',
         category: 'Cocktails',
         price: '20.00',
       }),
       property_id: property.id,
       outlet_id: outlet.id,
+    });
+    // Filed under the uncarried Mocktails category — sold nowhere yet.
+    t.posMenuItems.push({
+      id: await insertReturningId(trx, 'pos_menu_items', {
+        tenant_id: t.id,
+        property_id: property.id,
+        name: 'Fixture Mocktail',
+        category: 'Mocktails',
+        price: '8.00',
+      }),
+      property_id: property.id,
+    });
+    // A neutral per-outlet row (no own price, available) for the cocktail at
+    // the bar, so the generic suite has rows of this table for both tenants.
+    t.posOutletMenuItems.push({
+      id: await insertReturningId(trx, 'pos_outlet_menu_items', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: outlet.id,
+        menu_item_id: t.posMenuItems[0].id,
+      }),
+      property_id: property.id,
     });
   }
 
@@ -872,7 +917,6 @@ async function seedTwoTenants(trx) {
       id: await insertReturningId(trx, 'stock_item_categories', {
         tenant_id: t.id,
         property_id: property.id,
-        outlet_id: t.posOutlets[0].id,
         name: 'Beverages',
       }),
       property_id: property.id,
@@ -888,7 +932,6 @@ async function seedTwoTenants(trx) {
       id: await insertReturningId(trx, 'stock_items', {
         tenant_id: t.id,
         property_id: property.id,
-        outlet_id: outlet.id,
         name: 'Fixture Vodka',
         unit: 'ml',
         category: 'Beverages',
@@ -898,6 +941,18 @@ async function seedTwoTenants(trx) {
       }),
       property_id: property.id,
       outlet_id: outlet.id,
+    });
+    // The bar's own quantity of the shared vodka (shared catalogue).
+    t.stockLevels.push({
+      id: await insertReturningId(trx, 'stock_levels', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: outlet.id,
+        stock_item_id: t.stockItems[0].id,
+        current_quantity: '1000.000',
+        reorder_level: '500.000',
+      }),
+      property_id: property.id,
     });
 
     t.posMenuItemComponents.push({
@@ -924,7 +979,6 @@ async function seedTwoTenants(trx) {
       id: await insertReturningId(trx, 'stock_items', {
         tenant_id: t.id,
         property_id: property.id,
-        outlet_id: outlet.id,
         name: 'Fixture Garnish',
         unit: 'each',
         purchase_cost: '0.50',

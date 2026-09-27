@@ -4,6 +4,7 @@ import { posApi, ApiError } from '../../shared/api/index.js';
 import formStyles from './POSForm.module.css';
 import styles from './SetupTab.module.css';
 import { MenuItemsTab } from './MenuItemsTab.jsx';
+import { OutletCategoriesCard } from './OutletCategoriesCard.jsx';
 
 /**
  * SetupTab — PLAN.md Phase 4's POS core: outlets, terminals. Menu
@@ -36,9 +37,20 @@ import { MenuItemsTab } from './MenuItemsTab.jsx';
  */
 const OUTLET_TYPE_LABELS = { bar: 'Bar', restaurant: 'Restaurant', room_service: 'Room service', spa: 'Spa', poolside: 'Poolside' };
 
-/** What sits under the outlet being managed — menu first, since that is where setup time goes. */
+/**
+ * The shared catalogue (user-requested): categories and items are created
+ * once, in the Catalogue, belonging to no outlet; each outlet then chooses
+ * the categories it sells and inherits all their items.
+ */
+const VIEWS = [
+  { key: 'catalogue', label: 'Catalogue (all outlets)' },
+  { key: 'outlets', label: 'Outlets' },
+];
+
+/** What sits under the outlet being managed — its categories first: that is what it sells. */
 const OUTLET_SECTIONS = [
-  { key: 'menu', label: 'Menu categories & items' },
+  { key: 'categories', label: 'Categories sold here' },
+  { key: 'menu', label: 'Menu & prices here' },
   { key: 'terminals', label: 'Terminals' },
 ];
 
@@ -46,7 +58,8 @@ export function SetupTab({ activeProperty, isOffline = false }) {
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState(null);
   const [selectedOutletId, setSelectedOutletId] = useState(null);
-  const [outletSection, setOutletSection] = useState('menu');
+  const [view, setView] = useState('catalogue');
+  const [outletSection, setOutletSection] = useState('categories');
 
   const [outletForm, setOutletForm] = useState({ code: '', name: '', type: 'bar' });
   const [outletSubmitting, setOutletSubmitting] = useState(false);
@@ -100,9 +113,14 @@ export function SetupTab({ activeProperty, isOffline = false }) {
     setOutletSubmitting(true);
     setOutletError(null);
     try {
-      await posApi.createOutlet(outletForm);
+      const created = await posApi.createOutlet(outletForm);
       setOutletForm({ code: '', name: '', type: 'bar' });
       await reload();
+      // Straight on to choosing what the new outlet sells.
+      if (created?.id) {
+        handleSelectOutlet(created);
+        setOutletSection('categories');
+      }
     } catch (caught) {
       setOutletError(caught instanceof ApiError ? caught.message : 'Could not create this outlet.');
     } finally {
@@ -181,6 +199,33 @@ export function SetupTab({ activeProperty, isOffline = false }) {
 
   return (
     <div className={formStyles.form}>
+      <div className={styles.sectionTabs} role="tablist" aria-label="POS setup">
+        {VIEWS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            role="tab"
+            aria-selected={view === item.key}
+            className={`${styles.sectionTab} ${view === item.key ? styles.sectionTabActive : ''}`}
+            onClick={() => setView(item.key)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'catalogue' && (
+        <>
+          <p className={formStyles.hint}>
+            Categories and items belong to no outlet. Each outlet chooses which categories it sells, under Outlets → Categories sold here, and then sells
+            every item in them — at the price set here, or its own price.
+          </p>
+          <MenuItemsTab activeProperty={activeProperty} outletId={null} outletName={null} isOffline={isOffline} />
+        </>
+      )}
+
+      {view === 'outlets' && (
+      <>
       <Card title="New outlet">
         {outletError && (
           <p role="alert" className={formStyles.errorBanner}>
@@ -282,7 +327,7 @@ export function SetupTab({ activeProperty, isOffline = false }) {
       )}
 
       {!selectedOutlet && outlets?.length > 0 && (
-        <p className={formStyles.hint}>Choose an outlet with Manage to set up its menu categories, menu items and terminals. Each outlet keeps its own.</p>
+        <p className={formStyles.hint}>Choose an outlet with Manage to pick the categories it sells, set its own prices, and manage its terminals.</p>
       )}
 
       {selectedOutlet && (
@@ -292,7 +337,7 @@ export function SetupTab({ activeProperty, isOffline = false }) {
               <span className={styles.outletBarLabel}>Managing outlet</span>
               <h2 className={styles.outletBarName}>{selectedOutlet.name}</h2>
               <span className={styles.outletBarMeta}>
-                {selectedOutlet.code} · {OUTLET_TYPE_LABELS[selectedOutlet.type] ?? selectedOutlet.type} — menu categories, menu items and terminals below belong to this outlet only.
+                {selectedOutlet.code} · {OUTLET_TYPE_LABELS[selectedOutlet.type] ?? selectedOutlet.type} — what it sells, its own prices, and its terminals.
               </span>
             </div>
             <label className={formStyles.field}>
@@ -321,6 +366,10 @@ export function SetupTab({ activeProperty, isOffline = false }) {
               </button>
             ))}
           </div>
+
+          {outletSection === 'categories' && (
+            <OutletCategoriesCard outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} onSaved={() => setOutletSection('menu')} />
+          )}
 
           {outletSection === 'menu' && <MenuItemsTab activeProperty={activeProperty} outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} />}
 
@@ -420,6 +469,8 @@ export function SetupTab({ activeProperty, isOffline = false }) {
           )}
 
         </>
+      )}
+      </>
       )}
     </div>
   );

@@ -11,6 +11,7 @@
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { insertStockCategories, insertStockItem } = require('../helpers/catalogue');
 
 describe('Stock overview by category (gap closure)', () => {
   const t = useTestApp();
@@ -42,7 +43,7 @@ describe('Stock overview by category (gap closure)', () => {
 
   async function newStockItem(tenant, outlet, { name, category = null, current = '0.000', reorder = '0.000', status = 'active' } = {}) {
     counter += 1;
-    const [id] = await t.trx('stock_items').insert({
+    const [id] = await insertStockItem(t.trx, {
       tenant_id: tenant.id,
       property_id: tenant.properties[0].id,
       outlet_id: outlet,
@@ -73,7 +74,7 @@ describe('Stock overview by category (gap closure)', () => {
   }
 
   async function newCategory(tenant, name, sortOrder = 0, outlet = tenant === ctx.a ? outletId : tenant.posOutlets[0].id) {
-    await t.trx('stock_item_categories').insert({ tenant_id: tenant.id, property_id: tenant.properties[0].id, outlet_id: outlet, name, sort_order: sortOrder });
+    await insertStockCategories(t.trx, { tenant_id: tenant.id, property_id: tenant.properties[0].id, outlet_id: outlet, name, sort_order: sortOrder });
   }
 
   const overview = (query = '', token = manager()) => t.request.get(`/api/v1/pos/stock/reports/overview?date_from=${DATE}&date_to=${DATE}${query}`).set('Authorization', `Bearer ${token}`);
@@ -120,9 +121,10 @@ describe('Stock overview by category (gap closure)', () => {
 
   it('folds the period\'s movements onto each item — sold net of reversals, received, wastage and stock-take adjustments — and rolls cost up per category', async () => {
     const outlet = await newOutlet(ctx.a);
-    await newCategory(ctx.a, 'Spirits', 1, outlet);
-    const gin = await newStockItem(ctx.a, outlet, { name: 'Gin', category: 'Spirits', current: '80.000' });
-    const rum = await newStockItem(ctx.a, outlet, { name: 'Rum', category: 'Spirits', current: '50.000' });
+    const spiritsName = `Spirits ${outlet}`;
+    await newCategory(ctx.a, spiritsName, 1, outlet);
+    const gin = await newStockItem(ctx.a, outlet, { name: 'Gin', category: spiritsName, current: '80.000' });
+    const rum = await newStockItem(ctx.a, outlet, { name: 'Rum', category: spiritsName, current: '50.000' });
 
     await movement(ctx.a, outlet, gin, 'sold', '-30.000', '-60.00');
     await movement(ctx.a, outlet, gin, 'sale_reversal', '10.000', '20.00'); // A voided sale gives 10 back.
@@ -137,24 +139,25 @@ describe('Stock overview by category (gap closure)', () => {
     expect(items.Gin).toMatchObject({ soldQty: '20.000', soldCost: '40.00', receivedQty: '100.000', wastageQty: '5.000', wastageCost: '10.00', adjustmentQty: '-2.000' });
     expect(items.Rum).toMatchObject({ soldQty: '10.000', soldCost: '20.00' });
 
-    const spirits = res.body.data.byCategory.find((c) => c.category === 'Spirits');
+    const spirits = res.body.data.byCategory.find((c) => c.category === spiritsName);
     expect(spirits).toMatchObject({ itemCount: 2, soldCost: '60.00', wastageCost: '10.00' });
     expect(res.body.data.totals).toMatchObject({ itemCount: 2, soldCost: '60.00', wastageCost: '10.00' });
   });
 
   it('flags items at or below their reorder level, and counts them per category', async () => {
     const outlet = await newOutlet(ctx.a);
-    await newCategory(ctx.a, 'Mixers', 2, outlet);
-    await newStockItem(ctx.a, outlet, { name: 'Tonic low', category: 'Mixers', current: '5.000', reorder: '10.000' });
-    await newStockItem(ctx.a, outlet, { name: 'Soda fine', category: 'Mixers', current: '50.000', reorder: '10.000' });
-    await newStockItem(ctx.a, outlet, { name: 'No level', category: 'Mixers', current: '0.000', reorder: '0.000' });
+    const mixersName = `Mixers ${outlet}`;
+    await newCategory(ctx.a, mixersName, 2, outlet);
+    await newStockItem(ctx.a, outlet, { name: 'Tonic low', category: mixersName, current: '5.000', reorder: '10.000' });
+    await newStockItem(ctx.a, outlet, { name: 'Soda fine', category: mixersName, current: '50.000', reorder: '10.000' });
+    await newStockItem(ctx.a, outlet, { name: 'No level', category: mixersName, current: '0.000', reorder: '0.000' });
 
     const res = await overview(`&outlet_id=${outlet}`);
     const items = Object.fromEntries(res.body.data.items.map((r) => [r.name, r]));
     expect(items['Tonic low'].atOrBelowReorder).toBe(true);
     expect(items['Soda fine'].atOrBelowReorder).toBe(false);
     expect(items['No level'].atOrBelowReorder).toBe(false); // A zero reorder level means "not tracked".
-    expect(res.body.data.byCategory.find((c) => c.category === 'Mixers').lowStockCount).toBe(1);
+    expect(res.body.data.byCategory.find((c) => c.category === mixersName).lowStockCount).toBe(1);
   });
 
   it('excludes archived items, and orders items by category then name', async () => {

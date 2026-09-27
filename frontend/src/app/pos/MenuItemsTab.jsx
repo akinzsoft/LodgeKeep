@@ -82,7 +82,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
   const [addError, setAddError] = useState(null);
   const [addSubmitting, setAddSubmitting] = useState(false);
 
-  const [editForm, setEditForm] = useState({ name: '', category: '', price: '', cost_price: '', reorder_level: '', supplier: '' });
+  const [editForm, setEditForm] = useState({ name: '', category: '', price: '', outlet_price: '', cost_price: '', reorder_level: '', supplier: '' });
   const [editPhoto, setEditPhoto] = useState(null);
   const [editImageUrl, setEditImageUrl] = useState(null);
   const [editError, setEditError] = useState(null);
@@ -156,7 +156,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
       setMenuItems([]);
       setStockItems([]);
       setLinksByMenuItemId({});
-      setError(caught instanceof ApiError ? caught.message : 'Could not load this outlet.');
+      setError(caught instanceof ApiError ? caught.message : 'Could not load the menu.');
     }
   }
 
@@ -237,7 +237,9 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
     setEditForm({
       name: item.name,
       category: item.category,
-      price: item.price,
+      // The main price; at an outlet, `price` is what it sells for there.
+      price: item.base_price ?? item.price,
+      outlet_price: item.outlet_price ?? '',
       cost_price: item.cost_price ?? '',
       reorder_level: link?.reorder_level ?? '',
       supplier: link?.supplier ?? '',
@@ -366,8 +368,13 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
     try {
       await posApi.updateMenuItem(item.id, { name: editForm.name, category: editForm.category, price: editForm.price, cost_price: editForm.cost_price || null });
       saved = true;
+      // This outlet's own price (blank = the main price), only when it changed.
+      if (outletId && String(editForm.outlet_price ?? '') !== String(item.outlet_price ?? '')) {
+        await posApi.setOutletMenuItemPrice(item.id, outletId, editForm.outlet_price === '' ? null : editForm.outlet_price);
+      }
       if (editPhoto) await posApi.uploadMenuItemImage(item.id, editPhoto);
-      if (link) await stockApi.updateStockItem(link.id, { supplier: editForm.supplier || null, reorderLevel: editForm.reorder_level });
+      // At an outlet the reorder level is that outlet's own; in the catalogue, the default.
+      if (link) await stockApi.updateStockItem(link.id, { supplier: editForm.supplier || null, reorderLevel: editForm.reorder_level, outletId: outletId || undefined });
       setActivePanel(null);
       await reloadItems();
     } catch (caught) {
@@ -392,7 +399,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
 
   async function handleToggleAvailability(item) {
     try {
-      await posApi.setMenuItemAvailability(item.id, !item.is_available);
+      await posApi.setMenuItemAvailability(item.id, !item.is_available, outletId);
       await reloadItems();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not update availability.');
@@ -459,7 +466,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
           return (
             <div className={formStyles.categorySection}>
               <DataTable
-                title={`Items — ${section.title} (${outletName})`}
+                title={`Items — ${section.title} (${outletName ?? 'all outlets'})`}
                 state={section.items.length === 0 ? 'empty' : 'success'}
                 emptyMessage="No items yet — add the first one below."
                 footer={
@@ -476,10 +483,20 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                     render: (row) => (row.image_url ? <img className={formStyles.thumb} src={row.image_url} alt={`Photo of ${row.name}`} loading="lazy" /> : '—'),
                   },
                   { key: 'name', label: 'Name' },
-                  { key: 'price', label: 'Selling price', align: 'right', render: (row) => <Money amount={row.price} currencyCode={activeProperty.base_currency} /> },
+                  {
+                    key: 'price',
+                    label: outletId ? 'Price here' : 'Selling price',
+                    align: 'right',
+                    render: (row) => (
+                      <>
+                        <Money amount={row.price} currencyCode={activeProperty.base_currency} />
+                        {outletId && row.outlet_price != null && ' (own price)'}
+                      </>
+                    ),
+                  },
                   {
                     key: 'stock',
-                    label: 'Stock balance',
+                    label: outletId ? 'Stock balance' : 'Stock (all outlets)',
                     align: 'right',
                     render: (row) => {
                       if (linksByMenuItemId?.[row.id] === 'compound') return 'Compound recipe';
@@ -516,7 +533,8 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                     },
                   },
                   { key: 'supplier', label: 'Supplier', render: (row) => linkedStockItemFor(row.id)?.supplier ?? '—' },
-                  { key: 'is_available', label: 'Available', render: (row) => (row.is_available ? 'Yes' : 'Stocked out') },
+                  // Availability is per outlet — only shown when looking at one.
+                  ...(outletId ? [{ key: 'is_available', label: 'Available', render: (row) => (row.is_available ? 'Yes' : 'Stocked out') }] : []),
                 ]}
                 rows={section.items}
                 rowKey={(row) => row.id}
@@ -525,9 +543,11 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                     <Button size="compact" variant="ghost" disabled={isOffline} onClick={() => openEdit(row)}>
                       Edit
                     </Button>
-                    <Button size="compact" variant="ghost" disabled={isOffline} onClick={() => handleToggleAvailability(row)}>
-                      {row.is_available ? 'Mark stocked out' : 'Mark available'}
-                    </Button>
+                    {outletId && (
+                      <Button size="compact" variant="ghost" disabled={isOffline} onClick={() => handleToggleAvailability(row)}>
+                        {row.is_available ? 'Mark stocked out' : 'Mark available'}
+                      </Button>
+                    )}
                   </>
                 )}
               />
@@ -557,6 +577,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                         disabled={isOffline}
                       />
                     </label>
+                    {outletId && (
                     <label className={formStyles.field}>
                       <span className={formStyles.label}>Qty supplied (optional)</span>
                       <input
@@ -569,6 +590,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                         disabled={isOffline}
                       />
                     </label>
+                    )}
                     <label className={formStyles.field}>
                       <span className={formStyles.label}>Reorder level (optional)</span>
                       <input
@@ -609,7 +631,9 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                       />
                     </label>
                     <p className={formStyles.hint}>
-                      Leaving Qty supplied/Reorder level/Unit cost/Supplier all blank creates a sellable item with no inventory tracking — you can add that later via Edit.
+                      {outletId
+                        ? 'Leaving Qty supplied/Reorder level/Unit cost/Supplier all blank creates a sellable item with no inventory tracking — you can add that later via Edit.'
+                        : 'This adds the item to the shared catalogue — every outlet that sells this category sells it. Stock is received per outlet (under Outlets, or Stock → Goods received). Leaving Reorder level/Unit cost/Supplier blank creates it with no inventory tracking.'}
                     </p>
                     <div className={formStyles.actionsRow}>
                       <Button type="submit" loading={addSubmitting} disabled={isOffline}>
@@ -636,7 +660,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                       <input className={formStyles.input} value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} required disabled={isOffline} />
                     </label>
                     <label className={formStyles.field}>
-                      <span className={formStyles.label}>Selling price</span>
+                      <span className={formStyles.label}>{outletId ? 'Main price (every outlet)' : 'Selling price'}</span>
                       <input
                         className={formStyles.input}
                         type="number"
@@ -648,6 +672,21 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                         disabled={isOffline}
                       />
                     </label>
+                    {outletId && (
+                      <label className={formStyles.field}>
+                        <span className={formStyles.label}>{`Price at ${outletName} (optional)`}</span>
+                        <input
+                          className={formStyles.input}
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          placeholder="Uses the main price"
+                          value={editForm.outlet_price}
+                          onChange={(e) => setEditForm({ ...editForm, outlet_price: e.target.value })}
+                          disabled={isOffline}
+                        />
+                      </label>
+                    )}
                     <label className={formStyles.field}>
                       <span className={formStyles.label}>Menu category</span>
                       <select className={formStyles.select} value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })} required disabled={isOffline}>
@@ -726,6 +765,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                 </Card>
               )}
 
+              {outletId && (
               <Card title={`Restock — ${section.title}`}>
                 {restockError && (
                   <p role="alert" className={formStyles.errorBanner}>
@@ -800,6 +840,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                   </form>
                 )}
               </Card>
+              )}
             </div>
           );
         })()

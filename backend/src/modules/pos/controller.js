@@ -234,8 +234,10 @@ function optionalSortOrder(body) {
 
 async function createMenuCategory(req, res, next) {
   try {
-    const outletId = require_(req.body, 'outlet_id');
-    const category = await service.createMenuCategory({ context: req.context, outletId, name: req.body?.name, sortOrder: optionalSortOrder(req.body) });
+    // Optional: the outlets that should carry it straight away (`outlet_ids`,
+    // or a single `outlet_id` — the outlet it is being added from).
+    const outletIds = Array.isArray(req.body?.outlet_ids) ? req.body.outlet_ids : req.body?.outlet_id ? [req.body.outlet_id] : [];
+    const category = await service.createMenuCategory({ context: req.context, outletIds, name: req.body?.name, sortOrder: optionalSortOrder(req.body) });
     await req.audit({ entityType: 'pos_menu_categories', entityId: category.id, action: 'create', afterState: category });
     res.status(201).json(ok(category));
   } catch (error) {
@@ -271,7 +273,8 @@ async function archiveMenuCategory(req, res, next) {
 
 async function createMenuItem(req, res, next) {
   try {
-    const outletId = require_(req.body, 'outlet_id');
+    // Optional: the outlet it is being added from carries its category.
+    const outletId = req.body?.outlet_id || undefined;
     const name = require_(req.body, 'name');
     const category = require_(req.body, 'category');
     const price = require_(req.body, 'price');
@@ -327,9 +330,38 @@ async function setMenuItemAvailability(req, res, next) {
     const before = await service.getMenuItem({ context: req.context, id: req.params.id });
     if (!before) return notFound(res);
     if (req.body?.is_available === undefined) throw new ValidationError('MISSING_FIELD', '"is_available" is required.', [{ field: 'is_available', issue: 'missing' }]);
-    const menuItem = await service.setMenuItemAvailability({ context: req.context, id: req.params.id, isAvailable: !!req.body.is_available });
+    const outletId = require_(req.body, 'outlet_id');
+    const menuItem = await service.setMenuItemAvailability({ context: req.context, id: req.params.id, outletId, isAvailable: !!req.body.is_available });
     await req.audit({ entityType: 'pos_menu_items', entityId: req.params.id, action: 'set_availability', beforeState: before, afterState: menuItem });
     res.status(200).json(ok(menuItem));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** `PUT /pos/menu-items/:id/outlet-price` `{outlet_id, price}` — that outlet's own price; `price: null` goes back to the main price. */
+async function setOutletMenuItemPrice(req, res, next) {
+  try {
+    const outletId = require_(req.body, 'outlet_id');
+    const price = optionalCashAmount(req.body, 'price') ?? null;
+    const before = await service.getMenuItem({ context: req.context, id: req.params.id, outletId });
+    if (!before) return notFound(res);
+    const menuItem = await service.setOutletMenuItemPrice({ context: req.context, id: req.params.id, outletId, price });
+    await req.audit({ entityType: 'pos_menu_items', entityId: req.params.id, action: 'set_outlet_price', beforeState: { outlet_id: outletId, price: before.outlet_price }, afterState: { outlet_id: outletId, price } });
+    res.status(200).json(ok(menuItem));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** `PUT /pos/outlets/:id/categories` `{category_ids}` — the categories this outlet carries (it sells every item in them). */
+async function setOutletCategories(req, res, next) {
+  try {
+    const before = await service.getOutlet({ context: req.context, id: req.params.id });
+    if (!before) return notFound(res);
+    const categoryIds = await service.setOutletCategories({ context: req.context, outletId: req.params.id, categoryIds: req.body?.category_ids });
+    await req.audit({ entityType: 'pos_outlets', entityId: req.params.id, action: 'set_categories', afterState: { category_ids: categoryIds } });
+    res.status(200).json(ok({ outlet_id: String(req.params.id), category_ids: categoryIds }));
   } catch (error) {
     next(error);
   }
@@ -744,6 +776,8 @@ module.exports = {
   createMenuItem,
   updateMenuItem,
   setMenuItemAvailability,
+  setOutletMenuItemPrice,
+  setOutletCategories,
   uploadMenuItemImage,
   removeMenuItemImage,
   archiveMenuItem,

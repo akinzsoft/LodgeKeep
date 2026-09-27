@@ -2,13 +2,13 @@ import { CategoryCatalogueCard } from '../../shared/components/index.js';
 import { posApi } from '../../shared/api/index.js';
 
 /**
- * MenuCategoriesCard — ONE outlet's registered menu categories (Starters,
- * Mains, Drinks…); another outlet has its own list, even for the same name
- * (20261104090000). Menu items pick a category from a
- * dropdown fed by this list, so names stay consistent on the Register rail
- * and the guest QR menu. Register, rename (applied to every item using the
- * category), reorder, and archive (refused while items still use it).
- * Changes are `pos.manage`; a lower-tier account sees the real 403.
+ * MenuCategoriesCard — menu categories (Starters, Mains, Drinks…) from the
+ * property's shared catalogue (20261108090000). With an outlet, the ones
+ * that outlet carries (registering one here adds it to the catalogue and
+ * makes this outlet carry it); without, the whole catalogue. Register,
+ * rename (applied to every item using the category, and to the matching
+ * stock category), reorder, and archive (refused while items still use
+ * it). Changes are `pos.manage`; a lower-tier account sees the real 403.
  *
  * A thin wrapper around the shared `CategoryCatalogueCard` — see that
  * component's own header for why (this was one of three near-identical,
@@ -22,8 +22,12 @@ import { posApi } from '../../shared/api/index.js';
 export function MenuCategoriesCard({ outletId, outletName, categories, onChanged, extraRows, selectedRowKey, onSelectRow }) {
   return (
     <CategoryCatalogueCard
-      title={outletName ? `Menu categories — ${outletName}` : 'Menu categories'}
-      hint="Menu categories group what guests buy, and belong to this outlet only — another outlet keeps its own list, even if it uses the same names. They are separate from stock categories, which group what you hold in storage and are shared by every outlet. Menu items choose one of these, so the Register and guest menu show consistent names. Click a menu category to see its items below."
+      title={outletName ? `Menu categories sold at ${outletName}` : 'Menu categories — all outlets'}
+      hint={
+        outletId
+          ? 'This outlet sells every item in these categories. Adding a category here adds it to the shared catalogue and makes this outlet sell it; to choose from existing categories, use Categories sold here. Click a category to see its items below.'
+          : 'The shared catalogue: categories belong to no outlet. Each outlet chooses which ones it sells under Outlets → Categories sold here, and then sells every item in them. Click a category to see its items below.'
+      }
       noun="menu category"
       namePlaceholder="e.g. Starters"
       countColumnLabel="Menu items"

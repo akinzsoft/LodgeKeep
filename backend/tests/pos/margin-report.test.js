@@ -11,6 +11,7 @@
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
 
 describe('Cost-of-sales margin report (gap closure)', () => {
   const t = useTestApp();
@@ -53,7 +54,7 @@ describe('Cost-of-sales margin report (gap closure)', () => {
     const propertyId = ctx.a.properties[0].id;
     const [outletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: `MARGIN-${suffix}`, name: 'Margin Test Outlet', type: 'bar' });
     const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, device_ref: `MARGINTERM-${suffix}` });
-    const [menuItemId] = await t.trx('pos_menu_items').insert({
+    const [menuItemId] = await insertMenuItem(t.trx, {
       tenant_id: ctx.a.id,
       property_id: propertyId,
       outlet_id: outletId,
@@ -66,7 +67,7 @@ describe('Cost-of-sales margin report (gap closure)', () => {
   }
 
   async function createStockItem({ outletId, purchaseCost = '2.00' } = {}) {
-    const [id] = await t.trx('stock_items').insert({
+    const [id] = await insertStockItem(t.trx, {
       tenant_id: ctx.a.id,
       property_id: ctx.a.properties[0].id,
       outlet_id: outletId,

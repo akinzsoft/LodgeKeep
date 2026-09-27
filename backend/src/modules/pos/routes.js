@@ -30,6 +30,7 @@ function posRouter() {
   router.post('/pos/outlets', requirePermission('pos.manage'), controller.createOutlet);
   router.patch('/pos/outlets/:id', requirePermission('pos.manage'), controller.updateOutlet);
   router.post('/pos/outlets/:id/archive', requirePermission('pos.manage'), controller.archiveOutlet);
+  router.put('/pos/outlets/:id/categories', requirePermission('pos.manage'), controller.setOutletCategories);
 
   router.get('/pos/terminals', requirePermission('pos.operate'), controller.listTerminals);
   router.post('/pos/terminals', requirePermission('pos.manage'), controller.createTerminal);
@@ -45,6 +46,7 @@ function posRouter() {
   router.post('/pos/menu-items', requirePermission('pos.manage'), controller.createMenuItem);
   router.patch('/pos/menu-items/:id', requirePermission('pos.manage'), controller.updateMenuItem);
   router.post('/pos/menu-items/:id/set-availability', requirePermission('pos.operate'), controller.setMenuItemAvailability);
+  router.put('/pos/menu-items/:id/outlet-price', requirePermission('pos.manage'), controller.setOutletMenuItemPrice);
   router.post('/pos/menu-items/:id/archive', requirePermission('pos.manage'), controller.archiveMenuItem);
   router.post('/pos/menu-items/:id/image', requirePermission('pos.manage'), receiveImage, controller.uploadMenuItemImage);
   router.delete('/pos/menu-items/:id/image', requirePermission('pos.manage'), controller.removeMenuItemImage);

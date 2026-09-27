@@ -25,7 +25,7 @@ function idempotencyKey() {
 // wrappers exactly.
 // ---------------------------------------------------------------------
 
-/** Stock categories belong to one outlet — pass `outletId` for that outlet's list (every outlet's otherwise). */
+/** The property's shared stock categories (matching the menu categories). Pass `outletId` for just the ones that outlet carries. */
 export function listStockItemCategories({ includeArchived, outletId } = {}) {
   const params = new URLSearchParams();
   if (includeArchived) params.set('include_archived', 'true');
@@ -68,8 +68,10 @@ export function createStockItem({ outletId, name, unit, category, purchaseCost, 
   });
 }
 
-export function updateStockItem(id, { name, unit, category, supplier, reorderLevel } = {}) {
+/** With `outletId`, a `reorderLevel` change is that outlet's own; without, it is the item's default. */
+export function updateStockItem(id, { name, unit, category, supplier, reorderLevel, outletId } = {}) {
   const body = {};
+  if (outletId !== undefined && outletId !== null) body.outlet_id = outletId;
   if (name !== undefined) body.name = name;
   if (unit !== undefined) body.unit = unit;
   if (category !== undefined) body.category = category;
@@ -82,13 +84,18 @@ export function archiveStockItem(id) {
   return request(`/pos/stock/items/${id}/archive`, { method: 'POST', body: {} });
 }
 
-/** `pos.stock_view` — a floor action, reachable by pos_operator. `reason` is mandatory (backend-enforced; validate non-blank client-side too). */
-export function recordWastage(stockItemId, { quantity, reason }) {
+/** `pos.stock_view` — a floor action, reachable by pos_operator. `reason` is mandatory (backend-enforced; validate non-blank client-side too). `outletId`: where it was lost (stock is counted per outlet). */
+export function recordWastage(stockItemId, { outletId, quantity, reason }) {
   return request(`/pos/stock/items/${stockItemId}/wastage`, {
     method: 'POST',
     headers: { 'Idempotency-Key': idempotencyKey() },
-    body: { quantity, reason },
+    body: { outlet_id: outletId, quantity, reason },
   });
+}
+
+/** Every outlet's quantity and reorder level for one stock item. */
+export function listStockLevels(stockItemId) {
+  return request(`/pos/stock/items/${stockItemId}/levels`);
 }
 
 // ---------------------------------------------------------------------

@@ -349,18 +349,18 @@ describe('Staff notifications (real MySQL)', () => {
       // Take it to just below its reorder level (500), from 1000.
       const toBelowReorder = (Number(before.current_quantity) - 400).toFixed(3);
       await db.transaction((trx) =>
-        stockService.recordWastage({ trx, stockItemId, quantity: toBelowReorder, reason: 'Spill', userId: ctx.a.users[0].id, businessDate: '2026-12-24' })
+        stockService.recordWastage({ trx, stockItemId, outletId: ctx.a.posOutlets[0].id, quantity: toBelowReorder, reason: 'Spill', userId: ctx.a.users[0].id, businessDate: '2026-12-24' })
       );
       expect(await rowsFor(ctx.a, 'stock.reorder_level_reached')).toHaveLength(1);
 
       await db.transaction((trx) =>
-        stockService.recordWastage({ trx, stockItemId, quantity: '100.000', reason: 'Spill', userId: ctx.a.users[0].id, businessDate: '2026-12-24' })
+        stockService.recordWastage({ trx, stockItemId, outletId: ctx.a.posOutlets[0].id, quantity: '100.000', reason: 'Spill', userId: ctx.a.users[0].id, businessDate: '2026-12-24' })
       );
       expect(await rowsFor(ctx.a, 'stock.reorder_level_reached')).toHaveLength(1);
       expect(await rowsFor(ctx.a, 'stock.out_of_stock')).toHaveLength(0);
 
       await db.transaction((trx) =>
-        stockService.recordWastage({ trx, stockItemId, quantity: '300.000', reason: 'Spill', userId: ctx.a.users[0].id, businessDate: '2026-12-24' })
+        stockService.recordWastage({ trx, stockItemId, outletId: ctx.a.posOutlets[0].id, quantity: '300.000', reason: 'Spill', userId: ctx.a.users[0].id, businessDate: '2026-12-24' })
       );
       const outRows = await rowsFor(ctx.a, 'stock.out_of_stock');
       expect(outRows).toHaveLength(1);

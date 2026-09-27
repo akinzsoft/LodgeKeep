@@ -1764,17 +1764,17 @@ const ENTITIES = [
 
   {
     table: 'pos_menu_categories',
-    uniqueKeys: [['outlet_id', 'name']],
+    // Shared by the property since 20261108090000 (outlets carry categories
+    // through pos_outlet_categories), so names are unique per property.
+    uniqueKeys: [['property_id', 'name']],
     newRow: (ctx, t) => ({
       tenant_id: t.id,
       property_id: t.properties[0].id,
-      outlet_id: t.posOutlets[0].id,
       name: 'New Fixture Category',
     }),
     duplicateRow: (ctx, t) => ({
       tenant_id: t.id,
       property_id: t.properties[0].id,
-      outlet_id: t.posOutlets[0].id,
       name: 'Cocktails', // Matches seedTwoTenants' own fixture category.
     }),
     crossTenant: [
@@ -1783,35 +1783,24 @@ const ENTITIES = [
         row: (ctx, own, other) => ({
           tenant_id: own.id,
           property_id: other.properties[0].id,
-          outlet_id: other.posOutlets[0].id,
           name: 'Cross-Tenant Category',
-        }),
-      },
-      {
-        name: "registers a category against another tenant's outlet",
-        row: (ctx, own, other) => ({
-          tenant_id: own.id,
-          property_id: own.properties[0].id,
-          outlet_id: other.posOutlets[0].id,
-          name: 'Cross-Tenant Outlet Category',
         }),
       },
     ],
   },
 
+
   {
     table: 'stock_item_categories',
-    uniqueKeys: [['outlet_id', 'name']],
+    uniqueKeys: [['property_id', 'name']],
     newRow: (ctx, t) => ({
       tenant_id: t.id,
       property_id: t.properties[0].id,
-      outlet_id: t.posOutlets[0].id,
       name: 'New Fixture Stock Category',
     }),
     duplicateRow: (ctx, t) => ({
       tenant_id: t.id,
       property_id: t.properties[0].id,
-      outlet_id: t.posOutlets[0].id,
       name: 'Beverages', // Matches seedTwoTenants' own fixture category.
     }),
     crossTenant: [
@@ -1820,21 +1809,91 @@ const ENTITIES = [
         row: (ctx, own, other) => ({
           tenant_id: own.id,
           property_id: other.properties[0].id,
-          outlet_id: other.posOutlets[0].id,
           name: 'Cross-Tenant Stock Category',
-        }),
-      },
-      {
-        name: "registers a stock category against another tenant's outlet",
-        row: (ctx, own, other) => ({
-          tenant_id: own.id,
-          property_id: own.properties[0].id,
-          outlet_id: other.posOutlets[0].id,
-          name: 'Cross-Tenant Outlet Stock Category',
         }),
       },
     ],
   },
+
+  {
+    table: 'pos_outlet_categories',
+    uniqueKeys: [['outlet_id', 'category_id']],
+    // The fixture bar carries Cocktails; Mocktails (posMenuCategories[1]) is deliberately uncarried.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      category_id: t.posMenuCategories[1].id,
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      category_id: t.posMenuCategories[0].id,
+    }),
+    crossTenant: [
+      {
+        name: "makes an outlet carry another tenant's category",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: own.posOutlets[0].id,
+          category_id: other.posMenuCategories[1].id,
+        }),
+      },
+      {
+        name: "makes another tenant's outlet carry a category",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          category_id: own.posMenuCategories[1].id,
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'pos_outlet_menu_items',
+    uniqueKeys: [['outlet_id', 'menu_item_id']],
+    // The fixture has a row for the cocktail (posMenuItems[0]); the mocktail has none.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      menu_item_id: t.posMenuItems[1].id,
+      price: '9.00',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      menu_item_id: t.posMenuItems[0].id,
+    }),
+    crossTenant: [
+      {
+        name: "sets an outlet price on another tenant's menu item",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: own.posOutlets[0].id,
+          menu_item_id: other.posMenuItems[1].id,
+          price: '1.00',
+        }),
+      },
+      {
+        name: "sets a price at another tenant's outlet",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          menu_item_id: own.posMenuItems[1].id,
+          price: '1.00',
+        }),
+      },
+    ],
+  },
+
 
   {
     table: 'pos_terminals',
@@ -1873,18 +1932,16 @@ const ENTITIES = [
     newRow: (ctx, t) => ({
       tenant_id: t.id,
       property_id: t.properties[0].id,
-      outlet_id: t.posOutlets[0].id,
       name: 'New Fixture Item',
       category: 'Starters',
       price: '10.00',
     }),
     crossTenant: [
       {
-        name: "creates a menu item against another tenant's outlet",
+        name: "creates a menu item against another tenant's property",
         row: (ctx, own, other) => ({
           tenant_id: own.id,
-          property_id: own.properties[0].id,
-          outlet_id: other.posOutlets[0].id,
+          property_id: other.properties[0].id,
           name: 'Cross-Tenant Item',
           category: 'Starters',
           price: '10.00',
@@ -2157,23 +2214,61 @@ const ENTITIES = [
     newRow: (ctx, t) => ({
       tenant_id: t.id,
       property_id: t.properties[0].id,
-      outlet_id: t.posOutlets[0].id,
       name: 'New Fixture Stock Item',
       unit: 'ml',
     }),
     crossTenant: [
       {
-        name: "creates a stock item against another tenant's outlet",
+        name: "creates a stock item against another tenant's property",
         row: (ctx, own, other) => ({
           tenant_id: own.id,
-          property_id: own.properties[0].id,
-          outlet_id: other.posOutlets[0].id,
+          property_id: other.properties[0].id,
           name: 'Cross-Tenant Stock Item',
           unit: 'ml',
         }),
       },
     ],
   },
+
+  {
+    table: 'stock_levels',
+    uniqueKeys: [['outlet_id', 'stock_item_id']],
+    // The fixture bar has a level for the vodka (stockItems[0]); the garnish has none.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      stock_item_id: t.stockItems[1].id,
+      current_quantity: '5.000',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      stock_item_id: t.stockItems[0].id,
+    }),
+    crossTenant: [
+      {
+        name: "records a level of another tenant's stock item",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: own.posOutlets[0].id,
+          stock_item_id: other.stockItems[1].id,
+        }),
+      },
+      {
+        name: "records a level at another tenant's outlet",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          stock_item_id: own.stockItems[1].id,
+        }),
+      },
+    ],
+  },
+
 
   {
     table: 'pos_menu_item_components',

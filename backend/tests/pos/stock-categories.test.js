@@ -2,16 +2,17 @@
 
 /**
  * Stock item categories (gap closure) — mirrors `tests/pos/menu-categories.test.js`
- * exactly, for the parallel `stock_item_categories` mechanism: a registered
- * list per OUTLET (20261105090000). Stock items pick a registered, active
- * category of their own outlet (or none at all — category is optional,
- * unlike menu items'); renaming a category renames it on that outlet's
- * items; a category still in use there cannot be archived.
+ * exactly, for the parallel `stock_item_categories` mechanism: the
+ * property's shared list (20261108090000), kept matching the menu
+ * categories. Stock items pick a registered, active category (or none at
+ * all — category is optional, unlike menu items'); renaming a category
+ * renames it on its items; a category still in use cannot be archived.
  */
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { insertMenuCategories, insertMenuItem } = require('../helpers/catalogue');
 
 describe('Stock item categories (gap closure)', () => {
   const t = useTestApp();
@@ -169,65 +170,138 @@ describe('Stock item categories (gap closure)', () => {
     expect(cross.status).toBe(404);
   });
 
-  describe('per outlet', () => {
-    it("lists only the requested outlet's stock categories, and lets two outlets each have one with the same name", async () => {
+  // The shared catalogue (20261108090000, user-requested): stock categories
+  // belong to the property; an outlet shows the ones matching the menu
+  // categories it carries.
+  describe('shared catalogue', () => {
+    it('registers a stock category once for the property; the outlet it is added from carries it', async () => {
       const shopId = await secondOutlet();
       const bar = await createCategory({ name: 'Dry goods' });
-      const shop = await createCategory({ name: 'Dry goods', outlet_id: shopId });
       expect(bar.status).toBe(201);
-      expect(shop.status).toBe(201);
+      expect((await listFor(outletId)).body.data.map((c) => c.id)).toContain(bar.body.data.id);
+      expect((await listFor(shopId)).body.data.map((c) => c.id)).not.toContain(bar.body.data.id);
 
-      expect((await listFor(shopId)).body.data.map((c) => c.id)).toEqual([shop.body.data.id]);
-      const barIds = (await listFor(outletId)).body.data.map((c) => c.id);
-      expect(barIds).toContain(bar.body.data.id);
-      expect(barIds).not.toContain(shop.body.data.id);
-
-      const dup = await createCategory({ name: 'DRY GOODS' });
+      // One name per property — the shop cannot register its own "Dry goods".
+      const dup = await createCategory({ name: 'DRY GOODS', outlet_id: shopId });
       expect(dup.status).toBe(409);
-      expect(dup.body.error.message).toMatch(/at this outlet/);
     });
 
-    it('requires an active outlet of this property to register a stock category', async () => {
-      const missing = await t.request.post('/api/v1/pos/stock/categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'No outlet' });
-      expect(missing.status).toBe(400);
+    it('needs no outlet; an unknown or foreign outlet is refused', async () => {
+      const none = await t.request.post('/api/v1/pos/stock/categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'No outlet' });
+      expect(none.status).toBe(201);
       expect((await createCategory({ name: 'Ghost', outlet_id: '999999999' })).body.error.code).toBe('VALIDATION_OUTLET_NOT_FOUND');
       expect((await createCategory({ name: 'Foreign', outlet_id: ctx.b.posOutlets[0].id })).body.error.code).toBe('VALIDATION_OUTLET_NOT_FOUND');
     });
 
-    it("a stock item can only use its own outlet's stock categories, on create and on edit", async () => {
+    it('a stock item may use any category of the property, from any outlet', async () => {
       const shopId = await secondOutlet();
       await createCategory({ name: 'Footwear', outlet_id: shopId });
-      const refused = await createItem('Footwear');
-      expect(refused.status).toBe(400);
-      expect(refused.body.error.code).toBe('VALIDATION_CATEGORY_NOT_FOUND');
-      expect((await createItem('Footwear', shopId)).status).toBe(201);
-
+      expect((await createItem('Footwear')).status).toBe(201);
       const barItem = await createItem('Beverages');
       const moved = await t.request.patch(`/api/v1/pos/stock/items/${barItem.body.data.id}`).set('Authorization', `Bearer ${manager()}`).send({ category: 'Footwear' });
-      expect(moved.status).toBe(400);
+      expect(moved.status).toBe(200);
+      expect(moved.body.data.category).toBe('Footwear');
     });
 
-    it("counts, archives and renames only against the stock category's own outlet", async () => {
+    it('counts, renames and archives across the whole property', async () => {
       const shopId = await secondOutlet();
-      const barCat = await createCategory({ name: 'Linen' });
-      const shopCat = await createCategory({ name: 'Linen', outlet_id: shopId });
+      const linen = await createCategory({ name: 'Linen' });
       const barItem = await createItem('Linen');
       const shopItem = await createItem('Linen', shopId);
-      await createItem('Linen', shopId);
+      expect((await listFor(outletId)).body.data.find((c) => c.id === linen.body.data.id).item_count).toBe(2);
 
-      expect((await listFor(outletId)).body.data.find((c) => c.id === barCat.body.data.id).item_count).toBe(1);
-      expect((await listFor(shopId)).body.data.find((c) => c.id === shopCat.body.data.id).item_count).toBe(2);
-
-      await t.request.patch(`/api/v1/pos/stock/categories/${barCat.body.data.id}`).set('Authorization', `Bearer ${manager()}`).send({ name: 'Towels' });
+      await t.request.patch(`/api/v1/pos/stock/categories/${linen.body.data.id}`).set('Authorization', `Bearer ${manager()}`).send({ name: 'Towels' });
       expect((await t.trx('stock_items').where({ id: barItem.body.data.id }).first()).category).toBe('Towels');
-      expect((await t.trx('stock_items').where({ id: shopItem.body.data.id }).first()).category).toBe('Linen');
+      expect((await t.trx('stock_items').where({ id: shopItem.body.data.id }).first()).category).toBe('Towels');
 
-      const refused = await t.request.post(`/api/v1/pos/stock/categories/${shopCat.body.data.id}/archive`).set('Authorization', `Bearer ${manager()}`);
+      const refused = await t.request.post(`/api/v1/pos/stock/categories/${linen.body.data.id}/archive`).set('Authorization', `Bearer ${manager()}`);
       expect(refused.status).toBe(409);
-      const otherId = await secondOutlet();
-      const empty = await createCategory({ name: 'Linen', outlet_id: otherId });
-      const archived = await t.request.post(`/api/v1/pos/stock/categories/${empty.body.data.id}/archive`).set('Authorization', `Bearer ${manager()}`);
-      expect(archived.status).toBe(200);
+    });
+  });
+
+  describe('kept in step with Setup menu categories', () => {
+    const createMenuCategory = (name, atOutlet = outletId) =>
+      t.request.post('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${manager()}`).send({ outlet_id: atOutlet, name });
+    const menuListFor = (id) => t.request.get(`/api/v1/pos/menu-categories?outlet_id=${id}`).set('Authorization', `Bearer ${manager()}`);
+    const names = (res) => res.body.data.map((c) => c.name);
+    let n = 0;
+    const unique = (base) => `${base} ${Date.now().toString(36)}${(n += 1)}`;
+
+    it('a category created in Setup also appears in Stock for the same outlet only', async () => {
+      const other = await secondOutlet();
+      const name = unique('Grill');
+      expect((await createMenuCategory(name)).status).toBe(201);
+      expect(names(await listFor(outletId))).toContain(name);
+      expect(names(await listFor(other))).not.toContain(name);
+    });
+
+    it('a category created in Stock also appears in Setup for the same outlet only', async () => {
+      const other = await secondOutlet();
+      const name = unique('Spirits');
+      expect((await createCategory({ name })).status).toBe(201);
+      expect(names(await menuListFor(outletId))).toContain(name);
+      expect(names(await menuListFor(other))).not.toContain(name);
+    });
+
+    it('does not duplicate one the other side already has, whatever its case, nor revive an archived one', async () => {
+      const name = unique('Juices');
+      await createMenuCategory(name.toUpperCase());
+      const res = await createCategory({ name });
+      // Creating it in Stock after Setup got it is a real duplicate at this outlet now.
+      expect(res.status).toBe(409);
+      expect((await menuListFor(outletId)).body.data.filter((c) => c.name.toLowerCase() === name.toLowerCase())).toHaveLength(1);
+
+      // A Setup category someone archived stays archived when Stock registers the same name.
+      const archivedName = unique('Retired');
+      await insertMenuCategories(t.trx, {
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        outlet_id: outletId,
+        name: archivedName,
+        status: 'archived',
+      });
+      expect((await createCategory({ name: archivedName })).status).toBe(201);
+      const menuRows = await t.trx('pos_menu_categories').where({ tenant_id: ctx.a.id, name: archivedName });
+      expect(menuRows.map((row) => row.status)).toEqual(['archived']);
+    });
+
+    it('renaming in Stock renames the Setup category and the menu items filed under it; renaming in Setup does the reverse', async () => {
+      const oldName = unique('Beers');
+      const created = await createCategory({ name: oldName });
+      const [menuItemId] = await insertMenuItem(t.trx, {
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        outlet_id: outletId,
+        name: unique('Lager'),
+        price: '10.00',
+        category: oldName,
+      });
+      const stockItem = await createItem(oldName);
+
+      const newName = unique('Lagers');
+      await t.request.patch(`/api/v1/pos/stock/categories/${created.body.data.id}`).set('Authorization', `Bearer ${manager()}`).send({ name: newName });
+      expect(names(await menuListFor(outletId))).toContain(newName);
+      expect(names(await menuListFor(outletId))).not.toContain(oldName);
+      expect((await t.trx('pos_menu_items').where({ id: menuItemId }).first()).category).toBe(newName);
+
+      const menuCat = (await menuListFor(outletId)).body.data.find((c) => c.name === newName);
+      const thirdName = unique('Ales');
+      await t.request.patch(`/api/v1/pos/menu-categories/${menuCat.id}`).set('Authorization', `Bearer ${manager()}`).send({ name: thirdName });
+      expect(names(await listFor(outletId))).toContain(thirdName);
+      expect((await t.trx('stock_items').where({ id: stockItem.body.data.id }).first()).category).toBe(thirdName);
+    });
+
+    it('leaves the other side alone when a rename would clash with a name it already has', async () => {
+      const a = unique('Snacks');
+      const b = unique('Nibbles');
+      const stockA = await createCategory({ name: a });
+      await createMenuCategory(b); // now both sides have a and b
+      const res = await t.request.patch(`/api/v1/pos/stock/categories/${stockA.body.data.id}`).set('Authorization', `Bearer ${manager()}`).send({ name: `${a} x` });
+      expect(res.status).toBe(200);
+      const menuStockB = (await listFor(outletId)).body.data.find((c) => c.name === b);
+      const clash = await t.request.patch(`/api/v1/pos/stock/categories/${menuStockB.id}`).set('Authorization', `Bearer ${manager()}`).send({ name: `${a} x` });
+      expect(clash.status).toBe(409);
+      expect(names(await menuListFor(outletId))).toEqual(expect.arrayContaining([`${a} x`, b]));
     });
   });
 });

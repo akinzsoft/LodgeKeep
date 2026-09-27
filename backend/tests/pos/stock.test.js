@@ -23,6 +23,7 @@ const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { extendedCost } = require('../../src/shared/quantity');
+const { insertMenuItem, setOutletAvailability, setStockQuantity, outletMenuItem } = require('../helpers/catalogue');
 
 describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
   const t = useTestApp();
@@ -78,7 +79,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       outlet_id: outletId,
       device_ref: `STKTERM-${suffix}`,
     });
-    const [menuItemId] = await t.trx('pos_menu_items').insert({
+    const [menuItemId] = await insertMenuItem(t.trx, {
       tenant_id: tenant.id,
       property_id: propertyId,
       outlet_id: outletId,
@@ -140,7 +141,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       business_date: businessDate,
       reference: 'Test seed receipt',
     });
-    await t.trx('stock_items').where({ id: stockItem.id }).update({ current_quantity: quantity });
+    await setStockQuantity(t.trx, stockItem.id, quantity);
   }
 
   async function openOrder(token, { outletId, terminalId, tableLabel = 'T1' }) {
@@ -240,9 +241,8 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       expect(ids).not.toContain(healthy.id);
     });
 
-    it('a plain update cannot overwrite current_quantity, purchase_cost, outlet_id, or status — only name/unit/supplier/reorder_level are allowlisted', async () => {
+    it('a plain update cannot overwrite current_quantity, purchase_cost, or status — only name/unit/supplier/reorder_level are allowlisted', async () => {
       const outletA = await freshOutletSetup();
-      const outletB = await freshOutletSetup();
       const item = await createStockItem(managerToken(), { outletId: outletA.outletId, purchaseCost: '5.00' });
       await seedStockReceipt(ctx.a, item, '10.000');
 
@@ -253,18 +253,17 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
           name: 'Renamed',
           current_quantity: '999.000',
           purchase_cost: '1.00',
-          outlet_id: outletB.outletId,
           status: 'archived',
         });
       expect(res.status).toBe(200);
       expect(res.body.data.name).toBe('Renamed');
       // None of the disallowed fields moved — current_quantity/purchase_cost
       // stay exactly what the real ledger/goods-received already
-      // established, outlet_id/status stay exactly what creation set.
+      // established, status stays exactly what creation set.
       expect(res.body.data.current_quantity).toBe('10.000');
       expect(res.body.data.purchase_cost).toBe('5.00');
-      expect(Number(res.body.data.outlet_id)).toBe(outletA.outletId);
       expect(res.body.data.status).toBe('active');
+      expect((await t.trx('stock_levels').where({ stock_item_id: item.id, outlet_id: outletA.outletId }).first()).current_quantity).toBe('10.000');
     });
 
     it('a nonexistent outlet id is rejected with a friendly error, not a raw FK failure', async () => {
@@ -293,17 +292,17 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       expect(list.body.data[0].quantity).toBe('25.000');
     });
 
-    it('rejects a component whose stock item belongs to a DIFFERENT outlet', async () => {
+    it('any shared stock item can be a component, whichever outlet first stocked it (shared catalogue)', async () => {
       const outletA = await freshOutletSetup();
       const outletB = await freshOutletSetup();
-      const stockItemInB = await createStockItem(managerToken(), { outletId: outletB.outletId });
+      const stockItemFromB = await createStockItem(managerToken(), { outletId: outletB.outletId });
 
       const res = await t.request
         .put(`/api/v1/pos/stock/menu-items/${outletA.menuItemId}/components`)
         .set('Authorization', `Bearer ${managerToken()}`)
-        .send({ components: [{ stock_item_id: stockItemInB.id, quantity: '10.000' }] });
-      expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('VALIDATION_STOCK_ITEM_OUTLET_MISMATCH');
+        .send({ components: [{ stock_item_id: stockItemFromB.id, quantity: '10.000' }] });
+      expect(res.status).toBe(200);
+      expect(res.body.data[0].stock_item_id).toBe(stockItemFromB.id);
     });
 
     it('a full replace-all upsert drops a component no longer present in the request', async () => {
@@ -339,9 +338,9 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
         .post(`/api/v1/pos/stock/items/${stockItem.id}/wastage`)
         .set('Authorization', `Bearer ${managerToken()}`)
         .set('Idempotency-Key', idemKey())
-        .send({ quantity: '0.001', reason: 'Force to zero for this test' });
+        .send({ outlet_id: stockItem.outlet_id, quantity: '0.001', reason: 'Force to zero for this test' });
       expect(wastage.status).toBe(200);
-      const menuItemAfterWastage = await t.trx('pos_menu_items').where({ id: menuItemId }).first();
+      const menuItemAfterWastage = await outletMenuItem(t.trx, menuItemId, outletId);
       expect(menuItemAfterWastage.is_available).toBe(0);
       expect(menuItemAfterWastage.stock_auto_unavailable).toBe(1);
 
@@ -363,23 +362,42 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       expect(movement.total_cost).toBe('650.00');
       expect(movement.reference).toBe('DN-001');
 
-      const menuItemAfterReceipt = await t.trx('pos_menu_items').where({ id: menuItemId }).first();
+      const menuItemAfterReceipt = await outletMenuItem(t.trx, menuItemId, outletId);
       expect(menuItemAfterReceipt.is_available).toBe(1);
       expect(menuItemAfterReceipt.stock_auto_unavailable).toBe(0);
     });
 
-    it('rejects a line whose stock item belongs to a different outlet', async () => {
+    it('receiving a shared stock item into one outlet adds to that outlet only (shared catalogue, quantities per outlet)', async () => {
       const outletA = await freshOutletSetup();
       const outletB = await freshOutletSetup();
-      const stockItemInB = await createStockItem(managerToken(), { outletId: outletB.outletId });
+      const stockItem = await createStockItem(managerToken(), { outletId: outletB.outletId });
+      await seedStockReceipt(ctx.a, stockItem, '4.000'); // B already holds 4
 
       const res = await t.request
         .post('/api/v1/pos/stock/goods-received')
         .set('Authorization', `Bearer ${managerToken()}`)
         .set('Idempotency-Key', idemKey())
-        .send({ outlet_id: outletA.outletId, lines: [{ stock_item_id: stockItemInB.id, quantity: '10.000', unit_cost: '1.00' }] });
+        .send({ outlet_id: outletA.outletId, lines: [{ stock_item_id: stockItem.id, quantity: '10.000', unit_cost: '1.00' }] });
+      expect(res.status).toBe(201);
+      expect(res.body.data.items[0].current_quantity).toBe('10.000'); // A's own quantity
+
+      const levelA = await t.trx('stock_levels').where({ stock_item_id: stockItem.id, outlet_id: outletA.outletId }).first();
+      const levelB = await t.trx('stock_levels').where({ stock_item_id: stockItem.id, outlet_id: outletB.outletId }).first();
+      expect(levelA.current_quantity).toBe('10.000');
+      expect(levelB.current_quantity).toBe('4.000');
+      expect((await t.trx('stock_items').where({ id: stockItem.id }).first()).current_quantity).toBe('14.000'); // property-wide total
+    });
+
+    it('rejects a delivery into an outlet that does not exist', async () => {
+      const { outletId } = await freshOutletSetup();
+      const stockItem = await createStockItem(managerToken(), { outletId });
+      const res = await t.request
+        .post('/api/v1/pos/stock/goods-received')
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ outlet_id: 999999999, lines: [{ stock_item_id: stockItem.id, quantity: '10.000', unit_cost: '1.00' }] });
       expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('VALIDATION_STOCK_ITEM_OUTLET_MISMATCH');
+      expect(res.body.error.code).toBe('VALIDATION_OUTLET_NOT_FOUND');
     });
 
     it('replaying the same Idempotency-Key never double-receives the delivery', async () => {
@@ -413,7 +431,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
         .post(`/api/v1/pos/stock/items/${stockItem.id}/wastage`)
         .set('Authorization', `Bearer ${operatorToken}`)
         .set('Idempotency-Key', idemKey())
-        .send({ quantity: '2.500', reason: 'Bottle dropped and broke' });
+        .send({ outlet_id: stockItem.outlet_id, quantity: '2.500', reason: 'Bottle dropped and broke' });
       expect(res.status).toBe(200);
       expect(res.body.data.current_quantity).toBe('-2.500');
 
@@ -429,7 +447,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
         .post(`/api/v1/pos/stock/items/${stockItem.id}/wastage`)
         .set('Authorization', `Bearer ${managerToken()}`)
         .set('Idempotency-Key', idemKey())
-        .send({ quantity: '1.000' });
+        .send({ outlet_id: stockItem.outlet_id, quantity: '1.000' });
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe('VALIDATION_MISSING_FIELD');
     });
@@ -491,7 +509,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       const item = await t.trx('stock_items').where({ id: stockItem.id }).first();
       expect(item.current_quantity).toBe('-40.000'); // Genuinely negative, not clamped to zero.
 
-      const menuItem = await t.trx('pos_menu_items').where({ id: menuItemId }).first();
+      const menuItem = await outletMenuItem(t.trx, menuItemId, outletId);
       expect(menuItem.is_available).toBe(0);
       expect(menuItem.stock_auto_unavailable).toBe(1);
     });
@@ -500,7 +518,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       const { outletId, terminalId, menuItemId } = await freshOutletSetup();
       const stockItem = await createStockItem(managerToken(), { outletId });
       await linkComponent(managerToken(), { menuItemId, stockItemId: stockItem.id, quantity: '50.000' });
-      await t.trx('stock_items').where({ id: stockItem.id }).update({ current_quantity: '50.000' });
+      await setStockQuantity(t.trx, stockItem.id, '50.000');
 
       const order = await openOrder(managerToken(), { outletId, terminalId });
       // Consumes it to EXACTLY zero — the guard's own "<= 0" rule requires
@@ -509,7 +527,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       await addItem(managerToken(), order.id, { menuItemId, quantity: 1, stockOverrideReason: 'Last of this batch, confirmed by the bar' });
       await settleCash(managerToken(), order.id, { stockOverrideReason: 'Last of this batch, confirmed by the bar' });
 
-      const menuItem = await t.trx('pos_menu_items').where({ id: menuItemId }).first();
+      const menuItem = await outletMenuItem(t.trx, menuItemId, outletId);
       expect(menuItem.is_available).toBe(0);
 
       const secondOrder = await openOrder(managerToken(), { outletId, terminalId, tableLabel: 'T2' });
@@ -629,7 +647,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       const { outletId, terminalId, menuItemId } = await freshOutletSetup();
       const stockItem = await createStockItem(managerToken(), { outletId });
       await linkComponent(managerToken(), { menuItemId, stockItemId: stockItem.id, quantity: '1.000' });
-      await t.trx('stock_items').where({ id: stockItem.id }).update({ current_quantity: '-3.000' });
+      await setStockQuantity(t.trx, stockItem.id, '-3.000');
 
       const order = await openOrder(managerToken(), { outletId, terminalId });
       const rejected = await t.request
@@ -775,7 +793,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       const settled = await settleCash(managerToken(), order.id, { stockOverrideReason: 'Last of this batch' });
       const settlementId = settled.settlements[0].id;
 
-      expect((await t.trx('pos_menu_items').where({ id: menuItemId }).first()).is_available).toBe(0);
+      expect((await outletMenuItem(t.trx, menuItemId, outletId)).is_available).toBe(0);
 
       await t.request
         .post(`/api/v1/pos/orders/${order.id}/settlements/${settlementId}/void`)
@@ -783,7 +801,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
         .set('Idempotency-Key', idemKey())
         .send({ reason: 'Mistake order' });
 
-      const menuItem = await t.trx('pos_menu_items').where({ id: menuItemId }).first();
+      const menuItem = await outletMenuItem(t.trx, menuItemId, outletId);
       expect(menuItem.is_available).toBe(1);
       expect(menuItem.stock_auto_unavailable).toBe(0);
     });
@@ -798,15 +816,15 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       const { outletId, menuItemId } = await freshOutletSetup();
       const stockItem = await createStockItem(managerToken(), { outletId });
       await linkComponent(managerToken(), { menuItemId, stockItemId: stockItem.id, quantity: '10.000' });
-      await t.trx('stock_items').where({ id: stockItem.id }).update({ current_quantity: '100.000' });
+      await setStockQuantity(t.trx, stockItem.id, '100.000');
 
       // A HUMAN disables it manually — stock_auto_unavailable stays false.
       const manualDisable = await t.request
         .post(`/api/v1/pos/menu-items/${menuItemId}/set-availability`)
         .set('Authorization', `Bearer ${managerToken()}`)
-        .send({ is_available: false });
+        .send({ outlet_id: outletId, is_available: false });
       expect(manualDisable.status).toBe(200);
-      expect((await t.trx('pos_menu_items').where({ id: menuItemId }).first()).stock_auto_unavailable).toBe(0);
+      expect((await outletMenuItem(t.trx, menuItemId, outletId)).stock_auto_unavailable).toBe(0);
 
       // A real restock — should NOT reactivate a manual disable.
       await t.request
@@ -815,7 +833,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
         .set('Idempotency-Key', idemKey())
         .send({ outlet_id: outletId, lines: [{ stock_item_id: stockItem.id, quantity: '50.000', unit_cost: '1.00' }] });
 
-      const menuItem = await t.trx('pos_menu_items').where({ id: menuItemId }).first();
+      const menuItem = await outletMenuItem(t.trx, menuItemId, outletId);
       expect(menuItem.is_available).toBe(0); // Still disabled.
     });
 
@@ -826,16 +844,16 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       await linkComponent(managerToken(), { menuItemId, stockItemId: stockItemA.id, quantity: '10.000' });
       // Leave B unlinked to this menu item — its own movement must not affect A's menu item at all,
       // and re-enabling manually is the real thing under test here.
-      await t.trx('stock_items').where({ id: stockItemA.id }).update({ current_quantity: '-5.000' });
-      await t.trx('pos_menu_items').where({ id: menuItemId }).update({ is_available: false, stock_auto_unavailable: true });
+      await setStockQuantity(t.trx, stockItemA.id, '-5.000');
+      await setOutletAvailability(t.trx, menuItemId, { is_available: false, stock_auto_unavailable: true });
 
       // A human OVERRIDES it back on, despite the real negative stock.
       const manualEnable = await t.request
         .post(`/api/v1/pos/menu-items/${menuItemId}/set-availability`)
         .set('Authorization', `Bearer ${managerToken()}`)
-        .send({ is_available: true });
+        .send({ outlet_id: outletId, is_available: true });
       expect(manualEnable.status).toBe(200);
-      const afterManual = await t.trx('pos_menu_items').where({ id: menuItemId }).first();
+      const afterManual = await outletMenuItem(t.trx, menuItemId, outletId);
       expect(afterManual.is_available).toBe(1);
       expect(afterManual.stock_auto_unavailable).toBe(0);
 
@@ -844,9 +862,9 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
         .post(`/api/v1/pos/stock/items/${stockItemB.id}/wastage`)
         .set('Authorization', `Bearer ${managerToken()}`)
         .set('Idempotency-Key', idemKey())
-        .send({ quantity: '1.000', reason: 'Unrelated spill' });
+        .send({ outlet_id: stockItemB.outlet_id, quantity: '1.000', reason: 'Unrelated spill' });
 
-      const afterUnrelated = await t.trx('pos_menu_items').where({ id: menuItemId }).first();
+      const afterUnrelated = await outletMenuItem(t.trx, menuItemId, outletId);
       expect(afterUnrelated.is_available).toBe(1); // Untouched — B is not one of its components.
     });
   });
@@ -923,30 +941,36 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       expect(res.body.error.code).toBe('VALIDATION_STOCK_ITEM_NOT_FOUND');
     });
 
-    it('rejects a real stock item that belongs to a DIFFERENT outlet than the take itself', async () => {
+    it("counts a shared stock item against the take's OWN outlet quantity, leaving other outlets untouched", async () => {
       const takeOutlet = await freshOutletSetup();
       const otherOutlet = await freshOutletSetup();
-      const stockItemElsewhere = await createStockItem(managerToken(), { outletId: otherOutlet.outletId });
+      const stockItem = await createStockItem(managerToken(), { outletId: otherOutlet.outletId });
+      await seedStockReceipt(ctx.a, stockItem, '7.000'); // held at the OTHER outlet
 
       const open = await t.request.post('/api/v1/pos/stock/takes').set('Authorization', `Bearer ${managerToken()}`).send({ outlet_id: takeOutlet.outletId });
       const stockTakeId = open.body.data.id;
-
-      const res = await t.request
-        .patch(`/api/v1/pos/stock/takes/${stockTakeId}/lines/${stockItemElsewhere.id}`)
+      const count = await t.request
+        .patch(`/api/v1/pos/stock/takes/${stockTakeId}/lines/${stockItem.id}`)
         .set('Authorization', `Bearer ${managerToken()}`)
         .send({ counted_quantity: '5.000' });
-      expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('VALIDATION_STOCK_ITEM_OUTLET_MISMATCH');
+      expect(count.status).toBe(200);
 
-      // Never silently written despite the rejection.
-      const line = await t.trx('stock_take_lines').where({ stock_take_id: stockTakeId, stock_item_id: stockItemElsewhere.id }).first();
-      expect(line).toBeUndefined();
+      const complete = await t.request
+        .post(`/api/v1/pos/stock/takes/${stockTakeId}/complete`)
+        .set('Authorization', `Bearer ${managerToken()}`)
+        .set('Idempotency-Key', idemKey());
+      expect(complete.status).toBe(200);
+      const line = complete.body.data.lines.find((row) => row.stock_item_id === stockItem.id);
+      expect(line.theoretical_quantity).toBe('0.000'); // the take outlet had none
+      expect(line.variance).toBe('5.000');
+      expect((await t.trx('stock_levels').where({ stock_item_id: stockItem.id, outlet_id: takeOutlet.outletId }).first()).current_quantity).toBe('5.000');
+      expect((await t.trx('stock_levels').where({ stock_item_id: stockItem.id, outlet_id: otherOutlet.outletId }).first()).current_quantity).toBe('7.000');
     });
 
     it('a zero variance posts no movement at all', async () => {
       const { outletId } = await freshOutletSetup();
       const stockItem = await createStockItem(managerToken(), { outletId });
-      await t.trx('stock_items').where({ id: stockItem.id }).update({ current_quantity: '10.000' });
+      await setStockQuantity(t.trx, stockItem.id, '10.000');
 
       const open = await t.request.post('/api/v1/pos/stock/takes').set('Authorization', `Bearer ${managerToken()}`).send({ outlet_id: outletId });
       const stockTakeId = open.body.data.id;
@@ -987,7 +1011,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       const { outletId, terminalId, menuItemId } = await freshOutletSetup();
       const stockItem = await createStockItem(managerToken(), { outletId, purchaseCost: '2.00' });
       await linkComponent(managerToken(), { menuItemId, stockItemId: stockItem.id, quantity: '10.000' });
-      await t.trx('stock_items').where({ id: stockItem.id }).update({ current_quantity: '1000.000' });
+      await setStockQuantity(t.trx, stockItem.id, '1000.000');
       await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: '2027-06-20' });
 
       const order = await openOrder(managerToken(), { outletId, terminalId });
@@ -1008,7 +1032,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
     it('variance reports every completed take in range, summed per item', async () => {
       const { outletId } = await freshOutletSetup();
       const stockItem = await createStockItem(managerToken(), { outletId });
-      await t.trx('stock_items').where({ id: stockItem.id }).update({ current_quantity: '20.000' });
+      await setStockQuantity(t.trx, stockItem.id, '20.000');
       await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: '2027-06-25' });
 
       const open = await t.request.post('/api/v1/pos/stock/takes').set('Authorization', `Bearer ${managerToken()}`).send({ outlet_id: outletId });

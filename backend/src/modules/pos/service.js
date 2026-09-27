@@ -69,6 +69,7 @@ const reservationsService = require('../reservations/service');
 // requires this file back (see that module's own header).
 const stockService = require('../stock/service');
 const menuImages = require('./menu-images');
+const outletMenu = require('../../shared/outlet-menu');
 const { notifyStaff } = require('../notifications/staff-notifications');
 
 /** One settlement row's full charged amount — subtotal, tax, tip, service charge. */
@@ -162,23 +163,21 @@ async function archiveTerminal({ context, id }) {
 }
 
 // ---------------------------------------------------------------------
-// Menu categories — a registered list per OUTLET (gap closure: a bar and a
-// supermarket at one property never share one; see the add-outlet-id
-// migration's header); menu items pick one of their own outlet's instead of
-// typing it. `pos_menu_items.category` keeps
-// holding the category name, so every reader is unchanged.
+// The shared catalogue — user-requested (migration
+// 20261108090000_shared_pos_catalogue): categories and menu items belong
+// to the PROPERTY; each outlet carries some categories and sells every
+// active item in them. `pos_menu_items.category` holds the category name.
+// What an outlet sells, and at what price, is `shared/outlet-menu.js`.
 // ---------------------------------------------------------------------
 
-// Gap closure — extracted into a shared factory once a third domain
-// (expense categories) needed the identical "registered catalogue" shape;
-// see `shared/category-catalogue.js`'s own header for the full reasoning.
 const menuCategoryCatalogue = createCategoryCatalogue({
   table: 'pos_menu_categories',
   resolveMode: 'name',
   optional: false,
-  scopeColumn: 'outlet_id',
-  duplicateSuffix: ' at this outlet',
   cascadeRename: { table: 'pos_menu_items', matchColumn: 'category' },
+  // The Setup and Stock category lists hold the same names (user-requested);
+  // stock's config mirrors the other way.
+  mirror: { table: 'stock_item_categories', cascadeRename: { table: 'stock_items', matchColumn: 'category' } },
   inUseChecks: [{ table: 'pos_menu_items', matchColumn: 'category', matchBy: 'name', filter: (q) => q.where({ status: 'active' }) }],
   errors: {
     categoryNotFound: () =>
@@ -189,47 +188,107 @@ const menuCategoryCatalogue = createCategoryCatalogue({
   },
 });
 
-/** One outlet's categories when `outletId` is given; every outlet's otherwise (each row carries its `outlet_id`). */
-function listMenuCategories({ context, includeArchived, outletId }) {
-  return menuCategoryCatalogue.listCategories({ context, includeArchived, scopeValue: outletId });
+async function assertActiveOutlets(db, outletIds) {
+  for (const outletId of outletIds) {
+    const outlet = await db.table('pos_outlets').where({ id: outletId }).first();
+    if (!outlet || outlet.status !== 'active') throw new OutletNotFoundError();
+  }
+}
+
+/**
+ * Every category of the property, each with `outlet_ids` (the outlets that
+ * carry it). With `outletId`, only the categories that outlet carries.
+ */
+async function listMenuCategories({ context, includeArchived, outletId }) {
+  const db = scopedDb().for(context);
+  const rows = await menuCategoryCatalogue.listCategories({ context, includeArchived });
+  const carries = await db.table('pos_outlet_categories').select('outlet_id', 'category_id');
+  const outletsByCategory = new Map();
+  for (const carry of carries) {
+    const key = String(carry.category_id);
+    if (!outletsByCategory.has(key)) outletsByCategory.set(key, []);
+    outletsByCategory.get(key).push(String(carry.outlet_id));
+  }
+  const withOutlets = rows.map((row) => ({ ...row, outlet_ids: outletsByCategory.get(String(row.id)) ?? [] }));
+  if (!outletId) return withOutlets;
+  return withOutlets.filter((row) => row.outlet_ids.includes(String(outletId)));
 }
 const getMenuCategory = menuCategoryCatalogue.getCategory;
-async function createMenuCategory({ context, outletId, name, sortOrder }) {
-  const outlet = await getOutlet({ context, id: outletId });
-  if (!outlet || outlet.status !== 'active') throw new OutletNotFoundError();
-  return menuCategoryCatalogue.createCategory({ context, name, sortOrder, scopeValue: outletId });
+
+/** Registers a shared category; `outletIds` (optional) are the outlets that should carry it straight away. */
+async function createMenuCategory({ context, name, sortOrder, outletIds = [] }) {
+  const db = scopedDb().for(context);
+  const ids = [...new Set((outletIds ?? []).filter((id) => id !== undefined && id !== null && id !== '').map(String))];
+  await assertActiveOutlets(db, ids);
+  const category = await menuCategoryCatalogue.createCategory({ context, name, sortOrder });
+  for (const outletId of ids) await outletMenu.carryCategory(db, outletId, category.id);
+  return (await listMenuCategories({ context, includeArchived: true })).find((row) => String(row.id) === String(category.id));
 }
-// Rename/archive act on one row by id, which already belongs to one outlet.
 const updateMenuCategory = menuCategoryCatalogue.updateCategory;
 const archiveMenuCategory = menuCategoryCatalogue.archiveCategory;
-/** The active category of THIS outlet matching `name` (case-insensitively) — its canonical spelling is what the menu item stores. */
-function resolveMenuCategoryName({ db, name, outletId }) {
-  return menuCategoryCatalogue.resolveByName({ db, name, scopeValue: outletId });
+/** The active category matching `name` (case-insensitively) — its canonical spelling is what the menu item stores. */
+function resolveMenuCategoryName({ db, name }) {
+  return menuCategoryCatalogue.resolveByName({ db, name });
+}
+
+/**
+ * Replaces the set of categories an outlet carries — "when I create an
+ * outlet I can choose any category I want in that outlet" (user-requested).
+ * The outlet then sells every active item in them, including items added
+ * later. Categories must exist; an archived one it already carries may stay.
+ */
+async function setOutletCategories({ context, outletId, categoryIds }) {
+  const db = scopedDb().for(context);
+  if (!Array.isArray(categoryIds)) {
+    throw new ValidationError('MISSING_FIELD', '"category_ids" must be a list.', [{ field: 'category_ids', issue: 'invalid' }]);
+  }
+  const wanted = [...new Set(categoryIds.map(String))];
+  return db.transaction(async (trx) => {
+    const outlet = await trx.table('pos_outlets').where({ id: outletId }).forUpdate().first();
+    if (!outlet || outlet.status !== 'active') throw new OutletNotFoundError();
+    const current = new Set(await outletMenu.carriedCategoryIds(trx, outletId));
+    for (const categoryId of wanted) {
+      if (current.has(categoryId)) continue;
+      const category = await trx.table('pos_menu_categories').where({ id: categoryId, status: 'active' }).first('id');
+      if (!category) {
+        throw new ValidationError('CATEGORY_NOT_FOUND', 'One of the chosen categories does not exist.', [{ field: 'category_ids', issue: 'not_found' }]);
+      }
+      await outletMenu.carryCategory(trx, outletId, categoryId);
+    }
+    const removed = [...current].filter((categoryId) => !wanted.includes(categoryId));
+    if (removed.length) await trx.table('pos_outlet_categories').where({ outlet_id: outletId }).whereIn('category_id', removed).delete();
+    return outletMenu.carriedCategoryIds(trx, outletId);
+  });
 }
 
 // ---------------------------------------------------------------------
-// Menu items
+// Menu items — shared; `outletId` narrows a list to what that outlet
+// sells, with that outlet's own price and availability applied.
 // ---------------------------------------------------------------------
 
 async function listMenuItems({ context, outletId }) {
   const db = scopedDb().for(context);
-  const query = db.table('pos_menu_items').where({ status: 'active' });
-  const rows = await (outletId ? query.where({ outlet_id: outletId }) : query).orderBy('category').orderBy('name');
+  if (outletId) return (await outletMenu.menuItemsForOutlet(db, outletId)).map(menuImages.withImageUrl);
+  const rows = await db.table('pos_menu_items').where({ status: 'active' }).orderBy('category').orderBy('name');
   return rows.map(menuImages.withImageUrl);
 }
 
-async function getMenuItem({ context, id }) {
+async function getMenuItem({ context, id, outletId }) {
   const db = scopedDb().for(context);
+  if (outletId) return menuImages.withImageUrl(await outletMenu.menuItemAtOutlet(db, outletId, id));
   return menuImages.withImageUrl(await db.table('pos_menu_items').where({ id }).first());
 }
 
-async function createMenuItem({ context, outletId, name, category, price, costPrice, modifiers, isAvailable }) {
+/**
+ * A shared item. `outletId` (optional) is where it is being added from: that
+ * outlet then carries the item's category if it did not already, so the new
+ * item shows up there straight away.
+ */
+async function createMenuItem({ context, outletId, name, category, price, costPrice, modifiers }) {
   const db = scopedDb().for(context);
-  const outlet = await getOutlet({ context, id: outletId });
-  if (!outlet) throw new OutletNotFoundError();
-  const categoryName = await resolveMenuCategoryName({ db, name: category, outletId });
+  if (outletId) await assertActiveOutlets(db, [outletId]);
+  const categoryName = await resolveMenuCategoryName({ db, name: category });
   const [id] = await db.table('pos_menu_items').insert({
-    outlet_id: outletId,
     name,
     category: categoryName,
     price,
@@ -238,8 +297,11 @@ async function createMenuItem({ context, outletId, name, category, price, costPr
     // read anywhere else in POS core.
     cost_price: costPrice ?? null,
     modifiers: modifiers ?? null,
-    is_available: isAvailable ?? true,
   });
+  if (outletId) {
+    const categoryRow = await db.table('pos_menu_categories').where({ name: categoryName }).first('id');
+    if (categoryRow) await outletMenu.carryCategory(db, outletId, categoryRow.id);
+  }
   return getMenuItem({ context, id });
 }
 
@@ -247,15 +309,15 @@ async function updateMenuItem({ context, id, changes }) {
   const db = scopedDb().for(context);
   const next = { ...changes };
   if (next.category !== undefined) {
-    const current = await db.table('pos_menu_items').where({ id }).first('category', 'outlet_id');
+    const current = await db.table('pos_menu_items').where({ id }).first('category');
     const unchanged = current && typeof next.category === 'string' && next.category.trim() === current.category;
     // An item keeps its current category even if that category has since
     // been archived — editing only its price must not be refused. Only a
     // change of category has to name an active registered one.
     if (unchanged) delete next.category;
-    else next.category = await resolveMenuCategoryName({ db, name: next.category, outletId: current?.outlet_id });
+    else next.category = await resolveMenuCategoryName({ db, name: next.category });
   }
-  await db.table('pos_menu_items').where({ id }).update(next);
+  if (Object.keys(next).length) await db.table('pos_menu_items').where({ id }).update(next);
   return getMenuItem({ context, id });
 }
 
@@ -301,20 +363,35 @@ async function removeMenuItemImage({ context, id }) {
 
 /**
  * The stock-out toggle (PRODUCT_REQUIREMENTS.md §3.4) — staff mark an item
- * unavailable without an admin edit. Same `pos.operate` grant as running
- * the register, not `pos.manage` — see routes.js.
+ * unavailable AT ONE OUTLET without an admin edit (selling out at the bar
+ * must not switch it off at the restaurant). Same `pos.operate` grant as
+ * running the register, not `pos.manage` — see routes.js.
  *
- * PLAN.md Phase 6 (POS inventory & stock control) — ALWAYS clears
- * `stock_auto_unavailable` back to `false`, in either direction: an
- * explicit human action always wins over `applyStockAvailabilityEffects`'
- * own automatic bookkeeping (`stock/service.js`'s own header). Without
- * this, a human re-enabling an item the stock mechanism had disabled
- * would leave `stock_auto_unavailable: true` behind, and a later,
- * completely unrelated stock event on one of its components could
- * silently re-disable an item the human just turned back on.
+ * ALWAYS clears `stock_auto_unavailable` back to `false`, in either
+ * direction: an explicit human action always wins over the stock
+ * module's own automatic bookkeeping (`stock/service.js`'s
+ * `applyStockAvailabilityEffects`).
  */
-async function setMenuItemAvailability({ context, id, isAvailable }) {
-  return updateMenuItem({ context, id, changes: { is_available: isAvailable, stock_auto_unavailable: false } });
+async function setMenuItemAvailability({ context, id, outletId, isAvailable }) {
+  const db = scopedDb().for(context);
+  if (!outletId) throw new ValidationError('MISSING_FIELD', '"outlet_id" is required.', [{ field: 'outlet_id', issue: 'missing' }]);
+  return db.transaction(async (trx) => {
+    const item = await outletMenu.menuItemAtOutlet(trx, outletId, id);
+    if (!item) throw new MenuItemNotFoundError();
+    await outletMenu.upsertOutletMenuSetting(trx, outletId, id, { is_available: Boolean(isAvailable), stock_auto_unavailable: false });
+    return menuImages.withImageUrl(await outletMenu.menuItemAtOutlet(trx, outletId, id));
+  });
+}
+
+/** One outlet's own price for an item (user-requested); `price: null` goes back to the item's main price. */
+async function setOutletMenuItemPrice({ context, id, outletId, price }) {
+  const db = scopedDb().for(context);
+  return db.transaction(async (trx) => {
+    const item = await outletMenu.menuItemAtOutlet(trx, outletId, id);
+    if (!item) throw new MenuItemNotFoundError();
+    await outletMenu.upsertOutletMenuSetting(trx, outletId, id, { price: price ?? null });
+    return menuImages.withImageUrl(await outletMenu.menuItemAtOutlet(trx, outletId, id));
+  });
 }
 
 async function archiveMenuItem({ context, id }) {
@@ -506,7 +583,9 @@ async function addItem({ context, orderId, menuItemId, quantity, modifiers, stoc
 
     // Matched in the WHERE clause, not fetched-then-compared in JS — see
     // `openOrder`'s own comment on why.
-    const menuItem = await trx.table('pos_menu_items').where({ id: menuItemId, outlet_id: order.outlet_id }).first();
+    // The item as sold at THIS order's outlet — its own price and
+    // availability there; an item the outlet does not sell is not found.
+    const menuItem = await outletMenu.menuItemAtOutlet(trx, order.outlet_id, menuItemId);
     if (!menuItem) throw new MenuItemNotFoundError();
     if (!menuItem.is_available) {
       throw new ValidationError('POS_ITEM_UNAVAILABLE', `"${menuItem.name}" is currently marked unavailable.`);
@@ -523,6 +602,7 @@ async function addItem({ context, orderId, menuItemId, quantity, modifiers, stoc
       overrideReason: stockOverrideReason,
       userId: context.userId,
       propertyId: order.property_id,
+      outletId: order.outlet_id,
     });
 
     await trx.table('pos_order_items').insert({
@@ -769,6 +849,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
     overrideReason: stockOverrideReason,
     userId: settledByUserId,
     propertyId: order.property_id,
+    outletId: order.outlet_id,
   });
   const overrideReasonsByStockItemId = stockOverrideReason?.trim()
     ? new Map(stockGuardResult.affectedStockItemIds.map((id) => [id, stockOverrideReason.trim()]))
@@ -1266,6 +1347,8 @@ module.exports = {
   createMenuItem,
   updateMenuItem,
   setMenuItemAvailability,
+  setOutletMenuItemPrice,
+  setOutletCategories,
   archiveMenuItem,
   setMenuItemImage,
   removeMenuItemImage,

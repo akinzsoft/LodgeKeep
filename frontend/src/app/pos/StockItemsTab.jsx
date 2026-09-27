@@ -53,7 +53,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   const [outletFilter, setOutletFilter] = useState('');
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [error, setError] = useState(null);
-  // The selected outlet's registered stock categories (per outlet since 20261105090000) — one section per row.
+  // The stock categories the selected outlet carries (shared catalogue, 20261108090000) — one section per row.
   const [categories, setCategories] = useState(null);
 
   // Which single section (a real category, "Uncategorized", or an
@@ -501,7 +501,9 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
         unit: editForm.unit,
         category: editForm.category || null,
         supplier: editForm.supplier || null,
+        // The reorder level shown is this outlet's own (stock is counted per outlet).
         reorderLevel: editForm.reorder_level,
+        outletId: outletFilter,
       });
       setActivePanel(null);
       await reloadItems();
@@ -576,7 +578,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
         </label>
       </div>
       <p id="stock-items-outlet-filter-hint" className={formStyles.hint}>
-        Stock categories and stock items below belong to this outlet only — each outlet keeps its own. To see every outlet at once, use Reorder report or Reports.
+        Stock items are shared by every outlet; the quantities and reorder levels below are this outlet&apos;s own. The list shows the categories this outlet sells (chosen under POS → Setup → Outlets) and anything it already stocks. To see every outlet at once, use Reorder report or Reports.
       </p>
 
       {noOutlets && <p className={formStyles.hint}>Add an outlet under POS → Setup first — stock belongs to an outlet.</p>}

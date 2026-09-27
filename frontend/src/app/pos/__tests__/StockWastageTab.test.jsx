@@ -71,8 +71,9 @@ describe('<StockWastageTab>', () => {
     await userEvent.type(screen.getByLabelText('Reason'), 'Bottle dropped and broke');
     await userEvent.click(screen.getByRole('button', { name: 'Record wastage' }));
 
-    expect(mocks.recordWastage).toHaveBeenCalledWith('20', { quantity: '2.5', reason: 'Bottle dropped and broke' });
-    expect(await screen.findByText(/is now at 97\.500 ml on hand/)).toBeInTheDocument();
+    // Taken off the chosen outlet's own quantity.
+    expect(mocks.recordWastage).toHaveBeenCalledWith('20', { outletId: expect.any(String), quantity: '2.5', reason: 'Bottle dropped and broke' });
+    expect(await screen.findByText(/is now at 97\.500 ml on hand at this outlet/)).toBeInTheDocument();
   });
 
   it('shows a real backend error when wastage is rejected', async () => {

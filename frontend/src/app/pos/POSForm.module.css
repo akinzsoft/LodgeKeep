@@ -40,6 +40,16 @@
   width: 100%;
 }
 
+/* A checklist (e.g. the categories an outlet sells) — a grid of checkboxes. */
+.checkboxGroup {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0 var(--space-4);
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
 .checkboxField {
   display: flex;
   align-items: center;

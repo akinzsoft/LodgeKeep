@@ -11,6 +11,7 @@ const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, toCents, fromCents } = require('../../shared/money');
 const { sumQuantity, negateQuantity, extendedCost } = require('../../shared/quantity');
 const { computeMenuItemSalesTotals } = require('../pos/sales-report');
+const stockService = require('./service');
 
 /**
  * Cost of sales — the real cost side of every `sold`/`sale_reversal`
@@ -274,15 +275,12 @@ async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
   const db = scopedDb().for(context);
 
   // Sequential reads, joined in JS (this codebase never runs parallel queries on one accessor).
-  // Stock categories belong to one outlet (20261105090000): a single outlet's
-  // report lists only its own; the all-outlets report lists each name once.
-  let categoryQuery = db.table('stock_item_categories').where({ status: 'active' });
-  if (outletId) categoryQuery = categoryQuery.where({ outlet_id: outletId });
-  const categories = await categoryQuery.orderBy('sort_order').orderBy('name').select('name');
-  let itemQuery = db.table('stock_items').where({ status: 'active' });
-  if (outletId) itemQuery = itemQuery.where({ outlet_id: outletId });
-  const items = await itemQuery.select('id', 'outlet_id', 'name', 'unit', 'category', 'current_quantity', 'reorder_level', 'purchase_cost');
-
+  // Stock items and categories are shared by the property (20261108090000):
+  // one outlet's report lists what that outlet deals in, with ITS quantities
+  // and reorder levels (the same set the Stock items screen shows); the
+  // all-outlets report lists everything with property-wide totals.
+  const categories = await stockService.listStockItemCategories({ context, outletId });
+  const items = await stockService.listStockItems({ context, outletId });
   let movementQuery = db.table('stock_movements').whereBetween('business_date', [dateFrom, dateTo]);
   if (outletId) movementQuery = movementQuery.where({ outlet_id: outletId });
   const movements = await movementQuery.select('stock_item_id', 'type', 'quantity', 'total_cost');
@@ -316,7 +314,7 @@ async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
     const reorderLevel = item.reorder_level ?? '0.000';
     return {
       stockItemId: String(item.id),
-      outletId: String(item.outlet_id),
+      outletId: item.outlet_id == null ? null : String(item.outlet_id),
       name: item.name,
       unit: item.unit,
       category: item.category ?? null,

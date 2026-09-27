@@ -63,6 +63,7 @@ const { signAccessToken } = require('../../src/auth/tokens');
 const { generateRawToken, hashToken, encryptToken } = require('../../src/modules/qr-ordering/tokens');
 const { encrypt } = require('../../src/shared/encryption');
 const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
+const { insertMenuItem } = require('../helpers/catalogue');
 
 describe('QR self-ordering races under real concurrent connections (PLAN.md Phase 6)', () => {
   let req;
@@ -144,7 +145,7 @@ describe('QR self-ordering races under real concurrent connections (PLAN.md Phas
       guest_order_accept_timeout_minutes: 10,
       guest_order_rate_limit_max: 1000,
     });
-    [menuItemId] = await db()('pos_menu_items').insert({
+    [menuItemId] = await insertMenuItem(db(), {
       tenant_id: tenantId,
       property_id: propertyId,
       outlet_id: outletId,
@@ -184,7 +185,11 @@ describe('QR self-ordering races under real concurrent connections (PLAN.md Phas
     await db()('rooms').where({ tenant_id: tenantId }).delete();
     await db()('room_types').where({ tenant_id: tenantId }).delete();
     await db()('guests').where({ tenant_id: tenantId }).delete();
+    await db()('pos_outlet_menu_items').where({ tenant_id: tenantId }).delete();
     await db()('pos_menu_items').where({ tenant_id: tenantId }).delete();
+    await db()('pos_outlet_categories').where({ tenant_id: tenantId }).delete();
+    await db()('pos_menu_categories').where({ tenant_id: tenantId }).delete();
+    await db()('stock_item_categories').where({ tenant_id: tenantId }).delete();
     await db()('pos_outlets').where({ tenant_id: tenantId }).delete();
     await db()('audit_log').where({ tenant_id: tenantId }).delete();
     await db()('idempotency_keys').where({ tenant_id: tenantId }).delete();

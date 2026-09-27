@@ -1,10 +1,10 @@
 'use strict';
 
 /**
- * POS menu categories: a registered list per OUTLET. Menu items must pick a
- * registered, active category of their own outlet; renaming a category renames
- * it on that outlet's items; a category still in use there cannot be archived;
- * another outlet's same-named category is a different, independent row.
+ * POS menu categories: the property's shared list (20261108090000). Menu
+ * items must pick a registered, active category; renaming a category renames
+ * it on its items; a category still in use cannot be archived. Each outlet
+ * chooses the categories it carries and sells every item in them.
  */
 
 const { useTestApp } = require('../helpers/app');
@@ -150,7 +150,7 @@ describe('POS menu categories', () => {
   it("keeps each tenant's categories separate", async () => {
     await setRole(ctx.b, 0, 'manager');
     const res = await t.request.get('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${tokenFor(ctx.b, ctx.b.users[0].id)}`);
-    expect(res.body.data.map((c) => c.name)).toEqual(['Cocktails']);
+    expect(res.body.data.map((c) => c.name)).toEqual(['Cocktails', 'Mocktails']);
     const cross = await t.request
       .patch(`/api/v1/pos/menu-categories/${ctx.a.posMenuCategories[0].id}`)
       .set('Authorization', `Bearer ${tokenFor(ctx.b, ctx.b.users[0].id)}`)
@@ -158,80 +158,141 @@ describe('POS menu categories', () => {
     expect(cross.status).toBe(404);
   });
 
-  describe('per outlet', () => {
-    it("lists only the requested outlet's categories, and lets two outlets each have one with the same name", async () => {
+  // The shared catalogue (20261108090000, user-requested): categories and
+  // items belong to the property; each outlet chooses the categories it
+  // carries and sells every item in them.
+  describe('shared catalogue', () => {
+    const menuAt = (id) => t.request.get(`/api/v1/pos/menu-items?outlet_id=${id}`).set('Authorization', `Bearer ${manager()}`);
+    const idsOf = (res) => res.body.data.map((row) => String(row.id));
+    const setCarried = (id, categoryIds) =>
+      t.request.put(`/api/v1/pos/outlets/${id}/categories`).set('Authorization', `Bearer ${manager()}`).send({ category_ids: categoryIds });
+    const newItem = (category, price = '10.00') =>
+      t.request.post('/api/v1/pos/menu-items').set('Authorization', `Bearer ${manager()}`).send({ name: `Item ${Date.now()}-${Math.random()}`, category, price });
+
+    it('registers a category once for the property, carried by the outlets chosen for it', async () => {
       const shopId = await secondOutlet();
-      const bar = await createCategory({ name: 'Drinks' });
-      const shop = await createCategory({ name: 'Drinks', outlet_id: shopId });
-      expect(bar.status).toBe(201);
-      expect(shop.status).toBe(201);
-      expect(String(shop.body.data.outlet_id)).toBe(String(shopId));
+      const res = await t.request
+        .post('/api/v1/pos/menu-categories')
+        .set('Authorization', `Bearer ${manager()}`)
+        .send({ name: 'Drinks', outlet_ids: [outletId, shopId] });
+      expect(res.status).toBe(201);
+      expect(res.body.data.outlet_ids.sort()).toEqual([String(outletId), String(shopId)].sort());
+      expect((await listFor(shopId)).body.data.map((c) => c.name)).toContain('Drinks');
+      expect((await listFor(outletId)).body.data.map((c) => c.name)).toContain('Drinks');
 
-      const shopList = await listFor(shopId);
-      expect(shopList.body.data.map((c) => c.id)).toEqual([shop.body.data.id]);
-      const barList = await listFor(outletId);
-      expect(barList.body.data.map((c) => c.id)).toContain(bar.body.data.id);
-      expect(barList.body.data.map((c) => c.id)).not.toContain(shop.body.data.id);
-      // Without outlet_id, every outlet's categories come back, each with its outlet.
-      const all = await t.request.get('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${manager()}`);
-      expect(all.body.data.map((c) => c.id)).toEqual(expect.arrayContaining([bar.body.data.id, shop.body.data.id]));
-    });
-
-    it('still refuses a duplicate name at the same outlet, saying so', async () => {
-      await createCategory({ name: 'Wraps' });
-      const dup = await createCategory({ name: 'WRAPS' });
+      // One name per property: another outlet cannot register its own "Drinks".
+      const dup = await t.request.post('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'DRINKS', outlet_ids: [shopId] });
       expect(dup.status).toBe(409);
-      expect(dup.body.error.message).toMatch(/at this outlet/);
     });
 
-    it('requires an active outlet of this property to register a category', async () => {
-      const missing = await t.request.post('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'No outlet' });
-      expect(missing.status).toBe(400);
-      expect((await createCategory({ name: 'Ghost', outlet_id: '999999999' })).body.error.code).toBe('VALIDATION_OUTLET_NOT_FOUND');
-      expect((await createCategory({ name: 'Foreign', outlet_id: ctx.b.posOutlets[0].id })).body.error.code).toBe('VALIDATION_OUTLET_NOT_FOUND');
-      const archivedId = await secondOutlet();
-      await t.trx('pos_outlets').where({ id: archivedId }).update({ status: 'archived' });
-      expect((await createCategory({ name: 'Old', outlet_id: archivedId })).body.error.code).toBe('VALIDATION_OUTLET_NOT_FOUND');
-    });
-
-    it("a menu item can only use its own outlet's categories, on create and on edit", async () => {
+    it('a category needs no outlet at all; an outlet sells its items only once it carries it, including items added later', async () => {
       const shopId = await secondOutlet();
-      await createCategory({ name: 'Bakery', outlet_id: shopId });
-      const refused = await createItem('Bakery');
-      expect(refused.status).toBe(400);
-      expect(refused.body.error.code).toBe('VALIDATION_CATEGORY_NOT_FOUND');
-      expect((await createItem('Bakery', shopId)).status).toBe(201);
+      const bakery = await t.request.post('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'Bakery' });
+      expect(bakery.status).toBe(201);
+      expect(bakery.body.data.outlet_ids).toEqual([]);
+      const bread = await newItem('Bakery');
+      expect(bread.status).toBe(201);
+      expect(idsOf(await menuAt(shopId))).not.toContain(String(bread.body.data.id));
 
-      const barItem = await createItem('Cocktails');
-      const moved = await t.request.patch(`/api/v1/pos/menu-items/${barItem.body.data.id}`).set('Authorization', `Bearer ${manager()}`).send({ category: 'Bakery' });
-      expect(moved.status).toBe(400);
+      const carried = await setCarried(shopId, [bakery.body.data.id]);
+      expect(carried.status).toBe(200);
+      expect(carried.body.data.category_ids).toEqual([String(bakery.body.data.id)]);
+      expect(idsOf(await menuAt(shopId))).toContain(String(bread.body.data.id));
+
+      const croissant = await newItem('Bakery');
+      expect(idsOf(await menuAt(shopId))).toContain(String(croissant.body.data.id));
+      expect(idsOf(await menuAt(outletId))).not.toContain(String(croissant.body.data.id));
+
+      // Dropping the category stops the outlet selling its items.
+      await setCarried(shopId, []);
+      expect(idsOf(await menuAt(shopId))).not.toContain(String(bread.body.data.id));
     });
 
-    it("counts, archives and renames only against the category's own outlet", async () => {
+    it('refuses an unknown category or outlet when choosing categories', async () => {
       const shopId = await secondOutlet();
-      const barGrill = await createCategory({ name: 'Charcoal' });
-      const shopGrill = await createCategory({ name: 'Charcoal', outlet_id: shopId });
-      const barItem = await createItem('Charcoal');
-      const shopItem = await createItem('Charcoal', shopId);
-      await createItem('Charcoal', shopId);
+      expect((await setCarried(shopId, ['999999999'])).body.error.code).toBe('VALIDATION_CATEGORY_NOT_FOUND');
+      expect((await setCarried('999999999', [])).status).toBe(404);
+      expect((await setCarried(ctx.b.posOutlets[0].id, [])).status).toBe(404);
+      const register = await t.request.post('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'Ghost', outlet_ids: ['999999999'] });
+      expect(register.body.error.code).toBe('VALIDATION_OUTLET_NOT_FOUND');
+      // pos.operate may read, not choose.
+      const byOperator = await t.request.put(`/api/v1/pos/outlets/${shopId}/categories`).set('Authorization', `Bearer ${operator()}`).send({ category_ids: [] });
+      expect(byOperator.status).toBe(403);
+    });
 
-      const barList = await listFor(outletId);
-      expect(barList.body.data.find((c) => c.id === barGrill.body.data.id).item_count).toBe(1);
-      const shopList = await listFor(shopId);
-      expect(shopList.body.data.find((c) => c.id === shopGrill.body.data.id).item_count).toBe(2);
+    it('adding an item from an outlet makes that outlet carry its category', async () => {
+      const shopId = await secondOutlet();
+      await t.request.post('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'Snacks' });
+      const chips = await createItem('Snacks', shopId);
+      expect(chips.status).toBe(201);
+      expect(idsOf(await menuAt(shopId))).toContain(String(chips.body.data.id));
+    });
 
-      // Rename the bar's row: only the bar's item follows.
-      await t.request.patch(`/api/v1/pos/menu-categories/${barGrill.body.data.id}`).set('Authorization', `Bearer ${manager()}`).send({ name: 'Braai' });
-      expect((await t.trx('pos_menu_items').where({ id: barItem.body.data.id }).first()).category).toBe('Braai');
-      expect((await t.trx('pos_menu_items').where({ id: shopItem.body.data.id }).first()).category).toBe('Charcoal');
+    it('renaming a category renames it on every item, and counts every item of the property', async () => {
+      const shopId = await secondOutlet();
+      const grill = await t.request.post('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'Charcoal', outlet_ids: [outletId, shopId] });
+      const a = await newItem('Charcoal');
+      const b = await newItem('Charcoal');
+      const list = await listFor(shopId);
+      expect(list.body.data.find((c) => c.id === grill.body.data.id).item_count).toBe(2);
 
-      // The shop's category is in use at the shop; a same-named empty one elsewhere archives fine.
-      const refused = await t.request.post(`/api/v1/pos/menu-categories/${shopGrill.body.data.id}/archive`).set('Authorization', `Bearer ${manager()}`);
-      expect(refused.status).toBe(409);
-      const otherId = await secondOutlet();
-      const empty = await createCategory({ name: 'Charcoal', outlet_id: otherId });
-      const archived = await t.request.post(`/api/v1/pos/menu-categories/${empty.body.data.id}/archive`).set('Authorization', `Bearer ${manager()}`);
-      expect(archived.status).toBe(200);
+      await t.request.patch(`/api/v1/pos/menu-categories/${grill.body.data.id}`).set('Authorization', `Bearer ${manager()}`).send({ name: 'Braai' });
+      expect((await t.trx('pos_menu_items').where({ id: a.body.data.id }).first()).category).toBe('Braai');
+      expect((await t.trx('pos_menu_items').where({ id: b.body.data.id }).first()).category).toBe('Braai');
+      // Both outlets still sell them — they carry the category, not its name.
+      expect(idsOf(await menuAt(shopId))).toEqual(expect.arrayContaining([String(a.body.data.id), String(b.body.data.id)]));
+    });
+
+    it('an outlet can set its own price; the others keep the main price, and the Register charges the outlet price', async () => {
+      const shopId = await secondOutlet();
+      const water = await t.request.post('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'Water', outlet_ids: [outletId, shopId] });
+      expect(water.status).toBe(201);
+      const bottle = await newItem('Water', '3.00');
+
+      const priced = await t.request
+        .put(`/api/v1/pos/menu-items/${bottle.body.data.id}/outlet-price`)
+        .set('Authorization', `Bearer ${manager()}`)
+        .send({ outlet_id: shopId, price: '4.50' });
+      expect(priced.status).toBe(200);
+      expect(priced.body.data).toMatchObject({ price: '4.50', base_price: '3.00', outlet_price: '4.50' });
+
+      const atShop = (await menuAt(shopId)).body.data.find((row) => String(row.id) === String(bottle.body.data.id));
+      const atBar = (await menuAt(outletId)).body.data.find((row) => String(row.id) === String(bottle.body.data.id));
+      expect(atShop.price).toBe('4.50');
+      expect(atBar.price).toBe('3.00');
+
+      const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, outlet_id: shopId, device_ref: `SHOPTERM-${Date.now()}` });
+      const order = await t.request.post('/api/v1/pos/orders').set('Authorization', `Bearer ${manager()}`).send({ outlet_id: shopId, terminal_id: terminalId, table_label: 'S1' });
+      const added = await t.request.post(`/api/v1/pos/orders/${order.body.data.id}/items`).set('Authorization', `Bearer ${manager()}`).send({ menu_item_id: bottle.body.data.id, quantity: 1 });
+      expect(added.status).toBe(200);
+      expect(added.body.data.items[0].unit_price).toBe('4.50');
+
+      // Back to the main price.
+      const cleared = await t.request.put(`/api/v1/pos/menu-items/${bottle.body.data.id}/outlet-price`).set('Authorization', `Bearer ${manager()}`).send({ outlet_id: shopId, price: null });
+      expect(cleared.body.data.price).toBe('3.00');
+    });
+
+    it('marking an item sold out at one outlet leaves it on sale at the others', async () => {
+      const shopId = await secondOutlet();
+      await t.request.post('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'Juice', outlet_ids: [outletId, shopId] });
+      const juice = await newItem('Juice');
+      const off = await t.request
+        .post(`/api/v1/pos/menu-items/${juice.body.data.id}/set-availability`)
+        .set('Authorization', `Bearer ${operator()}`)
+        .send({ outlet_id: shopId, is_available: false });
+      expect(off.status).toBe(200);
+      expect((await menuAt(shopId)).body.data.find((row) => String(row.id) === String(juice.body.data.id)).is_available).toBe(false);
+      expect((await menuAt(outletId)).body.data.find((row) => String(row.id) === String(juice.body.data.id)).is_available).toBe(true);
+    });
+
+    it("the Register refuses an item the order's outlet does not sell", async () => {
+      const shopId = await secondOutlet();
+      await t.request.post('/api/v1/pos/menu-categories').set('Authorization', `Bearer ${manager()}`).send({ name: 'Shop only', outlet_ids: [shopId] });
+      const shopItem = await newItem('Shop only');
+      const order = await t.request.post('/api/v1/pos/orders').set('Authorization', `Bearer ${manager()}`).send({ outlet_id: outletId, terminal_id: ctx.a.posTerminals[0].id, table_label: 'B9' });
+      const added = await t.request.post(`/api/v1/pos/orders/${order.body.data.id}/items`).set('Authorization', `Bearer ${manager()}`).send({ menu_item_id: shopItem.body.data.id, quantity: 1 });
+      expect(added.status).toBe(400);
+      expect(added.body.error.code).toBe('VALIDATION_MENU_ITEM_NOT_FOUND');
     });
   });
 });
