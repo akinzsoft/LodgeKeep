@@ -179,6 +179,9 @@ const menuCategoryCatalogue = createCategoryCatalogue({
   scopeColumn: 'outlet_id',
   duplicateSuffix: ' at this outlet',
   cascadeRename: { table: 'pos_menu_items', matchColumn: 'category' },
+  // A menu category is also a stock category at the same outlet (see the
+  // factory's `mirror` doc), and stock's config mirrors the other way.
+  mirror: { table: 'stock_item_categories', cascadeRename: { table: 'stock_items', matchColumn: 'category' } },
   inUseChecks: [{ table: 'pos_menu_items', matchColumn: 'category', matchBy: 'name', filter: (q) => q.where({ status: 'active' }) }],
   errors: {
     categoryNotFound: () =>

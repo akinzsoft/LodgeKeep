@@ -83,6 +83,16 @@ function cleanSortOrder(sortOrder) {
  *   value (so one outlet's "Drinks" never counts or renames another's).
  *   Stock and expenses omit it and behave exactly as before.
  * @param {string} [config.duplicateSuffix] - appended to the duplicate-name message, e.g. ' at this outlet'.
+ * @param {{table: string, cascadeRename: {table: string, matchColumn: string}}} [config.mirror] - POS menu
+ *   and stock categories (user-requested: "when any outlet is clicked it
+ *   should show all the categories created in Setup, and vice versa"). A
+ *   category created here is also registered, same name and same
+ *   `scopeColumn` value, in the mirror table — unless one with that name
+ *   (any status, case-insensitive) is already there, so an archived one is
+ *   never revived. A rename renames the mirror's matching active row too,
+ *   with its own items, unless the new name is already taken there. Both in
+ *   the same transaction as the change itself. Archive is not mirrored: the
+ *   other side's items may still use the category. Requires `scopeColumn`.
  */
 function createCategoryCatalogue(config) {
   const { table, resolveMode, cascadeRename, inUseChecks, errors, scopeColumn } = config;
@@ -133,13 +143,16 @@ function createCategoryCatalogue(config) {
     }
     const db = scopedDb().for(context);
     const clean = cleanName(name, nameMaxLength);
-    return withDuplicateMapping(table, `A category named "${clean}" already exists${duplicateSuffix}.`, async () => {
-      const cleanSort = cleanSortOrder(sortOrder);
-      const insertRow = { name: clean, sort_order: cleanSort ?? 0 };
-      if (scopeColumn) insertRow[scopeColumn] = scopeValue;
-      const [id] = await db.table(table).insert(insertRow);
-      return getCategory({ context, id });
-    });
+    return withDuplicateMapping(table, `A category named "${clean}" already exists${duplicateSuffix}.`, () =>
+      db.transaction(async (trx) => {
+        const cleanSort = cleanSortOrder(sortOrder);
+        const insertRow = { name: clean, sort_order: cleanSort ?? 0 };
+        if (scopeColumn) insertRow[scopeColumn] = scopeValue;
+        const [id] = await trx.table(table).insert(insertRow);
+        if (mirror) await mirrorCreate(trx, clean, cleanSort ?? 0, scopeValue);
+        return trx.table(table).where({ id }).first();
+      })
+    );
   }
 
   async function updateCategory({ context, id, name, sortOrder }) {
@@ -158,9 +171,47 @@ function createCategoryCatalogue(config) {
           if (scopeColumn) renameQuery = renameQuery.where({ [scopeColumn]: category[scopeColumn] });
           await renameQuery.update({ [cascadeRename.matchColumn]: changes.name });
         }
+        if (mirror && changes.name && changes.name !== category.name) {
+          await mirrorRename(trx, category.name, changes.name, category[scopeColumn]);
+        }
         return trx.table(table).where({ id }).first();
       })
     );
+  }
+
+  const { mirror } = config;
+  if (mirror && !scopeColumn) throw new Error('category-catalogue: `mirror` requires `scopeColumn`.');
+
+  // The mirror's row for `name` at this scope value, any status. The name
+  // columns use a case-insensitive collation (utf8mb4_0900_ai_ci), so this
+  // plain match is the case-insensitive one — the same rule the unique
+  // (outlet_id, name) key applies.
+  function findMirrorRow(trx, name, scopeValue, { activeOnly = false } = {}) {
+    let query = trx.table(mirror.table).where({ [scopeColumn]: scopeValue, name: String(name).trim() });
+    if (activeOnly) query = query.where({ status: 'active' });
+    return query.first();
+  }
+
+  async function mirrorCreate(trx, name, sortOrder, scopeValue) {
+    if (await findMirrorRow(trx, name, scopeValue)) return;
+    try {
+      await trx.table(mirror.table).insert({ name, sort_order: sortOrder, [scopeColumn]: scopeValue });
+    } catch (error) {
+      // A concurrent create registered it first — the goal (it exists) is met.
+      if (error?.code !== 'ER_DUP_ENTRY') throw error;
+    }
+  }
+
+  async function mirrorRename(trx, oldName, newName, scopeValue) {
+    const row = await findMirrorRow(trx, oldName, scopeValue, { activeOnly: true });
+    if (!row) return;
+    const taken = await findMirrorRow(trx, newName, scopeValue);
+    if (taken && String(taken.id) !== String(row.id)) return;
+    await trx.table(mirror.table).where({ id: row.id }).update({ name: newName });
+    await trx
+      .table(mirror.cascadeRename.table)
+      .where({ [mirror.cascadeRename.matchColumn]: row.name, [scopeColumn]: scopeValue })
+      .update({ [mirror.cascadeRename.matchColumn]: newName });
   }
 
   async function archiveCategory({ context, id }) {

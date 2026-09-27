@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ApiError } from '../../../shared/api/index.js';
-import { photoProblem, choiceFromSelection, classifyStockItem, defaultCategorySelection, CREATE_CATEGORY_VALUE, menuCategoryChoiceFor, menuCategoryForStockCategory, sellStockItemInRegister, stockCategoryForMenuCategory, validateSellFields } from '../sellInRegister.js';
+import { photoProblem, choiceFromSelection, classifyStockItem, defaultCategorySelection, CREATE_CATEGORY_VALUE, menuCategoryChoiceFor, sellStockItemInRegister, stockCategoryForMenuCategory, validateSellFields } from '../sellInRegister.js';
 
 const mocks = vi.hoisted(() => ({
   createMenuCategory: vi.fn(),
@@ -245,42 +245,6 @@ describe('stockCategoryForMenuCategory', () => {
   it('asks for nothing when there is no menu category', async () => {
     expect(await stockCategoryForMenuCategory('  ')).toBeNull();
     expect(mocks.listStockItemCategories).not.toHaveBeenCalled();
-  });
-});
-
-describe('menuCategoryForStockCategory', () => {
-  beforeEach(() => {
-    mocks.listMenuCategories.mockReset();
-    mocks.createMenuCategory.mockReset();
-  });
-
-  it('reuses a menu category matching the stock category, case-insensitively', async () => {
-    mocks.listMenuCategories.mockResolvedValue([{ id: '1', name: 'Shirts' }]);
-    expect(await menuCategoryForStockCategory(' SHIRTS ', '3')).toBe('Shirts');
-    expect(mocks.createMenuCategory).not.toHaveBeenCalled();
-    expect(mocks.listMenuCategories).toHaveBeenCalledWith({ outletId: '3' });
-  });
-
-  it('creates one named like the stock category when none matches', async () => {
-    mocks.listMenuCategories.mockResolvedValue([]);
-    mocks.createMenuCategory.mockResolvedValue({ id: '2', name: 'SHIRT' });
-    expect(await menuCategoryForStockCategory('SHIRT', '3')).toBe('SHIRT');
-    expect(mocks.createMenuCategory).toHaveBeenCalledWith({ outletId: '3', name: 'SHIRT' });
-  });
-
-  it('re-reads after a 409 from a concurrent create, and rethrows anything else', async () => {
-    mocks.listMenuCategories.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: '3', name: 'Shirt' }]);
-    mocks.createMenuCategory.mockRejectedValue(new ApiError({ code: 'CONFLICT_DUPLICATE_ENTRY', message: 'Exists.', status: 409 }));
-    expect(await menuCategoryForStockCategory('SHIRT', '3')).toBe('Shirt');
-
-    mocks.listMenuCategories.mockResolvedValue([]);
-    mocks.createMenuCategory.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'No.', status: 403 }));
-    await expect(menuCategoryForStockCategory('SHIRT', '3')).rejects.toThrow('No.');
-  });
-
-  it('asks for nothing when there is no stock category', async () => {
-    expect(await menuCategoryForStockCategory('  ')).toBeNull();
-    expect(mocks.listMenuCategories).not.toHaveBeenCalled();
   });
 });
 

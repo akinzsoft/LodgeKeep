@@ -731,7 +731,6 @@ describe('<StockItemsTab>', () => {
   describe('categories (gap closure)', () => {
     it('registers a new category from the Stock categories card, and selecting its new row shows it as its own new, empty section', async () => {
       mocks.createStockItemCategory.mockResolvedValue({ id: '3', name: 'Wine' });
-      mocks.createMenuCategory.mockResolvedValue({ id: '30', name: 'Wine' });
       render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
       const card = (await screen.findByRole('heading', { name: 'Stock categories — Main Bar' })).closest('section');
 
@@ -744,9 +743,9 @@ describe('<StockItemsTab>', () => {
 
       expect(mocks.createStockItemCategory).toHaveBeenCalledWith({ outletId: '1', name: 'Wine', sortOrder: undefined });
       expect(await within(card).findByText('Wine')).toBeInTheDocument();
-      // User-requested: a new stock category is mirrored into the same
-      // outlet's own menu categories, so it shows up on POS -> Setup too.
-      await waitFor(() => expect(mocks.createMenuCategory).toHaveBeenCalledWith({ outletId: '1', name: 'Wine', sortOrder: undefined }));
+      // Setup's menu categories get it from the server, in the same save —
+      // the screen no longer makes a second, best-effort call for it.
+      expect(mocks.createMenuCategory).not.toHaveBeenCalled();
       // Creating it doesn't itself switch the selection away from
       // Beverages — clicking its new row is the real payoff: "create a
       // category, then see it as its own section with nothing built for it".
@@ -754,37 +753,6 @@ describe('<StockItemsTab>', () => {
       const wineSection = await screen.findByRole('heading', { name: 'Wine' });
       expect(within(wineSection.closest('div')).getByText('No items yet — add the first one below.')).toBeInTheDocument();
       expect(within(wineSection.closest('div')).getByRole('button', { name: 'Add item' })).toBeInTheDocument();
-    });
-
-    it('reuses an existing menu category matching the new stock category, whatever its case, instead of creating a duplicate', async () => {
-      mocks.createStockItemCategory.mockResolvedValue({ id: '3', name: 'Wine' });
-      mocks.listMenuCategories.mockResolvedValue([{ id: '30', name: 'wine' }]);
-      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
-      const card = (await screen.findByRole('heading', { name: 'Stock categories — Main Bar' })).closest('section');
-
-      await userEvent.type(within(card).getByLabelText('Stock category name'), 'Wine');
-      await userEvent.click(within(card).getByRole('button', { name: 'Add stock category' }));
-
-      await waitFor(() => expect(mocks.createStockItemCategory).toHaveBeenCalled());
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(mocks.createMenuCategory).not.toHaveBeenCalled();
-    });
-
-    it('still registers the stock category even when mirroring it into menu categories fails', async () => {
-      mocks.createStockItemCategory.mockResolvedValue({ id: '3', name: 'Wine' });
-      mocks.createMenuCategory.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'No permission.' }));
-      mocks.listStockItemCategories.mockResolvedValue([
-        { id: '1', name: 'Beverages', sort_order: 0, item_count: 0 },
-        { id: '3', name: 'Wine', sort_order: 0, item_count: 0 },
-      ]);
-      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
-      const card = (await screen.findByRole('heading', { name: 'Stock categories — Main Bar' })).closest('section');
-
-      await userEvent.type(within(card).getByLabelText('Stock category name'), 'Wine');
-      await userEvent.click(within(card).getByRole('button', { name: 'Add stock category' }));
-
-      expect(await within(card).findByText('Wine')).toBeInTheDocument();
-      expect(within(card).queryByRole('alert')).not.toBeInTheDocument();
     });
 
     it('shows why a category still in use cannot be archived', async () => {
