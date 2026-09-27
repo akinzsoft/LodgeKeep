@@ -69,7 +69,7 @@ describe('<POSScreen>', () => {
 
   it("bug fix: shows a real guard, not a crash, when no active property is resolved yet — every Money display below needs a real currency", () => {
     render(<POSScreen />);
-    expect(screen.getByText('Select an active property to use the POS.')).toBeInTheDocument();
+    expect(screen.getByText('Choose a property from the Property box in the top bar to use the POS.')).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Register' })).not.toBeInTheDocument();
   });
 });

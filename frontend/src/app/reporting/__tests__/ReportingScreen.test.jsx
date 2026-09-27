@@ -68,7 +68,7 @@ describe('<ReportingScreen>', () => {
     mocks.listProperties.mockResolvedValue([]); // no property matches activePropertyId="1"
     render(<ReportingScreen activePropertyId="1" />);
 
-    expect(await screen.findByText('Select an active property to view reports.')).toBeInTheDocument();
+    expect(await screen.findByText('Choose a property from the Property box in the top bar to view reports.')).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Revenue' })).not.toBeInTheDocument();
   });
 

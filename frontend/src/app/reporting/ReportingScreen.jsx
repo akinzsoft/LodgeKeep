@@ -65,7 +65,7 @@ export function ReportingScreen({ activePropertyId }) {
       {properties === null ? (
         <p className={styles.loading}>Loading reporting…</p>
       ) : !activeProperty ? (
-        <p className={styles.loading}>Select an active property to view reports.</p>
+        <p className={styles.loading}>Choose a property from the Property box in the top bar to view reports.</p>
       ) : (
         <>
           <div className={styles.tabs} role="tablist" aria-label="Reporting sections">

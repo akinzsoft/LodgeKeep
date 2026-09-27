@@ -65,7 +65,7 @@ describe('<BookingScreen>', () => {
   it('asks to select a property when the active property id matches none', async () => {
     mocks.listProperties.mockResolvedValue([PROPERTY]);
     render(<BookingScreen activePropertyId="999" />);
-    expect(await screen.findByText(/select an active property/i)).toBeInTheDocument();
+    expect(await screen.findByText(/choose a property from the property box/i)).toBeInTheDocument();
   });
 
   it('renders all five tabs and defaults to Availability', async () => {
