@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sumMoney, multiplyMoney, percentOfMoney } from '../money.js';
+import { sumMoney, multiplyMoney, percentOfMoney, extendedCost } from '../money.js';
 
 describe('sumMoney', () => {
   it('sums an array of decimal strings exactly', () => {
@@ -57,5 +57,22 @@ describe('percentOfMoney', () => {
 
   it('a negative amount rounds the same way as a positive one (sign handled once, not per-branch)', () => {
     expect(percentOfMoney('-20.00', '10')).toBe('-2.00');
+  });
+});
+
+describe('extendedCost', () => {
+  it('multiplies a unit cost by a 3-decimal stock quantity exactly', () => {
+    expect(extendedCost('500.00', '20.000')).toBe('10000.00');
+    expect(extendedCost('0.10', '3')).toBe('0.30');
+  });
+
+  it('rounds half-up to the cent, matching the backend', () => {
+    expect(extendedCost('1.00', '0.005')).toBe('0.01');
+    expect(extendedCost('1.00', '0.004')).toBe('0.00');
+    expect(extendedCost('3.33', '1.500')).toBe('5.00'); // 4.995 → 5.00
+  });
+
+  it('keeps a negative (oversold) balance negative', () => {
+    expect(extendedCost('2.00', '-1.250')).toBe('-2.50');
   });
 });

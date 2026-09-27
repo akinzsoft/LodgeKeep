@@ -112,6 +112,10 @@ describe('<MenuItemsTab>', () => {
     expect(within(section).getByText(/12\.000 unit/)).toBeInTheDocument();
     expect(within(section).getByText(/5\.000 unit/)).toBeInTheDocument();
     expect(within(section).getByText('Acme Beverages')).toBeInTheDocument();
+    // Stock balance 12 × unit cost 4.00 = what the stock on hand is worth.
+    expect(within(section).getByRole('columnheader', { name: 'Stock balance' })).toBeInTheDocument();
+    expect(within(section).getByRole('columnheader', { name: 'Stock value' })).toBeInTheDocument();
+    expect(within(section).getByText(/48\.00/)).toBeInTheDocument();
   });
 
   it('an item with no linked stock item shows "Not tracked", never a false zero', async () => {
