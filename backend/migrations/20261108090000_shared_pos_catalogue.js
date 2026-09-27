@@ -156,7 +156,14 @@ async function migrateProperty(knex, propertyRow) {
     const pairKey = `${pair.outlet_id}:${category.id}`;
     if (carry.has(pairKey)) continue;
     carry.add(pairKey);
-    await knex(T.outletCategories).insert({ ...where, outlet_id: pair.outlet_id, category_id: category.id });
+    // Bug fix: this table has a real UNIQUE(outlet_id, category_id) key, and
+    // a second run of this SAME property (e.g. a retry after the loop
+    // failed on a LATER property) would otherwise hit it — everything else
+    // in this function checks the database before writing; this one didn't.
+    const alreadyCarried = await knex(T.outletCategories).where({ outlet_id: pair.outlet_id, category_id: category.id }).first('id');
+    if (!alreadyCarried) {
+      await knex(T.outletCategories).insert({ ...where, outlet_id: pair.outlet_id, category_id: category.id });
+    }
   }
 
   // 3. Menu items: file each under its category's canonical spelling, then
@@ -171,6 +178,16 @@ async function migrateProperty(knex, propertyRow) {
   for (const group of groupBy(activeItems, (item) => `${key(item.category)}\u0000${key(item.name)}`)) {
     for (const set of planOnePerOutlet(group)) {
       const [kept, ...others] = set;
+      // User-requested: a merge of real menu items must never be silent —
+      // logged the moment the decision is made, before any write for it.
+      if (others.length > 0) {
+        console.log(
+          `[shared-pos-catalogue merge] property ${propertyRow.property_id}: menu item "${kept.name}" (id ${kept.id}, outlet ${kept.outlet_id}, price ${kept.price}) keeps` +
+            others
+              .map((other) => ` id ${other.id} (outlet ${other.outlet_id}, price ${other.price}${String(other.price) !== String(kept.price) ? ' -> kept as that outlet\'s own price' : ' -> matches, no override'})`)
+              .join(',')
+        );
+      }
       const keptChanges = {};
       for (const member of set) {
         const outletChanges = {};
@@ -216,6 +233,18 @@ async function migrateProperty(knex, propertyRow) {
   for (const group of groupBy(active, (item) => `${key(item.name)}\u0000${key(item.unit)}`)) {
     for (const set of planOnePerOutlet(group)) {
       const [kept, ...others] = set;
+      // User-requested: a merge of real stock items — and the real
+      // quantities that ride along with it — must never be silent. Each
+      // outlet's own quantity is unaffected (kept per-outlet in
+      // stock_levels below), but this is the moment their stock_movements
+      // are re-pointed onto one shared item, so it's logged here, before
+      // that write, with the quantity each outlet is bringing in.
+      if (others.length > 0) {
+        console.log(
+          `[shared-pos-catalogue merge] property ${propertyRow.property_id}: stock item "${kept.name}" [${kept.unit}] (id ${kept.id}, outlet ${kept.outlet_id}, ${kept.current_quantity} on hand) absorbs` +
+            others.map((other) => ` id ${other.id} (outlet ${other.outlet_id}, ${other.current_quantity} on hand — kept as that outlet's own level)`).join(',')
+        );
+      }
       for (const member of set) levelTargets.push({ stockItemId: kept.id, outletId: member.outlet_id, reorderLevel: member.reorder_level });
       for (const other of others) {
         await knex('stock_movements').where({ stock_item_id: other.id }).update({ stock_item_id: kept.id });
@@ -391,11 +420,26 @@ exports.up = async function up(knex) {
       table.dropUnique(['outlet_id', 'name'], 'pos_menu_categories_outlet_id_name_unique');
     });
   }
-  // Safe to re-run even if outlet_id is already nullable — MySQL treats an
-  // identical column redefinition as a legal no-op.
-  await knex.schema.alterTable('pos_menu_categories', (table) => {
-    table.bigInteger('outlet_id').unsigned().nullable().alter();
-  });
+  // Bug fix, found while proving idempotency (not resumability — a
+  // DIFFERENT, stronger requirement) against a real merge case: this used
+  // to run unconditionally, on the theory that "MySQL treats an identical
+  // column redefinition as a legal no-op." True only while the column still
+  // EXISTS. The four dropColumn('outlet_id') calls below this point (on
+  // pos_menu_categories, stock_item_categories, pos_menu_items, stock_items)
+  // are each their own separate ALTER TABLE statement, so a failure between
+  // any two of them leaves some of the four already dropped and others not
+  // — and a retry starts this whole function over from the top, which used
+  // to crash immediately with "Unknown column 'outlet_id'" the moment ANY
+  // of the four had already been dropped by the attempt it's retrying.
+  // hasColumn is the same "check reality, don't assume the column outlives
+  // this migration's own later steps" discipline indexExists/foreignKeyExists
+  // already apply to indexes and foreign keys.
+  const menuCategoriesOutletIdExists = await knex.schema.hasColumn('pos_menu_categories', 'outlet_id');
+  if (menuCategoriesOutletIdExists) {
+    await knex.schema.alterTable('pos_menu_categories', (table) => {
+      table.bigInteger('outlet_id').unsigned().nullable().alter();
+    });
+  }
 
   if (await foreignKeyExists(knex, 'stock_item_categories', 'stock_item_categories_outlet_foreign')) {
     await knex.schema.alterTable('stock_item_categories', (table) => {
@@ -407,46 +451,90 @@ exports.up = async function up(knex) {
       table.dropUnique(['outlet_id', 'name'], 'stock_item_categories_outlet_id_name_unique');
     });
   }
-  await knex.schema.alterTable('stock_item_categories', (table) => {
-    table.bigInteger('outlet_id').unsigned().nullable().alter();
-  });
+  const stockCategoriesOutletIdExists = await knex.schema.hasColumn('stock_item_categories', 'outlet_id');
+  if (stockCategoriesOutletIdExists) {
+    await knex.schema.alterTable('stock_item_categories', (table) => {
+      table.bigInteger('outlet_id').unsigned().nullable().alter();
+    });
+  }
 
-  const properties = await knex('properties').select('tenant_id', 'id as property_id').orderBy('id');
-  for (const propertyRow of properties) await migrateProperty(knex, propertyRow);
+  // The per-property loop only ever runs BEFORE either category table's
+  // outlet_id column is dropped (a few dozen lines below). If either is
+  // already gone, the loop already ran to completion on a prior attempt —
+  // migrateProperty() itself reads pos_menu_categories.outlet_id/
+  // stock_item_categories.outlet_id directly, so re-running it against a
+  // database that no longer has those columns would not just be redundant,
+  // it would crash. Skip it outright rather than guard every read inside it.
+  if (menuCategoriesOutletIdExists && stockCategoriesOutletIdExists) {
+    const properties = await knex('properties').select('tenant_id', 'id as property_id').orderBy('id');
+    for (const propertyRow of properties) await migrateProperty(knex, propertyRow);
+  }
 
-  await knex.schema.alterTable('pos_menu_categories', (table) => {
-    table.dropIndex(['tenant_id', 'property_id', 'outlet_id'], 'pos_menu_categories_outlet_foreign');
-    table.dropColumn('outlet_id');
-    table.unique(['property_id', 'name'], { indexName: 'pos_menu_categories_property_id_name_unique' });
-    table.comment('The shared menu categories of a property; outlets choose which to carry (pos_outlet_categories). Scope: PROPERTY_SCOPED.');
-  });
-  await knex.schema.alterTable('stock_item_categories', (table) => {
-    table.dropIndex(['tenant_id', 'property_id', 'outlet_id'], 'stock_item_categories_outlet_foreign');
-    table.dropColumn('outlet_id');
-    table.unique(['property_id', 'name'], { indexName: 'stock_item_categories_property_id_name_unique' });
-    table.comment('The shared stock-item categories of a property, kept matching its menu categories. Scope: PROPERTY_SCOPED.');
-  });
-  await knex.schema.alterTable('pos_menu_items', (table) => {
-    table.dropForeign(['tenant_id', 'property_id', 'outlet_id'], 'pos_menu_items_tenant_id_property_id_outlet_id_foreign');
-    table.dropIndex(['tenant_id', 'property_id', 'outlet_id', 'is_available'], 'pos_menu_items_outlet_id_is_available_index');
-    table.dropIndex(['tenant_id', 'property_id', 'outlet_id'], 'pos_menu_items_tenant_id_property_id_outlet_id_index');
-  });
-  await knex.schema.alterTable('pos_menu_items', (table) => {
-    table.dropColumn('outlet_id');
-    table.dropColumn('is_available');
-    table.dropColumn('stock_auto_unavailable');
-    table.index(['tenant_id', 'property_id', 'status', 'category'], 'pos_menu_items_property_status_category_index');
-    table.comment('The shared menu items of a property; an outlet sells those in categories it carries. Scope: PROPERTY_SCOPED.');
-  });
-  await knex.schema.alterTable('stock_items', (table) => {
-    table.dropForeign(['tenant_id', 'property_id', 'outlet_id'], 'stock_items_tenant_id_property_id_outlet_id_foreign');
-    table.dropIndex(['tenant_id', 'property_id', 'outlet_id', 'status'], 'stock_items_tenant_id_property_id_outlet_id_status_index');
-  });
-  await knex.schema.alterTable('stock_items', (table) => {
-    table.dropColumn('outlet_id');
-    table.index(['tenant_id', 'property_id', 'status'], 'stock_items_property_status_index');
-    table.comment('The shared stock items of a property; per-outlet quantities are in stock_levels. current_quantity = the property-wide total; reorder_level = the default for an outlet with no level. Scope: PROPERTY_SCOPED.');
-  });
+  if (await knex.schema.hasColumn('pos_menu_categories', 'outlet_id')) {
+    await knex.schema.alterTable('pos_menu_categories', (table) => {
+      table.dropIndex(['tenant_id', 'property_id', 'outlet_id'], 'pos_menu_categories_outlet_foreign');
+      table.dropColumn('outlet_id');
+      table.unique(['property_id', 'name'], { indexName: 'pos_menu_categories_property_id_name_unique' });
+      table.comment('The shared menu categories of a property; outlets choose which to carry (pos_outlet_categories). Scope: PROPERTY_SCOPED.');
+    });
+  }
+  if (await knex.schema.hasColumn('stock_item_categories', 'outlet_id')) {
+    await knex.schema.alterTable('stock_item_categories', (table) => {
+      table.dropIndex(['tenant_id', 'property_id', 'outlet_id'], 'stock_item_categories_outlet_foreign');
+      table.dropColumn('outlet_id');
+      table.unique(['property_id', 'name'], { indexName: 'stock_item_categories_property_id_name_unique' });
+      table.comment('The shared stock-item categories of a property, kept matching its menu categories. Scope: PROPERTY_SCOPED.');
+    });
+  }
+  if (await foreignKeyExists(knex, 'pos_menu_items', 'pos_menu_items_tenant_id_property_id_outlet_id_foreign')) {
+    await knex.schema.alterTable('pos_menu_items', (table) => {
+      table.dropForeign(['tenant_id', 'property_id', 'outlet_id'], 'pos_menu_items_tenant_id_property_id_outlet_id_foreign');
+    });
+  }
+  if (await indexExists(knex, 'pos_menu_items', 'pos_menu_items_outlet_id_is_available_index')) {
+    await knex.schema.alterTable('pos_menu_items', (table) => {
+      table.dropIndex(['tenant_id', 'property_id', 'outlet_id', 'is_available'], 'pos_menu_items_outlet_id_is_available_index');
+    });
+  }
+  if (await indexExists(knex, 'pos_menu_items', 'pos_menu_items_tenant_id_property_id_outlet_id_index')) {
+    await knex.schema.alterTable('pos_menu_items', (table) => {
+      table.dropIndex(['tenant_id', 'property_id', 'outlet_id'], 'pos_menu_items_tenant_id_property_id_outlet_id_index');
+    });
+  }
+  if (await knex.schema.hasColumn('pos_menu_items', 'outlet_id')) {
+    await knex.schema.alterTable('pos_menu_items', (table) => {
+      table.dropColumn('outlet_id');
+      table.dropColumn('is_available');
+      table.dropColumn('stock_auto_unavailable');
+    });
+  }
+  if (!(await indexExists(knex, 'pos_menu_items', 'pos_menu_items_property_status_category_index'))) {
+    await knex.schema.alterTable('pos_menu_items', (table) => {
+      table.index(['tenant_id', 'property_id', 'status', 'category'], 'pos_menu_items_property_status_category_index');
+      table.comment('The shared menu items of a property; an outlet sells those in categories it carries. Scope: PROPERTY_SCOPED.');
+    });
+  }
+  if (await foreignKeyExists(knex, 'stock_items', 'stock_items_tenant_id_property_id_outlet_id_foreign')) {
+    await knex.schema.alterTable('stock_items', (table) => {
+      table.dropForeign(['tenant_id', 'property_id', 'outlet_id'], 'stock_items_tenant_id_property_id_outlet_id_foreign');
+    });
+  }
+  if (await indexExists(knex, 'stock_items', 'stock_items_tenant_id_property_id_outlet_id_status_index')) {
+    await knex.schema.alterTable('stock_items', (table) => {
+      table.dropIndex(['tenant_id', 'property_id', 'outlet_id', 'status'], 'stock_items_tenant_id_property_id_outlet_id_status_index');
+    });
+  }
+  if (await knex.schema.hasColumn('stock_items', 'outlet_id')) {
+    await knex.schema.alterTable('stock_items', (table) => {
+      table.dropColumn('outlet_id');
+    });
+  }
+  if (!(await indexExists(knex, 'stock_items', 'stock_items_property_status_index'))) {
+    await knex.schema.alterTable('stock_items', (table) => {
+      table.index(['tenant_id', 'property_id', 'status'], 'stock_items_property_status_index');
+      table.comment('The shared stock items of a property; per-outlet quantities are in stock_levels. current_quantity = the property-wide total; reorder_level = the default for an outlet with no level. Scope: PROPERTY_SCOPED.');
+    });
+  }
 };
 
 exports.down = async function down(knex) {
