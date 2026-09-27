@@ -7,6 +7,7 @@ import { StockWastageTab } from './StockWastageTab.jsx';
 import { StockReportsTab } from './StockReportsTab.jsx';
 import { StockReorderReportTab } from './StockReorderReportTab.jsx';
 import { StockTransferTab } from './StockTransferTab.jsx';
+import { StockRequestsTab } from './StockRequestsTab.jsx';
 import styles from './POSScreen.module.css';
 
 /**
@@ -20,14 +21,20 @@ import styles from './POSScreen.module.css';
  * (transfers) and `pos.stock_manage` (everything else). When `permissions`
  * is given — the signed-in role's real grants, from the same endpoint the
  * sidebar filters by — only the tabs that role can use are shown, so a
- * Storekeeper sees Stock items, Wastage, Transfer and Reorder rather than a
- * row of screens that answer 403. Without it every tab shows, as before;
- * the server's own check is the real enforcement either way.
+ * Storekeeper sees Stock items, Requests, Transfer, Wastage and Reorder
+ * rather than a row of screens that answer 403. Without it every tab shows,
+ * as before; the server's own check is the real enforcement either way.
+ *
+ * Requests is open to either side of a stock request — `pos.stock_request`
+ * (the outlets that ask) or `pos.stock_transfer` (the storekeeper who
+ * issues) — so a tab's `permission` may be a list, any one of which is
+ * enough.
  */
 const STOCK_TABS = [
   { key: 'items', label: 'Stock items', permission: 'pos.stock_view' },
   { key: 'recipes', label: 'Recipes', permission: 'pos.stock_manage' },
   { key: 'goods_received', label: 'Goods received', permission: 'pos.stock_manage' },
+  { key: 'requests', label: 'Requests', permission: ['pos.stock_request', 'pos.stock_transfer'] },
   { key: 'transfer', label: 'Transfer', permission: 'pos.stock_transfer' },
   { key: 'takes', label: 'Stock takes', permission: 'pos.stock_manage' },
   { key: 'wastage', label: 'Wastage', permission: 'pos.stock_view' },
@@ -36,7 +43,8 @@ const STOCK_TABS = [
 ];
 
 export function StockTab({ activeProperty, isOffline = false, permissions }) {
-  const tabs = permissions ? STOCK_TABS.filter((t) => permissions.has(t.permission)) : STOCK_TABS;
+  const allowed = (t) => [t.permission].flat().some((key) => permissions.has(key));
+  const tabs = permissions ? STOCK_TABS.filter(allowed) : STOCK_TABS;
   const [chosen, setTab] = useState(null);
   const tab = tabs.some((t) => t.key === chosen) ? chosen : tabs[0]?.key;
 
@@ -63,6 +71,7 @@ export function StockTab({ activeProperty, isOffline = false, permissions }) {
         {tab === 'goods_received' && <StockGoodsReceivedTab activeProperty={activeProperty} isOffline={isOffline} />}
         {tab === 'takes' && <StockTakesTab isOffline={isOffline} />}
         {tab === 'wastage' && <StockWastageTab isOffline={isOffline} />}
+        {tab === 'requests' && <StockRequestsTab isOffline={isOffline} permissions={permissions} />}
         {tab === 'transfer' && <StockTransferTab isOffline={isOffline} />}
         {tab === 'reorder' && <StockReorderReportTab activeProperty={activeProperty} />}
         {tab === 'reports' && <StockReportsTab activeProperty={activeProperty} />}

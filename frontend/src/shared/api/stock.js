@@ -114,6 +114,57 @@ export function listTransfers({ outletId, limit } = {}) {
   return request(`/pos/stock/transfers?${params}`);
 }
 
+/**
+ * Stock requests — an outlet asks another (normally the store) for several
+ * items; the storekeeper issues them, in full or in part, or rejects the
+ * request with a reason. Issuing moves the stock immediately, as
+ * transfers. `lines` is `[{stockItemId, quantity}]`; quantities are exact
+ * decimal strings, never numbers.
+ */
+const toLineBodies = (lines) => lines.map((line) => ({ stock_item_id: line.stockItemId, quantity: line.quantity }));
+
+/** `status`: pending | issued | rejected | cancelled (omit for all); `outletId` matches either side. */
+export function listTransferRequests({ status, outletId, limit } = {}) {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (outletId) params.set('outlet_id', outletId);
+  if (limit) params.set('limit', limit);
+  return request(`/pos/stock/transfer-requests?${params}`);
+}
+
+export function createTransferRequest({ fromOutletId, toOutletId, lines, note }) {
+  return request('/pos/stock/transfer-requests', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey() },
+    body: { from_outlet_id: fromOutletId, to_outlet_id: toOutletId, lines: toLineBodies(lines), note: note || undefined },
+  });
+}
+
+/** Every line of the request, once — `quantity` "0" for a line the store cannot send. */
+export function issueTransferRequest(requestId, { lines, note }) {
+  return request(`/pos/stock/transfer-requests/${requestId}/issue`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey() },
+    body: { lines: toLineBodies(lines), note: note || undefined },
+  });
+}
+
+export function rejectTransferRequest(requestId, { reason }) {
+  return request(`/pos/stock/transfer-requests/${requestId}/reject`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey() },
+    body: { reason },
+  });
+}
+
+export function cancelTransferRequest(requestId, { reason } = {}) {
+  return request(`/pos/stock/transfer-requests/${requestId}/cancel`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey() },
+    body: { reason: reason || undefined },
+  });
+}
+
 /** Every outlet's quantity and reorder level for one stock item. */
 export function listStockLevels(stockItemId) {
   return request(`/pos/stock/items/${stockItemId}/levels`);

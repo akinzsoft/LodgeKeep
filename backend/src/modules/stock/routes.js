@@ -18,11 +18,17 @@
  * so a Storekeeper can move stock without selling at the Register
  * (`pos.operate`) or editing items and seeing cost reports
  * (`pos.stock_manage`).
+ *
+ * Transfer requests: `pos.stock_request` (pos_operator/manager/admin/
+ * super_admin) raises and withdraws a request; `pos.stock_transfer`
+ * issues or rejects it — issuing IS transferring, so it needs the same
+ * key. Either key reads the list (a requester follows what they asked
+ * for; a storekeeper works through what is pending).
  */
 
 const { Router } = require('express');
 const controller = require('./controller');
-const { requirePermission } = require('../../auth');
+const { requirePermission, requireAnyPermission } = require('../../auth');
 
 function stockRouter() {
   const router = Router();
@@ -51,6 +57,14 @@ function stockRouter() {
 
   router.post('/pos/stock/transfers', requirePermission('pos.stock_transfer'), controller.transferStock);
   router.get('/pos/stock/transfers', requirePermission('pos.stock_transfer'), controller.listTransfers);
+
+  const readRequests = requireAnyPermission(['pos.stock_request', 'pos.stock_transfer']);
+  router.get('/pos/stock/transfer-requests', readRequests, controller.listTransferRequests);
+  router.get('/pos/stock/transfer-requests/:id', readRequests, controller.getTransferRequest);
+  router.post('/pos/stock/transfer-requests', requirePermission('pos.stock_request'), controller.createTransferRequest);
+  router.post('/pos/stock/transfer-requests/:id/issue', requirePermission('pos.stock_transfer'), controller.issueTransferRequest);
+  router.post('/pos/stock/transfer-requests/:id/reject', requirePermission('pos.stock_transfer'), controller.rejectTransferRequest);
+  router.post('/pos/stock/transfer-requests/:id/cancel', requirePermission('pos.stock_request'), controller.cancelTransferRequest);
 
   router.get('/pos/stock/takes', requirePermission('pos.stock_manage'), controller.listStockTakes);
   router.get('/pos/stock/takes/:id', requirePermission('pos.stock_manage'), controller.getStockTake);

@@ -176,6 +176,8 @@ async function seedTwoTenants(trx) {
     stockMovements: [],
     stockTakes: [],
     stockTakeLines: [],
+    stockTransferRequests: [],
+    stockTransferRequestLines: [],
     expenseCategories: [],
     recurringExpenseSchedules: [],
     expenses: [],
@@ -1265,6 +1267,31 @@ async function seedTwoTenants(trx) {
       stock_take_id: stockTakeId,
       stock_item_id: stockItem.id,
     });
+
+    // One pending transfer request per tenant (stock transfer requests), so
+    // the generic ISO-* suite has rows for both tenants. The fixture has a
+    // single outlet, so it asks itself — the service refuses that, the
+    // schema (like stock_movements') does not, and isolation is all these
+    // rows exist to exercise.
+    const requestId = await insertReturningId(trx, 'stock_transfer_requests', {
+      tenant_id: t.id,
+      property_id: property.id,
+      from_outlet_id: outlet.id,
+      to_outlet_id: outlet.id,
+      requested_by_user_id: user.id,
+    });
+    t.stockTransferRequests.push({ id: requestId, property_id: property.id });
+    t.stockTransferRequestLines.push({
+      id: await insertReturningId(trx, 'stock_transfer_request_lines', {
+        tenant_id: t.id,
+        property_id: property.id,
+        request_id: requestId,
+        stock_item_id: stockItem.id,
+        quantity_requested: '5.000',
+      }),
+      property_id: property.id,
+      request_id: requestId,
+    });
   }
 
   // ------------------------------------------------------------------
@@ -1892,6 +1919,7 @@ async function seedTwoTenants(trx) {
     ['pos.stock_view', 'pos'],
     ['pos.stock_manage', 'pos'],
     ['pos.stock_transfer', 'pos'],
+    ['pos.stock_request', 'pos'],
     ['door_access.view', 'door_access'],
     ['door_access.manage', 'door_access'],
     ['expenses.view', 'expenses'],
@@ -2100,6 +2128,15 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.stock_transfer'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.stock_transfer'] },
     ]);
+  }
+
+  // Stock transfer requests: `pos.stock_request` for the outlets that ask
+  // (pos_operator) and manager/admin/super_admin. The storekeeper issues
+  // requests (pos.stock_transfer) and does not raise them.
+  for (const t of both) {
+    await trx('role_permissions').insert(
+      ['pos_operator', 'manager', 'admin', 'super_admin'].map((role) => ({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions['pos.stock_request'] })),
+    );
   }
 
   // Door access monitoring (PLAN.md Phase 7) — both keys, manager/admin/

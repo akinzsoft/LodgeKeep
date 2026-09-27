@@ -105,6 +105,29 @@ const NOTIFICATION_EVENTS = Object.freeze([
     defaultRoles: ['pos_operator', 'storekeeper', 'manager', 'admin', 'super_admin'],
   },
   {
+    eventType: 'stock.transfer_requested',
+    group: 'Inventory',
+    label: 'Stock requested',
+    description: 'An outlet asked another outlet (normally the store) for stock. The Storekeeper issues or rejects it under Stock → Requests.',
+    // Who can act on it (pos.stock_transfer) — the same "notify whoever can act" shape night_audit.* uses.
+    defaultRoles: ['storekeeper', 'manager', 'admin', 'super_admin'],
+  },
+  {
+    eventType: 'stock.transfer_request_issued',
+    group: 'Inventory',
+    label: 'Stock request issued',
+    description: 'A stock request was issued — the stock has moved. Says when some items were sent short.',
+    // Who raises requests (pos.stock_request). By role, not by the one person who asked — the bell resolves recipients by role.
+    defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
+  },
+  {
+    eventType: 'stock.transfer_request_rejected',
+    group: 'Inventory',
+    label: 'Stock request rejected',
+    description: 'A stock request was rejected, with the reason.',
+    defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
+  },
+  {
     eventType: 'pos.stock_override_applied',
     group: 'Inventory',
     label: 'Stock override applied',

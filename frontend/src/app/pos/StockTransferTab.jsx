@@ -11,8 +11,9 @@ import formStyles from './POSForm.module.css';
  * store to a bar) in one action. The server writes both ledger legs together
  * and refuses to take the source below zero; the warning here is only a
  * faster way of saying the same thing. Stock arrives at the destination the
- * moment it is issued — there is no confirm-on-receipt step and no
- * request/approve trail in this version.
+ * moment it is issued — there is no confirm-on-receipt step. An outlet that
+ * wants stock asks under Requests (`StockRequestsTab`); this tab is for a
+ * transfer nobody asked for.
  *
  * `pos.stock_transfer` (Storekeeper, Manager, Admin, Super admin). Every
  * outlet, stores included, can be a source or a destination.

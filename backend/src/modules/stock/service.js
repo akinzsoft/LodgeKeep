@@ -115,6 +115,10 @@ const {
   InsufficientStockOverrideRequiredError,
   InsufficientStockForTransferError,
   SameOutletTransferError,
+  StockTransferRequestNotFoundError,
+  StockTransferRequestNotPendingError,
+  NothingIssuedError,
+  InsufficientStockForIssueError,
 } = require('./errors');
 const { generateUlid } = require('../../shared/ulid');
 
@@ -929,8 +933,8 @@ async function recordWastage({ trx, stockItemId, outletId, quantity, reason, use
  * Lock order is the one every writer here uses: closure resolved first,
  * locked ascending in one call, then `stock_levels`, then (inside
  * `applyStockAvailabilityEffects`) menu items. Arrives immediately — there
- * is no confirm-on-receipt step, and no request/approve paper trail (both
- * deliberately out of scope for this first version). The two legs share a
+ * is no confirm-on-receipt step. An outlet can ask for stock first through a
+ * transfer request (below); issuing one calls this function per line. The two legs share a
  * system-generated `reference` (`TRF-<ulid>`) so a reader can pair them;
  * `note` (optional, the user's own words) goes in `reason` on both.
  */
@@ -1045,6 +1049,315 @@ async function listTransfers({ context, outletId, limit = 50 }) {
     byReference.set(leg.reference, entry);
   }
   return [...byReference.values()].sort((a, b) => b.lastId - a.lastId).map(({ lastId, ...rest }) => rest);
+}
+
+// ---------------------------------------------------------------------
+// Transfer requests — an outlet asks, the storekeeper issues
+// ---------------------------------------------------------------------
+
+/**
+ * User-requested, confirmed decisions: one request lists several items;
+ * POS operators and managers raise it (`pos.stock_request`); whoever
+ * issues stock (`pos.stock_transfer` — the Storekeeper) approves it in the
+ * same step by issuing it, in full or in part, or rejects it with a
+ * reason; stock moves the moment it is issued, through `transferStock`
+ * itself, so an issued line IS a transfer — same two ledger legs, same
+ * cost, same refusal to take the source below zero, same alerts. There is
+ * no receipt step and no in-transit state.
+ *
+ * A request is decided exactly once (`pending` -> `issued` | `rejected` |
+ * `cancelled`). Every decision takes a row lock on the request header
+ * FIRST, then re-reads its status under that lock, so two storekeepers
+ * issuing the same request — or an issue racing the requester's cancel —
+ * resolve to one decision and one set of transfers, never two.
+ */
+
+/** The request header joined to both outlets' names and the requester's/decider's names, plus its lines. */
+async function loadTransferRequests(db, { ids, status, outletId, limit }) {
+  let headers = db.table('stock_transfer_requests');
+  if (ids) headers = headers.whereIn('id', ids);
+  if (status) headers = headers.where({ status });
+  if (outletId) headers = headers.where((builder) => builder.where({ from_outlet_id: outletId }).orWhere({ to_outlet_id: outletId }));
+  headers = headers.orderBy('id', 'desc');
+  if (limit) headers = headers.limit(limit);
+  const rows = await headers.select('*');
+  if (!rows.length) return [];
+
+  // Names by id, in two small lookups — the accessor joins by table name,
+  // and each request names two outlets and up to two users.
+  const outletIds = [...new Set(rows.flatMap((row) => [String(row.from_outlet_id), String(row.to_outlet_id)]))];
+  const outlets = new Map((await db.table('pos_outlets').whereIn('id', outletIds).select('id', 'name', 'type')).map((row) => [String(row.id), row]));
+  const userIds = [...new Set(rows.flatMap((row) => [row.requested_by_user_id, row.decided_by_user_id]).filter(Boolean).map(String))];
+  const users = new Map((await db.table('users').whereIn('id', userIds).select('id', 'first_name', 'last_name')).map((row) => [String(row.id), row]));
+
+  const lines = await db
+    .table('stock_transfer_request_lines')
+    .joinScoped('stock_items', (join) => join.on('stock_items.id', '=', 'stock_transfer_request_lines.stock_item_id'))
+    .whereIn('stock_transfer_request_lines.request_id', rows.map((row) => row.id))
+    .orderBy('stock_items.name', 'asc')
+    .select(
+      'stock_transfer_request_lines.*',
+      'stock_items.name as stock_item_name',
+      'stock_items.unit as stock_item_unit',
+      'stock_items.status as stock_item_status',
+    );
+
+  // What the supplying outlet holds right now, for pending requests only —
+  // the issue form's starting point. Quantities, never cost: this list is
+  // readable by a requester (`pos.stock_request`) and a storekeeper alike.
+  const pending = rows.filter((row) => row.status === 'pending');
+  const onHand = new Map();
+  if (pending.length) {
+    const levels = await db
+      .table('stock_levels')
+      .whereIn('outlet_id', [...new Set(pending.map((row) => String(row.from_outlet_id)))])
+      .whereIn('stock_item_id', [...new Set(lines.map((line) => String(line.stock_item_id)))])
+      .select('outlet_id', 'stock_item_id', 'current_quantity');
+    for (const level of levels) onHand.set(`${level.outlet_id}:${level.stock_item_id}`, level.current_quantity);
+  }
+
+  const nameOf = (userId) => {
+    const user = users.get(String(userId));
+    return user ? [user.first_name, user.last_name].filter(Boolean).join(' ') || null : null;
+  };
+  const outletOf = (outletId) => {
+    const outlet = outlets.get(String(outletId));
+    return { id: outletId, name: outlet?.name ?? null, type: outlet?.type ?? null };
+  };
+  const linesByRequest = new Map();
+  for (const line of lines) {
+    const list = linesByRequest.get(String(line.request_id)) ?? [];
+    list.push(line);
+    linesByRequest.set(String(line.request_id), list);
+  }
+  return rows.map((row) => ({
+    id: row.id,
+    status: row.status,
+    note: row.note,
+    fromOutlet: outletOf(row.from_outlet_id),
+    toOutlet: outletOf(row.to_outlet_id),
+    requestedBy: { userId: row.requested_by_user_id, name: nameOf(row.requested_by_user_id) },
+    requestedAt: row.requested_at,
+    decidedBy: row.decided_by_user_id ? { userId: row.decided_by_user_id, name: nameOf(row.decided_by_user_id) } : null,
+    decidedAt: row.decided_at,
+    decisionNote: row.decision_note,
+    businessDate: row.business_date,
+    lines: (linesByRequest.get(String(row.id)) ?? []).map((line) => ({
+      stockItemId: line.stock_item_id,
+      name: line.stock_item_name,
+      unit: line.stock_item_unit,
+      archived: line.stock_item_status !== 'active',
+      quantityRequested: line.quantity_requested,
+      quantityIssued: line.quantity_issued,
+      transferReference: line.transfer_reference,
+      availableAtSource: row.status === 'pending' ? onHand.get(`${row.from_outlet_id}:${line.stock_item_id}`) ?? ZERO_QTY : null,
+    })),
+  }));
+}
+
+async function listTransferRequests({ context, status, outletId, limit = 50 }) {
+  return loadTransferRequests(scopedDb().for(context), { status, outletId, limit });
+}
+
+async function getTransferRequest({ context, id }) {
+  const [request] = await loadTransferRequests(scopedDb().for(context), { ids: [id] });
+  return request ?? null;
+}
+
+/** Locks the request header (every decision takes this lock first) and requires it to still be pending. */
+async function lockPendingRequest(trx, requestId) {
+  const request = await trx.table('stock_transfer_requests').where({ id: requestId }).forUpdate().first();
+  if (!request) throw new StockTransferRequestNotFoundError();
+  if (request.status !== 'pending') throw new StockTransferRequestNotPendingError(Number(requestId), request.status);
+  return request;
+}
+
+/**
+ * `trx`-based, from `runIdempotentMutation`. `lines` is `[{stockItemId,
+ * quantity}]`, already shape-checked by the controller (positive, at most
+ * 3 decimals). Stock availability is NOT checked here — asking for more
+ * than the store holds is a legitimate request; the issue decides what can
+ * actually be sent.
+ */
+async function createTransferRequest({ trx, fromOutletId, toOutletId, lines, note, userId }) {
+  if (String(fromOutletId) === String(toOutletId)) throw new SameOutletTransferError();
+  const fromOutlet = await assertOutlet(trx, fromOutletId);
+  const toOutlet = await assertOutlet(trx, toOutletId);
+
+  const ids = lines.map((line) => String(line.stockItemId));
+  if (new Set(ids).size !== ids.length) {
+    throw new ValidationError('DUPLICATE_STOCK_ITEM', 'Each stock item can appear only once on a request — combine the quantities.', [{ field: 'lines', issue: 'duplicate' }]);
+  }
+  const items = await trx.table('stock_items').whereIn('id', ids).select('id', 'status');
+  const activeIds = new Set(items.filter((item) => item.status === 'active').map((item) => String(item.id)));
+  if (ids.some((id) => !activeIds.has(id))) throw new StockItemNotFoundError();
+
+  const [requestId] = await trx.table('stock_transfer_requests').insert({
+    from_outlet_id: fromOutletId,
+    to_outlet_id: toOutletId,
+    status: 'pending',
+    note: note || null,
+    requested_by_user_id: userId,
+  });
+  for (const line of lines) {
+    await trx.table('stock_transfer_request_lines').insert({
+      request_id: requestId,
+      stock_item_id: line.stockItemId,
+      quantity_requested: line.quantity,
+    });
+  }
+
+  await notifyStaff({
+    trx,
+    eventType: 'stock.transfer_requested',
+    payload: { requestId: Number(requestId), fromOutletName: fromOutlet.name, toOutletName: toOutlet.name, lineCount: lines.length },
+  });
+  const [request] = await loadTransferRequests(trx, { ids: [requestId] });
+  return request;
+}
+
+/**
+ * Issues a pending request: one `transferStock` per line with a quantity
+ * above zero, all in the caller's one transaction — if any line cannot be
+ * sent (the source holds less than that line's quantity, or its item was
+ * archived since the request was raised) NOTHING is issued and the error
+ * names every such line; the storekeeper lowers them and issues again. `lines` must
+ * name every line of the request exactly once, `quantity` between 0 and
+ * what was asked (a line sent short is recorded as short, never over).
+ *
+ * Lock order: the request header (every decision's first lock), then the
+ * FULL stock-item closure of every line being issued, ascending, in one
+ * `lockStockItemsSorted` call — the same global order every stock writer
+ * uses, so two requests issuing overlapping items in different orders
+ * cannot deadlock. Each `transferStock` then re-locks rows this
+ * transaction already holds (instant) before its own source-level check.
+ */
+async function issueTransferRequest({ trx, requestId, lines, note, userId, businessDate }) {
+  const request = await lockPendingRequest(trx, requestId);
+  const requestLines = await trx.table('stock_transfer_request_lines').where({ request_id: requestId }).select('id', 'stock_item_id', 'quantity_requested');
+
+  const byItem = new Map(requestLines.map((line) => [String(line.stock_item_id), line]));
+  const given = new Map();
+  for (const line of lines) {
+    const key = String(line.stockItemId);
+    if (!byItem.has(key) || given.has(key)) {
+      throw new ValidationError('ISSUE_LINES_MISMATCH', 'Give one quantity for each item on the request — no other items.', [{ field: 'lines', issue: 'mismatch' }]);
+    }
+    if (compareQuantity(line.quantity, byItem.get(key).quantity_requested) > 0) {
+      throw new ValidationError('QUANTITY_EXCEEDS_REQUEST', 'You cannot issue more than was requested. Raise a new request for anything extra.', [
+        { field: 'lines', issue: 'exceeds_request', stockItemId: Number(key) },
+      ]);
+    }
+    given.set(key, line.quantity);
+  }
+  if (given.size !== byItem.size) {
+    throw new ValidationError('ISSUE_LINES_MISMATCH', 'Give one quantity for each item on the request — no other items.', [{ field: 'lines', issue: 'mismatch' }]);
+  }
+
+  const toSend = [...given.entries()].filter(([, quantity]) => compareQuantity(quantity, ZERO_QTY) > 0).sort(([a], [b]) => Number(a) - Number(b));
+  if (!toSend.length) throw new NothingIssuedError();
+
+  const lockClosure = await resolveLockClosure({ trx, stockItemIds: toSend.map(([id]) => id) });
+  const locked = await lockStockItemsSorted({ trx, stockItemIds: lockClosure });
+  for (const [id] of toSend) {
+    const item = locked.get(String(Number(id)));
+    if (item.status !== 'active') {
+      throw new ValidationError('STOCK_ITEM_ARCHIVED', `"${item.name}" has been archived since this request was raised — issue 0 of it.`, [
+        { field: 'lines', issue: 'archived', stockItemId: Number(id) },
+      ]);
+    }
+  }
+
+  // Every line is checked against the source, under the locks just taken,
+  // BEFORE anything is written — so a refusal names every short line at
+  // once and never leaves part of the request sent. `transferStock`
+  // re-checks each line itself (same locks, same answer).
+  const shortLines = [];
+  for (const [id, quantity] of toSend) {
+    const available = (await lockedLevel(trx, request.from_outlet_id, id))?.current_quantity ?? ZERO_QTY;
+    if (compareQuantity(available, quantity) < 0) {
+      const item = locked.get(String(Number(id)));
+      shortLines.push({ stockItemId: Number(id), name: item.name, unit: item.unit, available, requested: quantity });
+    }
+  }
+  if (shortLines.length) throw new InsufficientStockForIssueError(shortLines);
+
+  const movementNote = `Request #${request.id}${note ? ` — ${note}` : ''}`.slice(0, 255);
+  const references = new Map();
+  for (const [id, quantity] of toSend) {
+    const transfer = await transferStock({
+      trx,
+      stockItemId: id,
+      fromOutletId: request.from_outlet_id,
+      toOutletId: request.to_outlet_id,
+      quantity,
+      note: movementNote,
+      userId,
+      businessDate,
+    });
+    references.set(id, transfer.reference);
+  }
+
+  for (const line of requestLines) {
+    const key = String(line.stock_item_id);
+    await trx
+      .table('stock_transfer_request_lines')
+      .where({ id: line.id })
+      .update({ quantity_issued: given.get(key), transfer_reference: references.get(key) ?? null });
+  }
+  await trx.table('stock_transfer_requests').where({ id: request.id }).update({
+    status: 'issued',
+    decided_by_user_id: userId,
+    decided_at: new Date(),
+    decision_note: note || null,
+    business_date: businessDate,
+  });
+
+  const [issued] = await loadTransferRequests(trx, { ids: [request.id] });
+  const shortLineCount = issued.lines.filter((line) => compareQuantity(line.quantityIssued, line.quantityRequested) < 0).length;
+  await notifyStaff({
+    trx,
+    eventType: 'stock.transfer_request_issued',
+    payload: {
+      requestId: Number(request.id),
+      fromOutletName: issued.fromOutlet.name,
+      toOutletName: issued.toOutlet.name,
+      lineCount: issued.lines.length,
+      shortLineCount,
+    },
+  });
+  return issued;
+}
+
+/** Rejects a pending request; `reason` is required (the controller enforces it) and tells the requester why. */
+async function rejectTransferRequest({ trx, requestId, reason, userId }) {
+  const request = await lockPendingRequest(trx, requestId);
+  await trx.table('stock_transfer_requests').where({ id: request.id }).update({
+    status: 'rejected',
+    decided_by_user_id: userId,
+    decided_at: new Date(),
+    decision_note: reason,
+  });
+  const [rejected] = await loadTransferRequests(trx, { ids: [request.id] });
+  await notifyStaff({
+    trx,
+    eventType: 'stock.transfer_request_rejected',
+    payload: { requestId: Number(request.id), fromOutletName: rejected.fromOutlet.name, toOutletName: rejected.toOutlet.name, reason },
+  });
+  return rejected;
+}
+
+/** Withdraws a pending request (a requester changed their mind). No stock effect; the storekeeper's pending list simply loses it. */
+async function cancelTransferRequest({ trx, requestId, reason, userId }) {
+  const request = await lockPendingRequest(trx, requestId);
+  await trx.table('stock_transfer_requests').where({ id: request.id }).update({
+    status: 'cancelled',
+    decided_by_user_id: userId,
+    decided_at: new Date(),
+    decision_note: reason || null,
+  });
+  const [cancelled] = await loadTransferRequests(trx, { ids: [request.id] });
+  return cancelled;
 }
 
 // ---------------------------------------------------------------------
@@ -1250,6 +1563,12 @@ module.exports = {
   recordWastage,
   transferStock,
   listTransfers,
+  listTransferRequests,
+  getTransferRequest,
+  createTransferRequest,
+  issueTransferRequest,
+  rejectTransferRequest,
+  cancelTransferRequest,
   listStockTakes,
   getStockTake,
   openStockTake,
