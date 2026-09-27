@@ -25,6 +25,7 @@ const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { writeOutboxEvent } = require('../../shared/outbox');
 const { writeAuthEvent } = require('../../auth');
+const { describeEmailDelivery } = require('../notifications/email-adapter');
 
 const INVITATION_TTL_DAYS = 7;
 
@@ -137,7 +138,11 @@ async function inviteUser({ context, email, role, invitedByUserId }) {
       },
     });
 
-    return { invitation: await trx.table('user_invitations').where({ id }).first(), devOnlyToken };
+    // Whether the invitation email will actually reach them — a property
+    // with no mailbox only writes it to the server log (user-reported), so
+    // the invite screen warns instead of implying it was sent.
+    const emailDelivery = await describeEmailDelivery({ db: trx, propertyId: context.propertyId });
+    return { invitation: await trx.table('user_invitations').where({ id }).first(), devOnlyToken, emailDelivery };
   });
 }
 

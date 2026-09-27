@@ -69,6 +69,22 @@
   font-weight: var(--text-label-weight);
 }
 
+.warningBanner {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--state-warning) 35%, transparent);
+  background: var(--state-warning-bg);
+  color: var(--state-warning);
+  font-size: var(--text-label-size);
+  line-height: 1.5;
+}
+
+.warningBanner strong {
+  display: block;
+  margin-bottom: var(--space-1);
+}
+
 .disabledNotice {
   margin: 0;
   padding: var(--space-3);

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { EmailDeliveryNotice } from './EmailDeliveryNotice.jsx';
 import { Card, Button, Toast } from '../../shared/components/index.js';
 import { setupApi, ApiError } from '../../shared/api/index.js';
 import formStyles from './SetupForm.module.css';
@@ -31,6 +32,8 @@ export function EmailSettingsTab({ disabled, isOffline = false }) {
   const [testTo, setTestTo] = useState('');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  // Bumped after a save, so the delivery warning re-checks.
+  const [savedCount, setSavedCount] = useState(0);
 
   function emptyForm() {
     return { provider: 'console', smtp_host: '', smtp_port: '', smtp_user: '', smtp_password: '', smtp_from: '', smtp_from_name: '' };
@@ -83,6 +86,7 @@ export function EmailSettingsTab({ disabled, isOffline = false }) {
       setSettings(saved);
       setForm({ ...form, smtp_password: '' });
       setToast('Email settings saved');
+      setSavedCount((count) => count + 1);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not save email settings.');
     } finally {
@@ -96,7 +100,11 @@ export function EmailSettingsTab({ disabled, isOffline = false }) {
     setTestResult(null);
     try {
       const result = await setupApi.sendTestEmail(testTo);
-      setTestResult({ ok: true, message: `Sent via "${result.provider}". Check the inbox at ${testTo}.` });
+      setTestResult(
+        result.provider === 'console'
+          ? { ok: false, message: 'Written to the server log only — no mailbox is set up, so nothing was delivered.' }
+          : { ok: true, message: `Sent via "${result.provider}". Check the inbox at ${testTo}.` }
+      );
     } catch (caught) {
       setTestResult({ ok: false, message: caught instanceof ApiError ? caught.message : 'Could not send the test email.' });
     } finally {
@@ -111,6 +119,7 @@ export function EmailSettingsTab({ disabled, isOffline = false }) {
   return (
     <div>
       <Card title="Email delivery">
+        <EmailDeliveryNotice where="settings" refreshKey={savedCount} />
         {error && (
           <p role="alert" className={formStyles.errorBanner}>
             {error}
