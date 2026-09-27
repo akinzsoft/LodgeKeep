@@ -219,25 +219,26 @@ describe('stockCategoryForMenuCategory', () => {
 
   it('reuses a stock category matching the menu category, case-insensitively', async () => {
     mocks.listStockItemCategories.mockResolvedValue([{ id: '1', name: 'Shirts' }]);
-    expect(await stockCategoryForMenuCategory(' SHIRTS ')).toBe('Shirts');
+    expect(await stockCategoryForMenuCategory(' SHIRTS ', '3')).toBe('Shirts');
     expect(mocks.createStockItemCategory).not.toHaveBeenCalled();
+    expect(mocks.listStockItemCategories).toHaveBeenCalledWith({ outletId: '3' });
   });
 
   it('creates one named like the menu category when none matches', async () => {
     mocks.listStockItemCategories.mockResolvedValue([]);
     mocks.createStockItemCategory.mockResolvedValue({ id: '2', name: 'SHIRT' });
-    expect(await stockCategoryForMenuCategory('SHIRT')).toBe('SHIRT');
-    expect(mocks.createStockItemCategory).toHaveBeenCalledWith({ name: 'SHIRT' });
+    expect(await stockCategoryForMenuCategory('SHIRT', '3')).toBe('SHIRT');
+    expect(mocks.createStockItemCategory).toHaveBeenCalledWith({ outletId: '3', name: 'SHIRT' });
   });
 
   it('re-reads after a 409 from a concurrent create, and rethrows anything else', async () => {
     mocks.listStockItemCategories.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: '3', name: 'Shirt' }]);
     mocks.createStockItemCategory.mockRejectedValue(new ApiError({ code: 'CONFLICT_DUPLICATE_ENTRY', message: 'Exists.', status: 409 }));
-    expect(await stockCategoryForMenuCategory('SHIRT')).toBe('Shirt');
+    expect(await stockCategoryForMenuCategory('SHIRT', '3')).toBe('Shirt');
 
     mocks.listStockItemCategories.mockResolvedValue([]);
     mocks.createStockItemCategory.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'No.', status: 403 }));
-    await expect(stockCategoryForMenuCategory('SHIRT')).rejects.toThrow('No.');
+    await expect(stockCategoryForMenuCategory('SHIRT', '3')).rejects.toThrow('No.');
   });
 
   it('asks for nothing when there is no menu category', async () => {

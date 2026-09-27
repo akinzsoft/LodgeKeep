@@ -179,7 +179,7 @@ describe('<MenuItemsTab>', () => {
         expect.objectContaining({ outletId: '1', name: 'Soda', unit: 'unit', category: 'Drinks', purchaseCost: '2', supplier: 'Cola Co', reorderLevel: '6' })
       );
       // No stock category named like the menu category existed, so one was created — never "Uncategorized".
-      expect(stockMocks.createStockItemCategory).toHaveBeenCalledWith({ name: 'Drinks' });
+      expect(stockMocks.createStockItemCategory).toHaveBeenCalledWith({ outletId: '1', name: 'Drinks' });
       expect(stockMocks.recordGoodsReceived).toHaveBeenCalledWith(
         expect.objectContaining({ outletId: '1', reference: 'Initial stock', lines: [{ stockItemId: '40', quantity: '24', unitCost: '2' }] })
       );

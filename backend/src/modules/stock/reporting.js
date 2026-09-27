@@ -274,7 +274,11 @@ async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
   const db = scopedDb().for(context);
 
   // Sequential reads, joined in JS (this codebase never runs parallel queries on one accessor).
-  const categories = await db.table('stock_item_categories').where({ status: 'active' }).orderBy('sort_order').orderBy('name').select('name');
+  // Stock categories belong to one outlet (20261105090000): a single outlet's
+  // report lists only its own; the all-outlets report lists each name once.
+  let categoryQuery = db.table('stock_item_categories').where({ status: 'active' });
+  if (outletId) categoryQuery = categoryQuery.where({ outlet_id: outletId });
+  const categories = await categoryQuery.orderBy('sort_order').orderBy('name').select('name');
   let itemQuery = db.table('stock_items').where({ status: 'active' });
   if (outletId) itemQuery = itemQuery.where({ outlet_id: outletId });
   const items = await itemQuery.select('id', 'outlet_id', 'name', 'unit', 'category', 'current_quantity', 'reorder_level', 'purchase_cost');
@@ -330,7 +334,7 @@ async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
   });
 
   // One row per registered category (display order), then Uncategorized, then any category an item still names that is no longer registered.
-  const registered = categories.map((row) => row.name);
+  const registered = [...new Set(categories.map((row) => row.name))];
   const registeredSet = new Set(registered);
   const unregistered = [...new Set(itemRows.map((row) => row.category).filter((name) => name !== null && !registeredSet.has(name)))].sort();
   const categoryOrder = [...registered, null, ...unregistered];

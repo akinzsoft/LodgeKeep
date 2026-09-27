@@ -72,8 +72,8 @@ describe('Stock overview by category (gap closure)', () => {
     });
   }
 
-  async function newCategory(tenant, name, sortOrder = 0) {
-    await t.trx('stock_item_categories').insert({ tenant_id: tenant.id, property_id: tenant.properties[0].id, name, sort_order: sortOrder });
+  async function newCategory(tenant, name, sortOrder = 0, outlet = tenant === ctx.a ? outletId : tenant.posOutlets[0].id) {
+    await t.trx('stock_item_categories').insert({ tenant_id: tenant.id, property_id: tenant.properties[0].id, outlet_id: outlet, name, sort_order: sortOrder });
   }
 
   const overview = (query = '', token = manager()) => t.request.get(`/api/v1/pos/stock/reports/overview?date_from=${DATE}&date_to=${DATE}${query}`).set('Authorization', `Bearer ${token}`);
@@ -107,7 +107,7 @@ describe('Stock overview by category (gap closure)', () => {
 
   it('shows a registered category with no items, plus Uncategorized and an unregistered-but-referenced category', async () => {
     const outlet = await newOutlet(ctx.a);
-    await newCategory(ctx.a, 'Empty shelf', 5);
+    await newCategory(ctx.a, 'Empty shelf', 5, outlet);
     await newStockItem(ctx.a, outlet, { name: 'Loose item', category: null });
     await newStockItem(ctx.a, outlet, { name: 'Orphan item', category: 'Retired category' });
 
@@ -120,7 +120,7 @@ describe('Stock overview by category (gap closure)', () => {
 
   it('folds the period\'s movements onto each item — sold net of reversals, received, wastage and stock-take adjustments — and rolls cost up per category', async () => {
     const outlet = await newOutlet(ctx.a);
-    await newCategory(ctx.a, 'Spirits', 1);
+    await newCategory(ctx.a, 'Spirits', 1, outlet);
     const gin = await newStockItem(ctx.a, outlet, { name: 'Gin', category: 'Spirits', current: '80.000' });
     const rum = await newStockItem(ctx.a, outlet, { name: 'Rum', category: 'Spirits', current: '50.000' });
 
@@ -144,7 +144,7 @@ describe('Stock overview by category (gap closure)', () => {
 
   it('flags items at or below their reorder level, and counts them per category', async () => {
     const outlet = await newOutlet(ctx.a);
-    await newCategory(ctx.a, 'Mixers', 2);
+    await newCategory(ctx.a, 'Mixers', 2, outlet);
     await newStockItem(ctx.a, outlet, { name: 'Tonic low', category: 'Mixers', current: '5.000', reorder: '10.000' });
     await newStockItem(ctx.a, outlet, { name: 'Soda fine', category: 'Mixers', current: '50.000', reorder: '10.000' });
     await newStockItem(ctx.a, outlet, { name: 'No level', category: 'Mixers', current: '0.000', reorder: '0.000' });
@@ -180,6 +180,23 @@ describe('Stock overview by category (gap closure)', () => {
     expect(missing.status).toBe(400);
   });
 
+  it("lists only the chosen outlet's stock categories, and each name once across all outlets", async () => {
+    const a = await newOutlet(ctx.a);
+    const b = await newOutlet(ctx.a);
+    await newCategory(ctx.a, 'Shoes', 0, a);
+    await newCategory(ctx.a, 'Shared name', 1, a);
+    await newCategory(ctx.a, 'Shared name', 1, b);
+    await newCategory(ctx.a, 'Bar only', 2, b);
+
+    const atA = (await overview(`&outlet_id=${a}`)).body.data.byCategory.map((c) => c.category);
+    expect(atA).toEqual(expect.arrayContaining(['Shoes', 'Shared name']));
+    expect(atA).not.toContain('Bar only');
+
+    const all = (await overview()).body.data.byCategory.map((c) => c.category);
+    expect(all.filter((name) => name === 'Shared name')).toHaveLength(1);
+    expect(all).toEqual(expect.arrayContaining(['Shoes', 'Bar only']));
+  });
+
   it('needs pos.stock_manage — a pos_operator is refused', async () => {
     expect((await overview('', operator())).status).toBe(403);
   });
@@ -196,7 +213,7 @@ describe('Stock overview by category (gap closure)', () => {
 
   it('a stock item lists its category on movement history too', async () => {
     const outlet = await newOutlet(ctx.a);
-    await newCategory(ctx.a, 'History cat', 3);
+    await newCategory(ctx.a, 'History cat', 3, outlet);
     const id = await newStockItem(ctx.a, outlet, { name: 'History item', category: 'History cat' });
     await movement(ctx.a, outlet, id, 'sold', '-1.000', '-2.00');
 

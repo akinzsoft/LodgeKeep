@@ -1801,15 +1801,17 @@ const ENTITIES = [
 
   {
     table: 'stock_item_categories',
-    uniqueKeys: [['property_id', 'name']],
+    uniqueKeys: [['outlet_id', 'name']],
     newRow: (ctx, t) => ({
       tenant_id: t.id,
       property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
       name: 'New Fixture Stock Category',
     }),
     duplicateRow: (ctx, t) => ({
       tenant_id: t.id,
       property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
       name: 'Beverages', // Matches seedTwoTenants' own fixture category.
     }),
     crossTenant: [
@@ -1818,7 +1820,17 @@ const ENTITIES = [
         row: (ctx, own, other) => ({
           tenant_id: own.id,
           property_id: other.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
           name: 'Cross-Tenant Stock Category',
+        }),
+      },
+      {
+        name: "registers a stock category against another tenant's outlet",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          name: 'Cross-Tenant Outlet Stock Category',
         }),
       },
     ],

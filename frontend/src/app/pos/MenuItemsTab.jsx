@@ -307,7 +307,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
         // menu category, so it never shows up as "Uncategorized" in Stock.
         let stockCategory = null;
         try {
-          stockCategory = await stockCategoryForMenuCategory(categoryName);
+          stockCategory = await stockCategoryForMenuCategory(categoryName, outletId);
         } catch (caught) {
           problems.push(`its stock category could not be set (${caught instanceof ApiError ? caught.message : 'unknown error'}) — set it under Stock → Stock items`);
         }

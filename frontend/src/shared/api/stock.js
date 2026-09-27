@@ -25,15 +25,17 @@ function idempotencyKey() {
 // wrappers exactly.
 // ---------------------------------------------------------------------
 
-export function listStockItemCategories({ includeArchived } = {}) {
+/** Stock categories belong to one outlet — pass `outletId` for that outlet's list (every outlet's otherwise). */
+export function listStockItemCategories({ includeArchived, outletId } = {}) {
   const params = new URLSearchParams();
   if (includeArchived) params.set('include_archived', 'true');
+  if (outletId) params.set('outlet_id', String(outletId));
   const query = params.toString();
   return request(`/pos/stock/categories${query ? `?${query}` : ''}`);
 }
 
-export function createStockItemCategory({ name, sortOrder }) {
-  return request('/pos/stock/categories', { method: 'POST', body: { name, sort_order: sortOrder } });
+export function createStockItemCategory({ outletId, name, sortOrder }) {
+  return request('/pos/stock/categories', { method: 'POST', body: { outlet_id: outletId, name, sort_order: sortOrder } });
 }
 
 export function updateStockItemCategory(id, { name, sortOrder } = {}) {
