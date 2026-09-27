@@ -61,6 +61,12 @@ const ICONS = {
       <path d="M8 7h8M8 11h2M12 11h2M16 11h0M8 15h2M12 15h2M8 18h8" />
     </Icon>
   ),
+  stock: (
+    <Icon>
+      <path d="M3 8 12 3l9 5v10l-9 5-9-5V8z" />
+      <path d="M3 8l9 5 9-5M12 13v10" />
+    </Icon>
+  ),
   departments: (
     <Icon>
       <rect x="4" y="3" width="16" height="18" rx="1.5" />

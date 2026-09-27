@@ -93,6 +93,27 @@ export function recordWastage(stockItemId, { outletId, quantity, reason }) {
   });
 }
 
+/**
+ * Moves stock from one outlet to another — two ledger legs, written together
+ * (`stock/service.js`'s `transferStock`). Refused outright if the source does
+ * not hold enough. Idempotency-keyed like every other quantity-moving call.
+ */
+export function transferStock({ stockItemId, fromOutletId, toOutletId, quantity, note }) {
+  return request('/pos/stock/transfers', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey() },
+    body: { stock_item_id: stockItemId, from_outlet_id: fromOutletId, to_outlet_id: toOutletId, quantity, note: note || undefined },
+  });
+}
+
+/** Recent transfers, one row per transfer; `outletId` narrows to those in or out of that outlet. Quantities only, no cost. */
+export function listTransfers({ outletId, limit } = {}) {
+  const params = new URLSearchParams();
+  if (outletId) params.set('outlet_id', outletId);
+  if (limit) params.set('limit', limit);
+  return request(`/pos/stock/transfers?${params}`);
+}
+
 /** Every outlet's quantity and reorder level for one stock item. */
 export function listStockLevels(stockItemId) {
   return request(`/pos/stock/items/${stockItemId}/levels`);

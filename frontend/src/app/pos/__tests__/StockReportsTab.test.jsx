@@ -183,14 +183,14 @@ describe('<StockReportsTab>', () => {
     const OVERVIEW = {
       totals: { itemCount: 3, soldCost: '60.00', wastageCost: '10.00' },
       byCategory: [
-        { category: 'Spirits', registered: true, itemCount: 2, lowStockCount: 1, soldCost: '60.00', wastageCost: '10.00' },
-        { category: 'Empty shelf', registered: true, itemCount: 0, lowStockCount: 0, soldCost: '0.00', wastageCost: '0.00' },
-        { category: null, registered: null, itemCount: 1, lowStockCount: 0, soldCost: '0.00', wastageCost: '0.00' },
+        { category: 'Spirits', registered: true, itemCount: 2, lowStockCount: 1, soldCost: '60.00', wastageCost: '10.00', transferInCost: '0.00', transferOutCost: '12.50' },
+        { category: 'Empty shelf', registered: true, itemCount: 0, lowStockCount: 0, soldCost: '0.00', wastageCost: '0.00', transferInCost: '0.00', transferOutCost: '0.00' },
+        { category: null, registered: null, itemCount: 1, lowStockCount: 0, soldCost: '0.00', wastageCost: '0.00', transferInCost: '0.00', transferOutCost: '0.00' },
       ],
       items: [
-        { stockItemId: '20', name: 'Gin', unit: 'ml', category: 'Spirits', currentQuantity: '80.000', soldQty: '20.000', soldCost: '40.00', receivedQty: '100.000', wastageQty: '5.000', wastageCost: '10.00', adjustmentQty: '0.000' },
-        { stockItemId: '21', name: 'Rum', unit: 'ml', category: 'Spirits', currentQuantity: '50.000', soldQty: '10.000', soldCost: '20.00', receivedQty: '0.000', wastageQty: '0.000', wastageCost: '0.00', adjustmentQty: '0.000' },
-        { stockItemId: '22', name: 'Never sold ice', unit: 'kg', category: null, currentQuantity: '4.000', soldQty: '0.000', soldCost: '0.00', receivedQty: '0.000', wastageQty: '0.000', wastageCost: '0.00', adjustmentQty: '0.000' },
+        { stockItemId: '20', name: 'Gin', unit: 'ml', category: 'Spirits', currentQuantity: '80.000', soldQty: '20.000', soldCost: '40.00', receivedQty: '100.000', wastageQty: '5.000', wastageCost: '10.00', transferInQty: '0.000', transferOutQty: '2.500', adjustmentQty: '0.000' },
+        { stockItemId: '21', name: 'Rum', unit: 'ml', category: 'Spirits', currentQuantity: '50.000', soldQty: '10.000', soldCost: '20.00', receivedQty: '0.000', wastageQty: '0.000', wastageCost: '0.00', transferInQty: '0.000', transferOutQty: '0.000', adjustmentQty: '0.000' },
+        { stockItemId: '22', name: 'Never sold ice', unit: 'kg', category: null, currentQuantity: '4.000', soldQty: '0.000', soldCost: '0.00', receivedQty: '0.000', wastageQty: '0.000', wastageCost: '0.00', transferInQty: '0.000', transferOutQty: '0.000', adjustmentQty: '0.000' },
       ],
     };
 
@@ -212,6 +212,12 @@ describe('<StockReportsTab>', () => {
       const items = screen.getByRole('heading', { name: 'Every stock item — by stock category' }).closest('section');
       expect(within(items).getByText('Gin')).toBeInTheDocument();
       expect(within(items).getByText('Never sold ice')).toBeInTheDocument();
+      // A transfer is its own column, never folded into Wasted or Received.
+      const ginRow = within(items).getByText('Gin').closest('tr');
+      const headers = within(items).getAllByRole('columnheader').map((cell) => cell.textContent);
+      const cells = within(ginRow).getAllByRole('cell').map((cell) => cell.textContent);
+      expect(cells[headers.indexOf('Transferred out')]).toBe('2.500 ml');
+      expect(cells[headers.indexOf('Wasted')]).toBe('5.000 ml');
       expect(screen.getByText(/3 active stock items — cost of sales/)).toBeInTheDocument();
       expect(mocks.getStockOverview).toHaveBeenCalledWith({ dateFrom: expect.any(String), dateTo: expect.any(String), outletId: undefined });
     });
@@ -219,6 +225,8 @@ describe('<StockReportsTab>', () => {
     it('with an outlet chosen, lists its movement history — a Register sale is labelled as one', async () => {
       mocks.listStockMovements.mockResolvedValue([
         { id: '5', business_date: '2027-06-01', type: 'sold', quantity: '-1.000', stock_item_name: 'Gin', stock_item_unit: 'ml', stock_item_category: 'Spirits' },
+        { id: '7', business_date: '2027-06-01', type: 'transfer', quantity: '-2.000', stock_item_name: 'Gin', stock_item_unit: 'ml', stock_item_category: 'Spirits' },
+        { id: '8', business_date: '2027-06-01', type: 'transfer', quantity: '3.000', stock_item_name: 'Rum', stock_item_unit: 'ml', stock_item_category: 'Spirits' },
         { id: '4', business_date: '2027-06-01', type: 'received', quantity: '100.000', stock_item_name: 'Gin', stock_item_unit: 'ml', stock_item_category: null },
       ]);
       render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
@@ -227,8 +235,11 @@ describe('<StockReportsTab>', () => {
 
       const table = (await screen.findByRole('heading', { name: 'Stock movements — including Register sales' })).closest('section');
       expect(within(table).getByText('Register sale')).toBeInTheDocument();
+      expect(within(table).getByText('Transfer out')).toBeInTheDocument();
+      expect(within(table).getByText('Transfer in')).toBeInTheDocument();
+      expect(within(table).queryByText('Wastage')).not.toBeInTheDocument();
       expect(within(table).getByText('Received')).toBeInTheDocument();
-      expect(within(table).getByText('Spirits')).toBeInTheDocument();
+      expect(within(table).getAllByText('Spirits').length).toBeGreaterThan(0);
       expect(within(table).getByText('Uncategorized')).toBeInTheDocument();
       expect(mocks.listStockMovements).toHaveBeenCalledWith(expect.objectContaining({ outletId: '1' }));
     });

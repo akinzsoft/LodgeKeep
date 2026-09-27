@@ -1,6 +1,7 @@
 import lodgekeepIcon from '../../assets/brand/lodgekeep-icon.png';
 import { initialsFor } from './initials.js';
 import { NavIcon } from './navIcons.jsx';
+import { isNavItemVisible } from './nav-config.js';
 import styles from './Sidebar.module.css';
 
 /**
@@ -57,7 +58,7 @@ export function Sidebar({
   const visibleGroups = navGroups
     .map((group) => ({
       ...group,
-      items: group.items.filter((item) => !item.requiredPermission || permissions.has(item.requiredPermission)),
+      items: group.items.filter((item) => isNavItemVisible(item, permissions)),
     }))
     .filter((group) => group.items.length > 0);
 

@@ -350,6 +350,13 @@ describe('<RegisterTab>', () => {
     });
   });
 
+  it('never offers a store outlet — a store holds stock but is not a point of sale', async () => {
+    mocks.listOutlets.mockResolvedValue([{ id: '9', name: 'Main Store', type: 'store' }, OUTLET]);
+    render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
+    await selectWhenLoaded('Outlet', 'Main Bar');
+    expect(within(screen.getByLabelText('Outlet')).queryByRole('option', { name: 'Main Store' })).not.toBeInTheDocument();
+  });
+
   it('shows the item photo on its menu card', async () => {
     mocks.listMenuItems.mockResolvedValue([{ ...MENU_ITEM, image_url: '/api/v1/media/menu-items/cocktail.png' }]);
     await openNewTab([]);

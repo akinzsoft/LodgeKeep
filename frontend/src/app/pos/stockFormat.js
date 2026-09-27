@@ -51,3 +51,9 @@ export function quantityShortfall(reorderLevel, currentQuantity) {
   return `${units / 1000n}.${(units % 1000n).toString().padStart(3, '0')}`;
 }
 
+
+/** Exact comparison of two quantity strings (-1, 0, 1), in BigInt thousandths — never a float. */
+export function compareQuantity(a, b) {
+  const diff = toQtyUnits(a) - toQtyUnits(b);
+  return diff === 0n ? 0 : diff > 0n ? 1 : -1;
+}

@@ -142,7 +142,36 @@ class OrderNotFoundError extends ValidationError {
   }
 }
 
+/** A store outlet holds and issues stock; it never takes an order, a terminal, or guest QR ordering (`shared/outlet-types.js`). */
+class StoreOutletNotAPointOfSaleError extends AppError {
+  constructor(outletName) {
+    super(
+      'BUSINESS_RULE_STORE_OUTLET_NOT_SELLABLE',
+      `${outletName ? `"${outletName}"` : 'This outlet'} is a store — it holds and issues stock and is not a point of sale.`,
+      422,
+    );
+  }
+}
+
+/** Turning an outlet into a store while it is still selling would strand an open tab or a live guest QR code. */
+class StoreOutletConversionBlockedError extends AppError {
+  constructor({ openOrderCount, guestOrderingEnabled, activeTokenCount }) {
+    const reasons = [];
+    if (openOrderCount) reasons.push(`${openOrderCount} open tab${openOrderCount === 1 ? '' : 's'}`);
+    if (guestOrderingEnabled) reasons.push('guest QR ordering switched on');
+    if (activeTokenCount) reasons.push(`${activeTokenCount} active QR code${activeTokenCount === 1 ? '' : 's'}`);
+    super(
+      'CONFLICT_STORE_OUTLET_CONVERSION_BLOCKED',
+      `This outlet can't become a store while it has ${reasons.join(', ')}. Settle or void the tabs and turn off guest ordering and its QR codes first.`,
+      409,
+      { openOrderCount, guestOrderingEnabled, activeTokenCount },
+    );
+  }
+}
+
 module.exports = {
+  StoreOutletNotAPointOfSaleError,
+  StoreOutletConversionBlockedError,
   OrderNotOpenError,
   OrderItemAlreadyVoidedError,
   RoomChargeRejectedError,

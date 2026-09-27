@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Card, DataTable, Button, StatusPill } from '../../shared/components/index.js';
 import { posApi, setupApi, ApiError } from '../../shared/api/index.js';
 import formStyles from './POSForm.module.css';
+import { pointOfSaleOutlets } from './outletTypes.js';
 
 /**
  * QrTokensTab — PLAN.md Phase 6's QR self-ordering configuration surface:
@@ -58,7 +59,7 @@ export function QrTokensTab() {
   useEffect(() => {
     posApi
       .listOutlets()
-      .then(setOutlets)
+      .then((rows) => setOutlets(pointOfSaleOutlets(rows)))
       .catch((caught) => {
         setOutlets([]);
         setOutletError(caught instanceof ApiError ? caught.message : 'Could not load outlets.');

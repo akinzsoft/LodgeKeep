@@ -218,6 +218,60 @@ async function recordWastage(req, res, next) {
 }
 
 // ---------------------------------------------------------------------
+// Transfers between outlets
+// ---------------------------------------------------------------------
+
+/** A positive quantity with at most 3 decimals (the `DECIMAL(14,3)` the ledger stores) — never rounded, never a float. */
+function requirePositiveQuantity(body, field) {
+  const value = String(require_(body, field)).trim();
+  if (!/^\d+(\.\d{1,3})?$/.test(value) || /^0+(\.0+)?$/.test(value)) {
+    throw new ValidationError('INVALID_QUANTITY', `"${field}" must be a positive quantity with at most 3 decimal places.`, [{ field, issue: 'invalid' }]);
+  }
+  return value;
+}
+
+async function transferStock(req, res, next) {
+  try {
+    const stockItemId = require_(req.body, 'stock_item_id');
+    const fromOutletId = require_(req.body, 'from_outlet_id');
+    const toOutletId = require_(req.body, 'to_outlet_id');
+    const quantity = requirePositiveQuantity(req.body, 'quantity');
+    const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 255) : null;
+    await runIdempotentMutation(req, res, {
+      operationType: 'stock.transfer',
+      entityType: 'stock_items',
+      entityId: stockItemId,
+      action: 'transfer',
+      handler: async (trx) => {
+        const property = await trx.table('properties').first('current_business_date');
+        const result = await service.transferStock({
+          trx,
+          stockItemId,
+          fromOutletId,
+          toOutletId,
+          quantity,
+          note,
+          userId: req.context.userId,
+          businessDate: property?.current_business_date,
+        });
+        return { status: 201, body: ok(result) };
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function listTransfers(req, res, next) {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+    res.status(200).json(ok(await service.listTransfers({ context: req.context, outletId: req.query.outlet_id || undefined, limit })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ---------------------------------------------------------------------
 // Recipe / BOM
 // ---------------------------------------------------------------------
 
@@ -448,6 +502,8 @@ module.exports = {
   updateStockItem,
   archiveStockItem,
   recordWastage,
+  transferStock,
+  listTransfers,
   listStockLevels,
   listMenuItemComponents,
   listMenuItemLinks,

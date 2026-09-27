@@ -74,7 +74,7 @@ describe('<NotificationsTab>', () => {
     await userEvent.click(save);
 
     const rules = mocks.saveNotificationRoleRules.mock.calls[0][0];
-    expect(rules).toHaveLength(14);
+    expect(rules).toHaveLength(16); // 2 notification types × 8 roles
     expect(rules).toContainEqual({ eventType: 'room.became_dirty', role: 'front_desk', enabled: true });
     expect(rules).toContainEqual({ eventType: 'room.became_dirty', role: 'cashier', enabled: false });
     expect(await screen.findByText('Notification settings saved')).toBeInTheDocument();

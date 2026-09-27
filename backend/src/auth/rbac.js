@@ -173,4 +173,31 @@ function requirePermission(permissionKey) {
   };
 }
 
-module.exports = { requirePermission, assertPermission, hasPermission, listGrantedPermissions, resolveMyPermissions };
+/**
+ * `requireAnyPermission([keyA, keyB])` — passes when the role holds at least
+ * one of the keys. For a read two differently-shaped roles both need (the
+ * outlet list: a POS operator selling at one, a Storekeeper moving stock
+ * between them) where neither key implies the other. The same three checks
+ * as `requirePermission`, the first key named in the 403.
+ */
+function requireAnyPermission(permissionKeys) {
+  return async function requireAnyPermissionMiddleware(req, res, next) {
+    try {
+      let role = null;
+      for (const key of permissionKeys) {
+        try {
+          req.role = await assertPermission(req.context, key);
+          return next();
+        } catch (error) {
+          if (!(error instanceof PermissionDeniedError)) throw error;
+          role = error.details?.role ?? null;
+        }
+      }
+      throw new PermissionDeniedError(permissionKeys.join(' or '), role);
+    } catch (error) {
+      return next(error);
+    }
+  };
+}
+
+module.exports = { requirePermission, requireAnyPermission, assertPermission, hasPermission, listGrantedPermissions, resolveMyPermissions };

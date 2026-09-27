@@ -3,6 +3,7 @@ import { Button, Card, StatusPill } from '../../shared/components/index.js';
 import { posApi, ApiError } from '../../shared/api/index.js';
 import formStyles from './POSForm.module.css';
 import styles from './TicketsTab.module.css';
+import { pointOfSaleOutlets } from './outletTypes.js';
 
 /** How often the queue re-reads itself while the tab is open. */
 export const REFRESH_MS = 10_000;
@@ -97,7 +98,7 @@ export function TicketsTab() {
   useEffect(() => {
     posApi
       .listOutlets()
-      .then((rows) => setOutlets(rows.filter((outlet) => outlet.status !== 'archived')))
+      .then((rows) => setOutlets(pointOfSaleOutlets(rows).filter((outlet) => outlet.status !== 'archived')))
       .catch(() => setOutlets([]));
   }, []);
 

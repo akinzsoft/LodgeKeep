@@ -82,6 +82,10 @@ export const DEFAULT_NAV_GROUPS = [
       // via the API's own checks, the same split Cashiering's own
       // `cashiering.void_line` already established).
       { key: 'pos', label: 'POS', requiredPermission: 'pos.operate' },
+      // Stock on its own, for a Storekeeper: they move stock but do not sell,
+      // so they never see POS (`pos.operate`). Hidden from anyone who can
+      // open POS, where the same screens already live under POS → Stock.
+      { key: 'stock', label: 'Stock', requiredPermission: 'pos.stock_transfer', hiddenWithPermission: 'pos.operate' },
       // Gap closure (user-reported): this item had no screen in `main.jsx`
       // and bounced to Home. It now opens `StaffScreen` (the existing
       // user-management tab). Gated on `setup.view`, the key `/users`
@@ -175,5 +179,16 @@ export const DEFAULT_NAV_GROUPS = [
 export function isNavItemAllowed(key, permissions, groups = DEFAULT_NAV_GROUPS) {
   const item = groups.flatMap((group) => group.items).find((candidate) => candidate.key === key);
   if (!item) return false;
-  return !item.requiredPermission || permissions.has(item.requiredPermission);
+  return isNavItemVisible(item, permissions);
+}
+
+/**
+ * One nav item's own rule: it needs `requiredPermission` (if any), and is
+ * hidden from a role holding `hiddenWithPermission` — for an item that only
+ * exists because some roles can't reach the same screens by another item.
+ */
+export function isNavItemVisible(item, permissions) {
+  if (item.requiredPermission && !permissions.has(item.requiredPermission)) return false;
+  if (item.hiddenWithPermission && permissions.has(item.hiddenWithPermission)) return false;
+  return true;
 }

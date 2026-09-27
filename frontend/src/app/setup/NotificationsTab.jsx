@@ -4,12 +4,13 @@ import { notificationsApi, ApiError } from '../../shared/api/index.js';
 import formStyles from './SetupForm.module.css';
 import styles from './NotificationsTab.module.css';
 
-/** SECURITY.md §5's seven system roles, in the order Setup > Users lists them. */
+/** SECURITY.md §5's system roles, in the order Setup > Users lists them. */
 const ROLES = [
   { code: 'front_desk', label: 'Front desk' },
   { code: 'cashier', label: 'Cashier' },
   { code: 'housekeeping', label: 'Housekeeping' },
   { code: 'pos_operator', label: 'POS operator' },
+  { code: 'storekeeper', label: 'Storekeeper' },
   { code: 'manager', label: 'Manager' },
   { code: 'admin', label: 'Admin' },
   { code: 'super_admin', label: 'Super admin' },

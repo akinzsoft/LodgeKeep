@@ -23,6 +23,13 @@ describe('isNavItemAllowed', () => {
     expect(isNavItemAllowed('setup', new Set(['reservations.view']))).toBe(false);
   });
 
+  it('shows Stock to a Storekeeper (transfer, no Register) and hides it from anyone who can open POS', () => {
+    expect(isNavItemAllowed('stock', new Set(['pos.stock_view', 'pos.stock_transfer']))).toBe(true);
+    expect(isNavItemAllowed('pos', new Set(['pos.stock_view', 'pos.stock_transfer']))).toBe(false);
+    expect(isNavItemAllowed('stock', new Set(['pos.operate', 'pos.stock_view', 'pos.stock_transfer']))).toBe(false);
+    expect(isNavItemAllowed('stock', new Set(['pos.operate', 'pos.stock_view']))).toBe(false);
+  });
+
   it('never allows an unknown key', () => {
     expect(isNavItemAllowed('not-a-screen', new Set(['setup.view']))).toBe(false);
   });
