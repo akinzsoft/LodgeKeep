@@ -63,15 +63,17 @@ function niceMax(value) {
 /**
  * @param {{key: string, label: string, tone: 'primary'|'secondary', values: number[]}[]} series
  * @param {string[]} labels   One x-axis label per value.
+ * @param {number} [maxValue]   A fixed top of scale (e.g. 100 for a percentage); otherwise rounded up from the data.
+ * @param {(tick: number) => string} [formatTick]   Y-axis label text.
  */
-export function AreaChart({ series, labels, ariaLabel }) {
+export function AreaChart({ series, labels, ariaLabel, maxValue, formatTick = defaultTick }) {
   const gradientPrefix = useId();
   const [containerRef, width] = useMeasuredWidth(600);
   const height = 220;
-  const pad = { top: 12, right: 12, bottom: 28, left: 32 };
+  const pad = { top: 12, right: 12, bottom: 28, left: 44 };
   const innerWidth = width - pad.left - pad.right;
   const innerHeight = height - pad.top - pad.bottom;
-  const max = niceMax(Math.max(...series.flatMap((entry) => entry.values), 0));
+  const max = maxValue ?? niceMax(Math.max(...series.flatMap((entry) => entry.values), 0));
   const ticks = [0, max / 2, max];
   const x = (index) => pad.left + (labels.length === 1 ? innerWidth / 2 : (index / (labels.length - 1)) * innerWidth);
   const y = (value) => pad.top + innerHeight - (value / max) * innerHeight;
@@ -92,7 +94,7 @@ export function AreaChart({ series, labels, ariaLabel }) {
         <g key={tick}>
           <line className={styles.gridLine} x1={pad.left} x2={width - pad.right} y1={y(tick)} y2={y(tick)} />
           <text className={styles.axisLabel} x={pad.left - 8} y={y(tick)} textAnchor="end" dominantBaseline="middle">
-            {Number.isInteger(tick) ? tick : tick.toFixed(1)}
+            {formatTick(tick)}
           </text>
         </g>
       ))}
@@ -116,6 +118,73 @@ export function AreaChart({ series, labels, ariaLabel }) {
         </text>
       ))}
     </svg>
+    </div>
+  );
+}
+
+function defaultTick(tick) {
+  return Number.isInteger(tick) ? String(tick) : tick.toFixed(1);
+}
+
+/** Axis text for money — 65000 → "65k", 1200000 → "1.2M". Chart geometry only; exact figures are shown elsewhere. */
+export function compactNumber(value) {
+  const abs = Math.abs(value);
+  if (abs >= 1e6) return `${(value / 1e6).toFixed(abs >= 1e7 ? 0 : 1).replace(/\.0$/, '')}M`;
+  if (abs >= 1e3) return `${(value / 1e3).toFixed(abs >= 1e4 ? 0 : 1).replace(/\.0$/, '')}k`;
+  return String(Math.round(value));
+}
+
+/**
+ * One bar per label — the daily-revenue chart. Same real-pixel sizing as
+ * `AreaChart` (see `useMeasuredWidth`), so axis text stays 12px at any width.
+ * `highlightIndex` gives one bar (the current business date) the full accent.
+ *
+ * @param {number[]} values
+ * @param {string[]} labels
+ */
+export function BarChart({ values, labels, ariaLabel, formatTick = compactNumber, highlightIndex = null }) {
+  const [containerRef, width] = useMeasuredWidth(600);
+  const height = 220;
+  const pad = { top: 12, right: 12, bottom: 28, left: 44 };
+  const innerWidth = width - pad.left - pad.right;
+  const innerHeight = height - pad.top - pad.bottom;
+  const max = niceMax(Math.max(...values, 0));
+  const ticks = [0, max / 2, max];
+  const slot = values.length > 0 ? innerWidth / values.length : innerWidth;
+  const barWidth = Math.max(Math.min(slot * 0.56, 28), 4);
+  const y = (value) => pad.top + innerHeight - (value / max) * innerHeight;
+
+  return (
+    <div ref={containerRef} className={styles.chartContainer}>
+      <svg className={styles.chart} width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={ariaLabel}>
+        {ticks.map((tick) => (
+          <g key={tick}>
+            <line className={styles.gridLine} x1={pad.left} x2={width - pad.right} y1={y(tick)} y2={y(tick)} />
+            <text className={styles.axisLabel} x={pad.left - 8} y={y(tick)} textAnchor="end" dominantBaseline="middle">
+              {formatTick(tick)}
+            </text>
+          </g>
+        ))}
+        {values.map((value, index) => {
+          const barHeight = Math.max(pad.top + innerHeight - y(value), value > 0 ? 2 : 0);
+          return (
+            <rect
+              key={`${labels[index]}-${index}`}
+              className={index === highlightIndex ? styles.barHighlight : styles.bar}
+              x={pad.left + slot * index + (slot - barWidth) / 2}
+              y={pad.top + innerHeight - barHeight}
+              width={barWidth}
+              height={barHeight}
+              rx={3}
+            />
+          );
+        })}
+        {labels.map((label, index) => (
+          <text key={`${label}-${index}`} className={styles.axisLabel} x={pad.left + slot * index + slot / 2} y={height - 8} textAnchor="middle">
+            {label}
+          </text>
+        ))}
+      </svg>
     </div>
   );
 }

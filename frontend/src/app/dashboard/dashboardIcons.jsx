@@ -49,3 +49,60 @@ export function RevenueIcon() {
     </IconBase>
   );
 }
+
+export function OccupancyIcon() {
+  return (
+    <IconBase>
+      <path d="M4 20V10l8-6 8 6v10" />
+      <path d="M9 20v-6h6v6" />
+    </IconBase>
+  );
+}
+
+export function RateIcon() {
+  return (
+    <IconBase>
+      <path d="M3.5 12.5V5a1.5 1.5 0 0 1 1.5-1.5h7.5l8 8-9 9z" />
+      <circle cx="8" cy="8" r="1.4" />
+    </IconBase>
+  );
+}
+
+export function RevparIcon() {
+  return (
+    <IconBase>
+      <path d="M4 20h16" />
+      <path d="M7 16v-4M12 16V8M17 16v-7" />
+    </IconBase>
+  );
+}
+
+export function ArrivalIcon() {
+  return (
+    <IconBase>
+      <path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4" />
+      <path d="M3 12h11M10 8l4 4-4 4" />
+    </IconBase>
+  );
+}
+
+export function DepartureIcon() {
+  return (
+    <IconBase>
+      <path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" />
+      <path d="M21 12H10M17 8l4 4-4 4" />
+    </IconBase>
+  );
+}
+
+export function InHouseIcon() {
+  return (
+    <IconBase>
+      <circle cx="9" cy="8" r="3.2" />
+      <path d="M3.5 19.5a5.5 5.5 0 0 1 11 0" />
+      <circle cx="17" cy="9" r="2.4" />
+      <path d="M15.5 14.2a4.5 4.5 0 0 1 5 5.3" />
+    </IconBase>
+  );
+}
+
