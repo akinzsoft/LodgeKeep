@@ -1,5 +1,30 @@
 import { CategoryCatalogueCard } from '../../shared/components/index.js';
 import { stockApi } from '../../shared/api/index.js';
+import { menuCategoryForStockCategory } from './sellInRegister.js';
+
+/**
+ * Registering a stock category for an outlet also registers it as that
+ * outlet's own menu category (user-requested), matching the reverse
+ * bridge `sellInRegister.js`'s `stockCategoryForMenuCategory` already
+ * does when a menu item gets a linked stock item. Best-effort and never
+ * blocks the stock category itself: a role holding `pos.stock_manage` but
+ * not `pos.manage` (a real, distinct grant) genuinely cannot create the
+ * menu-side category, and the stock category the user actually asked for
+ * must still be created regardless. The menu category is picked up the
+ * next time Setup's own list reloads.
+ */
+async function createStockCategoryAndMirror(payload, outletId) {
+  const category = await stockApi.createStockItemCategory({ ...payload, outletId });
+  try {
+    await menuCategoryForStockCategory(category.name, outletId);
+  } catch {
+    // Best-effort — see this function's own header. The stock category
+    // above is real regardless; a menu item can still bridge the other
+    // way later (`stockCategoryForMenuCategory`), or Setup's own Menu
+    // categories card can register it directly.
+  }
+  return category;
+}
 
 /**
  * StockCategoriesCard — gap closure, mirrors `MenuCategoriesCard.jsx`
@@ -9,7 +34,8 @@ import { stockApi } from '../../shared/api/index.js';
  * dropdown fed by this list. Register, rename (applied to every stock item
  * using the category), reorder, and archive (refused while items still
  * use it). Changes are `pos.stock_manage`; a lower-tier account sees the
- * real 403.
+ * real 403. Registering a category also mirrors it into that outlet's own
+ * menu categories — see `createStockCategoryAndMirror`'s own header.
  *
  * A thin wrapper around the shared `CategoryCatalogueCard` — see that
  * component's own header for why (this was one of three near-identical,
@@ -32,7 +58,7 @@ export function StockCategoriesCard({ outletId, outletName, categories, onChange
       archiveConsequence="will no longer be offered for stock items. A stock category still used by stock items cannot be archived — move those items first."
       categories={categories}
       onChanged={onChanged}
-      api={{ create: (payload) => stockApi.createStockItemCategory({ ...payload, outletId }), update: stockApi.updateStockItemCategory, archive: stockApi.archiveStockItemCategory }}
+      api={{ create: (payload) => createStockCategoryAndMirror(payload, outletId), update: stockApi.updateStockItemCategory, archive: stockApi.archiveStockItemCategory }}
       extraRows={extraRows}
       selectedRowKey={selectedRowKey}
       onSelectRow={onSelectRow}
