@@ -176,3 +176,31 @@ export async function sellStockItemInRegister({ stockItem, name, price, category
 function messageOf(caught, fallback) {
   return caught instanceof ApiError ? caught.message : fallback;
 }
+
+/**
+ * The reverse bridge — menu to stock. POS -> Setup's Add item creates a
+ * stock item to track a new menu item's quantity; without this it got no
+ * stock category at all and showed as "Uncategorized" in Stock screens and
+ * the Reorder report. Returns the stock category to use: an existing one
+ * matching the menu category's name (case-insensitively), else a new one
+ * created under that name (a 409 from a concurrent create is re-read, not
+ * an error). Returns `null` for no menu category; throws if the stock
+ * category can be neither found nor created.
+ */
+export async function stockCategoryForMenuCategory(menuCategoryName) {
+  const wanted = String(menuCategoryName ?? '').trim();
+  if (!wanted) return null;
+  const findIn = (list) => (list ?? []).find((category) => nameKey(category.name) === nameKey(wanted))?.name ?? null;
+
+  const existing = findIn(await stockApi.listStockItemCategories());
+  if (existing) return existing;
+  try {
+    return (await stockApi.createStockItemCategory({ name: wanted })).name;
+  } catch (caught) {
+    if (!(caught instanceof ApiError && caught.status === 409)) throw caught;
+    const raced = findIn(await stockApi.listStockItemCategories());
+    if (raced) return raced;
+    throw caught;
+  }
+}
+

@@ -7,6 +7,7 @@ import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
 import { MenuCategoriesCard } from './MenuCategoriesCard.jsx';
 import { CostPricesCard } from './CostPricesCard.jsx';
 import { computeCategorySections } from './categorySections.js';
+import { stockCategoryForMenuCategory } from './sellInRegister.js';
 import formStyles from './POSForm.module.css';
 
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
@@ -302,10 +303,19 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
     try {
       const trackingRequested = form.qty_supplied || form.reorder_level || form.unit_cost || form.supplier;
       if (trackingRequested) {
+        // The linked stock item gets the stock category named like this
+        // menu category, so it never shows up as "Uncategorized" in Stock.
+        let stockCategory = null;
+        try {
+          stockCategory = await stockCategoryForMenuCategory(categoryName);
+        } catch (caught) {
+          problems.push(`its stock category could not be set (${caught instanceof ApiError ? caught.message : 'unknown error'}) — set it under Stock → Stock items`);
+        }
         const stockItem = await stockApi.createStockItem({
           outletId,
           name: form.name,
           unit: DEFAULT_UNIT,
+          category: stockCategory ?? undefined,
           purchaseCost: form.unit_cost || undefined,
           supplier: form.supplier || undefined,
           reorderLevel: form.reorder_level || undefined,

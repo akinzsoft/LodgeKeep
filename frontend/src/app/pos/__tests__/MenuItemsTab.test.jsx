@@ -25,6 +25,8 @@ const stockMocks = vi.hoisted(() => ({
   listMenuItemComponents: vi.fn(),
   upsertMenuItemComponents: vi.fn(),
   updateStockItem: vi.fn(),
+  listStockItemCategories: vi.fn(),
+  createStockItemCategory: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -69,6 +71,8 @@ describe('<MenuItemsTab>', () => {
     mocks.listMenuCategories.mockResolvedValue([CATEGORY]);
     mocks.listMenuItems.mockResolvedValue([]);
     stockMocks.listStockItems.mockResolvedValue([]);
+    stockMocks.listStockItemCategories.mockResolvedValue([]);
+    stockMocks.createStockItemCategory.mockImplementation(async ({ name }) => ({ id: '90', name }));
     mockNoLinks();
   });
 
@@ -172,8 +176,10 @@ describe('<MenuItemsTab>', () => {
 
       expect(mocks.createMenuItem).toHaveBeenCalledWith(expect.objectContaining({ name: 'Soda', price: '5', costPrice: '2' }));
       expect(stockMocks.createStockItem).toHaveBeenCalledWith(
-        expect.objectContaining({ outletId: '1', name: 'Soda', unit: 'unit', purchaseCost: '2', supplier: 'Cola Co', reorderLevel: '6' })
+        expect.objectContaining({ outletId: '1', name: 'Soda', unit: 'unit', category: 'Drinks', purchaseCost: '2', supplier: 'Cola Co', reorderLevel: '6' })
       );
+      // No stock category named like the menu category existed, so one was created — never "Uncategorized".
+      expect(stockMocks.createStockItemCategory).toHaveBeenCalledWith({ name: 'Drinks' });
       expect(stockMocks.recordGoodsReceived).toHaveBeenCalledWith(
         expect.objectContaining({ outletId: '1', reference: 'Initial stock', lines: [{ stockItemId: '40', quantity: '24', unitCost: '2' }] })
       );
@@ -183,6 +189,33 @@ describe('<MenuItemsTab>', () => {
       const menuCallOrder = mocks.createMenuItem.mock.invocationCallOrder[0];
       const stockCallOrder = stockMocks.createStockItem.mock.invocationCallOrder[0];
       expect(menuCallOrder).toBeLessThan(stockCallOrder);
+    });
+
+    async function addTrackedSoda() {
+      mocks.createMenuItem.mockResolvedValue(menuItem({ id: '7', name: 'Soda' }));
+      stockMocks.createStockItem.mockResolvedValue(stockItem({ id: '40', name: 'Soda' }));
+      renderTab();
+      await userEvent.click(within(await categoryHeading(/^Items — Drinks/)).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — Drinks' }).closest('section');
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Soda');
+      await userEvent.type(within(addCard).getByLabelText('Selling price'), '5');
+      await userEvent.type(within(addCard).getByLabelText('Reorder level (optional)'), '6');
+      await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
+      await waitFor(() => expect(stockMocks.upsertMenuItemComponents).toHaveBeenCalled());
+    }
+
+    it('reuses an existing stock category matching the menu category, whatever its case', async () => {
+      stockMocks.listStockItemCategories.mockResolvedValue([{ id: '3', name: 'drinks' }]);
+      await addTrackedSoda();
+      expect(stockMocks.createStockItemCategory).not.toHaveBeenCalled();
+      expect(stockMocks.createStockItem).toHaveBeenCalledWith(expect.objectContaining({ category: 'drinks' }));
+    });
+
+    it('still tracks the item when the stock category cannot be set, and says where to fix it', async () => {
+      stockMocks.createStockItemCategory.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'No permission.', status: 403 }));
+      await addTrackedSoda();
+      expect(stockMocks.createStockItem).toHaveBeenCalledWith(expect.objectContaining({ category: undefined }));
+      expect(await screen.findByText(/its stock category could not be set \(No permission\.\) — set it under Stock → Stock items/)).toBeInTheDocument();
     });
 
     it('rejects Qty supplied without a Unit cost before making any API call', async () => {
