@@ -27,7 +27,6 @@ const { sumMoney } = require('../../shared/money');
 const {
   livePhysicalCount: sharedLivePhysicalCount,
   listFreeRoomsNow: sharedListFreeRoomsNow,
-  outOfOrderRoomIds,
 } = require('../../shared/room-availability');
 const { generateUlid } = require('../../shared/ulid');
 const { notifyStaff } = require('../notifications/staff-notifications');
@@ -1638,38 +1637,87 @@ async function listFreeRoomsNow({ context, roomTypeId }) {
  *    (housekeeping will have caught up by then).
  */
 async function listEligiblePreferredRooms({ context, roomTypeId, arrivalDate, departureDate }) {
+  const board = await listRoomBoard({ context, roomTypeId, arrivalDate, departureDate });
+  return board
+    .filter((room) => room.available)
+    .map(({ id, room_number, floor, housekeeping_reported_status }) => ({ id, room_number, floor, housekeeping_reported_status }));
+}
+
+/**
+ * The booking form's room keypad (user-requested: "a standard keypad that
+ * shows all available rooms with an indicator, while rooms that have been
+ * taken show Not available"). Confirmed with the user: the searched room
+ * type only; tapping an available room picks it as the booking's preferred
+ * room (still a request, never a lock — the room is assigned at check-in).
+ *
+ * Every active room of the type, in room-number order, each with
+ * `available` and — when not — the FIRST reason that applies:
+ *   `out_of_order`  an out-of-order period covers any night of the stay;
+ *   `discrepancy`   an open housekeeping discrepancy (not sold until resolved);
+ *   `occupied`      a checked-in guest is in it for overlapping dates;
+ *   `reserved`      another open booking for overlapping dates asked for it;
+ *   `not_clean`     arriving today (the property's business date) and not clean yet.
+ * `listEligiblePreferredRooms` is exactly the available ones, so the keypad
+ * and the "Preferred room" list can never disagree. Archived rooms are left
+ * out entirely.
+ */
+async function listRoomBoard({ context, roomTypeId, arrivalDate, departureDate }) {
   const db = scopedDb().for(context);
-  const oooRoomIds = await outOfOrderRoomIds({ db, stayDate: arrivalDate });
+  const rooms = await db
+    .table('rooms')
+    .where({ status: 'active', room_type_id: roomTypeId })
+    .select('id', 'room_number', 'floor', 'housekeeping_reported_status', 'has_discrepancy');
 
-  let roomsQuery = db.table('rooms').where({ status: 'active', has_discrepancy: false, room_type_id: roomTypeId });
-  if (oooRoomIds.length > 0) roomsQuery = roomsQuery.whereNotIn('id', oooRoomIds);
-  const candidateRooms = await roomsQuery.select('id', 'room_number', 'floor', 'housekeeping_reported_status');
+  const outOfOrder = new Set(
+    (
+      await db
+        .table('out_of_order_periods')
+        .where('start_date', '<', departureDate)
+        .where('end_date', '>=', arrivalDate)
+        .select('room_id')
+    ).map((row) => String(row.room_id))
+  );
 
+  const overlapsRange = (commit) => arrivalDate < commit.departure_date && commit.arrival_date < departureDate;
   const preferenceCommits = await db
     .table('reservations')
     .whereNotNull('preferred_room_id')
     .whereIn('status', ['tentative', 'confirmed', 'checked_in'])
     .select('preferred_room_id as room_id', 'arrival_date', 'departure_date');
-
   const assignmentCommits = await db
     .table('reservation_rooms')
     .joinScoped('reservations', (join) => join.on('reservations.id', '=', 'reservation_rooms.reservation_id'))
     .whereNull('reservation_rooms.effective_to')
     .select('reservation_rooms.room_id as room_id', 'reservations.arrival_date', 'reservations.departure_date');
-
-  const overlapsRange = (commit) => arrivalDate < commit.departure_date && commit.arrival_date < departureDate;
-  const committedRoomIds = new Set(
-    [...preferenceCommits, ...assignmentCommits].filter(overlapsRange).map((commit) => String(commit.room_id))
-  );
+  const occupied = new Set(assignmentCommits.filter(overlapsRange).map((commit) => String(commit.room_id)));
+  const reserved = new Set(preferenceCommits.filter(overlapsRange).map((commit) => String(commit.room_id)));
 
   const businessDate = await propertyBusinessDate({ context });
   const isArrivingNow = businessDate != null && arrivalDate === businessDate;
 
-  return candidateRooms.filter((room) => {
-    if (committedRoomIds.has(String(room.id))) return false;
-    if (isArrivingNow && room.housekeeping_reported_status !== 'clean') return false;
-    return true;
-  });
+  const reasonFor = (room) => {
+    const id = String(room.id);
+    if (outOfOrder.has(id)) return 'out_of_order';
+    if (room.has_discrepancy) return 'discrepancy';
+    if (occupied.has(id)) return 'occupied';
+    if (reserved.has(id)) return 'reserved';
+    if (isArrivingNow && room.housekeeping_reported_status !== 'clean') return 'not_clean';
+    return null;
+  };
+
+  return rooms
+    .map((room) => {
+      const reason = reasonFor(room);
+      return {
+        id: room.id,
+        room_number: room.room_number,
+        floor: room.floor,
+        housekeeping_reported_status: room.housekeeping_reported_status,
+        available: reason === null,
+        reason,
+      };
+    })
+    .sort((a, b) => String(a.room_number).localeCompare(String(b.room_number), undefined, { numeric: true }));
 }
 
 /**
@@ -1797,6 +1845,7 @@ module.exports = {
   listDepartingWithOutstandingBalance,
   listFreeRoomsNow,
   listEligiblePreferredRooms,
+  listRoomBoard,
   findInHouseForCharge,
   findInHouseReservationForRoom,
   maskGuestName,

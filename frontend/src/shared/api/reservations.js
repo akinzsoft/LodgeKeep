@@ -61,6 +61,18 @@ export function listEligiblePreferredRooms({ roomTypeId, arrivalDate, departureD
   return request(`/reservations/eligible-preferred-rooms?${params}`);
 }
 
+/**
+ * The booking form's room keypad: every room of the type with `available`
+ * and, when not, `reason` (occupied, reserved, not_clean, out_of_order,
+ * discrepancy) for these dates. The available ones are exactly
+ * `listEligiblePreferredRooms`.
+ * @param {{roomTypeId: string, arrivalDate: string, departureDate: string}} params
+ */
+export function listRoomBoard({ roomTypeId, arrivalDate, departureDate }) {
+  const params = new URLSearchParams({ room_type_id: roomTypeId, arrival_date: arrivalDate, departure_date: departureDate });
+  return request(`/reservations/room-board?${params}`);
+}
+
 // ---------------------------------------------------------------------
 // Reservations
 // ---------------------------------------------------------------------

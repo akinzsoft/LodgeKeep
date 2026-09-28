@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   createReservation: vi.fn(),
   createGuest: vi.fn(),
   listFreeRooms: vi.fn(),
-  listEligiblePreferredRooms: vi.fn(),
+  listRoomBoard: vi.fn(),
   openBookingFolio: vi.fn(),
   captureCashPayment: vi.fn(),
   capturePaystackPayment: vi.fn(),
@@ -33,7 +33,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       createReservation: mocks.createReservation,
       createGuest: mocks.createGuest,
       listFreeRooms: mocks.listFreeRooms,
-      listEligiblePreferredRooms: mocks.listEligiblePreferredRooms,
+      listRoomBoard: mocks.listRoomBoard,
       openBookingFolio: mocks.openBookingFolio,
     },
     cashieringApi: {
@@ -77,7 +77,7 @@ describe('<AvailabilityTab>', () => {
     mocks.resolveRate.mockResolvedValue({ rate: '75.00', overridden: false });
     mocks.listGuests.mockResolvedValue([GUEST, GUEST_WITH_EMAIL, GUEST_WITH_PHONE]);
     mocks.listFreeRooms.mockResolvedValue([ROOM]);
-    mocks.listEligiblePreferredRooms.mockResolvedValue([ROOM]);
+    mocks.listRoomBoard.mockResolvedValue([{ ...ROOM, available: true, reason: null }]);
     mocks.listGroupBlocks.mockResolvedValue([]);
   });
 
@@ -620,7 +620,7 @@ describe('<AvailabilityTab>', () => {
       minSellable: 3,
       nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
     });
-    mocks.listEligiblePreferredRooms.mockResolvedValue([]);
+    mocks.listRoomBoard.mockResolvedValue([{ ...ROOM, available: false, reason: 'reserved' }]);
 
     render(<AvailabilityTab />);
     await screen.findByText('Deluxe (DLX)');
@@ -632,7 +632,7 @@ describe('<AvailabilityTab>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
     await screen.findByText('Fri 1 Jan 2027');
 
-    expect(mocks.listEligiblePreferredRooms).toHaveBeenCalledWith({
+    expect(mocks.listRoomBoard).toHaveBeenCalledWith({
       roomTypeId: '1',
       arrivalDate: '2027-01-01',
       departureDate: '2027-01-02',
@@ -640,6 +640,46 @@ describe('<AvailabilityTab>', () => {
     // Excluded (committed elsewhere) — only "No preference" remains.
     const preferredRoomSelect = screen.getByLabelText('Preferred room (optional)');
     expect(preferredRoomSelect.querySelectorAll('option')).toHaveLength(1);
+  });
+
+  it('the room keypad under the form shows every room of the type, and tapping an available one picks it for the booking', async () => {
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    const occupied = { id: '6', room_number: '102', floor: '1', available: false, reason: 'occupied' };
+    mocks.listRoomBoard
+      .mockResolvedValueOnce([{ ...ROOM, available: true, reason: null }, occupied])
+      // After booking, the room this guest asked for is reserved for these dates.
+      .mockResolvedValue([{ ...ROOM, available: false, reason: 'reserved' }, occupied]);
+    mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'KEY123' });
+
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    const keypad = await screen.findByRole('region', { name: 'Rooms' });
+    expect(within(keypad).getByText('Rooms — Deluxe')).toBeInTheDocument();
+    expect(within(keypad).getByRole('button', { name: 'Room 102, Not available — Occupied' })).toBeDisabled();
+    await userEvent.click(within(keypad).getByRole('button', { name: 'Room 101, Available' }));
+    // The keypad and the "Preferred room" list are the same choice.
+    expect(screen.getByLabelText('Preferred room (optional)')).toHaveValue('5');
+    expect(within(keypad).getByRole('button', { name: 'Room 101, Selected' })).toHaveAttribute('aria-pressed', 'true');
+
+    await userEvent.selectOptions(screen.getByLabelText('Guest'), '1');
+    await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
+    await userEvent.click(screen.getByRole('button', { name: 'Book' }));
+    await screen.findByText(/Booked — confirmation KEY123/);
+    expect(mocks.createReservation).toHaveBeenCalledWith(expect.objectContaining({ preferred_room_id: '5' }));
+    // Booked: the keypad refreshes — the room is now reserved for these dates.
+    expect(await within(keypad).findByRole('button', { name: 'Room 101, Not available — Reserved' })).toBeDisabled();
+    expect(within(keypad).getByText('0 available')).toBeInTheDocument();
   });
 
   it('omits preferred_room_id from the request entirely when left as "No preference"', async () => {
