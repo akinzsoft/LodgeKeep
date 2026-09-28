@@ -142,11 +142,18 @@ export function getTransferRequest(requestId) {
   return request(`/pos/stock/transfer-requests/${requestId}`);
 }
 
-export function createTransferRequest({ fromOutletId, toOutletId, lines, note }) {
+/** `topUpOfRequestId` — set by "Request the rest": the issued-short request this one asks the rest of. */
+export function createTransferRequest({ fromOutletId, toOutletId, lines, note, topUpOfRequestId }) {
   return request('/pos/stock/transfer-requests', {
     method: 'POST',
     headers: { 'Idempotency-Key': idempotencyKey() },
-    body: { from_outlet_id: fromOutletId, to_outlet_id: toOutletId, lines: toLineBodies(lines), note: note || undefined },
+    body: {
+      from_outlet_id: fromOutletId,
+      to_outlet_id: toOutletId,
+      lines: toLineBodies(lines),
+      note: note || undefined,
+      top_up_of_request_id: topUpOfRequestId || undefined,
+    },
   });
 }
 

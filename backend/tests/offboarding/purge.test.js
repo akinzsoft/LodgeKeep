@@ -8,7 +8,7 @@
  *
  * One tenant (`a`) is offboarded and purged; the fixtures already seed 81 of the
  * 85 plan tables for both tenants, and this file seeds the four platform tables
- * they leave empty plus the four self-references, real files in temp storage
+ * they leave empty plus the five self-references, real files in temp storage
  * directories, and the exports. Before purging it asserts EVERY plan table holds
  * rows for BOTH tenants, so a table this test silently skipped fails loudly.
  *
@@ -124,11 +124,12 @@ describe('tenant retention purge', () => {
       });
     }
 
-    // The four self-references: point one row at a sibling.
+    // The five self-references: point one row at a sibling.
     await selfReference('rooms', 'connecting_room_id');
     await selfReference('payments', 'parent_payment_id');
     await selfReference('folio_line_items', 'related_line_item_id');
     await selfReference('stock_movements', 'reversed_movement_id');
+    await selfReference('stock_transfer_requests', 'top_up_of_request_id');
 
     // Real files in the four storage kinds, for BOTH tenants.
     for (const [key, tenant] of [['a', ctx.a], ['b', ctx.b]]) {
@@ -166,6 +167,7 @@ describe('tenant retention purge', () => {
       payments: (row, tenant) => ({ idempotency_key: `sr-${tenant.id}-${row.id}`, provider_reference: `sr-ref-${tenant.id}-${row.id}` }),
       folio_line_items: () => ({}),
       stock_movements: () => ({}),
+      stock_transfer_requests: () => ({}),
     };
     for (const tenant of [ctx.a, ctx.b]) {
       const [first] = await t.trx(table).where({ tenant_id: tenant.id }).orderBy('id').limit(1);

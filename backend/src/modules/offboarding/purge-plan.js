@@ -16,9 +16,10 @@
  * if a migration adds a foreign key this order violates, or a tenant-owned table
  * this plan has no decision for. That test, not this comment, is the guarantee.
  *
- * The four SELF-REFERENCING tables (`rooms.connecting_room_id`,
+ * The five SELF-REFERENCING tables (`rooms.connecting_room_id`,
  * `payments.parent_payment_id`, `folio_line_items.related_line_item_id`,
- * `stock_movements.reversed_movement_id`) cannot be bulk-deleted row by row —
+ * `stock_movements.reversed_movement_id`,
+ * `stock_transfer_requests.top_up_of_request_id`) cannot be bulk-deleted row by row —
  * InnoDB checks RESTRICT per row. Their self-reference is set to NULL for the
  * tenant's rows first (a composite foreign key with a NULL part is not checked,
  * MATCH SIMPLE), then the rows are deleted.
@@ -82,12 +83,13 @@ const FILE_HOOKS = Object.freeze({
   properties: { kind: 'property_logo', column: 'logo_url' },
 });
 
-/** The four self-referencing tables and the column that points back at the same table. */
+/** The five self-referencing tables and the column that points back at the same table. */
 const SELF_REFERENCES = Object.freeze({
   rooms: 'connecting_room_id',
   payments: 'parent_payment_id',
   folio_line_items: 'related_line_item_id',
   stock_movements: 'reversed_movement_id',
+  stock_transfer_requests: 'top_up_of_request_id',
 });
 
 const LARGE_TABLES = new Set([
