@@ -54,6 +54,7 @@
  */
 
 const { SYSTEM_ROLES } = require('../tenancy');
+const { usersCoveringOutlets } = require('../../shared/outlet-assignments');
 const { ValidationError } = require('../../shared/errors');
 
 /**
@@ -260,13 +261,30 @@ async function resolveRecipientUserIds({ trx, eventType }) {
  * dedup_key)) — one insert per recipient, never a bulk insert, so a single
  * duplicate cannot abort the rows for everyone else.
  *
+ * `outletIds` (optional) narrows the role-based recipients to the people at
+ * those outlets — staff assigned elsewhere are skipped; unassigned staff and
+ * manager/admin/super_admin still get it (`shared/outlet-assignments.js`).
+ * `alsoUserIds` (optional) adds specific people regardless of the role grid,
+ * when they are active and work at this property — e.g. whoever raised a
+ * stock request hears back about it.
+ *
  * @returns {Promise<number>} rows actually written.
  */
-async function notifyStaff({ trx, eventType, payload, dedupKey = null, popup = false }) {
+async function notifyStaff({ trx, eventType, payload, dedupKey = null, popup = false, outletIds = null, alsoUserIds = [] }) {
   if (!NOTIFICATION_EVENTS_BY_TYPE.has(eventType)) {
     throw new Error(`notifyStaff: unknown staff notification type "${eventType}".`);
   }
-  const userIds = await resolveRecipientUserIds({ trx, eventType });
+  let userIds = await resolveRecipientUserIds({ trx, eventType });
+  if (outletIds) userIds = await usersCoveringOutlets(trx, userIds, outletIds);
+  if (alsoUserIds.length) {
+    const extra = await trx
+      .table('user_property_access')
+      .whereIn('user_property_access.user_id', alsoUserIds)
+      .joinScoped('users', (join) => join.on('user_property_access.user_id', '=', 'users.id'))
+      .where({ 'users.status': 'active' })
+      .select('users.id as user_id');
+    userIds = [...new Set([...userIds, ...extra.map((row) => String(row.user_id))])];
+  }
   let written = 0;
   for (const userId of userIds) {
     try {

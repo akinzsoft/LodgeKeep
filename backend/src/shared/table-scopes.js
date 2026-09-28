@@ -393,6 +393,8 @@ const TABLE_SCOPES = Object.freeze({
   // for stock, and what was sent against each line.
   stock_transfer_requests: { scope: SCOPES.PROPERTY },
   stock_transfer_request_lines: { scope: SCOPES.PROPERTY },
+  // The outlets a staff member works at (20261111090000). None = every outlet.
+  user_outlet_assignments: { scope: SCOPES.PROPERTY },
   // Gap closure: registered stock-item categories, mirroring
   // `pos_menu_categories` exactly (same table, same reasoning).
   stock_item_categories: { scope: SCOPES.PROPERTY },

@@ -27,6 +27,7 @@ function usersRouter() {
   router.post('/users/invite', requirePermission('setup.manage'), controller.inviteUser);
   router.post('/users/:id/deactivate', requirePermission('setup.manage'), controller.deactivateUser);
   router.patch('/users/:id/role', requirePermission('setup.manage'), controller.changeUserRole);
+  router.put('/users/:id/outlets', requirePermission('setup.manage'), controller.setUserOutlets);
 
   return router;
 }

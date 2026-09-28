@@ -178,6 +178,7 @@ async function seedTwoTenants(trx) {
     stockTakeLines: [],
     stockTransferRequests: [],
     stockTransferRequestLines: [],
+    userOutletAssignments: [],
     expenseCategories: [],
     recurringExpenseSchedules: [],
     expenses: [],
@@ -1281,6 +1282,18 @@ async function seedTwoTenants(trx) {
       requested_by_user_id: user.id,
     });
     t.stockTransferRequests.push({ id: requestId, property_id: property.id });
+    // One outlet assignment per tenant, on the manager — a role outlet
+    // assignments never limit — so the ISO-* suite has rows for both tenants
+    // without changing what any other test sees.
+    t.userOutletAssignments.push({
+      id: await insertReturningId(trx, 'user_outlet_assignments', {
+        tenant_id: t.id,
+        property_id: property.id,
+        user_id: user.id,
+        outlet_id: outlet.id,
+      }),
+      property_id: property.id,
+    });
     t.stockTransferRequestLines.push({
       id: await insertReturningId(trx, 'stock_transfer_request_lines', {
         tenant_id: t.id,

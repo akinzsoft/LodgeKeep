@@ -79,4 +79,21 @@ async function changeUserRole(req, res, next) {
   }
 }
 
-module.exports = { listUsers, listPendingInvitations, inviteUser, deactivateUser, changeUserRole };
+async function setUserOutlets(req, res, next) {
+  try {
+    const { id } = req.params;
+    const outletIds = req.body?.outlet_ids;
+    if (!Array.isArray(outletIds) || outletIds.some((value) => typeof value !== 'string' && typeof value !== 'number')) {
+      throw new ValidationError('INVALID_OUTLET_IDS', '"outlet_ids" must be a list of outlet ids (empty for every outlet).', [{ field: 'outlet_ids', issue: 'invalid' }]);
+    }
+    const before = await service.getUserAtActiveProperty({ context: req.context, id });
+    if (!before) return notFound(res);
+    const user = await service.setUserOutlets({ context: req.context, id, outletIds });
+    await req.audit({ entityType: 'user_outlet_assignments', entityId: id, action: 'set_outlets', beforeState: before, afterState: user });
+    res.status(200).json(ok(user));
+  } catch (error) {
+    next(error);
+  }
+}
+
+module.exports = { listUsers, listPendingInvitations, inviteUser, deactivateUser, changeUserRole, setUserOutlets };

@@ -25,3 +25,11 @@ export function deactivateUser(id) {
 export function changeUserRole(id, role) {
   return request(`/users/${id}/role`, { method: 'PATCH', body: { role } });
 }
+
+/**
+ * The outlets a staff member works at (stock requests and their alerts only).
+ * An empty list means every outlet. Replaces whatever was saved before.
+ */
+export function setUserOutlets(id, outletIds) {
+  return request(`/users/${id}/outlets`, { method: 'PUT', body: { outlet_ids: outletIds } });
+}

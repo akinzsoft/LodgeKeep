@@ -60,6 +60,9 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
   // Raising a request.
   const [fromOutletId, setFromOutletId] = useState('');
   const [toOutletId, setToOutletId] = useState('');
+  // Staff tied to outlets (Staff screen) deliver to their own outlets only —
+  // the server refuses any other; null until known or when unrestricted.
+  const [myOutletIds, setMyOutletIds] = useState(null);
   const [sourceItems, setSourceItems] = useState(null);
   const [lines, setLines] = useState(() => [blankLine()]);
   const [note, setNote] = useState('');
@@ -102,6 +105,18 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
       setError(messageOf(caught, 'Could not load the stock items for this outlet.'));
     }
   }
+
+  useEffect(() => {
+    if (!canRequest) return;
+    stockApi
+      .getMyRequestOutlets()
+      .then((scope) => {
+        if (!scope?.restricted) return;
+        setMyOutletIds(scope.outletIds.map(String));
+        if (scope.outletIds.length === 1) setToOutletId(String(scope.outletIds[0]));
+      })
+      .catch(() => {}); // unknown scope: offer every outlet; the server still enforces it
+  }, [canRequest]);
 
   useEffect(() => {
     posApi
@@ -394,7 +409,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
                   <option value="" disabled>
                     Select your outlet
                   </option>
-                  {(outlets ?? []).map((outlet) => (
+                  {(outlets ?? []).filter((outlet) => !myOutletIds || myOutletIds.includes(String(outlet.id))).map((outlet) => (
                     <option key={outlet.id} value={outlet.id} disabled={String(outlet.id) === String(fromOutletId)}>
                       {outletLabel(outlet)}
                     </option>

@@ -136,6 +136,7 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'ar_invoice_sequences',
   'ar_accounts',
   // stock
+  'user_outlet_assignments',
   'stock_transfer_request_lines',
   'stock_transfer_requests',
   'stock_take_lines',

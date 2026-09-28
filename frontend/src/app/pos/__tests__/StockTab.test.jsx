@@ -13,6 +13,7 @@ const stockMocks = vi.hoisted(() => ({
   listStockTakes: vi.fn(),
   listTransfers: vi.fn(),
   listTransferRequests: vi.fn(),
+  getMyRequestOutlets: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -30,6 +31,7 @@ describe('<StockTab>', () => {
     stockMocks.listStockTakes.mockResolvedValue([]);
     stockMocks.listTransfers.mockResolvedValue([]);
     stockMocks.listTransferRequests.mockResolvedValue([]);
+    stockMocks.getMyRequestOutlets.mockResolvedValue({ restricted: false, outletIds: null });
   });
 
   it('defaults to Stock items and, with no permissions given, switches between all nine inner tabs', async () => {

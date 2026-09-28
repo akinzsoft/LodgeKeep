@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   issueTransferRequest: vi.fn(),
   rejectTransferRequest: vi.fn(),
   getTransferRequest: vi.fn(),
+  getMyRequestOutlets: vi.fn(),
   cancelTransferRequest: vi.fn(),
 }));
 
@@ -56,6 +57,7 @@ describe('<StockRequestsTab>', () => {
     mocks.listOutlets.mockResolvedValue([STORE, BAR]);
     mocks.listStockItems.mockResolvedValue([COKE, GIN]);
     mocks.listTransferRequests.mockResolvedValue([]);
+    mocks.getMyRequestOutlets.mockResolvedValue({ restricted: false, outletIds: null });
   });
 
   describe('raising a request', () => {
@@ -87,6 +89,20 @@ describe('<StockRequestsTab>', () => {
       expect(await screen.findByText('Request #7 sent to Main Store.')).toBeInTheDocument();
       expect(mocks.listTransferRequests).toHaveBeenCalledTimes(2); // the initial load, then the refresh after sending
       expect(screen.getByLabelText('Quantity 1')).toHaveValue('');
+    });
+
+    it('staff tied to one outlet deliver only there, already chosen', async () => {
+      mocks.getMyRequestOutlets.mockResolvedValue({ restricted: true, outletIds: ['2'] });
+      render(<StockRequestsTab permissions={REQUESTER} />);
+      await waitFor(() => expect(screen.getByLabelText('Deliver to')).toHaveValue('2'));
+      const options = within(screen.getByLabelText('Deliver to')).getAllByRole('option').map((option) => option.textContent);
+      expect(options).toEqual(['Select your outlet', 'Main Bar']);
+    });
+
+    it('unrestricted staff can deliver to any outlet', async () => {
+      render(<StockRequestsTab permissions={REQUESTER} />);
+      await waitFor(() => expect(within(screen.getByLabelText('Deliver to')).getAllByRole('option')).toHaveLength(3));
+      expect(screen.getByLabelText('Deliver to')).toHaveValue('');
     });
 
     it('never offers an item already on another line, and will not send a zero quantity', async () => {

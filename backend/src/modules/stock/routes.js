@@ -60,6 +60,8 @@ function stockRouter() {
 
   const readRequests = requireAnyPermission(['pos.stock_request', 'pos.stock_transfer']);
   router.get('/pos/stock/transfer-requests', readRequests, controller.listTransferRequests);
+  // Before `/:id`, so "my-outlets" is never read as a request id.
+  router.get('/pos/stock/transfer-requests/my-outlets', readRequests, controller.getMyRequestOutlets);
   router.get('/pos/stock/transfer-requests/:id', readRequests, controller.getTransferRequest);
   router.post('/pos/stock/transfer-requests', requirePermission('pos.stock_request'), controller.createTransferRequest);
   router.post('/pos/stock/transfer-requests/:id/issue', requirePermission('pos.stock_transfer'), controller.issueTransferRequest);
