@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Follow-up: the room keypad replaces the "Rooms free right now" table (branch `gap-keypad-replaces-free-rooms`)
+
+**User-requested**: "remove Rooms free right now table and put the keypad on that position." The keypad moved out of "Book this stay" into its own card between the availability table and "Book this stay", and the "Rooms free right now" table (current business date only, `listFreeRooms`) is gone from the Booking screen — the keypad answers the same question for any dates, with the reason a room is taken. `GET /front-desk/free-rooms` stays (Front Desk's check-in/room-move pickers use it). The keypad now shows "The rooms could not be loaded. Search again to retry." on a failed fetch (it used to read as "no rooms set up"), and its own top border/margin went (the card frames it). Frontend-only. Tests: the two table tests replaced by three (DOM order availability table → keypad → Book this stay with the table and `listFreeRooms` gone; a future-dated search shows the keypad; a failed fetch says so without blocking booking); dropping the failure flag fails its test. Frontend 1338/1338, lint (3 pre-existing warnings), stylelint and build clean. Seen in real Chrome on the dev app in the new position.
+
 ## New capability: a room keypad under the booking form — every room of the type, Available or Not available (branch `gap-booking-room-keypad`)
 
 **User-requested**: "on booking, the register page, under the form, add a standard UI keypad that shows all available rooms with an indicator, while rooms that have been taken show Not available." **Confirmed with the user (AskUserQuestion, both recommended options)**: the searched room type only; tapping an available room picks it as the booking's preferred room (tap again to clear) — still a request, never a lock, since a booking holds a room TYPE and the room is fixed at check-in.

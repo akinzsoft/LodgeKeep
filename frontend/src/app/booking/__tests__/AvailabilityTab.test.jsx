@@ -480,52 +480,50 @@ describe('<AvailabilityTab>', () => {
     );
   });
 
-  it('shows actual room numbers free right now only when the search date is the property\'s own current business date', async () => {
+  async function searchFor(arrival, departure, stayDate, businessDate = '2027-01-01') {
     mocks.checkAvailability.mockResolvedValue({
       roomTypeId: '1',
       physicalCount: 5,
       minSellable: 3,
-      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+      nights: [{ stayDate, physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
     });
-
-    render(<AvailabilityTab activeProperty={{ id: '1', current_business_date: '2027-01-01' }} />);
+    render(<AvailabilityTab activeProperty={{ id: '1', current_business_date: businessDate }} />);
     await screen.findByText('Deluxe (DLX)');
-
     await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
     const dateInputs = document.querySelectorAll('input[type="date"]');
     await userEvent.clear(dateInputs[0]);
-    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[0], arrival);
     await userEvent.clear(dateInputs[1]);
-    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.type(dateInputs[1], departure);
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+  }
 
-    expect(await screen.findByText('Rooms free right now')).toBeInTheDocument();
-    expect(mocks.listFreeRooms).toHaveBeenCalledWith('1');
-    expect(await screen.findAllByText('101')).not.toHaveLength(0);
-  });
+  it('the room keypad sits where the "Rooms free right now" table was — between the availability table and "Book this stay" — and that table is gone', async () => {
+    await searchFor('2027-01-01', '2027-01-02', '2027-01-01');
 
-  it('does not show the free-rooms-right-now panel for a future-dated search', async () => {
-    mocks.checkAvailability.mockResolvedValue({
-      roomTypeId: '1',
-      physicalCount: 5,
-      minSellable: 3,
-      nights: [{ stayDate: '2027-06-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
-    });
-
-    render(<AvailabilityTab activeProperty={{ id: '1', current_business_date: '2027-01-01' }} />);
-    await screen.findByText('Deluxe (DLX)');
-
-    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
-    const dateInputs = document.querySelectorAll('input[type="date"]');
-    await userEvent.clear(dateInputs[0]);
-    await userEvent.type(dateInputs[0], '2027-06-01');
-    await userEvent.clear(dateInputs[1]);
-    await userEvent.type(dateInputs[1], '2027-06-02');
-    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-
-    await screen.findByText('Tue 1 Jun 2027');
+    const keypad = await screen.findByRole('region', { name: 'Rooms' });
     expect(screen.queryByText('Rooms free right now')).not.toBeInTheDocument();
     expect(mocks.listFreeRooms).not.toHaveBeenCalled();
+    const bookCard = screen.getByRole('heading', { name: 'Book this stay' });
+    const availabilityTable = screen.getByText('Fri 1 Jan 2027');
+    // DOM order: availability table → keypad → "Book this stay".
+    expect(availabilityTable.compareDocumentPosition(keypad) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(keypad.compareDocumentPosition(bookCard) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(keypad).getByRole('button', { name: 'Room 101, Available' })).toBeInTheDocument();
+  });
+
+  it('shows the keypad for a future-dated search too (the old table only showed for today)', async () => {
+    await searchFor('2027-06-01', '2027-06-02', '2027-06-01');
+    await screen.findByText('Tue 1 Jun 2027');
+    expect(await screen.findByRole('region', { name: 'Rooms' })).toBeInTheDocument();
+    expect(mocks.listRoomBoard).toHaveBeenCalledWith({ roomTypeId: '1', arrivalDate: '2027-06-01', departureDate: '2027-06-02' });
+  });
+
+  it('says so when the rooms cannot be loaded, without blocking the booking form', async () => {
+    mocks.listRoomBoard.mockRejectedValue(new Error('boom'));
+    await searchFor('2027-01-01', '2027-01-02', '2027-01-01');
+    expect(await screen.findByText('The rooms could not be loaded. Search again to retry.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Book this stay' })).toBeInTheDocument();
   });
 
   it('books a reservation carrying an optional preferred_room_id — a request, not a lock', async () => {

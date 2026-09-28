@@ -37,13 +37,11 @@ import styles from './BookingScreen.module.css';
  * Gap closure — two additions, deliberately answering different questions
  * (see `backend/src/shared/room-availability.js`'s own header for the full
  * reasoning):
- * 1. "Rooms free right now" — actual room numbers, shown ONLY when the
- *    searched arrival date is the property's own CURRENT business date
- *    (never wall-clock "today"), since no data in this schema can name a
- *    specific physical room for a future, not-yet-arrived stay — a room is
- *    assigned only at check-in (Phase 2's confirmed decision, unchanged).
- *    For every other search this stays exactly the aggregate sellable
- *    table it always was.
+ * 1. The "Rooms free right now" table (current business date only) was
+ *    replaced by the room keypad (item 3), user-requested: "remove Rooms
+ *    free right now table and put the keypad on that position." The
+ *    keypad answers the same question for ANY dates, with the reason a
+ *    room is taken.
  * 2. "Preferred room" — an optional, non-binding request recorded on the
  *    reservation (`preferred_room_id`). Sourced from `listEligiblePreferredRooms`
  *    (gap closure, user-reported), not every room of the searched type — a
@@ -63,7 +61,8 @@ import styles from './BookingScreen.module.css';
  *    room above (tap again to clear). The keypad and the "Preferred room"
  *    list come from ONE fetch (`listRoomBoard`, every room with its
  *    availability and reason) — the list is its available rooms — so the
- *    two can never disagree.
+ *    two can never disagree. It sits between the availability table and
+ *    "Book this stay", where the "Rooms free right now" table used to be.
  *
  * Gap closure (user-reported): "pay at the point of booking." A successful,
  * CONFIRMED booking (never a hold or a waitlisted one — neither holds a
@@ -152,9 +151,9 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     return { room_type_id: '', arrival_date: start, departure_date: start ? addDays(start, 1) : '' };
   });
   const [availability, setAvailability] = useState(null);
-  const [freeRoomsNow, setFreeRoomsNow] = useState(null);
   // Every room of the searched type for the searched dates, with `available`/`reason` (the keypad); null until searched.
   const [roomBoard, setRoomBoard] = useState(null);
+  const [roomBoardFailed, setRoomBoardFailed] = useState(false);
   const eligiblePreferredRooms = roomBoard?.filter((room) => room.available) ?? null;
   // Gap closure (user-reported): "when Room type is selected it shld show
   // the Rate/cost per night on the Rate code drop box only." `rateCodes`
@@ -246,19 +245,8 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     reloadGroupBlocks();
   }, []);
 
-  async function reloadFreeRoomsNow(roomTypeId) {
-    try {
-      setFreeRoomsNow(await reservationsApi.listFreeRooms(roomTypeId));
-    } catch {
-      // A 403 (no front_desk.view) or any other failure just hides this
-      // panel — it's a bonus alongside the aggregate table, never the
-      // reason the whole search fails. Same per-widget degradation
-      // HomeDashboard's own KPI cards already use.
-      setFreeRoomsNow(null);
-    }
-  }
-
   async function reloadRoomBoard() {
+    setRoomBoardFailed(false);
     try {
       setRoomBoard(
         await reservationsApi.listRoomBoard({
@@ -268,10 +256,11 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
         })
       );
     } catch {
-      // Same per-widget degradation as `reloadFreeRoomsNow` — a failure
-      // here just leaves the picker empty (still "No preference"-only),
-      // never blocks the search or the booking form itself.
+      // Per-widget degradation: the keypad says it could not load and the
+      // picker stays "No preference"-only — never blocks the search or the
+      // booking form itself.
       setRoomBoard([]);
+      setRoomBoardFailed(true);
     }
   }
 
@@ -282,7 +271,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
    * (there's no single endpoint that resolves every code for a room type
    * at once — `GET /rate-calendar/resolve` is inherently per rate code),
    * run in parallel and never let one code's failure blank the others —
-   * `Promise.allSettled`, the same reasoning `reloadFreeRoomsNow`'s own
+   * `Promise.allSettled`, the same reasoning `reloadRoomBoard`'s own
    * per-widget degradation uses, just per-entry instead of per-widget. A
    * code whose resolve fails (or hasn't resolved yet) simply falls back to
    * its own `base_rate` in the dropdown below — this is a display
@@ -307,7 +296,6 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     setSearching(true);
     setSearchError(null);
     setBookSuccess(null);
-    setFreeRoomsNow(null);
     setRoomBoard(null); // the keypad shows "Loading rooms…" rather than the previous search's rooms
     setRoomRatesByCode({});
     setBooking((current) => ({ ...current, preferred_room_id: '' }));
@@ -330,9 +318,6 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
         departureDate: search.departure_date,
       });
       setAvailability(result);
-      if (search.arrival_date === activeProperty?.current_business_date) {
-        await reloadFreeRoomsNow(search.room_type_id);
-      }
       await reloadRoomBoard();
       await reloadRoomRatesForType(search.room_type_id, search.arrival_date);
       // Gap closure (user-reported, third round): resolve THIS room type's
@@ -461,9 +446,6 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
         departureDate: search.departure_date,
       });
       setAvailability(res);
-      if (search.arrival_date === activeProperty?.current_business_date) {
-        await reloadFreeRoomsNow(search.room_type_id);
-      }
       setBooking((current) => ({ ...current, preferred_room_id: '', group_block_id: '' }));
       await reloadRoomBoard();
     } catch (caught) {
@@ -701,34 +683,21 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
         </>
       )}
 
-      {/* Gap closure: actual room numbers, only meaningful for the property's
-          own current business date — every other search stays the aggregate
-          table above (see this file's own header). `freeRoomsNow` stays
-          `null` until that fetch resolves, and again on a 403/failure
-          (`reloadFreeRoomsNow`'s own comment) — either way this panel is
-          simply absent rather than showing a misleading empty state. */}
-      {availability && freeRoomsNow !== null && (
-        <DataTable
-          title="Rooms free right now"
-          state="success"
-          columns={[
-            { key: 'room_number', label: 'Room' },
-            { key: 'floor', label: 'Floor' },
-            {
-              key: 'housekeeping_reported_status',
-              label: 'Housekeeping',
-              render: (row) => {
-                const value = row.housekeeping_reported_status;
-                if (!value) return '—';
-                const tone = value === 'clean' ? 'success' : value === 'dirty' ? 'warning' : 'neutral';
-                return <StatusPill tone={tone} label={value.charAt(0).toUpperCase() + value.slice(1)} />;
-              },
-            },
-          ]}
-          rows={freeRoomsNow}
-          rowKey={(row) => row.id}
-          emptyMessage="No rooms of this type are free right now."
-        />
+      {/* The room keypad, where the "Rooms free right now" table used to be
+          (user-requested) — every room of the searched type for these dates,
+          Available or Not available with why; tapping one picks it as the
+          booking's preferred room below. */}
+      {availability && (
+        <Card>
+          <RoomKeypad
+            rooms={roomBoard}
+            failed={roomBoardFailed}
+            roomTypeName={selectedRoomType?.name}
+            selectedId={booking.preferred_room_id}
+            onSelect={(roomId) => setBooking((current) => ({ ...current, preferred_room_id: roomId }))}
+            disabled={isOffline || submitting || Boolean(bookSuccess)}
+          />
+        </Card>
       )}
 
       {availability && (
@@ -1025,14 +994,6 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
               <p className={formStyles.disabledNotice}>Run a new search to make another booking.</p>
             )}
           </form>
-
-          <RoomKeypad
-            rooms={roomBoard}
-            roomTypeName={selectedRoomType?.name}
-            selectedId={booking.preferred_room_id}
-            onSelect={(roomId) => setBooking((current) => ({ ...current, preferred_room_id: roomId }))}
-            disabled={isOffline || submitting || Boolean(bookSuccess)}
-          />
 
         </Card>
       )}
