@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Card, DataTable, Button, StatusPill, ConfirmDialog } from '../../shared/components/index.js';
-import { formatQuantity, compareQuantity } from './stockFormat.js';
+import { formatQuantity, compareQuantity, quantityShortfall } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
 import { StockItemOptions } from './stockItemOptions.jsx';
 import { isStoreOutlet } from './outletTypes.js';
@@ -18,6 +18,14 @@ import formStyles from './POSForm.module.css';
  * that can raise requests, the Issue/Reject controls only to one that can
  * issue, and Withdraw only to a requester. Without `permissions` every
  * control shows; the server's own check is the real enforcement.
+ *
+ * Top-ups (user-requested): a request is still decided once, so when the
+ * store sends less than was asked, the outlet raises a NEW request for the
+ * rest. "Request the rest" on an issued-short request fills the form with
+ * what was not sent, between the same two outlets (the server requires
+ * them), and the outlet may lower amounts, drop items or add others before
+ * sending. The two requests are linked both ways ("Top-up of #12" /
+ * "Topped up by #15"); only one live top-up per request is allowed.
  */
 
 const STATUS = {
@@ -35,6 +43,12 @@ const FILTERS = [
 ];
 const QUANTITY_PATTERN = /^\d+(\.\d{1,3})?$/;
 
+/** Lines sent short, with what is still missing — archived items are left out (they cannot be asked for again). */
+const shortfallOf = (request) =>
+  request.lines
+    .filter((line) => line.quantityIssued != null && compareQuantity(line.quantityIssued, line.quantityRequested) < 0)
+    .map((line) => ({ ...line, missing: quantityShortfall(line.quantityRequested, line.quantityIssued) }));
+const liveTopUpOf = (request) => request.topUps?.find((topUp) => topUp.status === 'pending' || topUp.status === 'issued') ?? null;
 const isPositiveQuantity = (value) => QUANTITY_PATTERN.test(value.trim()) && compareQuantity(value.trim(), '0') > 0;
 const formatWhen = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 const messageOf = (caught, fallback) => (caught instanceof ApiError ? caught.message : fallback);
@@ -68,6 +82,9 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const itemsRequest = useRef(0);
+  // The issued-short request the form is topping up, or null for an ordinary request.
+  const [topUpOf, setTopUpOf] = useState(null);
+  const formRef = useRef(null);
 
   // The list and the one request open for review.
   const [filter, setFilter] = useState(canIssue ? 'pending' : '');
@@ -170,11 +187,10 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
   // Once per click (the intent's nonce); a newer click wins over a slower answer.
   const focusId = intent?.requestId ?? null;
   const focusNonce = intent?.nonce ?? null;
-  useEffect(() => {
-    if (!focusId) return;
+  function openById(id) {
     const requestId = (focusRequest.current += 1);
     stockApi
-      .getTransferRequest(focusId)
+      .getTransferRequest(id)
       .then((row) => {
         if (requestId !== focusRequest.current) return;
         setFocused(row);
@@ -184,8 +200,12 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
         setIssueQuantities(Object.fromEntries(row.lines.map((line) => [String(line.stockItemId), defaultIssueQuantity(line)])));
       })
       .catch(() => {
-        if (requestId === focusRequest.current) setError(`Request #${focusId} could not be found.`);
+        if (requestId === focusRequest.current) setError(`Request #${id} could not be found.`);
       });
+  }
+
+  useEffect(() => {
+    if (focusId) openById(focusId); // a new click (nonce) re-runs this
   }, [focusId, focusNonce]);
 
   useEffect(() => {
@@ -193,6 +213,26 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
     detailRef.current.scrollIntoView?.({ block: 'start' });
     detailRef.current.focus?.({ preventScroll: true });
   }, [revealTick]);
+
+  /** "Request the rest": the form, between the same two outlets, starting from what was not sent. */
+  function startTopUp(request) {
+    const missing = shortfallOf(request).filter((line) => !line.archived);
+    setError(null);
+    setNotice(null);
+    setTopUpOf(request);
+    setFromOutletId(String(request.fromOutlet.id));
+    setToOutletId(String(request.toOutlet.id));
+    loadSourceItems(String(request.fromOutlet.id));
+    setLines(missing.length ? missing.map((line) => ({ key: (lineKeySeed += 1), stockItemId: String(line.stockItemId), quantity: line.missing })) : [blankLine()]);
+    setNote(`Top-up of #${request.id}`);
+    formRef.current?.scrollIntoView?.({ block: 'start' });
+  }
+
+  function stopTopUp() {
+    setTopUpOf(null);
+    setLines([blankLine()]);
+    setNote('');
+  }
 
   function chooseFrom(outletId) {
     setFromOutletId(outletId);
@@ -222,10 +262,14 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
         toOutletId,
         lines: lines.map((line) => ({ stockItemId: line.stockItemId, quantity: line.quantity.trim() })),
         note: note.trim(),
+        topUpOfRequestId: topUpOf?.id,
       });
-      setNotice(`Request #${created.id} sent to ${created.fromOutlet.name}.`);
+      setNotice(topUpOf ? `Top-up #${created.id} of request #${topUpOf.id} sent to ${created.fromOutlet.name}.` : `Request #${created.id} sent to ${created.fromOutlet.name}.`);
+      setTopUpOf(null);
       setLines([blankLine()]);
       setNote('');
+      // The request it tops up now shows "Topped up by": drop a notification's stale copy of it.
+      setFocused(null);
       await loadRequests();
     } catch (caught) {
       setError(messageOf(caught, 'Could not send this request.'));
@@ -278,6 +322,8 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
 
   const outletLabel = (outlet) => (isStoreOutlet(outlet) ? `${outlet.name} (store)` : outlet.name);
   const pending = selected?.status === 'pending';
+  const selectedShortfall = selected?.status === 'issued' ? shortfallOf(selected) : [];
+  const selectedLiveTopUp = selected ? liveTopUpOf(selected) : null;
 
   return (
     <div className={formStyles.form}>
@@ -309,6 +355,26 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
                 {STATUS[selected.status].label} by {selected.decidedBy.name ?? 'a staff member'}, {formatWhen(selected.decidedAt)}
                 {selected.decisionNote ? ` — “${selected.decisionNote}”` : ''}
               </p>
+            )}
+            {selected.topUpOfRequestId && (
+              <div className={formStyles.actionsRow}>
+                <span className={formStyles.hint}>Top-up of request #{selected.topUpOfRequestId}.</span>
+                <Button type="button" size="compact" variant="ghost" onClick={() => openById(selected.topUpOfRequestId)}>
+                  View #{selected.topUpOfRequestId}
+                </Button>
+              </div>
+            )}
+            {selected.topUps?.length > 0 && (
+              <div className={formStyles.actionsRow}>
+                <span className={formStyles.hint}>
+                  Topped up by {selected.topUps.map((topUp) => `#${topUp.id} (${STATUS[topUp.status].label.toLowerCase()})`).join(', ')}.
+                </span>
+                {selected.topUps.map((topUp) => (
+                  <Button key={topUp.id} type="button" size="compact" variant="ghost" onClick={() => openById(topUp.id)}>
+                    View #{topUp.id}
+                  </Button>
+                ))}
+              </div>
             )}
 
             <DataTable
@@ -372,6 +438,20 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
                 <p className={formStyles.hint}>Set an item to 0 to send none of it. The stock moves as soon as you issue.</p>
               </div>
             )}
+            {selectedShortfall.length > 0 && (
+              <div className={formStyles.form}>
+                <p className={formStyles.hint}>
+                  Sent short: {selectedShortfall.map((line) => `${line.name} ${formatQuantity(line.missing, line.unit)} missing`).join(', ')}.
+                </p>
+                {canRequest && !selectedLiveTopUp && (
+                  <div className={formStyles.actionsRow}>
+                    <Button type="button" variant="secondary" disabled={isOffline || submitting} onClick={() => startTopUp(selected)}>
+                      Request the rest
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
             {pending && canRequest && !canIssue && (
               <div className={formStyles.actionsRow}>
                 <Button type="button" variant="secondary" disabled={isOffline || acting} onClick={() => setDialog('cancel')}>
@@ -384,102 +464,115 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
       )}
 
       {canRequest && (
-        <Card title="Request stock">
-          <p className={formStyles.hint}>
-            Ask the store (or another outlet) for stock. The storekeeper issues it — all of it, part of it, or none with a reason — and it arrives the moment it is issued.
-          </p>
-          <form className={formStyles.form} onSubmit={handleRaise}>
-            <div className={formStyles.row}>
-              <label className={formStyles.field}>
-                <span className={formStyles.label}>Request from</span>
-                <select className={formStyles.select} value={fromOutletId} onChange={(event) => chooseFrom(event.target.value)} required disabled={isOffline}>
-                  <option value="" disabled>
-                    Select an outlet
-                  </option>
-                  {(outlets ?? []).map((outlet) => (
-                    <option key={outlet.id} value={outlet.id}>
-                      {outletLabel(outlet)}
+        <section ref={formRef} className={formStyles.scrollTarget} aria-label="Request stock">
+          <Card title={topUpOf ? `Request the rest of #${topUpOf.id}` : 'Request stock'}>
+            {topUpOf ? (
+              <div className={formStyles.actionsRow}>
+                <p className={formStyles.hint}>
+                  This asks {topUpOf.fromOutlet.name} again for what request #{topUpOf.id} did not send. Lower an amount, remove an item or add others before you send it.
+                </p>
+                <Button type="button" variant="ghost" size="compact" onClick={stopTopUp} disabled={submitting}>
+                  Not a top-up
+                </Button>
+              </div>
+            ) : (
+              <p className={formStyles.hint}>
+                Ask the store (or another outlet) for stock. The storekeeper issues it — all of it, part of it, or none with a reason — and it arrives the moment it is issued.
+              </p>
+            )}
+            <form className={formStyles.form} onSubmit={handleRaise}>
+              <div className={formStyles.row}>
+                <label className={formStyles.field}>
+                  <span className={formStyles.label}>Request from</span>
+                  <select className={formStyles.select} value={fromOutletId} onChange={(event) => chooseFrom(event.target.value)} required disabled={isOffline || Boolean(topUpOf)}>
+                    <option value="" disabled>
+                      Select an outlet
                     </option>
-                  ))}
-                </select>
-              </label>
-              <label className={formStyles.field}>
-                <span className={formStyles.label}>Deliver to</span>
-                <select className={formStyles.select} value={toOutletId} onChange={(event) => setToOutletId(event.target.value)} required disabled={isOffline}>
-                  <option value="" disabled>
-                    Select your outlet
-                  </option>
-                  {(outlets ?? []).filter((outlet) => !myOutletIds || myOutletIds.includes(String(outlet.id))).map((outlet) => (
-                    <option key={outlet.id} value={outlet.id} disabled={String(outlet.id) === String(fromOutletId)}>
-                      {outletLabel(outlet)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            {lines.map((line, index) => {
-              const item = itemById.get(String(line.stockItemId));
-              const badQuantity = line.quantity.trim() !== '' && !isPositiveQuantity(line.quantity);
-              return (
-                <div className={formStyles.row} key={line.key}>
-                  <label className={formStyles.field}>
-                    <span className={formStyles.label}>Item {index + 1}</span>
-                    <select
-                      className={formStyles.select}
-                      value={line.stockItemId}
-                      onChange={(event) => updateLine(line.key, { stockItemId: event.target.value })}
-                      required
-                      disabled={isOffline || !fromOutletId}
-                    >
-                      <option value="" disabled>
-                        {fromOutletId ? 'Select a stock item' : 'Choose where to request from first'}
+                    {(outlets ?? []).map((outlet) => (
+                      <option key={outlet.id} value={outlet.id}>
+                        {outletLabel(outlet)}
                       </option>
-                      <StockItemOptions items={(sourceItems ?? []).filter((candidate) => String(candidate.id) === String(line.stockItemId) || !chosenIds.has(String(candidate.id)))} />
-                    </select>
-                    {item && <span className={formStyles.hint}>{formatQuantity(item.current_quantity, item.unit)} at the store now</span>}
-                  </label>
-                  <label className={formStyles.field}>
-                    <span className={formStyles.label}>Quantity {index + 1}</span>
-                    <input
-                      className={formStyles.input}
-                      inputMode="decimal"
-                      value={line.quantity}
-                      onChange={(event) => updateLine(line.key, { quantity: event.target.value })}
-                      required
-                      disabled={isOffline}
-                      aria-invalid={badQuantity || undefined}
-                    />
-                    {badQuantity && <span className={formStyles.hint}>More than zero, at most 3 decimal places.</span>}
-                  </label>
-                  {lines.length > 1 && (
-                    <div className={formStyles.actionsRow}>
-                      <Button type="button" variant="ghost" size="compact" onClick={() => setLines((current) => current.filter((other) => other.key !== line.key))} disabled={isOffline}>
-                        Remove item {index + 1}
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {fromOutletId && sourceItems?.length === 0 && <p className={formStyles.hint}>This outlet carries no stock items yet.</p>}
+                    ))}
+                  </select>
+                </label>
+                <label className={formStyles.field}>
+                  <span className={formStyles.label}>Deliver to</span>
+                  <select className={formStyles.select} value={toOutletId} onChange={(event) => setToOutletId(event.target.value)} required disabled={isOffline || Boolean(topUpOf)}>
+                    <option value="" disabled>
+                      Select your outlet
+                    </option>
+                    {(outlets ?? []).filter((outlet) => !myOutletIds || myOutletIds.includes(String(outlet.id))).map((outlet) => (
+                      <option key={outlet.id} value={outlet.id} disabled={String(outlet.id) === String(fromOutletId)}>
+                        {outletLabel(outlet)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
 
-            <div className={formStyles.actionsRow}>
-              <Button type="button" variant="secondary" onClick={() => setLines((current) => [...current, blankLine()])} disabled={isOffline || !fromOutletId}>
-                Add another item
-              </Button>
-            </div>
-            <label className={formStyles.field}>
-              <span className={formStyles.label}>Note (optional)</span>
-              <input className={formStyles.input} value={note} onChange={(event) => setNote(event.target.value)} maxLength={255} disabled={isOffline} />
-            </label>
-            <div className={formStyles.actionsRow}>
-              <Button type="submit" loading={submitting} disabled={!canSubmit}>
-                Send request
-              </Button>
-            </div>
-          </form>
-        </Card>
+              {lines.map((line, index) => {
+                const item = itemById.get(String(line.stockItemId));
+                const badQuantity = line.quantity.trim() !== '' && !isPositiveQuantity(line.quantity);
+                return (
+                  <div className={formStyles.row} key={line.key}>
+                    <label className={formStyles.field}>
+                      <span className={formStyles.label}>Item {index + 1}</span>
+                      <select
+                        className={formStyles.select}
+                        value={line.stockItemId}
+                        onChange={(event) => updateLine(line.key, { stockItemId: event.target.value })}
+                        required
+                        disabled={isOffline || !fromOutletId}
+                      >
+                        <option value="" disabled>
+                          {fromOutletId ? 'Select a stock item' : 'Choose where to request from first'}
+                        </option>
+                        <StockItemOptions items={(sourceItems ?? []).filter((candidate) => String(candidate.id) === String(line.stockItemId) || !chosenIds.has(String(candidate.id)))} />
+                      </select>
+                      {item && <span className={formStyles.hint}>{formatQuantity(item.current_quantity, item.unit)} at the store now</span>}
+                    </label>
+                    <label className={formStyles.field}>
+                      <span className={formStyles.label}>Quantity {index + 1}</span>
+                      <input
+                        className={formStyles.input}
+                        inputMode="decimal"
+                        value={line.quantity}
+                        onChange={(event) => updateLine(line.key, { quantity: event.target.value })}
+                        required
+                        disabled={isOffline}
+                        aria-invalid={badQuantity || undefined}
+                      />
+                      {badQuantity && <span className={formStyles.hint}>More than zero, at most 3 decimal places.</span>}
+                    </label>
+                    {lines.length > 1 && (
+                      <div className={formStyles.actionsRow}>
+                        <Button type="button" variant="ghost" size="compact" onClick={() => setLines((current) => current.filter((other) => other.key !== line.key))} disabled={isOffline}>
+                          Remove item {index + 1}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {fromOutletId && sourceItems?.length === 0 && <p className={formStyles.hint}>This outlet carries no stock items yet.</p>}
+
+              <div className={formStyles.actionsRow}>
+                <Button type="button" variant="secondary" onClick={() => setLines((current) => [...current, blankLine()])} disabled={isOffline || !fromOutletId}>
+                  Add another item
+                </Button>
+              </div>
+              <label className={formStyles.field}>
+                <span className={formStyles.label}>Note (optional)</span>
+                <input className={formStyles.input} value={note} onChange={(event) => setNote(event.target.value)} maxLength={255} disabled={isOffline} />
+              </label>
+              <div className={formStyles.actionsRow}>
+                <Button type="submit" loading={submitting} disabled={!canSubmit}>
+                  {topUpOf ? 'Send top-up' : 'Send request'}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </section>
       )}
 
       {/* Outside the table: a DataTable renders its toolbar only when it has rows, and "no pending requests" is the normal state. */}
@@ -499,7 +592,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
       <DataTable
         title="Stock requests"
         columns={[
-          { key: 'id', label: 'Request', render: (row) => `#${row.id}` },
+          { key: 'id', label: 'Request', render: (row) => (row.topUpOfRequestId ? `#${row.id} (top-up of #${row.topUpOfRequestId})` : `#${row.id}`) },
           { key: 'route', label: 'From → To', render: (row) => `${row.fromOutlet.name} → ${row.toOutlet.name}` },
           { key: 'items', label: 'Items', render: (row) => row.lines.map((line) => `${line.name} ${formatQuantity(line.quantityRequested, line.unit)}`).join(', ') },
           { key: 'requestedBy', label: 'Requested by', render: (row) => row.requestedBy.name ?? '—' },

@@ -128,6 +128,42 @@ class StockTransferRequestNotPendingError extends AppError {
   }
 }
 
+/**
+ * A top-up asks for the rest of a request the store sent short. Refused
+ * when the request it names was not issued, or was issued in full — there
+ * is no "rest" to ask for (a rejected request is asked for again as a new
+ * request, not a top-up).
+ */
+class TopUpRequiresShortIssueError extends AppError {
+  constructor(requestId, status) {
+    super(
+      'BUSINESS_RULE_TOP_UP_REQUIRES_SHORT_ISSUE',
+      status === 'issued'
+        ? `Stock request ${requestId} was issued in full — there is nothing left to top up.`
+        : `Stock request ${requestId} has not been issued, so it cannot be topped up.`,
+      422,
+      { requestId, status },
+    );
+  }
+}
+
+/**
+ * One live top-up per short request: a second while the first is still
+ * pending, or after it was issued, is refused so the store is never asked
+ * for the same shortfall twice. A top-up that was rejected or withdrawn
+ * frees the shortfall to be asked for again.
+ */
+class RequestAlreadyToppedUpError extends AppError {
+  constructor(requestId, topUpRequestId, topUpStatus) {
+    super(
+      'CONFLICT_STOCK_REQUEST_ALREADY_TOPPED_UP',
+      `Stock request ${requestId} already has a top-up (#${topUpRequestId}, ${topUpStatus}).`,
+      409,
+      { requestId, topUpRequestId, topUpStatus },
+    );
+  }
+}
+
 /** An issue sent nothing on every line — that is a rejection, which needs a reason, not an empty issue. */
 class NothingIssuedError extends ValidationError {
   constructor() {
@@ -157,6 +193,8 @@ module.exports = {
   StockTransferRequestNotFoundError,
   StockTransferRequestNotPendingError,
   NothingIssuedError,
+  TopUpRequiresShortIssueError,
+  RequestAlreadyToppedUpError,
   StockItemNotFoundError,
   OutletNotFoundError,
   MenuItemNotFoundError,

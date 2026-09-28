@@ -77,7 +77,7 @@ export function describeNotification(notification) {
     case 'stock.transfer_requested':
       return {
         title: `Stock requested — ${p.toOutletName ?? 'an outlet'}`,
-        detail: `Request #${p.requestId}: ${p.lineCount} ${p.lineCount === 1 ? 'item' : 'items'} from ${p.fromOutletName ?? 'the store'}`,
+        detail: `Request #${p.requestId}${p.topUpOfRequestId ? ` (top-up of #${p.topUpOfRequestId})` : ''}: ${p.lineCount} ${p.lineCount === 1 ? 'item' : 'items'} from ${p.fromOutletName ?? 'the store'}`,
       };
     case 'stock.transfer_request_issued':
       return {

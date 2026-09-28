@@ -314,4 +314,114 @@ describe('<StockRequestsTab>', () => {
       expect(screen.getByRole('button', { name: 'View #8' })).toBeInTheDocument();
     });
   });
+  describe('topping up a short issue', () => {
+    function issuedShort(overrides = {}) {
+      return pendingRequest({
+        status: 'issued',
+        decidedBy: { userId: '8', name: 'Kemi Store' },
+        decidedAt: '2027-07-01T19:00:00Z',
+        topUpOfRequestId: null,
+        topUps: [],
+        lines: [
+          { stockItemId: '20', name: 'Coke', unit: 'bottle', archived: false, quantityRequested: '12.000', quantityIssued: '12.000', availableAtSource: null },
+          { stockItemId: '21', name: 'Gin', unit: 'bottle', archived: false, quantityRequested: '2.000', quantityIssued: '0.500', availableAtSource: null },
+        ],
+        ...overrides,
+      });
+    }
+
+    it('"Request the rest" fills the form with only what was not sent, between the same outlets, and links the new request', async () => {
+      mocks.listTransferRequests.mockResolvedValue([issuedShort()]);
+      mocks.createTransferRequest.mockResolvedValue({ id: '9', fromOutlet: { name: 'Main Store' } });
+      render(<StockRequestsTab permissions={REQUESTER} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'View #5' }));
+      expect(screen.getByText('Sent short: Gin 1.500 bottle missing.')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Request the rest' }));
+
+      expect(screen.getByText('Request the rest of #5')).toBeInTheDocument();
+      expect(screen.getByLabelText('Request from')).toHaveValue('1');
+      expect(screen.getByLabelText('Request from')).toBeDisabled();
+      expect(screen.getByLabelText('Deliver to')).toHaveValue('2');
+      expect(screen.getByLabelText('Deliver to')).toBeDisabled();
+      await waitFor(() => expect(screen.getByLabelText(/^Item 1/)).toHaveValue('21'));
+      expect(screen.getByText('1.000 bottle at the store now')).toBeInTheDocument();
+      expect(screen.getByLabelText('Quantity 1')).toHaveValue('1.500');
+      expect(screen.queryByLabelText('Item 2')).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Note (optional)')).toHaveValue('Top-up of #5');
+
+      // Editable: ask for less than the shortfall.
+      await userEvent.clear(screen.getByLabelText('Quantity 1'));
+      await userEvent.type(screen.getByLabelText('Quantity 1'), '1');
+      await userEvent.click(screen.getByRole('button', { name: 'Send top-up' }));
+
+      expect(mocks.createTransferRequest).toHaveBeenCalledWith({
+        fromOutletId: '1',
+        toOutletId: '2',
+        lines: [{ stockItemId: '21', quantity: '1' }],
+        note: 'Top-up of #5',
+        topUpOfRequestId: '5',
+      });
+      expect(await screen.findByText('Top-up #9 of request #5 sent to Main Store.')).toBeInTheDocument();
+      expect(screen.getByText('Request stock')).toBeInTheDocument();
+      expect(screen.getByLabelText('Request from')).not.toBeDisabled();
+    });
+
+    it('"Not a top-up" turns the form back into an ordinary request', async () => {
+      mocks.listTransferRequests.mockResolvedValue([issuedShort()]);
+      render(<StockRequestsTab permissions={REQUESTER} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'View #5' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Request the rest' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Not a top-up' }));
+
+      expect(screen.getByText('Request stock')).toBeInTheDocument();
+      expect(screen.getByLabelText('Item 1')).toHaveValue('');
+      expect(screen.getByLabelText('Note (optional)')).toHaveValue('');
+      expect(screen.getByLabelText('Request from')).not.toBeDisabled();
+    });
+
+    it('is not offered when the request was sent in full, already has a live top-up, or to a storekeeper', async () => {
+      const full = issuedShort({ id: '6', lines: [issuedShort().lines[0]] });
+      const toppedUp = issuedShort({ id: '5', topUps: [{ id: '9', status: 'pending' }] });
+      mocks.listTransferRequests.mockResolvedValue([toppedUp, full]);
+      const { unmount } = render(<StockRequestsTab permissions={REQUESTER} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'View #6' }));
+      expect(screen.queryByText(/Sent short/)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Request the rest' })).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'View #5' }));
+      expect(screen.getByText('Topped up by #9 (pending).')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Request the rest' })).not.toBeInTheDocument();
+      unmount();
+
+      mocks.listTransferRequests.mockResolvedValue([issuedShort()]);
+      render(<StockRequestsTab permissions={STOREKEEPER} />);
+      await userEvent.selectOptions(screen.getByLabelText('Show'), '');
+      await userEvent.click(await screen.findByRole('button', { name: 'View #5' }));
+      expect(screen.getByText('Sent short: Gin 1.500 bottle missing.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Request the rest' })).not.toBeInTheDocument();
+    });
+
+    it('a withdrawn top-up frees the shortfall again, and the links open the other request', async () => {
+      const original = issuedShort({ topUps: [{ id: '9', status: 'cancelled' }] });
+      mocks.listTransferRequests.mockResolvedValue([original]);
+      mocks.getTransferRequest.mockResolvedValue(pendingRequest({ id: '9', status: 'cancelled', topUpOfRequestId: '5', topUps: [] }));
+      render(<StockRequestsTab permissions={REQUESTER} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'View #5' }));
+      expect(screen.getByText('Topped up by #9 (withdrawn).')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Request the rest' })).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'View #9' }));
+      expect(mocks.getTransferRequest).toHaveBeenCalledWith('9');
+      expect(await screen.findByText('Top-up of request #5.')).toBeInTheDocument();
+    });
+
+    it('marks a top-up in the list', async () => {
+      mocks.listTransferRequests.mockResolvedValue([pendingRequest({ id: '9', topUpOfRequestId: '5', topUps: [] })]);
+      render(<StockRequestsTab permissions={REQUESTER} />);
+      expect(await screen.findByText('#9 (top-up of #5)')).toBeInTheDocument();
+    });
+  });
 });

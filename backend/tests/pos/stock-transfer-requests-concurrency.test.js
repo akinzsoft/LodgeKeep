@@ -16,6 +16,8 @@
  *   - an issue racing a direct transfer for the same stock never takes the
  *     source below zero, and a refused issue sends NONE of its lines
  *     (CONC-REQ-4);
+ *   - two "Request the rest" top-ups of the same short request racing:
+ *     exactly one lands, the other is a 409 naming it (CONC-REQ-5);
  *   - after every race, each transfer is exactly two legs that cancel, and
  *     every outlet's level equals the sum of its own ledger.
  */
@@ -80,6 +82,8 @@ describe('Stock transfer requests: real concurrency', () => {
   });
 
   afterAll(async () => {
+    // Top-ups point at the request they top up (a self-reference): unlink first.
+    await db()('stock_transfer_requests').where({ tenant_id: tenantId }).update({ top_up_of_request_id: null });
     for (const table of [
       'stock_transfer_request_lines', 'stock_transfer_requests', 'stock_movements', 'pos_menu_item_components', 'stock_levels', 'stock_items', 'audit_log', 'idempotency_keys',
       'outbox_events', 'pos_order_settlements', 'pos_order_items', 'pos_orders', 'pos_outlet_menu_items', 'pos_menu_items',
@@ -173,6 +177,26 @@ describe('Stock transfer requests: real concurrency', () => {
     expect(await levelOf(barId, fanta)).toBe('4.000');
     expect(await assertLedgerConsistent(coke)).toBe(1);
     expect(await assertLedgerConsistent(fanta)).toBe(1);
+  });
+
+  // -----------------------------------------------------------------------
+  // CONC-REQ-5
+  // -----------------------------------------------------------------------
+  test.each([1, 2, 3])('CONC-REQ-5 (round %i): two top-ups of the same short request at once — one lands, one 409', async () => {
+    const item = await newItem('Stout');
+    await seed(storeId, item, '4.000');
+    const requestId = await raise(storeId, barId, [[item, '10']]);
+    expect((await issue(requestId, [[item, '4']])).status).toBe(200);
+
+    const topUp = () => post('', { from_outlet_id: storeId, to_outlet_id: barId, top_up_of_request_id: requestId, lines: [{ stock_item_id: item, quantity: '6' }] });
+    const results = await Promise.all([topUp(), topUp()]);
+    expect(results.map((res) => res.status).sort()).toEqual([201, 409]);
+    const winner = results.find((res) => res.status === 201).body.data;
+    expect(results.find((res) => res.status === 409).body.error).toMatchObject({
+      code: 'CONFLICT_STOCK_REQUEST_ALREADY_TOPPED_UP',
+      details: { requestId: Number(requestId), topUpRequestId: Number(winner.id), topUpStatus: 'pending' },
+    });
+    expect(await db()('stock_transfer_requests').where({ top_up_of_request_id: requestId })).toHaveLength(1);
   });
 
   // -----------------------------------------------------------------------

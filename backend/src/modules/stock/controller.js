@@ -347,12 +347,17 @@ async function createTransferRequest(req, res, next) {
     const toOutletId = require_(req.body, 'to_outlet_id');
     const lines = parseLines(req.body, { allowZero: false });
     const note = optionalNote(req.body);
+    // Optional: set by "Request the rest" — the issued-short request this one tops up.
+    const topUpOfRequestId = req.body?.top_up_of_request_id ?? null;
+    if (topUpOfRequestId !== null && !/^\d+$/.test(String(topUpOfRequestId))) {
+      throw new ValidationError('INVALID_FIELD', '"top_up_of_request_id" must be a request id.', [{ field: 'top_up_of_request_id', issue: 'invalid' }]);
+    }
     await runIdempotentMutation(req, res, {
       operationType: 'stock.transfer_request.create',
       entityType: 'stock_transfer_requests',
       action: 'create',
       handler: async (trx) => {
-        const request = await service.createTransferRequest({ trx, fromOutletId, toOutletId, lines, note, userId: req.context.userId });
+        const request = await service.createTransferRequest({ trx, fromOutletId, toOutletId, lines, note, topUpOfRequestId, userId: req.context.userId });
         return { status: 201, body: ok(request) };
       },
     });

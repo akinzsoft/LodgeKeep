@@ -120,6 +120,8 @@ const {
   StockTransferRequestNotPendingError,
   NothingIssuedError,
   InsufficientStockForIssueError,
+  TopUpRequiresShortIssueError,
+  RequestAlreadyToppedUpError,
 } = require('./errors');
 const { generateUlid } = require('../../shared/ulid');
 
@@ -1119,6 +1121,20 @@ async function loadTransferRequests(db, { ids, status, outletId, limit, scope = 
     for (const level of levels) onHand.set(`${level.outlet_id}:${level.stock_item_id}`, level.current_quantity);
   }
 
+  // Top-ups of these requests (a top-up has the same two outlets as the
+  // request it tops up, so whoever may see one may see the other).
+  const topUpsOf = new Map();
+  const topUps = await db
+    .table('stock_transfer_requests')
+    .whereIn('top_up_of_request_id', rows.map((row) => row.id))
+    .orderBy('id', 'asc')
+    .select('id', 'status', 'top_up_of_request_id');
+  for (const topUp of topUps) {
+    const list = topUpsOf.get(String(topUp.top_up_of_request_id)) ?? [];
+    list.push({ id: topUp.id, status: topUp.status });
+    topUpsOf.set(String(topUp.top_up_of_request_id), list);
+  }
+
   const nameOf = (userId) => {
     const user = users.get(String(userId));
     return user ? [user.first_name, user.last_name].filter(Boolean).join(' ') || null : null;
@@ -1137,6 +1153,8 @@ async function loadTransferRequests(db, { ids, status, outletId, limit, scope = 
     id: row.id,
     status: row.status,
     note: row.note,
+    topUpOfRequestId: row.top_up_of_request_id ?? null,
+    topUps: topUpsOf.get(String(row.id)) ?? [],
     fromOutlet: outletOf(row.from_outlet_id),
     toOutlet: outletOf(row.to_outlet_id),
     requestedBy: { userId: row.requested_by_user_id, name: nameOf(row.requested_by_user_id) },
@@ -1191,14 +1209,60 @@ async function lockPendingRequest(trx, requestId, userId) {
 }
 
 /**
+ * A top-up ("Request the rest", user-requested) is an ordinary new request
+ * that names the ISSUED-SHORT request it asks the rest of. The request it
+ * tops up stays decided — the store never sends more against it — so the
+ * paper trail remains one decision per request.
+ *
+ * Refused unless: the original is visible to the caller (404 otherwise,
+ * never "forbidden"); it was issued with at least one line sent short; the
+ * top-up goes between the same two outlets; and no other top-up of it is
+ * pending or issued (a rejected or withdrawn one frees the shortfall to be
+ * asked for again). The lines are the requester's own — the form starts
+ * from the shortfall but may ask for less, drop lines or add items.
+ *
+ * The original's header is locked FIRST, then its top-ups are read with a
+ * LOCKING read: under REPEATABLE READ a plain read would reuse the snapshot
+ * taken at this transaction's first read (the idempotency-key lookup,
+ * before the lock was granted) and miss a top-up committed while this one
+ * waited — two "Request the rest" clicks would then both land.
+ */
+async function assertCanTopUp(trx, { topUpOfRequestId, fromOutletId, toOutletId, userId }) {
+  const original = await trx.table('stock_transfer_requests').where({ id: topUpOfRequestId }).forUpdate().first();
+  if (!original) throw new StockTransferRequestNotFoundError();
+  if (!scopeCovers(await outletScopeForUser(trx, userId), [original.from_outlet_id, original.to_outlet_id])) {
+    throw new StockTransferRequestNotFoundError();
+  }
+  if (String(original.from_outlet_id) !== String(fromOutletId) || String(original.to_outlet_id) !== String(toOutletId)) {
+    throw new ValidationError('TOP_UP_OUTLETS_MISMATCH', 'A top-up goes between the same two outlets as the request it tops up.', [
+      { field: 'top_up_of_request_id', issue: 'outlets_mismatch' },
+    ]);
+  }
+  if (original.status !== 'issued') throw new TopUpRequiresShortIssueError(Number(original.id), original.status);
+  const lines = await trx.table('stock_transfer_request_lines').where({ request_id: original.id }).select('quantity_requested', 'quantity_issued');
+  if (!lines.some((line) => compareQuantity(line.quantity_issued ?? ZERO_QTY, line.quantity_requested) < 0)) {
+    throw new TopUpRequiresShortIssueError(Number(original.id), original.status);
+  }
+  const live = await trx
+    .table('stock_transfer_requests')
+    .where({ top_up_of_request_id: original.id })
+    .whereIn('status', ['pending', 'issued'])
+    .orderBy('id', 'asc')
+    .forUpdate()
+    .first();
+  if (live) throw new RequestAlreadyToppedUpError(Number(original.id), Number(live.id), live.status);
+}
+
+/**
  * `trx`-based, from `runIdempotentMutation`. `lines` is `[{stockItemId,
  * quantity}]`, already shape-checked by the controller (positive, at most
  * 3 decimals). Stock availability is NOT checked here — asking for more
  * than the store holds is a legitimate request; the issue decides what can
  * actually be sent.
  */
-async function createTransferRequest({ trx, fromOutletId, toOutletId, lines, note, userId }) {
+async function createTransferRequest({ trx, fromOutletId, toOutletId, lines, note, userId, topUpOfRequestId = null }) {
   if (String(fromOutletId) === String(toOutletId)) throw new SameOutletTransferError();
+  if (topUpOfRequestId) await assertCanTopUp(trx, { topUpOfRequestId, fromOutletId, toOutletId, userId });
   const fromOutlet = await assertOutlet(trx, fromOutletId);
   const toOutlet = await assertOutlet(trx, toOutletId);
   // Staff tied to outlets ask for stock for their own outlet only.
@@ -1222,6 +1286,7 @@ async function createTransferRequest({ trx, fromOutletId, toOutletId, lines, not
     to_outlet_id: toOutletId,
     status: 'pending',
     note: note || null,
+    top_up_of_request_id: topUpOfRequestId || null,
     requested_by_user_id: userId,
   });
   for (const line of lines) {
@@ -1236,7 +1301,13 @@ async function createTransferRequest({ trx, fromOutletId, toOutletId, lines, not
     trx,
     eventType: 'stock.transfer_requested',
     popup: true, // user-requested: a stock request pops up (and beeps) rather than only counting in the bell
-    payload: { requestId: Number(requestId), fromOutletName: fromOutlet.name, toOutletName: toOutlet.name, lineCount: lines.length },
+    payload: {
+      requestId: Number(requestId),
+      fromOutletName: fromOutlet.name,
+      toOutletName: toOutlet.name,
+      lineCount: lines.length,
+      topUpOfRequestId: topUpOfRequestId ? Number(topUpOfRequestId) : null,
+    },
     outletIds: [fromOutletId], // the storekeepers at the supplying store, not every storekeeper
   });
   const [request] = await loadTransferRequests(trx, { ids: [requestId] });
