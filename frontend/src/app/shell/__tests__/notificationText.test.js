@@ -37,6 +37,9 @@ describe('describeNotification', () => {
       describeNotification({ type: 'stock.transfer_requested', payload: { requestId: 9, fromOutletName: 'Main Store', toOutletName: 'Main Bar', lineCount: 1, topUpOfRequestId: 5 } }).detail,
     ).toBe('Request #9 (top-up of #5): 1 item from Main Store');
     expect(
+      describeNotification({ type: 'stock.transfer_requested', payload: { requestId: 5, fromOutletName: 'Main Store', toOutletName: 'Main Bar', lineCount: 2, reminder: true } }),
+    ).toEqual({ title: 'Still waiting — Main Bar', detail: 'Request #5: 2 items from Main Store' });
+    expect(
       describeNotification({ type: 'stock.transfer_request_issued', payload: { requestId: 5, fromOutletName: 'Main Store', toOutletName: 'Main Bar', lineCount: 3, shortLineCount: 1 } }),
     ).toEqual({ title: 'Stock sent — Main Bar', detail: 'Request #5 from Main Store · 1 item sent short' });
     expect(

@@ -19,7 +19,7 @@ import { SignupScreen } from './app/auth/screens/SignupScreen.jsx';
 import { AppShell, isNavItemAllowed } from './app/shell/index.js';
 import { NotificationPopups } from './app/shell/NotificationPopups.jsx';
 import { MyAccountModal } from './app/account/MyAccountModal.jsx';
-import { notificationTarget, notificationIntent } from './app/shell/notificationText.js';
+import { notificationTarget, notificationIntent, parsePayload } from './app/shell/notificationText.js';
 import { HomeDashboard } from './app/dashboard/HomeDashboard.jsx';
 import { SetupScreen } from './app/setup/SetupScreen.jsx';
 import { BookingScreen } from './app/booking/BookingScreen.jsx';
@@ -43,6 +43,7 @@ import { ChainOverviewScreen } from './app/chain-overview/ChainOverviewScreen.js
 import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { useStaffNotifications } from './shared/hooks/useStaffNotifications.js';
+import { usePendingRequestReminders, forgetRequestReminders } from './shared/hooks/usePendingRequestReminders.js';
 import { useNotificationSound } from './shared/hooks/useNotificationSound.js';
 import { useNewVersionAvailable } from './shared/hooks/useNewVersionAvailable.js';
 import { playAlertBeep, unlockAlertSound } from './shared/sound/alertBeep.js';
@@ -187,6 +188,22 @@ function Demo() {
       if (soundOn) playAlertBeep();
     }, [soundOn]),
   });
+  // User-requested: a stock request still pending pops up once each time the
+  // storekeeper signs in, until it is issued, rejected or withdrawn. Only for
+  // someone who can issue stock, once this property's grants are known.
+  const canIssueStock = Boolean(grants && grants.userId === user?.userId && grants.permissions.includes('pos.stock_transfer'));
+  const requestReminders = usePendingRequestReminders({
+    enabled: status === 'authenticated' && canIssueStock,
+    sessionKey: status === 'authenticated' ? `${user?.userId}:${user?.activePropertyId}` : null,
+    onShow: useCallback(() => {
+      if (soundOn) playAlertBeep();
+    }, [soundOn]),
+  });
+  // Signed out (or the session expired): the next sign-in reminds them again.
+  useEffect(() => {
+    if (status === 'idle' || status === 'session_expired') forgetRequestReminders();
+  }, [status]);
+
   // A device left open all day keeps running the build it loaded; when a
   // newer one is deployed, offer a reload (never forced — see UpdateBanner).
   const newVersionAvailable = useNewVersionAvailable({ enabled: import.meta.env.PROD, currentBuildId: import.meta.env.VITE_APP_BUILD_ID });
@@ -275,8 +292,16 @@ function Demo() {
     return target && isNavItemAllowed(target, grantedPermissions) ? target : null;
   }
 
+  // Fresh alerts on top, then the sign-in reminders — minus any request a fresh card already shows.
+  const freshRequestIds = new Set(
+    staffNotifications.popups.filter((row) => row.type.startsWith('stock.transfer_request')).map((row) => String(parsePayload(row).requestId))
+  );
+  const popups = [...staffNotifications.popups, ...requestReminders.reminders.filter((card) => !freshRequestIds.has(String(card.payload.requestId)))];
+
   function handleOpenNotification(notification) {
-    staffNotifications.markRead(notification.id);
+    // A sign-in reminder is not a bell row — nothing to mark read.
+    if (notification.reminder) requestReminders.dismiss(notification.id);
+    else staffNotifications.markRead(notification.id);
     const target = notificationScreenFor(notification);
     if (target) {
       const intent = notificationIntent(notification);
@@ -338,10 +363,10 @@ function Demo() {
       onOpenProfile={() => setProfileOpen(true)}
     >
       <NotificationPopups
-        popups={staffNotifications.popups}
+        popups={popups}
         onOpen={handleOpenNotification}
         canOpen={(notification) => notificationScreenFor(notification) !== null}
-        onDismiss={staffNotifications.dismissPopup}
+        onDismiss={(id) => (String(id).startsWith('reminder:') ? requestReminders.dismiss(id) : staffNotifications.dismissPopup(id))}
       />
       {profileOpen && <MyAccountModal isOffline={!isOnline} onClose={() => setProfileOpen(false)} />}
       {switchError && (

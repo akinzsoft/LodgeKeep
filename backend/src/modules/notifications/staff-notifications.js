@@ -256,6 +256,24 @@ async function resolveRecipientUserIds({ trx, eventType }) {
 }
 
 /**
+ * Whether `userId`'s role at the active property is on this property's
+ * recipient list for `eventType` (defaults plus Setup → Notifications
+ * overrides) — the same role rule `notifyStaff` applies, for a reader that
+ * asks about one person rather than listing everyone (the sign-in reminder
+ * of pending stock requests).
+ */
+async function roleReceivesEvent({ db, eventType, userId }) {
+  const access = await db.table('user_property_access').where({ user_id: userId }).first('role');
+  if (!access) return false;
+  const overrides = await db.table('notification_role_rules').where({ event_type: eventType });
+  const roles = effectiveRoles(
+    eventType,
+    overrides.map((row) => ({ ...row, enabled: Boolean(row.enabled) }))
+  );
+  return roles.has(access.role);
+}
+
+/**
  * Writes one bell row per recipient. With a `dedupKey`, a recipient who
  * already holds a row with that key is skipped (UNIQUE(tenant_id, user_id,
  * dedup_key)) — one insert per recipient, never a bulk insert, so a single
@@ -358,6 +376,7 @@ module.exports = {
   NOTIFICATION_EVENTS,
   NOTIFICATION_EVENTS_BY_TYPE,
   effectiveRoles,
+  roleReceivesEvent,
   notifyStaff,
   listRoleRules,
   saveRoleRules,

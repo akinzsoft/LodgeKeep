@@ -98,7 +98,7 @@
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { createCategoryCatalogue } = require('../../shared/category-catalogue');
-const { notifyStaff } = require('../notifications/staff-notifications');
+const { notifyStaff, roleReceivesEvent } = require('../notifications/staff-notifications');
 const { recordAuditEntry } = require('../../audit');
 const outletMenu = require('../../shared/outlet-menu');
 const { outletScopeForUser, scopeCovers } = require('../../shared/outlet-assignments');
@@ -1187,6 +1187,27 @@ async function getTransferRequest({ context, id }) {
   return request ?? null;
 }
 
+/**
+ * The pending requests waiting on the caller — what the sign-in reminder
+ * pops up (user-requested: a pending request shows once each time the
+ * storekeeper signs in, until it is issued, rejected or withdrawn). The
+ * same people the "Stock requested" alert reaches: the caller's role is on
+ * this property's recipient list for it (Setup → Notifications), and they
+ * cover the SUPPLYING outlet — a storekeeper tied to one store is not
+ * reminded of another store's requests, nor of requests delivered to their
+ * own. Oldest first, at most 50.
+ */
+async function listRequestsAwaitingMe({ context }) {
+  const db = scopedDb().for(context);
+  if (!(await roleReceivesEvent({ db, eventType: 'stock.transfer_requested', userId: context.userId }))) return [];
+  const scope = await outletScopeForUser(db, context.userId);
+  let pending = db.table('stock_transfer_requests').where({ status: 'pending' });
+  if (scope) pending = pending.whereIn('from_outlet_id', scope);
+  const ids = (await pending.orderBy('id', 'asc').limit(50).select('id')).map((row) => row.id);
+  if (!ids.length) return [];
+  return (await loadTransferRequests(db, { ids })).reverse();
+}
+
 /** The outlets the caller covers for stock requests: `{restricted: false}` or `{restricted: true, outletIds}`. */
 async function getMyRequestOutlets({ context }) {
   const scope = await outletScopeForUser(scopedDb().for(context), context.userId);
@@ -1669,6 +1690,7 @@ module.exports = {
   listTransfers,
   listTransferRequests,
   getTransferRequest,
+  listRequestsAwaitingMe,
   getMyRequestOutlets,
   createTransferRequest,
   issueTransferRequest,

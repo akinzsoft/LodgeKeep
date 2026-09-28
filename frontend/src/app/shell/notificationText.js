@@ -76,7 +76,8 @@ export function describeNotification(notification) {
       return { title: `Out of stock: ${p.name ?? 'stock item'}`, detail: 'Menu items that use it are now unavailable.' };
     case 'stock.transfer_requested':
       return {
-        title: `Stock requested — ${p.toOutletName ?? 'an outlet'}`,
+        // A sign-in reminder of a request still waiting, or the alert when it was raised.
+        title: `${p.reminder ? 'Still waiting' : 'Stock requested'} — ${p.toOutletName ?? 'an outlet'}`,
         detail: `Request #${p.requestId}${p.topUpOfRequestId ? ` (top-up of #${p.topUpOfRequestId})` : ''}: ${p.lineCount} ${p.lineCount === 1 ? 'item' : 'items'} from ${p.fromOutletName ?? 'the store'}`,
       };
     case 'stock.transfer_request_issued':
