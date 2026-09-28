@@ -38,7 +38,7 @@ function daysFromNow(days) {
 /** Every user holding a role at the active property — the Setup "User management" screen's own list. */
 async function listUsers({ context }) {
   const db = scopedDb().for(context);
-  return db
+  const users = await db
     .table('user_property_access')
     .joinScoped('users', (join) => join.on('user_property_access.user_id', '=', 'users.id'))
     .select(
@@ -51,6 +51,14 @@ async function listUsers({ context }) {
       'user_property_access.role as role'
     )
     .orderBy('users.email');
+  // The outlets each works at here (`user_outlet_assignments`); empty = every outlet.
+  const assignments = users.length
+    ? await db.table('user_outlet_assignments').whereIn('user_id', users.map((user) => user.id)).select('user_id', 'outlet_id')
+    : [];
+  return users.map((user) => ({
+    ...user,
+    outlet_ids: assignments.filter((row) => String(row.user_id) === String(user.id)).map((row) => String(row.outlet_id)),
+  }));
 }
 
 /** One row from `listUsers`, or null if this id holds no access at the active property — the controller's own "before" check for a real 404. */
@@ -188,4 +196,30 @@ async function changeUserRole({ context, id, role }) {
   return getUserAtActiveProperty({ context, id });
 }
 
-module.exports = { listUsers, getUserAtActiveProperty, listPendingInvitations, inviteUser, deactivateUser, changeUserRole };
+/**
+ * Replaces the outlets a staff member works at, at the active property
+ * (user-requested: "tie staff to outlets"). An empty list means every
+ * outlet. Confirmed scope: this limits stock requests and their alerts only
+ * (`shared/outlet-assignments.js`); manager/admin/super_admin are never
+ * limited by it, whatever is saved here. Every id must be an active outlet
+ * of this property — another property's or tenant's outlet is "not found".
+ */
+async function setUserOutlets({ context, id, outletIds }) {
+  const db = scopedDb().for(context);
+  const wanted = [...new Set(outletIds.map(String))];
+  if (wanted.length) {
+    const found = await db.table('pos_outlets').whereIn('id', wanted).where({ status: 'active' }).select('id');
+    if (found.length !== wanted.length) {
+      throw new ValidationError('OUTLET_NOT_FOUND', 'One of the chosen outlets does not exist or is archived.', [{ field: 'outlet_ids', issue: 'not_found' }]);
+    }
+  }
+  await db.transaction(async (trx) => {
+    await trx.table('user_outlet_assignments').where({ user_id: id }).delete();
+    for (const outletId of wanted) {
+      await trx.table('user_outlet_assignments').insert({ user_id: id, outlet_id: outletId });
+    }
+  });
+  return getUserAtActiveProperty({ context, id });
+}
+
+module.exports = { listUsers, getUserAtActiveProperty, listPendingInvitations, inviteUser, deactivateUser, changeUserRole, setUserOutlets };

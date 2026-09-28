@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, DataTable, Button, StatusPill, ConfirmDialog } from '../../shared/components/index.js';
-import { usersApi, ApiError } from '../../shared/api/index.js';
+import { usersApi, posApi, ApiError } from '../../shared/api/index.js';
 import styles from './SetupScreen.module.css';
 import formStyles from './SetupForm.module.css';
 import { EmailDeliveryNotice } from './EmailDeliveryNotice.jsx';
@@ -13,6 +13,12 @@ import { EmailDeliveryNotice } from './EmailDeliveryNotice.jsx';
  * real roles-listing endpoint first; flagged, not silently assumed away.
  */
 const ROLES = ['front_desk', 'cashier', 'housekeeping', 'pos_operator', 'storekeeper', 'manager', 'admin', 'super_admin'];
+
+/**
+ * Roles an outlet assignment never limits (`backend/src/shared/outlet-assignments.js`),
+ * so the Outlets action is not offered for them.
+ */
+const ROLES_ALL_OUTLETS = ['manager', 'admin', 'super_admin'];
 
 /**
  * UsersTab — PLAN.md Phase 1 gap closure, PRODUCT_REQUIREMENTS.md §3.19's
@@ -38,6 +44,12 @@ export function UsersTab({ disabled, isOffline = false }) {
   const [deactivating, setDeactivating] = useState(null);
   const [roleChangingId, setRoleChangingId] = useState(null);
 
+  // Staff outlet assignments (user-requested: tie staff to outlets) — which
+  // outlets a POS operator or storekeeper works at, for stock requests and
+  // their alerts. None ticked = every outlet.
+  const [outlets, setOutlets] = useState(null);
+  const [editingOutlets, setEditingOutlets] = useState(null); // {user, chosen: Set}
+
   async function reload() {
     try {
       const [userRows, invitationRows] = await Promise.all([usersApi.listUsers(), usersApi.listPendingInvitations()]);
@@ -53,6 +65,12 @@ export function UsersTab({ disabled, isOffline = false }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate fetch-on-mount; no data-fetching library exists yet to own this
     if (!disabled) reload();
+  }, [disabled]);
+
+  useEffect(() => {
+    if (disabled) return;
+    // A role that cannot read outlets simply gets no Outlets column; the rest of the screen still works.
+    posApi.listOutlets().then(setOutlets, () => setOutlets([]));
   }, [disabled]);
 
   if (disabled) {
@@ -85,6 +103,35 @@ export function UsersTab({ disabled, isOffline = false }) {
       setError(caught instanceof ApiError ? caught.message : 'Could not deactivate this user.');
       setDeactivating(null);
     }
+  }
+
+  function outletNames(row) {
+    if (ROLES_ALL_OUTLETS.includes(row.role)) return 'All outlets (role)';
+    if (!row.outlet_ids?.length) return 'All outlets';
+    const byId = new Map((outlets ?? []).map((outlet) => [String(outlet.id), outlet.name]));
+    return row.outlet_ids.map((id) => byId.get(String(id)) ?? `Outlet ${id}`).join(', ');
+  }
+
+  async function handleSaveOutlets() {
+    const { user, chosen } = editingOutlets;
+    setError(null);
+    try {
+      await usersApi.setUserOutlets(user.id, [...chosen]);
+      setEditingOutlets(null);
+      await reload();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not save this user’s outlets.');
+      setEditingOutlets(null);
+    }
+  }
+
+  function toggleOutlet(outletId) {
+    setEditingOutlets((current) => {
+      const chosen = new Set(current.chosen);
+      if (chosen.has(outletId)) chosen.delete(outletId);
+      else chosen.add(outletId);
+      return { ...current, chosen };
+    });
   }
 
   async function handleRoleChange(row, role) {
@@ -138,15 +185,29 @@ export function UsersTab({ disabled, isOffline = false }) {
             label: 'Status',
             render: (row) => <StatusPill tone={row.status === 'active' ? 'success' : 'neutral'} label={row.status} />,
           },
+          ...(outlets && outlets.length ? [{ key: 'outlets', label: 'Outlets', render: outletNames }] : []),
           { key: 'last_login_at', label: 'Last login', render: (row) => row.last_login_at ?? 'Never' },
         ]}
         rows={users ?? []}
         rowKey={(row) => row.id}
         actions={(row) =>
           row.status === 'active' && (
-            <Button variant="danger" size="compact" disabled={isOffline} onClick={() => setDeactivating(row)}>
-              Deactivate
-            </Button>
+            <>
+              {outlets && outlets.length > 0 && !ROLES_ALL_OUTLETS.includes(row.role) && (
+                <Button
+                  variant="secondary"
+                  size="compact"
+                  disabled={isOffline}
+                  onClick={() => setEditingOutlets({ user: row, chosen: new Set((row.outlet_ids ?? []).map(String)) })}
+                  aria-label={`Outlets for ${row.email}`}
+                >
+                  Outlets
+                </Button>
+              )}
+              <Button variant="danger" size="compact" disabled={isOffline} onClick={() => setDeactivating(row)}>
+                Deactivate
+              </Button>
+            </>
           )
         }
       />
@@ -222,6 +283,37 @@ export function UsersTab({ disabled, isOffline = false }) {
         rows={invitations ?? []}
         rowKey={(row) => row.id}
       />
+
+      {editingOutlets && (
+        <ConfirmDialog
+          title={`Outlets for ${editingOutlets.user.email}`}
+          consequence={
+            editingOutlets.chosen.size
+              ? 'They will only be able to request stock for these outlets, see requests to or from them, and get stock alerts about them.'
+              : 'No outlet ticked: they cover every outlet (the default).'
+          }
+          confirmLabel="Save outlets"
+          onConfirm={handleSaveOutlets}
+          onCancel={() => setEditingOutlets(null)}
+        >
+          <fieldset className={formStyles.form}>
+            <legend className={formStyles.label}>Works at</legend>
+            {(outlets ?? []).map((outlet) => (
+              <label key={outlet.id} className={formStyles.checkboxField}>
+                <input
+                  type="checkbox"
+                  checked={editingOutlets.chosen.has(String(outlet.id))}
+                  onChange={() => toggleOutlet(String(outlet.id))}
+                />
+                <span>
+                  {outlet.name}
+                  {outlet.type === 'store' ? ' (store)' : ''}
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        </ConfirmDialog>
+      )}
 
       {deactivating && (
         <ConfirmDialog

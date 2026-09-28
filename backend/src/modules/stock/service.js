@@ -101,6 +101,7 @@ const { createCategoryCatalogue } = require('../../shared/category-catalogue');
 const { notifyStaff } = require('../notifications/staff-notifications');
 const { recordAuditEntry } = require('../../audit');
 const outletMenu = require('../../shared/outlet-menu');
+const { outletScopeForUser, scopeCovers } = require('../../shared/outlet-assignments');
 const { sumQuantity, negateQuantity, multiplyQuantityByInteger, compareQuantity, extendedCost } = require('../../shared/quantity');
 const {
   StockItemNotFoundError,
@@ -1073,9 +1074,11 @@ async function listTransfers({ context, outletId, limit = 50 }) {
  */
 
 /** The request header joined to both outlets' names and the requester's/decider's names, plus its lines. */
-async function loadTransferRequests(db, { ids, status, outletId, limit }) {
+async function loadTransferRequests(db, { ids, status, outletId, limit, scope = null }) {
   let headers = db.table('stock_transfer_requests');
   if (ids) headers = headers.whereIn('id', ids);
+  // A staff member limited to some outlets sees only requests to or from them.
+  if (scope) headers = headers.where((builder) => builder.whereIn('from_outlet_id', scope).orWhereIn('to_outlet_id', scope));
   if (status) headers = headers.where({ status });
   if (outletId) headers = headers.where((builder) => builder.where({ from_outlet_id: outletId }).orWhere({ to_outlet_id: outletId }));
   headers = headers.orderBy('id', 'desc');
@@ -1156,18 +1159,33 @@ async function loadTransferRequests(db, { ids, status, outletId, limit }) {
 }
 
 async function listTransferRequests({ context, status, outletId, limit = 50 }) {
-  return loadTransferRequests(scopedDb().for(context), { status, outletId, limit });
+  const db = scopedDb().for(context);
+  return loadTransferRequests(db, { status, outletId, limit, scope: await outletScopeForUser(db, context.userId) });
 }
 
 async function getTransferRequest({ context, id }) {
-  const [request] = await loadTransferRequests(scopedDb().for(context), { ids: [id] });
+  const db = scopedDb().for(context);
+  const [request] = await loadTransferRequests(db, { ids: [id], scope: await outletScopeForUser(db, context.userId) });
   return request ?? null;
 }
 
-/** Locks the request header (every decision takes this lock first) and requires it to still be pending. */
-async function lockPendingRequest(trx, requestId) {
+/** The outlets the caller covers for stock requests: `{restricted: false}` or `{restricted: true, outletIds}`. */
+async function getMyRequestOutlets({ context }) {
+  const scope = await outletScopeForUser(scopedDb().for(context), context.userId);
+  return scope ? { restricted: true, outletIds: scope } : { restricted: false, outletIds: null };
+}
+
+/**
+ * Locks the request header (every decision takes this lock first), hides a
+ * request outside the caller's outlets as not found (never "forbidden",
+ * which would confirm it exists), and requires it to still be pending.
+ */
+async function lockPendingRequest(trx, requestId, userId) {
   const request = await trx.table('stock_transfer_requests').where({ id: requestId }).forUpdate().first();
   if (!request) throw new StockTransferRequestNotFoundError();
+  if (!scopeCovers(await outletScopeForUser(trx, userId), [request.from_outlet_id, request.to_outlet_id])) {
+    throw new StockTransferRequestNotFoundError();
+  }
   if (request.status !== 'pending') throw new StockTransferRequestNotPendingError(Number(requestId), request.status);
   return request;
 }
@@ -1183,6 +1201,13 @@ async function createTransferRequest({ trx, fromOutletId, toOutletId, lines, not
   if (String(fromOutletId) === String(toOutletId)) throw new SameOutletTransferError();
   const fromOutlet = await assertOutlet(trx, fromOutletId);
   const toOutlet = await assertOutlet(trx, toOutletId);
+  // Staff tied to outlets ask for stock for their own outlet only.
+  const scope = await outletScopeForUser(trx, userId);
+  if (scope && !scope.includes(String(toOutletId))) {
+    throw new ValidationError('OUTLET_NOT_ASSIGNED', 'You can only request stock for an outlet you are assigned to.', [
+      { field: 'to_outlet_id', issue: 'not_assigned' },
+    ]);
+  }
 
   const ids = lines.map((line) => String(line.stockItemId));
   if (new Set(ids).size !== ids.length) {
@@ -1212,6 +1237,7 @@ async function createTransferRequest({ trx, fromOutletId, toOutletId, lines, not
     eventType: 'stock.transfer_requested',
     popup: true, // user-requested: a stock request pops up (and beeps) rather than only counting in the bell
     payload: { requestId: Number(requestId), fromOutletName: fromOutlet.name, toOutletName: toOutlet.name, lineCount: lines.length },
+    outletIds: [fromOutletId], // the storekeepers at the supplying store, not every storekeeper
   });
   const [request] = await loadTransferRequests(trx, { ids: [requestId] });
   return request;
@@ -1234,7 +1260,7 @@ async function createTransferRequest({ trx, fromOutletId, toOutletId, lines, not
  * transaction already holds (instant) before its own source-level check.
  */
 async function issueTransferRequest({ trx, requestId, lines, note, userId, businessDate }) {
-  const request = await lockPendingRequest(trx, requestId);
+  const request = await lockPendingRequest(trx, requestId, userId);
   const requestLines = await trx.table('stock_transfer_request_lines').where({ request_id: requestId }).select('id', 'stock_item_id', 'quantity_requested');
 
   const byItem = new Map(requestLines.map((line) => [String(line.stock_item_id), line]));
@@ -1320,6 +1346,8 @@ async function issueTransferRequest({ trx, requestId, lines, note, userId, busin
     trx,
     eventType: 'stock.transfer_request_issued',
     popup: true, // user-requested: a stock request pops up (and beeps) rather than only counting in the bell
+    outletIds: [request.to_outlet_id], // the staff at the outlet that asked...
+    alsoUserIds: [request.requested_by_user_id], // ...and whoever asked
     payload: {
       requestId: Number(request.id),
       fromOutletName: issued.fromOutlet.name,
@@ -1333,7 +1361,7 @@ async function issueTransferRequest({ trx, requestId, lines, note, userId, busin
 
 /** Rejects a pending request; `reason` is required (the controller enforces it) and tells the requester why. */
 async function rejectTransferRequest({ trx, requestId, reason, userId }) {
-  const request = await lockPendingRequest(trx, requestId);
+  const request = await lockPendingRequest(trx, requestId, userId);
   await trx.table('stock_transfer_requests').where({ id: request.id }).update({
     status: 'rejected',
     decided_by_user_id: userId,
@@ -1345,6 +1373,8 @@ async function rejectTransferRequest({ trx, requestId, reason, userId }) {
     trx,
     eventType: 'stock.transfer_request_rejected',
     popup: true, // user-requested: a stock request pops up (and beeps) rather than only counting in the bell
+    outletIds: [request.to_outlet_id],
+    alsoUserIds: [request.requested_by_user_id],
     payload: { requestId: Number(request.id), fromOutletName: rejected.fromOutlet.name, toOutletName: rejected.toOutlet.name, reason },
   });
   return rejected;
@@ -1352,7 +1382,7 @@ async function rejectTransferRequest({ trx, requestId, reason, userId }) {
 
 /** Withdraws a pending request (a requester changed their mind). No stock effect; the storekeeper's pending list simply loses it. */
 async function cancelTransferRequest({ trx, requestId, reason, userId }) {
-  const request = await lockPendingRequest(trx, requestId);
+  const request = await lockPendingRequest(trx, requestId, userId);
   await trx.table('stock_transfer_requests').where({ id: request.id }).update({
     status: 'cancelled',
     decided_by_user_id: userId,
@@ -1568,6 +1598,7 @@ module.exports = {
   listTransfers,
   listTransferRequests,
   getTransferRequest,
+  getMyRequestOutlets,
   createTransferRequest,
   issueTransferRequest,
   rejectTransferRequest,

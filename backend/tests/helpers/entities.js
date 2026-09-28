@@ -2414,6 +2414,24 @@ const ENTITIES = [
   },
 
   {
+    table: 'user_outlet_assignments',
+    uniqueKeys: [['tenant_id', 'property_id', 'user_id', 'outlet_id']],
+    // users[1] is a new (user, outlet) pair — the fixture assigns users[0].
+    newRow: (ctx, t) => ({ tenant_id: t.id, property_id: t.properties[0].id, user_id: t.users[1].id, outlet_id: t.posOutlets[0].id }),
+    duplicateRow: (ctx, t) => ({ tenant_id: t.id, property_id: t.properties[0].id, user_id: t.users[0].id, outlet_id: t.posOutlets[0].id }),
+    crossTenant: [
+      {
+        name: "assigns a staff member to another tenant's outlet",
+        row: (ctx, own, other) => ({ tenant_id: own.id, property_id: own.properties[0].id, user_id: own.users[1].id, outlet_id: other.posOutlets[0].id }),
+      },
+      {
+        name: "assigns another tenant's user to this tenant's outlet",
+        row: (ctx, own, other) => ({ tenant_id: own.id, property_id: own.properties[0].id, user_id: other.users[1].id, outlet_id: own.posOutlets[0].id }),
+      },
+    ],
+  },
+
+  {
     table: 'stock_transfer_requests',
     uniqueKeys: [],
     newRow: (ctx, t) => ({

@@ -132,6 +132,11 @@ export function listTransferRequests({ status, outletId, limit } = {}) {
   return request(`/pos/stock/transfer-requests?${params}`);
 }
 
+/** The outlets the signed-in user covers for stock requests: `{restricted: false}` or `{restricted: true, outletIds}`. */
+export function getMyRequestOutlets() {
+  return request('/pos/stock/transfer-requests/my-outlets');
+}
+
 /** One request by id — what a stock-request notification opens. */
 export function getTransferRequest(requestId) {
   return request(`/pos/stock/transfer-requests/${requestId}`);

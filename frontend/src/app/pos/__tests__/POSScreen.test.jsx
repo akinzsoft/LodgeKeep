@@ -20,6 +20,7 @@ const stockMocks = vi.hoisted(() => ({
   listStockTakes: vi.fn(),
   listTransferRequests: vi.fn(),
   getTransferRequest: vi.fn(),
+  getMyRequestOutlets: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -58,6 +59,7 @@ describe('<POSScreen>', () => {
     stockMocks.listStockTakes.mockResolvedValue([]);
     stockMocks.listTransferRequests.mockResolvedValue([]);
     stockMocks.getTransferRequest.mockResolvedValue(STOCK_REQUEST);
+    stockMocks.getMyRequestOutlets.mockResolvedValue({ restricted: false, outletIds: null });
   });
 
   describe('opened from a stock-request notification', () => {
