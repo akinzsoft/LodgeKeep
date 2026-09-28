@@ -62,6 +62,8 @@ function stockRouter() {
   router.get('/pos/stock/transfer-requests', readRequests, controller.listTransferRequests);
   // Before `/:id`, so "my-outlets" is never read as a request id.
   router.get('/pos/stock/transfer-requests/my-outlets', readRequests, controller.getMyRequestOutlets);
+  // The sign-in reminder: pending requests waiting on the caller to issue (before `/:id`).
+  router.get('/pos/stock/transfer-requests/awaiting-me', requirePermission('pos.stock_transfer'), controller.listRequestsAwaitingMe);
   router.get('/pos/stock/transfer-requests/:id', readRequests, controller.getTransferRequest);
   router.post('/pos/stock/transfer-requests', requirePermission('pos.stock_request'), controller.createTransferRequest);
   router.post('/pos/stock/transfer-requests/:id/issue', requirePermission('pos.stock_transfer'), controller.issueTransferRequest);

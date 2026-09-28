@@ -331,6 +331,14 @@ async function getMyRequestOutlets(req, res, next) {
   }
 }
 
+async function listRequestsAwaitingMe(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listRequestsAwaitingMe({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getTransferRequest(req, res, next) {
   try {
     const request = await service.getTransferRequest({ context: req.context, id: req.params.id });
@@ -658,6 +666,7 @@ module.exports = {
   listTransfers,
   listTransferRequests,
   getTransferRequest,
+  listRequestsAwaitingMe,
   getMyRequestOutlets,
   createTransferRequest,
   issueTransferRequest,

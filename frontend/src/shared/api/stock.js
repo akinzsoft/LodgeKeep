@@ -137,6 +137,11 @@ export function getMyRequestOutlets() {
   return request('/pos/stock/transfer-requests/my-outlets');
 }
 
+/** Pending requests waiting on the caller to issue — the sign-in reminder (needs `pos.stock_transfer`). */
+export function listRequestsAwaitingMe() {
+  return request('/pos/stock/transfer-requests/awaiting-me');
+}
+
 /** One request by id — what a stock-request notification opens. */
 export function getTransferRequest(requestId) {
   return request(`/pos/stock/transfer-requests/${requestId}`);
