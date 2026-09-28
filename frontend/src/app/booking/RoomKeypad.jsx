@@ -25,8 +25,10 @@ const REASON_LABEL = {
  * @param {string} selectedId   the booking's preferred room id, '' for none
  * @param {(id: string) => void} onSelect   '' clears the choice
  * @param {boolean} [disabled]  offline, submitting, or already booked
+ * @param {boolean} [failed]    the rooms could not be loaded
  */
-export function RoomKeypad({ rooms, roomTypeName, selectedId, onSelect, disabled = false }) {
+export function RoomKeypad({ rooms, roomTypeName, selectedId, onSelect, disabled = false, failed = false }) {
+  if (failed) return <p className={styles.hint}>The rooms could not be loaded. Search again to retry.</p>;
   if (rooms === null) return <p className={styles.hint}>Loading rooms…</p>;
   if (rooms.length === 0) return <p className={styles.hint}>This room type has no rooms set up yet.</p>;
 
