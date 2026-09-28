@@ -6,6 +6,7 @@ import { filterRateCodesForStay, resolvePrimaryRateCodeForStay } from './rate-co
 import { Money, formatMoney, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import { multiplyMoney } from '../../shared/money.js';
 import { addDays, formatDate } from '../../shared/format/dates.js';
+import { RoomKeypad } from './RoomKeypad.jsx';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
 
@@ -55,6 +56,14 @@ import styles from './BookingScreen.module.css';
  *    it is DATE-OVERLAP aware rather than "hide until the other stay ends
  *    entirely" — a room preferred for next week still appears for a
  *    December search.
+ * 3. Room keypad (user-requested: "a standard keypad that shows all
+ *    available rooms with an indicator, while rooms that have been taken
+ *    show Not available"), under the booking form. Confirmed: the searched
+ *    room type only; tapping an available room picks it as the preferred
+ *    room above (tap again to clear). The keypad and the "Preferred room"
+ *    list come from ONE fetch (`listRoomBoard`, every room with its
+ *    availability and reason) — the list is its available rooms — so the
+ *    two can never disagree.
  *
  * Gap closure (user-reported): "pay at the point of booking." A successful,
  * CONFIRMED booking (never a hold or a waitlisted one — neither holds a
@@ -144,7 +153,9 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   });
   const [availability, setAvailability] = useState(null);
   const [freeRoomsNow, setFreeRoomsNow] = useState(null);
-  const [eligiblePreferredRooms, setEligiblePreferredRooms] = useState(null);
+  // Every room of the searched type for the searched dates, with `available`/`reason` (the keypad); null until searched.
+  const [roomBoard, setRoomBoard] = useState(null);
+  const eligiblePreferredRooms = roomBoard?.filter((room) => room.available) ?? null;
   // Gap closure (user-reported): "when Room type is selected it shld show
   // the Rate/cost per night on the Rate code drop box only." `rateCodes`
   // carries only each code's own property-wide `base_rate` — the ACTUAL
@@ -247,10 +258,10 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     }
   }
 
-  async function reloadEligiblePreferredRooms() {
+  async function reloadRoomBoard() {
     try {
-      setEligiblePreferredRooms(
-        await reservationsApi.listEligiblePreferredRooms({
+      setRoomBoard(
+        await reservationsApi.listRoomBoard({
           roomTypeId: search.room_type_id,
           arrivalDate: search.arrival_date,
           departureDate: search.departure_date,
@@ -260,7 +271,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
       // Same per-widget degradation as `reloadFreeRoomsNow` — a failure
       // here just leaves the picker empty (still "No preference"-only),
       // never blocks the search or the booking form itself.
-      setEligiblePreferredRooms([]);
+      setRoomBoard([]);
     }
   }
 
@@ -297,6 +308,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     setSearchError(null);
     setBookSuccess(null);
     setFreeRoomsNow(null);
+    setRoomBoard(null); // the keypad shows "Loading rooms…" rather than the previous search's rooms
     setRoomRatesByCode({});
     setBooking((current) => ({ ...current, preferred_room_id: '' }));
     // Gap closure (user-reported): "disable the book button ... wen payment
@@ -321,7 +333,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
       if (search.arrival_date === activeProperty?.current_business_date) {
         await reloadFreeRoomsNow(search.room_type_id);
       }
-      await reloadEligiblePreferredRooms();
+      await reloadRoomBoard();
       await reloadRoomRatesForType(search.room_type_id, search.arrival_date);
       // Gap closure (user-reported, third round): resolve THIS room type's
       // own configured rate code and auto-select it — a real default now
@@ -453,7 +465,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
         await reloadFreeRoomsNow(search.room_type_id);
       }
       setBooking((current) => ({ ...current, preferred_room_id: '', group_block_id: '' }));
-      await reloadEligiblePreferredRooms();
+      await reloadRoomBoard();
     } catch (caught) {
       setBookError(caught instanceof ApiError ? caught.message : 'Could not create the reservation.');
     } finally {
@@ -1013,6 +1025,14 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
               <p className={formStyles.disabledNotice}>Run a new search to make another booking.</p>
             )}
           </form>
+
+          <RoomKeypad
+            rooms={roomBoard}
+            roomTypeName={selectedRoomType?.name}
+            selectedId={booking.preferred_room_id}
+            onSelect={(roomId) => setBooking((current) => ({ ...current, preferred_room_id: roomId }))}
+            disabled={isOffline || submitting || Boolean(bookSuccess)}
+          />
 
         </Card>
       )}

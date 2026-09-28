@@ -915,6 +915,103 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
   });
 
   // ====================================================================
+  // The booking form's room keypad (user-requested): every room of the
+  // searched type for the dates, free or not — and why not.
+  // ====================================================================
+  describe('GET /reservations/room-board — every room of the type, free or not and why', () => {
+    let roomTypeId;
+    let rateCodeId;
+    const rooms = {};
+
+    beforeAll(async () => {
+      roomTypeId = await createRoomType(ctx.a, { code: 'BOARD' });
+      rateCodeId = await createRateCode(ctx.a, { code: 'BOARDRATE' });
+      for (const number of ['B10', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7']) rooms[number] = await createRoom(ctx.a, { roomTypeId, roomNumber: number });
+      rooms.archived = await createRoom(ctx.a, { roomTypeId, roomNumber: 'B8', status: 'archived' });
+      // B3: out of order on the SECOND night only of the searched stay.
+      await t.trx('out_of_order_periods').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, room_id: rooms.B3, start_date: '2027-11-06', end_date: '2027-11-06', reason: 'Leak', created_by_user_id: ctx.a.users[0].id });
+      // B4: an open discrepancy.
+      await t.trx('rooms').where({ id: rooms.B4 }).update({ has_discrepancy: true });
+      // B5: another booking asked for it, overlapping dates. B6: asked for, but only later dates.
+      for (const [roomId, arrival, departure] of [[rooms.B5, '2027-11-04', '2027-11-06'], [rooms.B6, '2027-11-20', '2027-11-22']]) {
+        const res = await t.request
+          .post('/api/v1/reservations')
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ guest_id: String(ctx.a.guests[0].id), room_type_id: String(roomTypeId), rate_code_id: String(rateCodeId), arrival_date: arrival, departure_date: departure, preferred_room_id: String(roomId) });
+        expect(res.status).toBe(201);
+      }
+      // B7: a checked-in guest's room for overlapping dates.
+      const [reservationId] = await t.trx('reservations').insert({
+        tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, guest_id: ctx.a.guests[0].id, room_type_id: roomTypeId, rate_code_id: rateCodeId,
+        confirmation_number: `BRD${Date.now().toString(36)}`, status: 'checked_in', arrival_date: '2027-11-01', departure_date: '2027-11-07', adults: 1, children: 0,
+      });
+      await t.trx('reservation_rooms').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, reservation_id: reservationId, room_id: rooms.B7, effective_from: '2027-11-01' });
+    });
+
+    const board = (arrivalDate, departureDate) =>
+      t.request
+        .get('/api/v1/reservations/room-board')
+        .query({ room_type_id: String(roomTypeId), arrival_date: arrivalDate, departure_date: departureDate })
+        .set('Authorization', `Bearer ${tokenFor()}`);
+
+    it('lists every active room in room-number order, each free or with the reason it is not', async () => {
+      const res = await board('2027-11-05', '2027-11-07');
+      expect(res.status).toBe(200);
+      expect(res.body.data.map((room) => [room.room_number, room.available, room.reason])).toEqual([
+        ['B2', true, null],
+        ['B3', false, 'out_of_order'],
+        ['B4', false, 'discrepancy'],
+        ['B5', false, 'reserved'],
+        ['B6', true, null],
+        ['B7', false, 'occupied'],
+        ['B10', true, null],
+      ]);
+    });
+
+    it('the "Preferred room" list is exactly the available rooms on the board', async () => {
+      const [boardRes, eligibleRes] = await Promise.all([
+        board('2027-11-05', '2027-11-07'),
+        t.request
+          .get('/api/v1/reservations/eligible-preferred-rooms')
+          .query({ room_type_id: String(roomTypeId), arrival_date: '2027-11-05', departure_date: '2027-11-07' })
+          .set('Authorization', `Bearer ${tokenFor()}`),
+      ]);
+      expect(eligibleRes.body.data.map((room) => room.id).sort()).toEqual(boardRes.body.data.filter((room) => room.available).map((room) => room.id).sort());
+    });
+
+    it('is date-aware: other dates free the reserved, occupied and out-of-order rooms', async () => {
+      const res = await board('2027-12-01', '2027-12-03');
+      expect(res.body.data.filter((room) => !room.available).map((room) => [room.room_number, room.reason])).toEqual([['B4', 'discrepancy']]);
+    });
+
+    it('arriving on the business date, a room not yet clean is not available', async () => {
+      const property = await t.trx('properties').where({ id: ctx.a.properties[0].id }).first('current_business_date');
+      await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: '2027-12-10' });
+      await t.trx('rooms').where({ id: rooms.B2 }).update({ housekeeping_reported_status: 'dirty' });
+      try {
+        const res = await board('2027-12-10', '2027-12-11');
+        expect(res.body.data.find((room) => room.room_number === 'B2')).toMatchObject({ available: false, reason: 'not_clean' });
+        const later = await board('2027-12-20', '2027-12-21');
+        expect(later.body.data.find((room) => room.room_number === 'B2')).toMatchObject({ available: true, reason: null });
+      } finally {
+        await t.trx('rooms').where({ id: rooms.B2 }).update({ housekeeping_reported_status: 'clean' });
+        await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: property.current_business_date });
+      }
+    });
+
+    it('another tenant sees none of these rooms', async () => {
+      const res = await t.request
+        .get('/api/v1/reservations/room-board')
+        .query({ room_type_id: String(roomTypeId), arrival_date: '2027-11-05', departure_date: '2027-11-07' })
+        .set('Authorization', `Bearer ${tokenFor({ tenant: ctx.b })}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([]);
+    });
+  });
+
+
+  // ====================================================================
   // Gap closure (user-reported): "if the customer wants to pay at the point
   // of booking" — opens the folio and posts room charges before check-in.
   // ====================================================================

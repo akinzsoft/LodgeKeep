@@ -115,6 +115,18 @@ async function listEligiblePreferredRooms(req, res, next) {
   }
 }
 
+/** The booking form's room keypad: every room of the type with whether it is free for these dates, and why not — `service.listRoomBoard`. */
+async function listRoomBoard(req, res, next) {
+  try {
+    const roomTypeId = require_(req.query, 'room_type_id');
+    const arrivalDate = require_(req.query, 'arrival_date');
+    const departureDate = require_(req.query, 'departure_date');
+    res.status(200).json(ok(await service.listRoomBoard({ context: req.context, roomTypeId, arrivalDate, departureDate })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 /**
  * PLAN.md Phase 3: the missing configuration endpoint for
  * `room_type_inventory.overbooking_threshold_pct` — not a state-transition
@@ -495,6 +507,7 @@ module.exports = {
   listGuests,
   checkAvailability,
   listEligiblePreferredRooms,
+  listRoomBoard,
   configureOverbookingThreshold,
   createReservation,
   openBookingFolio,

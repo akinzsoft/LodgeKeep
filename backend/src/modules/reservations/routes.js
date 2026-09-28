@@ -58,6 +58,8 @@ function reservationsRouter() {
     requirePermission('reservations.view'),
     controller.listEligiblePreferredRooms
   );
+  // The booking form's room keypad: every room of the type, free or not and why (same gate).
+  router.get('/reservations/room-board', requirePermission('reservations.view'), controller.listRoomBoard);
 
   // PLAN.md Phase 3: the missing overbooking-threshold config endpoint —
   // static path components either side of the two path params, no
