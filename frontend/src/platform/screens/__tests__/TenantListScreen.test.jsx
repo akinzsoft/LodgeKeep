@@ -84,6 +84,13 @@ describe('<TenantListScreen>', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not reach the server.');
   });
 
+  it('the Backups button opens the backups screen', async () => {
+    const onOpenBackups = vi.fn();
+    render(<TenantListScreen onSelectTenant={vi.fn()} onOpenBackups={onOpenBackups} onLogout={vi.fn()} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Backups' }));
+    expect(onOpenBackups).toHaveBeenCalled();
+  });
+
   it('Sign out calls onLogout', async () => {
     const onLogout = vi.fn();
     render(<TenantListScreen onSelectTenant={vi.fn()} onLogout={onLogout} />);

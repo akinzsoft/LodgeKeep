@@ -45,6 +45,8 @@ const TABLE_SCOPES = Object.freeze({
   role_permissions: { scope: SCOPES.TENANT },
   user_property_access: { scope: SCOPES.PROPERTY },
   platform_users: { scope: SCOPES.PLATFORM },
+  // Platform console backups (user-requested) — who emailed a copy of the whole database, where, and how it went.
+  platform_backups: { scope: SCOPES.PLATFORM },
   guest_accounts: { scope: SCOPES.PROPERTY },
 
   // Gap closure (feature-dev): guest password-reset. PROPERTY_SCOPED,

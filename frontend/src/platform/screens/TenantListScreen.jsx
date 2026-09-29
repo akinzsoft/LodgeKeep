@@ -23,7 +23,7 @@ function describeTrial(row) {
  * deliberately no computed "at risk" badge, and no room count (only property count — reaching `rooms`, a
  * PROPERTY_SCOPED operational table, would cut against this console's own "never a back door into tenant data" rule).
  */
-export function TenantListScreen({ onSelectTenant, onLogout }) {
+export function TenantListScreen({ onSelectTenant, onOpenBackups, onLogout }) {
   const [tenants, setTenants] = useState(null);
   const [error, setError] = useState(null);
 
@@ -46,9 +46,16 @@ export function TenantListScreen({ onSelectTenant, onLogout }) {
     <div className={styles.console}>
       <div className={styles.consoleHeader}>
         <h1 className={styles.consoleTitle}>Tenants</h1>
-        <Button variant="ghost" onClick={onLogout}>
-          Sign out
-        </Button>
+        <div className={styles.actionsRow}>
+          {onOpenBackups && (
+            <Button variant="secondary" onClick={onOpenBackups}>
+              Backups
+            </Button>
+          )}
+          <Button variant="ghost" onClick={onLogout}>
+            Sign out
+          </Button>
+        </div>
       </div>
       {error && (
         <p role="alert" className={styles.errorBanner}>

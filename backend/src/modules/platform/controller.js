@@ -18,6 +18,8 @@ function require_(body, field) {
   return value;
 }
 
+const backup = require('./backup');
+
 function requestMeta(req) {
   return { ip: req.ip, userAgent: req.get('User-Agent'), requestId: req.requestId };
 }
@@ -138,7 +140,36 @@ async function listImpersonationSessionsForTenant(req, res, next) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Whole-database backups — POST/GET /platform/backups
+// ---------------------------------------------------------------------
+
+/** Starts a backup and answers at once (202); the backup runs on and its row says how it went. */
+async function startBackup(req, res, next) {
+  try {
+    const { backup: row } = await backup.startBackup({
+      context: req.context,
+      recipientEmail: req.body?.recipient_email,
+      passphrase: req.body?.passphrase,
+    });
+    res.status(202).json(ok(row));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function listBackups(req, res, next) {
+  try {
+    const result = await backup.listBackups({ context: req.context });
+    res.status(200).json(ok(result.backups, { emailConfigured: result.emailConfigured, emailProvider: result.emailProvider }));
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
+  startBackup,
+  listBackups,
   listTenants,
   getTenant,
   startImpersonation,

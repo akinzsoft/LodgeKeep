@@ -1,4 +1,4 @@
-import { request } from './client.js';
+import { request, requestWithMeta } from './client.js';
 
 /**
  * Platform console endpoint wrappers — PLAN.md Phase 5 (Platform
@@ -95,4 +95,18 @@ export function reactivateTenant(tenantId, reason) {
 /** PLAN.md Phase 5 (tenant offboarding) — the platform-initiated half; `src/modules/offboarding/service.js`'s own `requestOwnOffboarding` is the tenant self-service half. */
 export function offboardTenant(tenantId, reason) {
   return request(`/platform/tenants/${tenantId}/offboard`, { method: 'POST', body: { reason: reason || undefined } });
+}
+
+/**
+ * Whole-database backups (user-requested). `listBackups` → `{backups,
+ * emailConfigured, emailProvider}`; `startBackup` answers at once with the
+ * new row (`running`) — the history shows how it went.
+ */
+export async function listBackups() {
+  const { data, meta } = await requestWithMeta('/platform/backups');
+  return { backups: data, emailConfigured: Boolean(meta?.emailConfigured), emailProvider: meta?.emailProvider ?? null };
+}
+
+export function startBackup({ recipientEmail, passphrase }) {
+  return request('/platform/backups', { method: 'POST', body: { recipient_email: recipientEmail, passphrase } });
 }

@@ -5,6 +5,7 @@ import { PlatformMfaEnrollScreen } from './screens/PlatformMfaEnrollScreen.jsx';
 import { PlatformMfaChallengeScreen } from './screens/PlatformMfaChallengeScreen.jsx';
 import { TenantListScreen } from './screens/TenantListScreen.jsx';
 import { TenantDetailScreen } from './screens/TenantDetailScreen.jsx';
+import { BackupsScreen } from './screens/BackupsScreen.jsx';
 import { ImpersonatedStaffView } from './ImpersonatedStaffView.jsx';
 
 /**
@@ -23,6 +24,7 @@ import { ImpersonatedStaffView } from './ImpersonatedStaffView.jsx';
 function PlatformConsole() {
   const { status, impersonation, logout } = usePlatformAuth();
   const [selectedTenantId, setSelectedTenantId] = useState(null);
+  const [showBackups, setShowBackups] = useState(false);
 
   if (status === 'mfa_enrollment_required') return <PlatformMfaEnrollScreen />;
   if (status === 'mfa_challenge_required') return <PlatformMfaChallengeScreen />;
@@ -37,10 +39,11 @@ function PlatformConsole() {
   // list with no token issued yet.
   if (status !== 'authenticated') return <PlatformLoginScreen />;
 
+  if (showBackups) return <BackupsScreen onBack={() => setShowBackups(false)} onLogout={logout} />;
   return selectedTenantId ? (
     <TenantDetailScreen tenantId={selectedTenantId} onBack={() => setSelectedTenantId(null)} onLogout={logout} />
   ) : (
-    <TenantListScreen onSelectTenant={setSelectedTenantId} onLogout={logout} />
+    <TenantListScreen onSelectTenant={setSelectedTenantId} onOpenBackups={() => setShowBackups(true)} onLogout={logout} />
   );
 }
 

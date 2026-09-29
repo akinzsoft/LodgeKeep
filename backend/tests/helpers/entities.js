@@ -2909,6 +2909,19 @@ const ENTITIES = [
   },
 
   {
+    table: 'platform_backups',
+    // PLATFORM_SCOPED with no tenant column at all: a backup spans every
+    // tenant. The platform console's own audit log of every copy of the
+    // database emailed out (src/modules/platform/backup.js). Nothing unique.
+    uniqueKeys: [],
+    newRow: (ctx) => ({
+      requested_by_platform_user_id: ctx.platform.id,
+      recipient_email: 'ops@planmsys.test',
+      status: 'sent',
+    }),
+  },
+
+  {
     table: 'tenant_signups',
     // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns, not
     // attribution — see table-scopes.js) — a real UNIQUE(email) enforcing
