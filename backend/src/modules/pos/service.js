@@ -157,10 +157,13 @@ async function archiveOutlet({ context, id }) {
 // Terminals
 // ---------------------------------------------------------------------
 
-async function listTerminals({ context, outletId }) {
+/** `outletIds` (optional, from staff outlet assignments) limits the list to those outlets. */
+async function listTerminals({ context, outletId, outletIds = null }) {
   const db = scopedDb().for(context);
-  const query = db.table('pos_terminals').where({ status: 'active' });
-  return (outletId ? query.where({ outlet_id: outletId }) : query).orderBy('device_ref');
+  let query = db.table('pos_terminals').where({ status: 'active' });
+  if (outletId) query = query.where({ outlet_id: outletId });
+  if (outletIds) query = query.whereIn('outlet_id', outletIds);
+  return query.orderBy('device_ref');
 }
 
 async function getTerminal({ context, id }) {
@@ -439,10 +442,12 @@ async function findInHouseForCharge({ context, query }) {
 // Orders (tabs)
 // ---------------------------------------------------------------------
 
-async function listOrders({ context, outletId, status }) {
+/** `outletIds` (optional, from staff outlet assignments) limits the list to those outlets. */
+async function listOrders({ context, outletId, status, outletIds = null }) {
   const db = scopedDb().for(context);
   let query = db.table('pos_orders');
   if (outletId) query = query.where({ outlet_id: outletId });
+  if (outletIds) query = query.whereIn('outlet_id', outletIds);
   if (status) query = query.where({ status });
   return query.orderBy('opened_at', 'desc');
 }
@@ -1254,14 +1259,16 @@ async function voidSettlement({ trx, settlementId, reason, userId }) {
 // ---------------------------------------------------------------------
 
 /** Carries the terminal's device_ref and the opener's name so the history table can be reviewed without a second lookup (a pos_operator holds no grant to read the staff directory). */
-async function listShifts({ context, terminalId }) {
+/** `outletIds` (optional, from staff outlet assignments) limits the list to shifts on those outlets' terminals. */
+async function listShifts({ context, terminalId, outletIds = null }) {
   const db = scopedDb().for(context);
   const query = db
     .table('pos_shifts')
     .joinScoped('pos_terminals', (join) => join.on('pos_terminals.id', '=', 'pos_shifts.terminal_id'))
     .joinScoped('users', (join) => join.on('users.id', '=', 'pos_shifts.user_id'))
     .select('pos_shifts.*', 'pos_terminals.device_ref as terminal_device_ref', 'users.first_name as opened_by_first_name', 'users.last_name as opened_by_last_name');
-  return (terminalId ? query.where({ 'pos_shifts.terminal_id': terminalId }) : query).orderBy('pos_shifts.opened_at', 'desc').orderBy('pos_shifts.id', 'desc');
+  const scoped = outletIds ? query.whereIn('pos_terminals.outlet_id', outletIds) : query;
+  return (terminalId ? scoped.where({ 'pos_shifts.terminal_id': terminalId }) : scoped).orderBy('pos_shifts.opened_at', 'desc').orderBy('pos_shifts.id', 'desc');
 }
 
 async function getShift({ context, id }) {

@@ -7,6 +7,7 @@ import { selectWhenLoaded } from './selectWhenLoaded.js';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
+  getMyOutlets: vi.fn(),
   listTerminals: vi.fn(),
   listMenuItems: vi.fn(),
   listMenuCategories: vi.fn(),
@@ -80,6 +81,7 @@ describe('<RegisterTab>', () => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     paystackMocks.openPaystackPopup.mockReset();
     window.print = vi.fn();
+    mocks.getMyOutlets.mockResolvedValue({ restricted: false, outletIds: null });
     mocks.listOutlets.mockResolvedValue([OUTLET]);
     mocks.listTerminals.mockResolvedValue([TERMINAL]);
     mocks.listMenuItems.mockResolvedValue([MENU_ITEM]);
@@ -355,6 +357,22 @@ describe('<RegisterTab>', () => {
     render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
     await selectWhenLoaded('Outlet', 'Main Bar');
     expect(within(screen.getByLabelText('Outlet')).queryByRole('option', { name: 'Main Store' })).not.toBeInTheDocument();
+  });
+
+  it('offers an assigned operator only their own outlets', async () => {
+    mocks.listOutlets.mockResolvedValue([{ id: '7', name: 'Pool Bar', type: 'bar' }, OUTLET]);
+    mocks.getMyOutlets.mockResolvedValue({ restricted: true, outletIds: [String(OUTLET.id)] });
+    render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
+    await selectWhenLoaded('Outlet', 'Main Bar');
+    expect(within(screen.getByLabelText('Outlet')).queryByRole('option', { name: 'Pool Bar' })).not.toBeInTheDocument();
+  });
+
+  it('still lists every outlet if the assignment lookup fails (the server decides)', async () => {
+    mocks.listOutlets.mockResolvedValue([{ id: '7', name: 'Pool Bar', type: 'bar' }, OUTLET]);
+    mocks.getMyOutlets.mockRejectedValue(new Error('network down'));
+    render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
+    await selectWhenLoaded('Outlet', 'Pool Bar');
+    expect(within(screen.getByLabelText('Outlet')).getByRole('option', { name: 'Main Bar' })).toBeInTheDocument();
   });
 
   it('shows the item photo on its menu card', async () => {

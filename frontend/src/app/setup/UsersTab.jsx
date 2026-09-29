@@ -45,8 +45,8 @@ export function UsersTab({ disabled, isOffline = false }) {
   const [roleChangingId, setRoleChangingId] = useState(null);
 
   // Staff outlet assignments (user-requested: tie staff to outlets) — which
-  // outlets a POS operator or storekeeper works at, for stock requests and
-  // their alerts. None ticked = every outlet.
+  // outlets a POS operator or storekeeper works at, for the Register, shifts,
+  // stock requests and their alerts. None ticked = every outlet.
   const [outlets, setOutlets] = useState(null);
   const [editingOutlets, setEditingOutlets] = useState(null); // {user, chosen: Set}
 
@@ -289,7 +289,7 @@ export function UsersTab({ disabled, isOffline = false }) {
           title={`Outlets for ${editingOutlets.user.email}`}
           consequence={
             editingOutlets.chosen.size
-              ? 'They will only be able to request stock for these outlets, see requests to or from them, and get stock alerts about them.'
+              ? 'They will only be able to sell and run shifts at these outlets on the Register, request stock for them, see requests to or from them, and get stock alerts about them.'
               : 'No outlet ticked: they cover every outlet (the default).'
           }
           confirmLabel="Save outlets"

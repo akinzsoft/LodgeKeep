@@ -20,6 +20,7 @@
 
 const { Router } = require('express');
 const controller = require('./controller');
+const scope = require('./outlet-scope');
 const { receiveImage } = require('../../shared/image-store');
 const { requirePermission, requireAnyPermission } = require('../../auth');
 
@@ -47,7 +48,7 @@ function posRouter() {
   router.get('/pos/menu-items', requirePermission('pos.operate'), controller.listMenuItems);
   router.post('/pos/menu-items', requirePermission('pos.manage'), controller.createMenuItem);
   router.patch('/pos/menu-items/:id', requirePermission('pos.manage'), controller.updateMenuItem);
-  router.post('/pos/menu-items/:id/set-availability', requirePermission('pos.operate'), controller.setMenuItemAvailability);
+  router.post('/pos/menu-items/:id/set-availability', requirePermission('pos.operate'), scope.availabilityOutletInScope, controller.setMenuItemAvailability);
   router.put('/pos/menu-items/:id/outlet-price', requirePermission('pos.manage'), controller.setOutletMenuItemPrice);
   router.post('/pos/menu-items/:id/archive', requirePermission('pos.manage'), controller.archiveMenuItem);
   router.post('/pos/menu-items/:id/image', requirePermission('pos.manage'), receiveImage, controller.uploadMenuItemImage);
@@ -55,20 +56,22 @@ function posRouter() {
 
   router.get('/pos/guests/in-house', requirePermission('pos.operate'), controller.findInHouseForCharge);
 
+  // Staff outlet assignments: what the Register/Shifts screens may offer.
+  router.get('/pos/my-outlets', requirePermission('pos.operate'), controller.getMyOutlets);
   router.get('/pos/orders', requirePermission('pos.operate'), controller.listOrders);
   router.get('/pos/tickets', requirePermission('pos.operate'), controller.listKitchenTickets);
   router.post('/pos/tickets/:id/done', requirePermission('pos.operate'), controller.markTicketDone);
-  router.get('/pos/orders/:id', requirePermission('pos.operate'), controller.getOrder);
-  router.post('/pos/orders', requirePermission('pos.operate'), controller.openOrder);
-  router.post('/pos/orders/:id/items', requirePermission('pos.operate'), controller.addItem);
-  router.post('/pos/orders/:id/items/:itemId/void', requirePermission('pos.operate'), controller.voidOrderItem);
-  router.post('/pos/orders/:id/items/:itemId/split-group', requirePermission('pos.operate'), controller.assignItemSplitGroup);
-  router.post('/pos/orders/:id/rename', requirePermission('pos.operate'), controller.renameOrder);
-  router.post('/pos/orders/:id/void', requirePermission('pos.operate'), controller.voidOrder);
-  router.get('/pos/orders/:id/settlement-preview', requirePermission('pos.operate'), controller.previewSettlement);
-  router.post('/pos/orders/:id/paystack-checkout', requirePermission('pos.operate'), controller.startPaystackCheckout);
-  router.post('/pos/orders/:id/paystack-checkout/:paymentId/verify', requirePermission('pos.operate'), controller.verifyPaystackPayment);
-  router.post('/pos/orders/:id/settle', requirePermission('pos.operate'), controller.settleOrder);
+  router.get('/pos/orders/:id', requirePermission('pos.operate'), scope.orderInScope, controller.getOrder);
+  router.post('/pos/orders', requirePermission('pos.operate'), scope.newOrderOutletInScope, controller.openOrder);
+  router.post('/pos/orders/:id/items', requirePermission('pos.operate'), scope.orderInScope, controller.addItem);
+  router.post('/pos/orders/:id/items/:itemId/void', requirePermission('pos.operate'), scope.orderItemInScope, controller.voidOrderItem);
+  router.post('/pos/orders/:id/items/:itemId/split-group', requirePermission('pos.operate'), scope.orderItemInScope, controller.assignItemSplitGroup);
+  router.post('/pos/orders/:id/rename', requirePermission('pos.operate'), scope.orderInScope, controller.renameOrder);
+  router.post('/pos/orders/:id/void', requirePermission('pos.operate'), scope.orderInScope, controller.voidOrder);
+  router.get('/pos/orders/:id/settlement-preview', requirePermission('pos.operate'), scope.orderInScope, controller.previewSettlement);
+  router.post('/pos/orders/:id/paystack-checkout', requirePermission('pos.operate'), scope.orderInScope, controller.startPaystackCheckout);
+  router.post('/pos/orders/:id/paystack-checkout/:paymentId/verify', requirePermission('pos.operate'), scope.orderInScope, controller.verifyPaystackPayment);
+  router.post('/pos/orders/:id/settle', requirePermission('pos.operate'), scope.orderInScope, controller.settleOrder);
   router.post('/pos/orders/:id/settlements/:settlementId/void', requirePermission('pos.manage'), controller.voidSettlement);
 
   // A reconciliation report, not a till action — manager tier, like the other POS overrides.
@@ -76,8 +79,8 @@ function posRouter() {
   router.get('/pos/reports/sales', requirePermission('pos.manage'), controller.salesReport);
 
   router.get('/pos/shifts', requirePermission('pos.operate'), controller.listShifts);
-  router.get('/pos/shifts/:id', requirePermission('pos.operate'), controller.getShift);
-  router.post('/pos/shifts', requirePermission('pos.operate'), controller.openShift);
+  router.get('/pos/shifts/:id', requirePermission('pos.operate'), scope.shiftInScope, controller.getShift);
+  router.post('/pos/shifts', requirePermission('pos.operate'), scope.newShiftTerminalInScope, controller.openShift);
   router.post('/pos/shifts/:id/close', requirePermission('pos.operate'), controller.closeShift);
 
   return router;
