@@ -121,8 +121,10 @@ describe('<QrTokensTab>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Create QR code' }));
 
     expect(mocks.createQrToken).toHaveBeenCalledWith(
-      expect.objectContaining({ outletId: '1', type: 'table', tableLabel: 'T1', baseUrl: expect.stringContaining('/qr-order') })
+      expect.objectContaining({ outletId: '1', type: 'table', tableLabel: 'T1' })
     );
+    // The server derives the printed address from the tenant's own host.
+    expect(mocks.createQrToken.mock.calls[0][0]).not.toHaveProperty('baseUrl');
     expect(await screen.findByAltText('Scannable QR code for this table or room')).toHaveAttribute('src', 'data:image/png;base64,abc');
     await waitFor(() => expect(mocks.listQrTokens).toHaveBeenCalledTimes(2));
   });
@@ -147,7 +149,7 @@ describe('<QrTokensTab>', () => {
     await screen.findByText('T1');
     await userEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
 
-    expect(mocks.regenerateQrToken).toHaveBeenCalledWith('9', expect.stringContaining('/qr-order'));
+    expect(mocks.regenerateQrToken).toHaveBeenCalledWith('9');
     expect(await screen.findByAltText('Scannable QR code for this table or room')).toHaveAttribute('src', 'data:image/png;base64,new');
   });
 

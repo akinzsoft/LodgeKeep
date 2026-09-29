@@ -1192,4 +1192,88 @@ describe('QR self-ordering (PLAN.md Phase 6)', () => {
     await flushIpRateLimitKeys();
     await destroyRateLimitRedisConnection();
   });
+  // -----------------------------------------------------------------
+  // Security fix (POS review): modifiers and quantity are validated
+  // against the live menu item; the guest never sets a price.
+  // -----------------------------------------------------------------
+
+  describe('security fix: order line validation', () => {
+    let lineRaw;
+    let modifierItemId;
+
+    beforeAll(async () => {
+      const created = await createStaffToken({ type: 'table', tableLabel: 'LINE-CHECK' });
+      lineRaw = created.body.meta.rawToken;
+      const [id] = await insertMenuItem(t.trx, {
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        outlet_id: outletId,
+        name: 'Burger With Options',
+        category: 'Drinks',
+        price: '20.00',
+        modifiers: JSON.stringify([{ name: 'Size', options: [{ label: 'Regular', priceDelta: '0.00' }, { label: 'Large', priceDelta: '5.00' }] }]),
+      });
+      modifierItemId = id;
+    });
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      paystack.initializeTransaction.mockResolvedValue({ authorizationUrl: 'https://paystack.test/pay/line', accessCode: 'line', reference: 'x' });
+    });
+
+    function order(items) {
+      return guestPost(`/${lineRaw}/orders`).set('Idempotency-Key', idemKey()).send({ payment_method: 'card', guest_contact: 'lines@example.com', items });
+    }
+
+    async function ordersOnToken() {
+      const token = await t.trx('pos_order_tokens').where({ token_hash: require('../../src/modules/qr-ordering/tokens').hashToken(lineRaw) }).first('id');
+      return t.trx('pos_guest_orders').where({ token_id: token.id }).count({ n: '*' }).first();
+    }
+
+    it('prices a modifier from the menu item, ignoring a forged priceDelta', async () => {
+      const res = await order([{ menu_item_id: modifierItemId, quantity: 1, modifiers: [{ name: 'size', option: 'large', priceDelta: '-500.00' }] }]);
+      expect(res.status).toBe(201);
+      const line = await t.trx('pos_order_items').where({ pos_order_id: res.body.data.pos_order_id }).first();
+      const stored = typeof line.modifiers === 'string' ? JSON.parse(line.modifiers) : line.modifiers;
+      expect(stored).toEqual([{ name: 'Size', option: 'Large', priceDelta: '5.00' }]);
+      const payment = await t.trx('payments').where({ pos_order_id: res.body.data.pos_order_id }).first();
+      expect(payment.amount).toBe('26.88'); // (20.00 + 5.00) + 7.5% VAT
+    });
+
+    it.each([
+      ['an option the item does not offer', [{ name: 'Size', option: 'Free', priceDelta: '-20.00' }]],
+      ['a group the item does not offer', [{ name: 'Discount', option: 'All', priceDelta: '-20.00' }]],
+      ['two choices in one group', [{ name: 'Size', option: 'Large' }, { name: 'Size', option: 'Regular' }]],
+      ['a choice with no option', [{ name: 'Size', priceDelta: '-20.00' }]],
+      ['a non-list', { name: 'Size', option: 'Large' }],
+    ])('rejects %s with nothing written', async (_label, modifiers) => {
+      const before = await ordersOnToken();
+      const res = await order([{ menu_item_id: modifierItemId, quantity: 1, modifiers }]);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_INVALID_MODIFIERS');
+      expect(await ordersOnToken()).toEqual(before);
+    });
+
+    it('rejects any modifier on an item that offers none', async () => {
+      const res = await order([{ menu_item_id: menuItemId, quantity: 1, modifiers: [{ name: 'Discount', option: 'x', priceDelta: '-19.99' }] }]);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_INVALID_MODIFIERS');
+    });
+
+    it.each([0, -1, 1.5, 'abc', 1000, '1e3', true])('rejects quantity %p with nothing written', async (quantity) => {
+      const before = await ordersOnToken();
+      const res = await order([{ menu_item_id: menuItemId, quantity }]);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_INVALID_QUANTITY');
+      expect(await ordersOnToken()).toEqual(before);
+      expect(paystack.initializeTransaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a cart with more than 50 lines', async () => {
+      const items = Array.from({ length: 51 }, () => ({ menu_item_id: menuItemId, quantity: 1 }));
+      const res = await order(items);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_CART_TOO_LARGE');
+    });
+  });
 });

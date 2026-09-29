@@ -58,6 +58,7 @@ const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { sumMoney, compareMoney } = require('../../shared/money');
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
+const { resolveOrderLine, normalizeQuantity, modifiersForInsert } = require('../../shared/pos-line-input');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('../cashiering/tax-engine');
 const { withIdempotency } = require('../../shared/idempotency');
 const { writeOutboxEvent } = require('../../shared/outbox');
@@ -89,6 +90,9 @@ const {
   GuestOrderStateConflictError,
   GuestOrderAlreadyRejectedError,
 } = require('./errors');
+
+/** A guest cart's line limit — bounds a single order's size alongside the per-line quantity cap. */
+const MAX_CART_LINES = 50;
 
 /**
  * Code-review fix (CRITICAL) — every guest-facing action that can move
@@ -162,6 +166,17 @@ async function sumOpenUnpaidValueForToken({ trx, tokenId }) {
  */
 async function createGuestOrder({ context, token, cart, paymentMethod, guestContact, guestName, idempotencyKey, acknowledgeLowStock }) {
   if (!Array.isArray(cart) || cart.length === 0) throw new EmptyCartError();
+  if (cart.length > MAX_CART_LINES) {
+    throw new ValidationError('CART_TOO_LARGE', `An order can have at most ${MAX_CART_LINES} lines.`, [{ field: 'items', issue: 'too_many' }]);
+  }
+  // Cheap shape/quantity checks before any database work; modifiers are
+  // checked against the live item inside the transaction below.
+  cart.forEach((line, index) => {
+    if (!line || typeof line !== 'object') {
+      throw new ValidationError('INVALID_CART_LINE', `Order line ${index + 1} is not valid.`, [{ field: `items[${index}]`, issue: 'invalid' }]);
+    }
+    normalizeQuantity(line.quantity, `items[${index}].quantity`);
+  });
   if (paymentMethod !== 'card' && paymentMethod !== 'room_charge') {
     throw new ValidationError('INVALID_PAYMENT_METHOD', '"payment_method" must be "card" or "room_charge".', [{ field: 'payment_method', issue: 'invalid' }]);
   }
@@ -197,10 +212,13 @@ async function createGuestOrder({ context, token, cart, paymentMethod, guestCont
         if (!menuItem.is_available) {
           throw new ValidationError('POS_ITEM_UNAVAILABLE', `"${menuItem.name}" is currently marked unavailable.`);
         }
-        const quantity = line.quantity ?? 1;
-        const lineTotal = computeItemLineTotal({ unit_price: menuItem.price, quantity, modifiers: line.modifiers });
+        // Quantity and modifier choices are checked against the live item;
+        // the price of a modifier always comes from the item's own catalogue,
+        // never from the guest's request (shared/pos-line-input.js).
+        const { quantity, modifiers } = resolveOrderLine({ menuItem, unitPrice: menuItem.price, quantity: line?.quantity, modifiers: line?.modifiers });
+        const lineTotal = computeItemLineTotal({ unit_price: menuItem.price, quantity, modifiers });
         cartTotal = sumMoney([cartTotal, lineTotal]);
-        resolvedItems.push({ menuItem, quantity, modifiers: line.modifiers ?? null });
+        resolvedItems.push({ menuItem, quantity, modifiers });
       }
 
       // Gap closure — the stock-out override guard, the SAME rule/error
@@ -256,7 +274,7 @@ async function createGuestOrder({ context, token, cart, paymentMethod, guestCont
           menu_item_id: menuItem.id,
           quantity,
           unit_price: menuItem.price,
-          modifiers,
+          modifiers: modifiersForInsert(modifiers),
         });
       }
 

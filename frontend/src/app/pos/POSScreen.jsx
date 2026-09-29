@@ -25,10 +25,9 @@ import styles from './POSScreen.module.css';
  * plus Sales (totals per payment method, top sellers, settled tabs, CSV,
  * and captured card payments to refund — `pos.manage`, see `SalesTab.jsx`).
  * Same self-contained multi-tab pattern `HousekeepingScreen`/`BookingScreen`
- * already established — no router in this app yet. No client-side
- * permission check hides any tab, the same "the real 403 is what a
- * lower-tier account sees" convention every tab on this screen already
- * follows (`SetupTab.jsx`'s own header).
+ * already established — no router in this app yet. Tabs are filtered by
+ * the role's real grants (see `TABS` below); the server's own permission
+ * check remains the enforcement.
  *
  * Deliberately NOT built here, per this module's own backend header:
  * happy-hour/time-based menu pricing.
@@ -53,19 +52,27 @@ import styles from './POSScreen.module.css';
  * since `shared/format/money.jsx`'s own `Money` component throws rather
  * than silently defaulting a currency it wasn't given.
  */
+// Each tab shows only when the signed-in role holds a key its endpoints
+// accept (any one in a list). The server's own check is still the real one;
+// this just stops a lower role landing on a screen that can only 403. The
+// Stock tab filters its own inner tabs the same way (`StockTab.jsx`).
 const TABS = [
-  { key: 'register', label: 'Register' },
-  { key: 'tickets', label: 'Tickets' },
-  { key: 'guest_orders', label: 'Guest orders' },
-  { key: 'shifts', label: 'Shifts' },
-  { key: 'sales', label: 'Sales' },
-  { key: 'qr_codes', label: 'QR codes' },
-  { key: 'stock', label: 'Stock' },
-  { key: 'setup', label: 'Setup' },
+  { key: 'register', label: 'Register', permission: 'pos.operate' },
+  { key: 'tickets', label: 'Tickets', permission: 'pos.operate' },
+  { key: 'guest_orders', label: 'Guest orders', permission: 'pos.operate' },
+  { key: 'shifts', label: 'Shifts', permission: 'pos.operate' },
+  { key: 'sales', label: 'Sales', permission: 'pos.manage' },
+  { key: 'qr_codes', label: 'QR codes', permission: 'pos.manage' },
+  { key: 'stock', label: 'Stock', permission: ['pos.stock_view', 'pos.stock_request', 'pos.stock_transfer', 'pos.stock_manage'] },
+  { key: 'setup', label: 'Setup', permission: 'pos.manage' },
 ];
 
-export function POSScreen({ activeProperty, isOffline = false, currentUserLabel, permissions, intent }) {
-  const [tab, setTab] = useState(intent?.posTab ?? 'register');
+export function POSScreen({ activeProperty, isOffline = false, currentUserLabel, currentUserId, permissions, intent }) {
+  const tabs = permissions ? TABS.filter((t) => [t.permission].flat().some((key) => permissions.has(key))) : TABS;
+  const [selectedTab, setTab] = useState(intent?.posTab ?? 'register');
+  // A tab this role cannot open (a notification intent, or the default
+  // Register for a role without it) falls back to the first one it can.
+  const tab = tabs.some((t) => t.key === selectedTab) ? selectedTab : tabs[0]?.key;
   // A notification click while POS is already open lands on its tab too —
   // applied once per click (its `nonce`), adjusted during render rather than
   // in an effect so there is no flash of the old tab.
@@ -84,7 +91,7 @@ export function POSScreen({ activeProperty, isOffline = false, currentUserLabel,
       ) : (
         <>
           <div className={styles.tabs} role="tablist" aria-label="POS sections">
-            {TABS.map((t) => (
+            {tabs.map((t) => (
               <button
                 key={t.key}
                 type="button"
@@ -102,7 +109,9 @@ export function POSScreen({ activeProperty, isOffline = false, currentUserLabel,
             {tab === 'register' && <RegisterTab activeProperty={activeProperty} isOffline={isOffline} currentUserLabel={currentUserLabel} />}
             {tab === 'tickets' && <TicketsTab />}
             {tab === 'guest_orders' && <GuestOrdersTab activeProperty={activeProperty} />}
-            {tab === 'shifts' && <ShiftsTab isOffline={isOffline} />}
+            {tab === 'shifts' && (
+              <ShiftsTab isOffline={isOffline} currentUserId={currentUserId} canCloseForOthers={permissions ? permissions.has('pos.manage') : false} />
+            )}
             {tab === 'sales' && <SalesTab activeProperty={activeProperty} isOffline={isOffline} />}
             {tab === 'qr_codes' && <QrTokensTab />}
             {tab === 'stock' && <StockTab activeProperty={activeProperty} isOffline={isOffline} permissions={permissions} intent={intent} />}

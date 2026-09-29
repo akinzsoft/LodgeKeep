@@ -177,4 +177,37 @@ describe('<ShiftsTab>', () => {
     expect(screen.getByRole('button', { name: 'Submit count' })).toBeDisabled();
     expect(screen.getByLabelText('Counted cash')).toBeDisabled();
   });
+  describe("security fix: closing another operator's shift", () => {
+    const othersShift = { id: '8', terminal_id: '1', terminal_device_ref: 'BAR-TERM-1', user_id: '42', opened_by_first_name: 'Bola', opened_by_last_name: 'Barman', opened_at: '2027-01-01', opening_float: '100.00', currency: 'NGN', closed_at: null };
+    const ownShift = { ...othersShift, id: '9', user_id: '7' };
+
+    it("offers no close action on someone else's shift to an operator", async () => {
+      mocks.listShifts.mockResolvedValue([othersShift, ownShift]);
+      render(<ShiftsTab currentUserId="7" />);
+      expect(await screen.findAllByRole('button', { name: 'Close (blind count)' })).toHaveLength(1);
+      expect(screen.queryByRole('button', { name: 'Close on their behalf' })).not.toBeInTheDocument();
+    });
+
+    it("lets a manager close someone else's shift, sending the required reason", async () => {
+      mocks.listShifts.mockResolvedValue([othersShift]);
+      mocks.closeShift.mockResolvedValue({ counted_cash: '100.00', expected_cash: '100.00', variance: '0.00', currency: 'NGN' });
+      render(<ShiftsTab currentUserId="7" canCloseForOthers />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Close on their behalf' }));
+
+      const reason = screen.getByLabelText("Reason for closing Bola Barman's shift");
+      expect(reason).toBeRequired();
+      await userEvent.type(screen.getByLabelText('Counted cash'), '100');
+      await userEvent.type(reason, 'Went home sick');
+      await userEvent.click(screen.getByRole('button', { name: 'Submit count' }));
+
+      await waitFor(() => expect(mocks.closeShift).toHaveBeenCalledWith('8', '100', expect.any(String), 'Went home sick'));
+    });
+
+    it('asks for no reason on your own shift', async () => {
+      mocks.listShifts.mockResolvedValue([ownShift]);
+      render(<ShiftsTab currentUserId="7" canCloseForOthers />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Close (blind count)' }));
+      expect(screen.queryByLabelText(/Reason for closing/)).not.toBeInTheDocument();
+    });
+  });
 });

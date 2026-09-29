@@ -405,7 +405,7 @@ function Demo() {
       ) : screenKey === 'profiles' ? (
         <ProfilesScreen isOffline={!isOnline} activeProperty={activePropertyRecord} />
       ) : screenKey === 'pos' ? (
-        <POSScreen activeProperty={activePropertyRecord} isOffline={!isOnline} currentUserLabel={displayName} permissions={grantedPermissions} intent={screenIntent} />
+        <POSScreen activeProperty={activePropertyRecord} isOffline={!isOnline} currentUserLabel={displayName} currentUserId={user.userId} permissions={grantedPermissions} intent={screenIntent} />
       ) : screenKey === 'stock' ? (
         <StockScreen activeProperty={activePropertyRecord} isOffline={!isOnline} permissions={grantedPermissions} intent={screenIntent} />
       ) : screenKey === 'ar' ? (

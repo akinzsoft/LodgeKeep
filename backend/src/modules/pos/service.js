@@ -60,6 +60,7 @@ const { sumMoney, negateMoney, compareMoney, percentOfMoney } = require('../../s
 // even exists — re-exported below so no existing import of this module
 // breaks.
 const { computeItemLineTotal, POS_SERVICE_CHARGE_PERCENT } = require('../../shared/pos-pricing');
+const { resolveOrderLine, normalizeModifierCatalogue, modifiersForInsert } = require('../../shared/pos-line-input');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('../cashiering/tax-engine');
 const cashieringService = require('../cashiering/service');
 const reservationsService = require('../reservations/service');
@@ -88,6 +89,7 @@ const {
   OrderNotFoundError,
   ShiftAlreadyClosedError,
   ShiftNotFoundError,
+  ShiftNotYoursError,
   SettlementAlreadyVoidedError,
   RegisterPaymentInvalidError,
   OrderHasCapturedPaymentError,
@@ -321,7 +323,7 @@ async function createMenuItem({ context, outletId, name, category, price, costPr
     // this item has no recipe/BOM (stock/reporting.js's own header). Never
     // read anywhere else in POS core.
     cost_price: costPrice ?? null,
-    modifiers: modifiers ?? null,
+    modifiers: modifiersForInsert(normalizeModifierCatalogue(modifiers ?? null)),
   });
   if (outletId) {
     const categoryRow = await db.table('pos_menu_categories').where({ name: categoryName }).first('id');
@@ -333,6 +335,7 @@ async function createMenuItem({ context, outletId, name, category, price, costPr
 async function updateMenuItem({ context, id, changes }) {
   const db = scopedDb().for(context);
   const next = { ...changes };
+  if (next.modifiers !== undefined) next.modifiers = modifiersForInsert(normalizeModifierCatalogue(next.modifiers));
   if (next.category !== undefined) {
     const current = await db.table('pos_menu_items').where({ id }).first('category');
     const unchanged = current && typeof next.category === 'string' && next.category.trim() === current.category;
@@ -616,6 +619,10 @@ async function addItem({ context, orderId, menuItemId, quantity, modifiers, stoc
     if (!menuItem.is_available) {
       throw new ValidationError('POS_ITEM_UNAVAILABLE', `"${menuItem.name}" is currently marked unavailable.`);
     }
+    // Quantity and modifier choices are checked against the live item; a
+    // modifier's price always comes from the item's own catalogue, never
+    // from the request (shared/pos-line-input.js).
+    const line = resolveOrderLine({ menuItem, unitPrice: menuItem.price, quantity, modifiers });
 
     // Gap closure — the stock-out override guard (user-reported: the
     // Register let an item sell at zero stock with no proactive check at
@@ -624,7 +631,7 @@ async function addItem({ context, orderId, menuItemId, quantity, modifiers, stoc
     // own header for the full rule.
     await stockService.assertStockAvailableOrOverridden({
       trx,
-      lines: [{ menuItemId, quantity: quantity ?? 1 }],
+      lines: [{ menuItemId, quantity: line.quantity }],
       overrideReason: stockOverrideReason,
       userId: context.userId,
       propertyId: order.property_id,
@@ -634,9 +641,9 @@ async function addItem({ context, orderId, menuItemId, quantity, modifiers, stoc
     await trx.table('pos_order_items').insert({
       pos_order_id: orderId,
       menu_item_id: menuItemId,
-      quantity: quantity ?? 1,
+      quantity: line.quantity,
       unit_price: menuItem.price,
-      modifiers: modifiers ?? null,
+      modifiers: modifiersForInsert(line.modifiers),
     });
     // A new item sends the tab back to the kitchen queue.
     if (order.ticket_done_at) await trx.table('pos_orders').where({ id: orderId }).update({ ticket_done_at: null, ticket_done_by_user_id: null });
@@ -1310,7 +1317,7 @@ async function openShift({ context, terminalId, userId, openingFloat }) {
  * (PRODUCT_REQUIREMENTS.md §3.19's "blind cash-up," structural, not a UI
  * convention — see migration header).
  */
-async function closeShift({ trx, shiftId, countedCash }) {
+async function closeShift({ trx, shiftId, countedCash, userId, canCloseForOthers = false, reason }) {
   // terminal_id never changes, so a plain read is enough to find which
   // terminal to lock; the state that matters is re-read under that lock.
   const located = await trx.table('pos_shifts').where({ id: shiftId }).first('terminal_id');
@@ -1319,6 +1326,14 @@ async function closeShift({ trx, shiftId, countedCash }) {
 
   const shift = await trx.table('pos_shifts').where({ id: shiftId }).forUpdate().first();
   if (shift.closed_at) throw new ShiftAlreadyClosedError(shiftId);
+  // Security fix (POS review): the opener closes their own till; anyone
+  // else needs `pos.manage` and a reason (recorded on the audit row).
+  if (String(shift.user_id) !== String(userId)) {
+    if (!canCloseForOthers) throw new ShiftNotYoursError(shiftId);
+    if (!reason || !String(reason).trim()) {
+      throw new ValidationError('REASON_REQUIRED', 'A reason is required to close another operator\'s shift.', [{ field: 'reason', issue: 'missing' }]);
+    }
+  }
 
   // By the shift id `settleOrder` stamped, never by time: a same-second
   // hand-over used to count the previous shift's sales again (see the
