@@ -24,6 +24,11 @@ export function listOutlets() {
   return request('/pos/outlets');
 }
 
+/** `{restricted, outletIds}` — the outlets this user may use on the Register and Shifts (staff outlet assignments); `restricted: false` means every outlet. */
+export function getMyOutlets() {
+  return request('/pos/my-outlets');
+}
+
 export function createOutlet({ code, name, type }) {
   return request('/pos/outlets', { method: 'POST', body: { code, name, type } });
 }

@@ -19,6 +19,7 @@ const { runIdempotentMutation, requireIdempotencyKey } = require('../../shared/m
 const { withIdempotency } = require('../../shared/idempotency');
 const { scopedDb } = require('../../db');
 const service = require('./service');
+const outletScope = require('./outlet-scope');
 const { assertPermission } = require('../../auth');
 const { PermissionDeniedError } = require('../../auth/errors');
 const { computeSalesReport } = require('./sales-report');
@@ -160,7 +161,8 @@ async function archiveOutlet(req, res, next) {
 
 async function listTerminals(req, res, next) {
   try {
-    res.status(200).json(ok(await service.listTerminals({ context: req.context, outletId: req.query.outlet_id })));
+    const outletIds = await outletScope.scopeForRequest(req);
+    res.status(200).json(ok(await service.listTerminals({ context: req.context, outletId: req.query.outlet_id, outletIds })));
   } catch (error) {
     next(error);
   }
@@ -398,9 +400,19 @@ async function findInHouseForCharge(req, res, next) {
 // Orders (tabs)
 // ---------------------------------------------------------------------
 
+/** Which outlets the caller may use on the Register and Shifts screens (staff outlet assignments). */
+async function getMyOutlets(req, res, next) {
+  try {
+    res.status(200).json(ok(await outletScope.describeScope(req)));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function listOrders(req, res, next) {
   try {
-    res.status(200).json(ok(await service.listOrders({ context: req.context, outletId: req.query.outlet_id, status: req.query.status })));
+    const outletIds = await outletScope.scopeForRequest(req);
+    res.status(200).json(ok(await service.listOrders({ context: req.context, outletId: req.query.outlet_id, status: req.query.status, outletIds })));
   } catch (error) {
     next(error);
   }
@@ -715,7 +727,8 @@ async function voidSettlement(req, res, next) {
 
 async function listShifts(req, res, next) {
   try {
-    res.status(200).json(ok(await service.listShifts({ context: req.context, terminalId: req.query.terminal_id })));
+    const outletIds = await outletScope.scopeForRequest(req);
+    res.status(200).json(ok(await service.listShifts({ context: req.context, terminalId: req.query.terminal_id, outletIds })));
   } catch (error) {
     next(error);
   }
@@ -782,6 +795,7 @@ async function closeShift(req, res, next) {
 }
 
 module.exports = {
+  getMyOutlets,
   listOutlets,
   createOutlet,
   updateOutlet,

@@ -77,7 +77,7 @@ describe('<UsersTab>', () => {
       render(<UsersTab />);
       await userEvent.click(await screen.findByRole('button', { name: 'Outlets for bar@example.com' }));
       const dialog = screen.getByRole('alertdialog');
-      expect(dialog).toHaveTextContent('They will only be able to request stock for these outlets');
+      expect(dialog).toHaveTextContent('They will only be able to sell and run shifts at these outlets on the Register, request stock for them');
       await userEvent.click(screen.getByRole('checkbox', { name: 'Pool Bar' }));
       await userEvent.click(screen.getByRole('button', { name: 'Save outlets' }));
       expect(mocks.setUserOutlets).toHaveBeenCalledWith('7', ['1', '2']);

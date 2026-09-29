@@ -5,6 +5,7 @@ import { POSScreen } from '../POSScreen.jsx';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
+  getMyOutlets: vi.fn(),
   listTerminals: vi.fn(),
   listMenuItems: vi.fn(),
   listMenuCategories: vi.fn(),
@@ -46,6 +47,7 @@ describe('<POSScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     Object.values(stockMocks).forEach((fn) => fn.mockReset());
+    mocks.getMyOutlets.mockResolvedValue({ restricted: false, outletIds: null });
     mocks.listOutlets.mockResolvedValue([]);
     mocks.listTerminals.mockResolvedValue([]);
     mocks.listMenuItems.mockResolvedValue([]);

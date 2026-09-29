@@ -2,6 +2,42 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Follow-up: outlet assignments now limit the Register and Shifts (branch `gap-outlet-scope-register`)
+
+**User-requested**: "restrict outlet assignments to Register and shifts too". This widens the user's own `gap-staff-outlets` decision (stock requests and alerts only), which the POS security review had flagged. It is built on `gap-pos-hardening` (PR #159) and should be rebased once that merges.
+
+**What's real now**: `src/modules/pos/outlet-scope.js` applies the existing `outletScopeForUser` rule (manager/admin/super_admin, and anyone with no assignment, cover every outlet) as route middleware on `pos/routes.js`:
+- **Starting something at an outlet the caller doesn't cover is `400 VALIDATION_OUTLET_NOT_ASSIGNED`**, the stock-request answer. This covers opening a tab (`POST /pos/orders`), opening a shift (the terminal's outlet), and the stock-out toggle (`set-availability`).
+- **Every action on an existing tab or shift at another outlet is `404`, never 403.** Tab actions are read, preview, add, rename, void, Paystack checkout/verify and settle. A tab line is judged by its own tab, not by the `:id` in the URL, so a covered tab id can't be used to reach another outlet's line. Shifts: `GET /pos/shifts/:id`.
+- **`GET /pos/orders`, `/pos/terminals` and `/pos/shifts` list only the caller's outlets.**
+- **`GET /pos/my-outlets` (`pos.operate`) tells the Register which outlets to offer.** If that lookup fails, it offers every outlet and the server still decides. The Shifts screen needs no change because its terminal list is already scoped.
+- **The check runs before the handler with a plain read and cannot race.** A tab's outlet, a line's tab, a shift's terminal and a terminal's outlet are never updated after they're written.
+- **The Setup → Staff "Outlets" dialog now says an assignment covers the Register and shifts too.**
+
+**Deliberate choices**: the opener can always close their own shift, even after being reassigned elsewhere, so a till is never stranded; anyone else still needs `pos.manage`, which only unrestricted roles hold. **Not covered, because it wasn't asked**: Tickets, Guest orders, the room-charge guest lookup, menu reads, and `GET /pos/outlets` (the stock screens need every outlet).
+
+**Tests**: backend `tests/pos/outlet-scope.test.js` (8 tests):
+- `my-outlets` for assigned, unassigned and manager users;
+- opening a tab or shift elsewhere refused;
+- ten tab actions on another outlet's tab all 404 with nothing changed, including a line reached through a covered tab id;
+- lists scoped;
+- the stock-out toggle;
+- managers and unassigned operators unaffected;
+- shift reads;
+- the reassigned opener closes their own shift.
+
+Each guard was mutation-checked: removing the tab guard, the line guard, the new-tab/shift guard, the list filter or the shift-read guard each fails its own tests. Frontend: RegisterTab (+2: only assigned outlets offered; lookup failure falls back to all) and the UsersTab wording. Frontend 1354/1354, lint (3 pre-existing warnings), build clean. Backend 3691/3691 across 151 suites, lint clean.
+
+**Production-shaped check**: the newest production backup was restored into a throwaway database and migrated (6 migrations). It holds **zero outlet assignments**, so nothing changes for anyone on deploy (assignments made in production after that backup would take effect). Then, as `alpha-motel`, the housekeeping user was re-roled to pos_operator:
+- Before any assignment, it could read the real open BAR tab.
+- Once assigned to RESTAURANT: that tab's read, rename and void were 404 and the tab was unchanged; opening a tab or a shift at BAR was refused.
+- Opening a tab or a shift at RESTAURANT worked, and its tab and terminal lists showed only RESTAURANT.
+- The super_admin still read the BAR tab.
+
+The database was dropped afterwards.
+
+**Frontend CI flake found while merging #159**: the frontend job failed on a commit whose frontend was identical to one that had passed. Running the suite with every CPU core saturated produced 6 load-sensitive failures in screens neither branch touches: PlatformApp, SignupScreen, StockTab (5s timeouts), and StockItemsTab/MenuItemsTab "auto-selects the first category on load". A second loaded run passed 1354/1354. The first-category tests look like a real race worth fixing separately. Not investigated here.
+
 ## Security fix: POS order lines, shift closing and QR addresses hardened (branch `gap-pos-hardening`)
 
 **From a POS security review (an outside report, verified against the code before any change).** The user chose to fix four confirmed findings plus the tab filter ("fix 1-4 and the tab filter"). **Deliberately not changed:** outlet assignments still limit stock requests only. That was the user's own `gap-staff-outlets` decision, and the review had counted it as a High finding. Operators may still void or rename each other's open tabs. Both would be policy changes and are left for the user to decide.

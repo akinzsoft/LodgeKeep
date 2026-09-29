@@ -249,9 +249,15 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const ticketRef = useRef(null);
 
   useEffect(() => {
-    posApi
-      .listOutlets()
-      .then((rows) => setOutlets(pointOfSaleOutlets(rows)))
+    // Staff outlet assignments: an assigned operator is offered only their
+    // outlets (the server refuses any other). If the assignment lookup
+    // itself fails, every outlet is shown and the server still decides.
+    const myOutlets = posApi.getMyOutlets().catch(() => ({ restricted: false, outletIds: null }));
+    Promise.all([posApi.listOutlets(), myOutlets])
+      .then(([rows, mine]) => {
+        const allowed = mine.restricted ? rows.filter((row) => mine.outletIds.includes(String(row.id))) : rows;
+        setOutlets(pointOfSaleOutlets(allowed));
+      })
       .catch((caught) => {
         setOutlets([]);
         setError(caught instanceof ApiError ? caught.message : 'Could not load outlets.');

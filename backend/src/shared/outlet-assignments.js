@@ -3,7 +3,8 @@
 /**
  * Staff outlet assignments (`user_outlet_assignments`) — the one place that
  * answers "which outlets does this person cover here?" for stock requests
- * and their alerts. Confirmed with the user:
+ * and their alerts, and (user-requested later) for the Register and Shifts
+ * (`src/modules/pos/outlet-scope.js`). Confirmed with the user:
  *
  *   - manager, admin and super_admin are never limited;
  *   - anyone else with NO assignment at the property covers every outlet
