@@ -47,13 +47,29 @@ function hasOpenssl() {
   }
 }
 
+/**
+ * Whether decrypting with `passphrase` gives back the original data. A wrong
+ * passphrase USUALLY fails the CBC padding check and throws, but about 1 time
+ * in 256 the garbage it produces ends in valid-looking padding and comes back
+ * as bytes instead (the salt is random per run, so which runs hit that is
+ * random too — the old `toThrow()` assertion failed intermittently). What a
+ * wrong passphrase must never do is recover the data; that is what this checks.
+ */
+function wrongPassphraseRecovers(encrypted, plain, passphrase, iterations) {
+  try {
+    return decryptFromOpenssl(encrypted, passphrase, iterations).equals(plain);
+  } catch {
+    return false;
+  }
+}
+
 describe('the backup file format', () => {
   test('encrypts in OpenSSL enc format: the real openssl binary opens it, and a wrong passphrase cannot', () => {
     const plain = zlib.gzipSync(Buffer.from('SELECT 1; -- ünïcödé 🏨\n'.repeat(500)));
     const encrypted = encryptForOpenssl(plain, PASSPHRASE);
     expect(encrypted.subarray(0, 8).toString('ascii')).toBe('Salted__');
     expect(decryptFromOpenssl(encrypted, PASSPHRASE).equals(plain)).toBe(true);
-    expect(() => decryptFromOpenssl(encrypted, 'not the passphrase at all')).toThrow();
+    expect(wrongPassphraseRecovers(encrypted, plain, 'not the passphrase at all')).toBe(false);
     // A fresh salt every time: the same data never encrypts the same way twice.
     expect(encryptForOpenssl(plain, PASSPHRASE).equals(encrypted)).toBe(false);
 
@@ -66,6 +82,27 @@ describe('the backup file format', () => {
     } finally {
       fs.unlinkSync(file);
     }
+  });
+
+  test('a wrong passphrase that happens to pass the padding check still cannot recover the data', () => {
+    // 1 PBKDF2 iteration so hundreds of attempts are cheap. Keep trying wrong
+    // passphrases until one decrypts WITHOUT throwing (about 1 in 256) — the
+    // exact case that made the old toThrow() assertion flaky — and check it
+    // gives back garbage, not the data.
+    const plain = zlib.gzipSync(Buffer.from('SELECT 1;\n'.repeat(50)));
+    const encrypted = encryptForOpenssl(plain, PASSPHRASE, 1);
+    let quietFailure = null;
+    for (let attempt = 0; attempt < 5000 && !quietFailure; attempt += 1) {
+      try {
+        quietFailure = { passphrase: `wrong-${attempt}`, output: decryptFromOpenssl(encrypted, `wrong-${attempt}`, 1) };
+      } catch {
+        // the usual outcome: bad padding
+      }
+    }
+    expect(quietFailure).not.toBeNull();
+    expect(quietFailure.output.equals(plain)).toBe(false);
+    expect(wrongPassphraseRecovers(encrypted, plain, quietFailure.passphrase, 1)).toBe(false);
+    expect(wrongPassphraseRecovers(encrypted, plain, PASSPHRASE, 1)).toBe(true);
   });
 });
 
