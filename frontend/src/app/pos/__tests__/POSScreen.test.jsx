@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { POSScreen } from '../POSScreen.jsx';
 
@@ -123,5 +123,31 @@ describe('<POSScreen>', () => {
     render(<POSScreen />);
     expect(screen.getByText('Choose a property from the Property box in the top bar to use the POS.')).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Register' })).not.toBeInTheDocument();
+  });
+  describe('tabs follow the role', () => {
+    const tabNames = () => within(screen.getByRole('tablist', { name: 'POS sections' })).getAllByRole('tab').map((tab) => tab.textContent);
+
+    it('shows a POS operator only the tabs it can use', () => {
+      render(<POSScreen activeProperty={{ base_currency: 'NGN' }} permissions={new Set(['pos.operate'])} />);
+      expect(tabNames()).toEqual(['Register', 'Tickets', 'Guest orders', 'Shifts']);
+    });
+
+    it('shows a manager every tab', () => {
+      const manager = new Set(['pos.operate', 'pos.manage', 'pos.stock_view', 'pos.stock_manage']);
+      render(<POSScreen activeProperty={{ base_currency: 'NGN' }} permissions={manager} />);
+      expect(tabNames()).toEqual(['Register', 'Tickets', 'Guest orders', 'Shifts', 'Sales', 'QR codes', 'Stock', 'Setup']);
+    });
+
+    it('lands a role without the Register on the first tab it can open', () => {
+      render(<POSScreen activeProperty={{ base_currency: 'NGN' }} permissions={new Set(['pos.stock_view'])} />);
+      expect(tabNames()).toEqual(['Stock']);
+      expect(screen.getByRole('tab', { name: 'Stock', selected: true })).toBeInTheDocument();
+    });
+
+    it('ignores a notification intent for a tab the role cannot open', () => {
+      render(<POSScreen activeProperty={{ base_currency: 'NGN' }} permissions={new Set(['pos.operate'])} intent={{ posTab: 'sales', nonce: 1 }} />);
+      expect(screen.getByRole('tab', { name: 'Register', selected: true })).toBeInTheDocument();
+      expect(screen.queryByRole('tab', { name: 'Sales' })).not.toBeInTheDocument();
+    });
   });
 });

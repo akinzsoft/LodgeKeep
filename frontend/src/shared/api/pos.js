@@ -301,11 +301,12 @@ export function openShift({ terminalId, openingFloat }) {
  * `countedCash` is the operator's own blind count — the response carries the computed `expected_cash`/`variance`, never exposed before this call.
  * `key` lets the caller hold one Idempotency-Key per close attempt, so retrying the same count after a lost response replays the stored result instead of hitting "already closed".
  */
-export function closeShift(shiftId, countedCash, key = idempotencyKey()) {
+/** `reason` is required by the server only when closing another operator's shift (a `pos.manage` action). */
+export function closeShift(shiftId, countedCash, key = idempotencyKey(), reason) {
   return request(`/pos/shifts/${shiftId}/close`, {
     method: 'POST',
     headers: { 'Idempotency-Key': key },
-    body: { counted_cash: countedCash },
+    body: reason ? { counted_cash: countedCash, reason } : { counted_cash: countedCash },
   });
 }
 
@@ -326,20 +327,19 @@ export function listQrTokens(outletId) {
 }
 
 /** Returns `{token, qrImageDataUrl}` — `rawToken` (the value that goes into the printed/displayed code) travels in `meta`, so this flattens it in, the same `{...data, ...meta}` shape every other split-envelope response in this codebase uses. */
-export async function createQrToken({ outletId, type, tableLabel, roomId, baseUrl }) {
+// The address printed into the QR image is derived by the server from this
+// tenant's own host — the client no longer sends one (security fix).
+export async function createQrToken({ outletId, type, tableLabel, roomId }) {
   const { data, meta } = await requestWithMeta('/pos/qr-tokens', {
     method: 'POST',
-    body: { outlet_id: outletId, type, table_label: tableLabel, room_id: roomId, base_url: baseUrl },
+    body: { outlet_id: outletId, type, table_label: tableLabel, room_id: roomId },
   });
   return { ...data, rawToken: meta.rawToken };
 }
 
 /** The old code stops working the instant this succeeds (`rotated_at` set) — a genuinely new code, not a re-display of the old one. */
-export async function regenerateQrToken(id, baseUrl) {
-  const { data, meta } = await requestWithMeta(`/pos/qr-tokens/${id}/regenerate`, {
-    method: 'POST',
-    body: { base_url: baseUrl },
-  });
+export async function regenerateQrToken(id) {
+  const { data, meta } = await requestWithMeta(`/pos/qr-tokens/${id}/regenerate`, { method: 'POST' });
   return { ...data, rawToken: meta.rawToken };
 }
 

@@ -19,9 +19,26 @@ function require_(body, field) {
   return value;
 }
 
-/** The base URL a guest's browser reaches this tenant's own subdomain at — the frontend's own QR-ordering route prefix is appended by `tokens.js`'s `renderTokenQrImage`. Not derivable from `req` alone (Host header carries the STAFF console's own origin, not necessarily the guest-facing one), so the caller supplies it explicitly. */
+/**
+ * The base URL printed into a QR code — `tokens.js`'s `renderTokenQrImage`
+ * appends `/{token}/menu`.
+ *
+ * Security fix (POS review): this used to take `base_url` from the request
+ * body or query and print it into the QR image unchecked, so a privileged
+ * session could mint genuine order tokens pointing guests at any domain.
+ * It is now always derived from the hostname this request was resolved to
+ * a tenant by (`tenant-resolution.js` reads `req.hostname`) — the tenant's
+ * own subdomain or custom domain — and any `base_url` sent is ignored. The
+ * port is kept only when the raw Host header names that same hostname
+ * (the dev server on :5173); `req.protocol` honours the proxy's
+ * X-Forwarded-Proto (`app.set('trust proxy', 1)`).
+ */
 function baseUrlFrom(req) {
-  return req.body?.base_url ?? req.query?.base_url ?? `${req.protocol}://${req.get('host')}/qr-order`;
+  const hostname = req.hostname;
+  const rawHost = req.get('host') ?? '';
+  const portMatch = rawHost.match(/^(.*):(\d+)$/);
+  const port = portMatch && portMatch[1].toLowerCase() === String(hostname).toLowerCase() ? `:${portMatch[2]}` : '';
+  return `${req.protocol}://${hostname}${port}/qr-order`;
 }
 
 async function listTokens(req, res, next) {
@@ -164,6 +181,7 @@ async function rejectGuestOrder(req, res, next) {
 }
 
 module.exports = {
+  baseUrlFrom,
   listTokens,
   createToken,
   regenerateToken,

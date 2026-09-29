@@ -135,7 +135,6 @@ export function QrTokensTab() {
         type: tokenForm.type,
         tableLabel: tokenForm.type === 'table' ? tokenForm.table_label : undefined,
         roomId: tokenForm.type === 'room' ? tokenForm.room_id : undefined,
-        baseUrl,
       });
       setLastCreated({ tokenId: result.token.id, qrImageDataUrl: result.qrImageDataUrl, rawToken: result.rawToken });
       setTokenForm({ type: 'table', table_label: '', room_id: '' });
@@ -151,7 +150,7 @@ export function QrTokensTab() {
     setBusyId(token.id);
     setTokenError(null);
     try {
-      const result = await posApi.regenerateQrToken(token.id, baseUrl);
+      const result = await posApi.regenerateQrToken(token.id);
       setLastCreated({ tokenId: result.token.id, qrImageDataUrl: result.qrImageDataUrl, rawToken: result.rawToken });
       await reloadTokens(selectedOutletId);
     } catch (caught) {

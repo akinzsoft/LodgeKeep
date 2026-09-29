@@ -13,6 +13,15 @@ function operatorName(row) {
   return name || '—';
 }
 
+/**
+ * Whether the signed-in user opened this shift. An unknown user (no id
+ * passed) is treated as the opener, so the screen falls back to the
+ * server's own answer rather than hiding the action.
+ */
+function isOwnShift(row, currentUserId) {
+  return currentUserId == null || String(row.user_id) === String(currentUserId);
+}
+
 /** Money for a closed shift's cash-up figures; an open shift has none yet. */
 function closedMoney(row, field) {
   return row.closed_at ? <Money amount={row[field]} currencyCode={row.currency} /> : '—';
@@ -29,8 +38,12 @@ function closedMoney(row, field) {
  * One Idempotency-Key is held per close attempt and renewed whenever the
  * count changes: re-submitting the same count after a lost response replays
  * the stored result, while a corrected count is a genuinely new request.
+ *
+ * Security fix (POS review): the server lets only the opener close a shift;
+ * a manager (`pos.manage`, passed as `canCloseForOthers`) may close someone
+ * else's with a reason. Other operators' open shifts show no close action.
  */
-export function ShiftsTab({ isOffline = false }) {
+export function ShiftsTab({ isOffline = false, currentUserId, canCloseForOthers = false }) {
   const [terminals, setTerminals] = useState(null);
   const [shifts, setShifts] = useState(null);
   const [selectedTerminalId, setSelectedTerminalId] = useState('');
@@ -40,6 +53,7 @@ export function ShiftsTab({ isOffline = false }) {
 
   const [closingShift, setClosingShift] = useState(null);
   const [countedCash, setCountedCash] = useState('');
+  const [closeReason, setCloseReason] = useState('');
   const [closeSubmitting, setCloseSubmitting] = useState(false);
   const [closeResult, setCloseResult] = useState(null);
   const closeKeyRef = useRef(null);
@@ -69,6 +83,7 @@ export function ShiftsTab({ isOffline = false }) {
     setError(null);
     setCloseResult(null);
     setCountedCash('');
+    setCloseReason('');
     closeKeyRef.current = crypto.randomUUID();
     setClosingShift(shift);
   }
@@ -77,6 +92,7 @@ export function ShiftsTab({ isOffline = false }) {
     setClosingShift(null);
     setCloseResult(null);
     setCountedCash('');
+    setCloseReason('');
     closeKeyRef.current = null;
   }
 
@@ -102,7 +118,9 @@ export function ShiftsTab({ isOffline = false }) {
     setCloseSubmitting(true);
     setError(null);
     try {
-      const result = await posApi.closeShift(closingShift.id, countedCash, closeKeyRef.current);
+      const result = isOwnShift(closingShift, currentUserId)
+        ? await posApi.closeShift(closingShift.id, countedCash, closeKeyRef.current)
+        : await posApi.closeShift(closingShift.id, countedCash, closeKeyRef.current, closeReason);
       setCloseResult(result);
       await reload();
     } catch (caught) {
@@ -170,13 +188,16 @@ export function ShiftsTab({ isOffline = false }) {
         ]}
         rows={shifts ?? []}
         rowKey={(row) => row.id}
-        actions={(row) =>
-          !row.closed_at && (
+        actions={(row) => {
+          if (row.closed_at) return null;
+          const own = isOwnShift(row, currentUserId);
+          if (!own && !canCloseForOthers) return null;
+          return (
             <Button size="compact" variant="danger" disabled={isOffline} onClick={() => startClosing(row)}>
-              Close (blind count)
+              {own ? 'Close (blind count)' : 'Close on their behalf'}
             </Button>
-          )
-        }
+          );
+        }}
       />
 
       {closingShift && !closeResult && (
@@ -199,6 +220,21 @@ export function ShiftsTab({ isOffline = false }) {
                 disabled={isOffline || closeSubmitting}
               />
             </label>
+            {!isOwnShift(closingShift, currentUserId) && (
+              <label className={formStyles.field}>
+                <span className={formStyles.label}>Reason for closing {operatorName(closingShift)}&apos;s shift</span>
+                <input
+                  className={formStyles.input}
+                  value={closeReason}
+                  onChange={(e) => {
+                    setCloseReason(e.target.value);
+                    closeKeyRef.current = crypto.randomUUID();
+                  }}
+                  required
+                  disabled={isOffline || closeSubmitting}
+                />
+              </label>
+            )}
             <div className={formStyles.actionsRow}>
               <Button type="submit" loading={closeSubmitting} disabled={isOffline}>
                 Submit count

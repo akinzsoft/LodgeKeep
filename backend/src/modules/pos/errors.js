@@ -62,6 +62,16 @@ class ShiftAlreadyClosedError extends AppError {
 }
 
 /** 404, never 400: closing a shift id that is unknown or belongs to another tenant must not read as a validation problem with the request (SECURITY.md — cross-tenant access is 404). Code kept as it was. */
+/**
+ * Security fix (POS review): a shift is closed by the operator who opened
+ * it. A manager (`pos.manage`) may close it on their behalf, with a reason.
+ */
+class ShiftNotYoursError extends AppError {
+  constructor(shiftId) {
+    super('FORBIDDEN_SHIFT_NOT_YOURS', 'Only the operator who opened this shift can close it. A manager can close it on their behalf, with a reason.', 403, { shiftId });
+  }
+}
+
 class ShiftNotFoundError extends AppError {
   constructor() {
     super('VALIDATION_SHIFT_NOT_FOUND', 'The specified shift does not exist.', 404);
@@ -179,6 +189,7 @@ module.exports = {
   ShiftAlreadyOpenError,
   ShiftAlreadyClosedError,
   ShiftNotFoundError,
+  ShiftNotYoursError,
   SettlementAlreadyVoidedError,
   RegisterPaymentInvalidError,
   OrderHasCapturedPaymentError,

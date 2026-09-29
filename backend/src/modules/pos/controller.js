@@ -19,6 +19,8 @@ const { runIdempotentMutation, requireIdempotencyKey } = require('../../shared/m
 const { withIdempotency } = require('../../shared/idempotency');
 const { scopedDb } = require('../../db');
 const service = require('./service');
+const { assertPermission } = require('../../auth');
+const { PermissionDeniedError } = require('../../auth/errors');
 const { computeSalesReport } = require('./sales-report');
 const { computeCostOfSalesMargin } = require('../stock/reporting');
 const { toCsv } = require('../reporting/service');
@@ -741,16 +743,36 @@ async function openShift(req, res, next) {
   }
 }
 
+/** True when the caller holds `permissionKey` at the active property; never throws for a plain "no". */
+async function holdsPermission(context, permissionKey) {
+  try {
+    await assertPermission(context, permissionKey);
+    return true;
+  } catch (error) {
+    if (error instanceof PermissionDeniedError) return false;
+    throw error;
+  }
+}
+
 async function closeShift(req, res, next) {
   try {
     const countedCash = requireCashAmount(req.body, 'counted_cash');
+    // Closing someone else's shift is a manager action (see service.closeShift).
+    const canCloseForOthers = await holdsPermission(req.context, 'pos.manage');
     await runIdempotentMutation(req, res, {
       operationType: 'pos.close_shift',
       entityType: 'pos_shifts',
       entityId: req.params.id,
       action: 'close',
       handler: async (trx) => {
-        const shift = await service.closeShift({ trx, shiftId: req.params.id, countedCash });
+        const shift = await service.closeShift({
+          trx,
+          shiftId: req.params.id,
+          countedCash,
+          userId: req.context.userId,
+          canCloseForOthers,
+          reason: req.body?.reason,
+        });
         return { status: 200, body: ok(shift) };
       },
     });
