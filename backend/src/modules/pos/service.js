@@ -90,6 +90,7 @@ const {
   ShiftAlreadyClosedError,
   ShiftNotFoundError,
   ShiftNotYoursError,
+  TabNotYoursError,
   SettlementAlreadyVoidedError,
   RegisterPaymentInvalidError,
   OrderHasCapturedPaymentError,
@@ -688,11 +689,24 @@ async function lockOrderAndItem({ trx, orderItemId }) {
   return { order, item: lockedItem };
 }
 
-async function voidOrderItem({ context, orderItemId, reason, userId }) {
+/**
+ * Void and rename belong to a tab's opener (user-requested). Anyone else
+ * needs `pos.manage` (`canActForOthers`); a void still records its own
+ * reason and voider. A tab with no opener — a guest QR order — is left to
+ * any operator at its outlet. `opened_by_user_id` never changes after the
+ * tab is opened, so any read of the row is enough to decide.
+ */
+function assertCanChangeTab(order, { userId, canActForOthers }) {
+  if (order.opened_by_user_id == null || canActForOthers) return;
+  if (String(order.opened_by_user_id) !== String(userId)) throw new TabNotYoursError(order.id);
+}
+
+async function voidOrderItem({ context, orderItemId, reason, userId, canActForOthers = false }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to void an order item.', [{ field: 'reason', issue: 'missing' }]);
   const db = scopedDb().for(context);
   return db.transaction(async (trx) => {
-    await lockOrderAndItem({ trx, orderItemId });
+    const { order } = await lockOrderAndItem({ trx, orderItemId });
+    assertCanChangeTab(order, { userId, canActForOthers });
     await trx.table('pos_order_items').where({ id: orderItemId }).update({
       voided_at: new Date(),
       void_reason: reason,
@@ -716,7 +730,7 @@ async function assignItemSplitGroup({ context, orderItemId, splitGroup }) {
  * "Pool bar – John", "Room 205"). Locks the order like every tab mutation;
  * a settled or voided tab keeps the name it closed with.
  */
-async function renameOrder({ context, orderId, tableLabel }) {
+async function renameOrder({ context, orderId, tableLabel, userId, canActForOthers = false }) {
   const name = typeof tableLabel === 'string' ? tableLabel.trim() : '';
   if (!name || name.length > 60) {
     throw new ValidationError('INVALID_TAB_NAME', 'A tab name is required, up to 60 characters.', [{ field: 'table_label', issue: name ? 'too_long' : 'missing' }]);
@@ -726,14 +740,19 @@ async function renameOrder({ context, orderId, tableLabel }) {
     const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
     if (!order) throw new OrderNotFoundError();
     if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
+    assertCanChangeTab(order, { userId, canActForOthers });
     await trx.table('pos_orders').where({ id: orderId }).update({ table_label: name });
     return trx.table('pos_orders').where({ id: orderId }).first();
   });
 }
 
-async function voidOrder({ context, orderId, reason, userId }) {
+async function voidOrder({ context, orderId, reason, userId, canActForOthers = false }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to void an order.', [{ field: 'reason', issue: 'missing' }]);
   const db = scopedDb().for(context);
+
+  // Refuse someone else's tab before asking Paystack anything.
+  const existing = await db.table('pos_orders').where({ id: orderId }).first();
+  if (existing) assertCanChangeTab(existing, { userId, canActForOthers });
 
   // A card/NQR checkout still open on Paystack may already have been paid.
   // Ask Paystack first — outside any transaction (ARCHITECTURE.md §7) — so
@@ -749,6 +768,7 @@ async function voidOrder({ context, orderId, reason, userId }) {
     const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
     if (!order) throw new OrderNotFoundError();
     if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
+    assertCanChangeTab(order, { userId, canActForOthers });
 
     const unsettled = await listUnsettledRegisterPayments({ db: trx, orderId });
     const captured = unsettled.find((p) => p.status === 'CAPTURED');

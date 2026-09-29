@@ -2,6 +2,29 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Follow-up: void and rename belong to the tab opener (branch `gap-tab-owner-actions`)
+
+**User-requested**: "restrict void and rename to the tab opener too". This closes the review's remaining open policy item, after `gap-outlet-scope-register`. It is the same shape as shift closing (PR #159).
+
+**What's real now**: `assertCanChangeTab` (`pos/service.js`) runs in `voidOrder`, `voidOrderItem` and `renameOrder` after each takes its lock. `voidOrder` also runs it on a plain read *before* its Paystack pre-check, so another operator can't trigger gateway calls on a tab they may not void; `opened_by_user_id` never changes, so any read decides.
+- **Someone else's tab is `403 FORBIDDEN_TAB_NOT_YOURS`** unless the caller holds `pos.manage` (the controller asks `holdsPermission`). A manager's void still records its own reason and voider.
+- **A tab with no opener is any operator's** (every guest QR order has a null `opened_by_user_id`). QR rejection and auto-rejection, which call `voidOrder`, are unaffected.
+- **Adding items to someone else's tab is still allowed**, as is settling, split and preview (not asked).
+- **The Register** hides the tab's ✕, Rename, − and trash controls on another operator's tab for a non-manager, and says "Opened by another operator — a manager can void or rename it". `POSScreen` passes `currentUserId` and `canManageTabs`; with no user id, every control shows and the server decides.
+
+**Tests**: backend `tests/pos/tab-owner.test.js` (5):
+- another operator refused on rename, line void and tab void, with nothing changed;
+- adding still allowed;
+- the opener allowed;
+- a manager allowed and recorded as the voider;
+- a guest tab (no opener) open to anyone.
+
+Mutation-checked: removing the opener check, the manager override or the guest exemption each fails 1; letting the Register show every control fails 1. Frontend RegisterTab +3. POS and QR backend suites 459/459; backend 3696/3696 across 152 suites, lint clean. Frontend 1357/1357, lint (3 pre-existing warnings), build and audit clean.
+
+**Production-shaped check**: the newest production backup was restored into a throwaway database and migrated. Real data: all 4 guest tabs have no opener, and no tab void, line void or rename (audit log) has ever been done by anyone other than the tab's opener, so real work so far would not have been blocked. As `alpha-motel`, the housekeeping user re-roled to pos_operator was refused (403) renaming, voiding or voiding a line of the super_admin's real open tab #9; the super_admin could rename it, and it stayed open. Dropped afterwards.
+
+**Gaps**: settling or splitting someone else's tab is still allowed (not asked); a manager's rename records no reason (void does); there is no "transfer tab to another operator" action, so a shift hand-over of an open tab needs a manager to void or rename it.
+
 ## Follow-up: outlet assignments now limit the Register and Shifts (branch `gap-outlet-scope-register`)
 
 **User-requested**: "restrict outlet assignments to Register and shifts too". This widens the user's own `gap-staff-outlets` decision (stock requests and alerts only), which the POS security review had flagged. It is built on `gap-pos-hardening` (PR #159) and should be rebased once that merges.

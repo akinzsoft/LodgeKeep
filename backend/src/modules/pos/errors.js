@@ -72,6 +72,17 @@ class ShiftNotYoursError extends AppError {
   }
 }
 
+/**
+ * A tab's opener may void it, void its lines and rename it; anyone else
+ * needs `pos.manage` (user-requested). A tab with no opener (a guest QR
+ * order) stays open to any operator at its outlet.
+ */
+class TabNotYoursError extends AppError {
+  constructor(orderId) {
+    super('FORBIDDEN_TAB_NOT_YOURS', 'Only the operator who opened this tab can change it. A manager can do it on their behalf.', 403, { orderId });
+  }
+}
+
 class ShiftNotFoundError extends AppError {
   constructor() {
     super('VALIDATION_SHIFT_NOT_FOUND', 'The specified shift does not exist.', 404);
@@ -190,6 +201,7 @@ module.exports = {
   ShiftAlreadyClosedError,
   ShiftNotFoundError,
   ShiftNotYoursError,
+  TabNotYoursError,
   SettlementAlreadyVoidedError,
   RegisterPaymentInvalidError,
   OrderHasCapturedPaymentError,

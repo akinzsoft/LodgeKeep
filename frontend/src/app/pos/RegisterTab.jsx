@@ -155,7 +155,14 @@ function defaultSettlementForm(splitGroup) {
  * (a stale-response race and an empty-preview-response gap), both fixed
  * and covered by dedicated regression tests.
  */
-export function RegisterTab({ activeProperty, isOffline = false, currentUserLabel }) {
+export function RegisterTab({ activeProperty, isOffline = false, currentUserLabel, currentUserId, canManageTabs = false }) {
+  // Void and rename belong to a tab's opener; a manager (`pos.manage`) may
+  // act on anyone's, and a tab with no opener (a guest QR order) is anyone's
+  // at the outlet — the server's rule (`assertCanChangeTab`). An unknown
+  // current user leaves every control in place for the server to decide.
+  const canChangeTab = (order) =>
+    currentUserId == null || canManageTabs || order?.opened_by_user_id == null || String(order.opened_by_user_id) === String(currentUserId);
+
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
@@ -981,16 +988,18 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                       <button type="button" className={styles.tabLabelButton} onClick={() => switchToTab(order)} disabled={settling}>
                         {label}
                       </button>
-                      <button
-                        type="button"
-                        className={styles.tabCloseButton}
-                        onClick={() => handleRemoveTab(order)}
-                        disabled={isOffline || settling || removingTabId === order.id}
-                        aria-label={`Remove ${label}`}
-                        title="Remove tab"
-                      >
-                        ✕
-                      </button>
+                      {canChangeTab(order) && (
+                        <button
+                          type="button"
+                          className={styles.tabCloseButton}
+                          onClick={() => handleRemoveTab(order)}
+                          disabled={isOffline || settling || removingTabId === order.id}
+                          aria-label={`Remove ${label}`}
+                          title="Remove tab"
+                        >
+                          ✕
+                        </button>
+                      )}
                     </span>
                   );
                 })}
@@ -1111,15 +1120,19 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                   {' · '}
                   {activeOrder.order.table_label || `Tab #${activeOrder.order.id}`}
                   {' · '}
-                  <button
-                    type="button"
-                    className={styles.renameLink}
-                    onClick={() => setTabNameDialog({ mode: 'rename', orderId: activeOrder.order.id, value: activeOrder.order.table_label ?? '' })}
-                    disabled={isOffline || settling}
-                    aria-label={`Rename ${activeOrder.order.table_label || `Tab #${activeOrder.order.id}`}`}
-                  >
-                    Rename
-                  </button>
+                  {canChangeTab(activeOrder.order) ? (
+                    <button
+                      type="button"
+                      className={styles.renameLink}
+                      onClick={() => setTabNameDialog({ mode: 'rename', orderId: activeOrder.order.id, value: activeOrder.order.table_label ?? '' })}
+                      disabled={isOffline || settling}
+                      aria-label={`Rename ${activeOrder.order.table_label || `Tab #${activeOrder.order.id}`}`}
+                    >
+                      Rename
+                    </button>
+                  ) : (
+                    'Opened by another operator — a manager can void or rename it'
+                  )}
                 </p>
 
                 <div className={styles.ticketLines}>
@@ -1135,28 +1148,32 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                           </span>
                         </div>
                         <div className={styles.ticketLineActions}>
-                          <button
-                            type="button"
-                            className={styles.stepperButton}
-                            onClick={() => setVoidingRow({ ids: [lastRow.id], name: menuItemName(group.menuItemId) })}
-                            disabled={isOffline}
-                            aria-label={`Remove one ${menuItemName(group.menuItemId)}`}
-                          >
-                            −
-                          </button>
+                          {canChangeTab(activeOrder.order) && (
+                            <button
+                              type="button"
+                              className={styles.stepperButton}
+                              onClick={() => setVoidingRow({ ids: [lastRow.id], name: menuItemName(group.menuItemId) })}
+                              disabled={isOffline}
+                              aria-label={`Remove one ${menuItemName(group.menuItemId)}`}
+                            >
+                              −
+                            </button>
+                          )}
                           <span className={styles.stepperQuantity}>{quantity}</span>
                           <button type="button" className={styles.stepperButton} onClick={() => handleAddItem(group.menuItemId)} disabled={isOffline} aria-label={`Add another ${menuItemName(group.menuItemId)}`}>
                             +
                           </button>
-                          <button
-                            type="button"
-                            className={styles.removeButton}
-                            onClick={() => setVoidingRow({ ids: group.rows.map((row) => row.id), name: menuItemName(group.menuItemId) })}
-                            disabled={isOffline}
-                            aria-label={`Void ${menuItemName(group.menuItemId)}`}
-                          >
-                            <TrashIcon />
-                          </button>
+                          {canChangeTab(activeOrder.order) && (
+                            <button
+                              type="button"
+                              className={styles.removeButton}
+                              onClick={() => setVoidingRow({ ids: group.rows.map((row) => row.id), name: menuItemName(group.menuItemId) })}
+                              disabled={isOffline}
+                              aria-label={`Void ${menuItemName(group.menuItemId)}`}
+                            >
+                              <TrashIcon />
+                            </button>
+                          )}
                         </div>
                       </div>
                     );

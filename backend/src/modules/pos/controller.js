@@ -495,7 +495,8 @@ async function addItem(req, res, next) {
 async function voidOrderItem(req, res, next) {
   try {
     const reason = require_(req.body, 'reason');
-    const item = await service.voidOrderItem({ context: req.context, orderItemId: req.params.itemId, reason, userId: req.context.userId });
+    const canActForOthers = await holdsPermission(req.context, 'pos.manage');
+    const item = await service.voidOrderItem({ context: req.context, orderItemId: req.params.itemId, reason, userId: req.context.userId, canActForOthers });
     await req.audit({ entityType: 'pos_order_items', entityId: req.params.itemId, action: 'void', afterState: item, reason });
     res.status(200).json(ok(item));
   } catch (error) {
@@ -520,7 +521,8 @@ async function renameOrder(req, res, next) {
   try {
     const before = await service.getOrder({ context: req.context, id: req.params.id });
     if (!before) return notFound(res);
-    const order = await service.renameOrder({ context: req.context, orderId: req.params.id, tableLabel: req.body?.table_label });
+    const canActForOthers = await holdsPermission(req.context, 'pos.manage');
+    const order = await service.renameOrder({ context: req.context, orderId: req.params.id, tableLabel: req.body?.table_label, userId: req.context.userId, canActForOthers });
     await req.audit({ entityType: 'pos_orders', entityId: order.id, action: 'rename', beforeState: { table_label: before.table_label }, afterState: { table_label: order.table_label } });
     res.status(200).json(ok(order));
   } catch (error) {
@@ -531,7 +533,8 @@ async function renameOrder(req, res, next) {
 async function voidOrder(req, res, next) {
   try {
     const reason = require_(req.body, 'reason');
-    const order = await service.voidOrder({ context: req.context, orderId: req.params.id, reason, userId: req.context.userId });
+    const canActForOthers = await holdsPermission(req.context, 'pos.manage');
+    const order = await service.voidOrder({ context: req.context, orderId: req.params.id, reason, userId: req.context.userId, canActForOthers });
     await req.audit({ entityType: 'pos_orders', entityId: req.params.id, action: 'void', afterState: order, reason });
     res.status(200).json(ok(order));
   } catch (error) {
