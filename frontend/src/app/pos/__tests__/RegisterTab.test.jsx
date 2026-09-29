@@ -8,6 +8,8 @@ import { selectWhenLoaded } from './selectWhenLoaded.js';
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
   getMyOutlets: vi.fn(),
+  listTransferCandidates: vi.fn(),
+  transferTabs: vi.fn(),
   listTerminals: vi.fn(),
   listMenuItems: vi.fn(),
   listMenuCategories: vi.fn(),
@@ -726,6 +728,62 @@ describe('<RegisterTab>', () => {
     expect(await screen.findByRole('button', { name: 'Room 205' })).toBeInTheDocument();
   });
 
+  describe('shift handover', () => {
+    const mine = { id: '9', table_label: 'Table 1', status: 'open', opened_by_user_id: '7' };
+    const alsoMine = { id: '11', table_label: 'Table 3', status: 'open', opened_by_user_id: '42', owner_user_id: '7' };
+    const theirs = { id: '10', table_label: 'Table 2', status: 'open', opened_by_user_id: '42' };
+    const PEOPLE = [
+      { id: '7', first_name: 'Me', last_name: 'Myself', role: 'pos_operator' },
+      { id: '8', first_name: 'Nia', last_name: 'Night', role: 'pos_operator' },
+    ];
+
+    beforeEach(() => {
+      mocks.listOrders.mockResolvedValue([mine, theirs, alsoMine]);
+      mocks.listTransferCandidates.mockResolvedValue(PEOPLE);
+    });
+
+    it('hands one tab to the chosen colleague, never offering its own owner, and then treats it as theirs', async () => {
+      mocks.getOrder.mockResolvedValue({ order: mine, items: [orderItem()], settlements: [] });
+      mocks.transferTabs.mockResolvedValue([{ ...mine, owner_user_id: '8' }]);
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} currentUserId="7" />);
+      await selectStation();
+      await userEvent.click(await screen.findByRole('button', { name: 'Table 1' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Hand over Table 1' }));
+
+      const picker = await screen.findByLabelText('Hand to');
+      expect(within(picker).queryByRole('option', { name: 'Me Myself' })).not.toBeInTheDocument();
+      await userEvent.selectOptions(picker, 'Nia Night');
+      await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Hand over' }));
+
+      expect(mocks.listTransferCandidates).toHaveBeenCalledWith(OUTLET.id);
+      expect(mocks.transferTabs).toHaveBeenCalledWith({ orderIds: ['9'], toUserId: '8' });
+      expect(await screen.findByText(/Another operator's tab/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Rename/ })).not.toBeInTheDocument();
+    });
+
+    it("hands over every tab this operator owns (opened or received), not other people's", async () => {
+      mocks.transferTabs.mockResolvedValue([{ ...mine, owner_user_id: '8' }, { ...alsoMine, owner_user_id: '8' }]);
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} currentUserId="7" />);
+      await selectStation();
+      await userEvent.click(await screen.findByRole('button', { name: 'Hand over my tabs (2)' }));
+      await userEvent.selectOptions(await screen.findByLabelText('Hand to'), 'Nia Night');
+      await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Hand over' }));
+      expect(mocks.transferTabs).toHaveBeenCalledWith({ orderIds: ['9', '11'], toUserId: '8' });
+      await waitFor(() => expect(screen.queryByRole('button', { name: /^Hand over my tabs/ })).not.toBeInTheDocument());
+    });
+
+    it('shows the server refusal and changes nothing', async () => {
+      mocks.transferTabs.mockRejectedValue(new ApiError({ status: 400, code: 'VALIDATION_TRANSFER_RECIPIENT_NOT_AT_OUTLET', message: 'That person is not assigned to the outlet of tab #9.' }));
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} currentUserId="7" />);
+      await selectStation();
+      await userEvent.click(await screen.findByRole('button', { name: 'Hand over my tabs (2)' }));
+      await userEvent.selectOptions(await screen.findByLabelText('Hand to'), 'Nia Night');
+      await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Hand over' }));
+      expect(await screen.findByText('That person is not assigned to the outlet of tab #9.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Hand over my tabs (2)' })).toBeInTheDocument();
+    });
+  });
+
   describe("another operator's tab", () => {
     const othersTab = { id: '9', table_label: 'Table 1', status: 'open', opened_by_user_id: '42' };
 
@@ -740,7 +798,7 @@ describe('<RegisterTab>', () => {
 
     it('offers an operator no void or rename on it, and says why', async () => {
       await openExistingTab({ currentUserId: '7' });
-      expect(screen.getByText(/Opened by another operator/)).toBeInTheDocument();
+      expect(screen.getByText(/Another operator's tab/)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^Rename/ })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Remove Table 1' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^Void / })).not.toBeInTheDocument();

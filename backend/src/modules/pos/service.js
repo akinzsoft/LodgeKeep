@@ -61,6 +61,8 @@ const { sumMoney, negateMoney, compareMoney, percentOfMoney } = require('../../s
 // breaks.
 const { computeItemLineTotal, POS_SERVICE_CHARGE_PERCENT } = require('../../shared/pos-pricing');
 const { resolveOrderLine, normalizeModifierCatalogue, modifiersForInsert } = require('../../shared/pos-line-input');
+const { outletScopeForUser, scopeCovers, usersCoveringOutlets } = require('../../shared/outlet-assignments');
+const { hasPermission } = require('../../auth/rbac');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('../cashiering/tax-engine');
 const cashieringService = require('../cashiering/service');
 const reservationsService = require('../reservations/service');
@@ -91,6 +93,7 @@ const {
   ShiftNotFoundError,
   ShiftNotYoursError,
   TabNotYoursError,
+  TabNotTransferableError,
   SettlementAlreadyVoidedError,
   RegisterPaymentInvalidError,
   OrderHasCapturedPaymentError,
@@ -690,15 +693,110 @@ async function lockOrderAndItem({ trx, orderItemId }) {
 }
 
 /**
- * Void and rename belong to a tab's opener (user-requested). Anyone else
+ * Who owns a tab: the operator it was last handed to (`owner_user_id`, set
+ * by `transferTabs`), else the one who opened it. NULL for a guest QR
+ * order, which has no opener and is never transferred.
+ */
+function tabOwnerId(order) {
+  return order.owner_user_id ?? order.opened_by_user_id ?? null;
+}
+
+/**
+ * Void and rename belong to a tab's owner (user-requested). Anyone else
  * needs `pos.manage` (`canActForOthers`); a void still records its own
- * reason and voider. A tab with no opener — a guest QR order — is left to
- * any operator at its outlet. `opened_by_user_id` never changes after the
- * tab is opened, so any read of the row is enough to decide.
+ * reason and voider. A tab with no owner — a guest QR order — is left to
+ * any operator at its outlet. The owner can change (a transfer), so the
+ * deciding check always runs on the row read under the order lock;
+ * `voidOrder`'s earlier check is only an early refusal before Paystack.
  */
 function assertCanChangeTab(order, { userId, canActForOthers }) {
-  if (order.opened_by_user_id == null || canActForOthers) return;
-  if (String(order.opened_by_user_id) !== String(userId)) throw new TabNotYoursError(order.id);
+  const owner = tabOwnerId(order);
+  if (owner == null || canActForOthers) return;
+  if (String(owner) !== String(userId)) throw new TabNotYoursError(order.id);
+}
+
+const MAX_TABS_PER_TRANSFER = 50;
+
+function invalidTransfer(code, message, field) {
+  return new ValidationError(code, message, [{ field, issue: 'invalid' }]);
+}
+
+/**
+ * Staff who may receive a tab at `outletId`: active, holding a role at this
+ * property that grants `pos.operate`, and covering the outlet under staff
+ * outlet assignments. Sorted by name.
+ */
+async function listTransferCandidates({ context, outletId }) {
+  const db = scopedDb().for(context);
+  const outlet = await db.table('pos_outlets').where({ id: outletId }).first('id');
+  if (!outlet) throw new OutletNotFoundError();
+  const rows = await db
+    .table('user_property_access')
+    .joinScoped('users', (join) => join.on('users.id', '=', 'user_property_access.user_id'))
+    .where('users.status', 'active')
+    .select('users.id', 'users.first_name', 'users.last_name', 'user_property_access.role');
+  const operators = [];
+  for (const row of rows) {
+    if (await hasPermission(db, row.role, 'pos.operate')) operators.push(row);
+  }
+  const covering = new Set((await usersCoveringOutlets(db, operators.map((row) => row.id), [outlet.id])).map(String));
+  return operators
+    .filter((row) => covering.has(String(row.id)))
+    .map((row) => ({ id: row.id, first_name: row.first_name, last_name: row.last_name, role: row.role }))
+    .sort((a, b) => `${a.first_name} ${a.last_name}`.localeCompare(`${b.first_name} ${b.last_name}`));
+}
+
+/**
+ * Hands one or more open tabs to another operator (shift handover). All or
+ * nothing: every tab is locked (ascending id, the order every tab writer
+ * locks in) and checked before any is changed.
+ *
+ * - The caller must own each tab or hold `pos.manage`, and cover its outlet
+ *   (a tab outside their outlets is "not found", as elsewhere).
+ * - A guest QR tab has no owner and is refused — it is everyone's already.
+ * - The receiver must be active here, able to run the Register
+ *   (`pos.operate`), and cover every tab's outlet.
+ *
+ * Returns each tab before and after, for the audit trail.
+ */
+async function transferTabs({ context, orderIds, toUserId, userId, canActForOthers = false }) {
+  if (!Array.isArray(orderIds) || orderIds.length === 0) throw invalidTransfer('TRANSFER_NO_TABS', 'Choose at least one tab to hand over.', 'order_ids');
+  if (orderIds.length > MAX_TABS_PER_TRANSFER) throw invalidTransfer('TRANSFER_TOO_MANY_TABS', `Hand over at most ${MAX_TABS_PER_TRANSFER} tabs at once.`, 'order_ids');
+  const ids = [...new Set(orderIds.map(String))];
+  if (ids.length !== orderIds.length || ids.some((id) => !/^\d+$/.test(id))) throw invalidTransfer('TRANSFER_INVALID_TABS', 'Each tab must be listed once, by id.', 'order_ids');
+  if (toUserId === undefined || toUserId === null || !/^\d+$/.test(String(toUserId))) throw invalidTransfer('TRANSFER_RECIPIENT_REQUIRED', 'Choose who to hand the tabs to.', 'to_user_id');
+
+  const db = scopedDb().for(context);
+  return db.transaction(async (trx) => {
+    const orders = await trx.table('pos_orders').whereIn('id', ids).orderBy('id').forUpdate();
+    const callerScope = await outletScopeForUser(trx, userId);
+    if (orders.length !== ids.length || orders.some((order) => !scopeCovers(callerScope, [order.outlet_id]))) throw new OrderNotFoundError();
+
+    for (const order of orders) {
+      if (order.status !== 'open') throw new OrderNotOpenError(order.id, order.status);
+      if (tabOwnerId(order) == null) {
+        throw new TabNotTransferableError(order.id);
+      }
+      assertCanChangeTab(order, { userId, canActForOthers });
+    }
+
+    const recipient = await trx
+      .table('user_property_access')
+      .joinScoped('users', (join) => join.on('users.id', '=', 'user_property_access.user_id'))
+      .where('user_property_access.user_id', toUserId)
+      .where('users.status', 'active')
+      .first('user_property_access.role');
+    if (!recipient || !(await hasPermission(trx, recipient.role, 'pos.operate'))) {
+      throw invalidTransfer('TRANSFER_RECIPIENT_INVALID', 'That person cannot take tabs here: they need an active account with Register access at this property.', 'to_user_id');
+    }
+    const recipientScope = await outletScopeForUser(trx, toUserId);
+    const uncovered = orders.find((order) => !scopeCovers(recipientScope, [order.outlet_id]));
+    if (uncovered) throw invalidTransfer('TRANSFER_RECIPIENT_NOT_AT_OUTLET', `That person is not assigned to the outlet of tab #${uncovered.id}.`, 'to_user_id');
+
+    await trx.table('pos_orders').whereIn('id', ids).update({ owner_user_id: toUserId });
+    const after = await trx.table('pos_orders').whereIn('id', ids).orderBy('id');
+    return orders.map((before, index) => ({ before, after: after[index] }));
+  });
 }
 
 async function voidOrderItem({ context, orderItemId, reason, userId, canActForOthers = false }) {
@@ -1395,6 +1493,8 @@ async function closeShift({ trx, shiftId, countedCash, userId, canCloseForOthers
 }
 
 module.exports = {
+  listTransferCandidates,
+  transferTabs,
   listOutlets,
   getOutlet,
   createOutlet,

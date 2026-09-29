@@ -24,6 +24,16 @@ export function listOutlets() {
   return request('/pos/outlets');
 }
 
+/** Staff who can take a tab at this outlet (shift handover): `[{id, first_name, last_name, role}]`. */
+export function listTransferCandidates(outletId) {
+  return request(`/pos/orders/transfer-candidates?${new URLSearchParams({ outlet_id: outletId })}`);
+}
+
+/** Hands open tabs to another operator, all or nothing; returns the updated tabs. */
+export function transferTabs({ orderIds, toUserId }) {
+  return request('/pos/orders/transfer', { method: 'POST', body: { order_ids: orderIds, to_user_id: toUserId } });
+}
+
 /** `{restricted, outletIds}` — the outlets this user may use on the Register and Shifts (staff outlet assignments); `restricted: false` means every outlet. */
 export function getMyOutlets() {
   return request('/pos/my-outlets');

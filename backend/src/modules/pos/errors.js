@@ -83,6 +83,13 @@ class TabNotYoursError extends AppError {
   }
 }
 
+/** A guest QR tab has no operator to hand over from (see `transferTabs`). */
+class TabNotTransferableError extends AppError {
+  constructor(orderId) {
+    super('BUSINESS_RULE_POS_TAB_NOT_TRANSFERABLE', `Tab #${orderId} is a guest order with no operator; anyone at its outlet can already work on it.`, 422, { orderId });
+  }
+}
+
 class ShiftNotFoundError extends AppError {
   constructor() {
     super('VALIDATION_SHIFT_NOT_FOUND', 'The specified shift does not exist.', 404);
@@ -202,6 +209,7 @@ module.exports = {
   ShiftNotFoundError,
   ShiftNotYoursError,
   TabNotYoursError,
+  TabNotTransferableError,
   SettlementAlreadyVoidedError,
   RegisterPaymentInvalidError,
   OrderHasCapturedPaymentError,
