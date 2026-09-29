@@ -106,7 +106,15 @@ export function POSScreen({ activeProperty, isOffline = false, currentUserLabel,
           </div>
 
           <div className={styles.panel}>
-            {tab === 'register' && <RegisterTab activeProperty={activeProperty} isOffline={isOffline} currentUserLabel={currentUserLabel} />}
+            {tab === 'register' && (
+              <RegisterTab
+                activeProperty={activeProperty}
+                isOffline={isOffline}
+                currentUserLabel={currentUserLabel}
+                currentUserId={currentUserId}
+                canManageTabs={permissions ? permissions.has('pos.manage') : false}
+              />
+            )}
             {tab === 'tickets' && <TicketsTab />}
             {tab === 'guest_orders' && <GuestOrdersTab activeProperty={activeProperty} />}
             {tab === 'shifts' && (

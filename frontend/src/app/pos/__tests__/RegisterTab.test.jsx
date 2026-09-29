@@ -726,6 +726,43 @@ describe('<RegisterTab>', () => {
     expect(await screen.findByRole('button', { name: 'Room 205' })).toBeInTheDocument();
   });
 
+  describe("another operator's tab", () => {
+    const othersTab = { id: '9', table_label: 'Table 1', status: 'open', opened_by_user_id: '42' };
+
+    async function openExistingTab(props) {
+      mocks.listOrders.mockResolvedValue([othersTab]);
+      mocks.getOrder.mockResolvedValue({ order: othersTab, items: [orderItem()], settlements: [] });
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} {...props} />);
+      await selectStation();
+      await userEvent.click(await screen.findByRole('button', { name: 'Table 1' }));
+      await screen.findByText('Order Ticket');
+    }
+
+    it('offers an operator no void or rename on it, and says why', async () => {
+      await openExistingTab({ currentUserId: '7' });
+      expect(screen.getByText(/Opened by another operator/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Rename/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Remove Table 1' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Void / })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Remove one / })).not.toBeInTheDocument();
+      // Adding to it is still allowed.
+      expect(screen.getByRole('button', { name: /^Add another / })).toBeInTheDocument();
+    });
+
+    it('offers a manager every control on it', async () => {
+      await openExistingTab({ currentUserId: '7', canManageTabs: true });
+      expect(screen.getByRole('button', { name: /^Rename/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Remove Table 1' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Void / })).toBeInTheDocument();
+    });
+
+    it("offers the opener every control on their own tab", async () => {
+      await openExistingTab({ currentUserId: '42' });
+      expect(screen.getByRole('button', { name: /^Rename/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Remove Table 1' })).toBeInTheDocument();
+    });
+  });
+
   it('reference-design fix: a second new tab is auto-labelled "Table 2", not left blank', async () => {
     mocks.listOrders.mockResolvedValue([{ id: '9', table_label: 'Table 1', status: 'open' }]);
     mocks.openOrder.mockResolvedValue({ id: '10', table_label: 'Table 2', status: 'open' });
