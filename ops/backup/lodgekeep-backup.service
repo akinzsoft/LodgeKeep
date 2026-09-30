@@ -1,0 +1,24 @@
+# Installed to /etc/systemd/system/ by ops/backup/install.sh (@DEPLOY_PATH@ is
+# replaced with the real checkout path).
+[Unit]
+Description=LodgeKeep encrypted off-site backup (restic -> Backblaze B2)
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+# Retry a failed run (B2 or Docker hiccup at 03:30) at most 3 times in 6 hours.
+StartLimitIntervalSec=6h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+ExecStart=@DEPLOY_PATH@/ops/backup/lodgekeep-backup.sh
+Restart=on-failure
+RestartSec=30min
+# A system unit has no $HOME/XDG cache; give restic a real cache so nightly
+# prune/check do not re-download all repository metadata from B2.
+Environment=HOME=/root
+CacheDirectory=lodgekeep-backup
+Environment=RESTIC_CACHE_DIR=/var/cache/lodgekeep-backup
+# Stay out of the way of the hotel's live traffic.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3h
