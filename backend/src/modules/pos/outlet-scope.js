@@ -109,6 +109,7 @@ const shiftInScope = requireExistingInScope(async (db, req) => {
 
 const newOrderOutletInScope = requireNamedOutletInScope('outlet_id', async (db, req) => req.body?.outlet_id);
 const availabilityOutletInScope = requireNamedOutletInScope('outlet_id', async (db, req) => req.body?.outlet_id);
+const queryOutletInScope = requireNamedOutletInScope('outlet_id', async (db, req) => req.query?.outlet_id);
 const newShiftTerminalInScope = requireNamedOutletInScope('terminal_id', async (db, req) =>
   req.body?.terminal_id ? outletOfTerminal(db, req.body.terminal_id) : undefined
 );
@@ -130,5 +131,6 @@ module.exports = {
   shiftInScope,
   newOrderOutletInScope,
   availabilityOutletInScope,
+  queryOutletInScope,
   newShiftTerminalInScope,
 };

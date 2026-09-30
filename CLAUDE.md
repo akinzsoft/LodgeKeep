@@ -2,6 +2,37 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## New capability: hand tabs over at shift change (branch `gap-tab-transfer`)
+
+**User-requested**: "add a transfer tab action for shift handover". This closes the gap `gap-tab-owner-actions` left: without it, an open tab could only change hands through a manager.
+
+**What's real now**:
+- **Ownership column.** `pos_orders.owner_user_id` (`20261114090000`, nullable, composite `(tenant_id, owner_user_id)` key onto `users`, RESTRICT). A tab's owner is `owner_user_id ?? opened_by_user_id` (`tabOwnerId`); who opened a tab is never rewritten. Existing rows stay NULL, so today's behaviour is unchanged. `assertCanChangeTab` now checks the owner. Because the owner can change, the deciding check is always the one made under the order lock; `voidOrder`'s earlier check is only an early refusal before Paystack.
+- **`POST /pos/orders/transfer {order_ids, to_user_id, reason?}`** (`pos.operate`) → `transferTabs`. Up to 50 tabs, all or nothing. Every tab is locked in ascending id order, then checked:
+  - open;
+  - has an owner — a guest QR tab is `422 BUSINESS_RULE_POS_TAB_NOT_TRANSFERABLE`;
+  - the caller owns it or holds `pos.manage` (`403 FORBIDDEN_TAB_NOT_YOURS`);
+  - inside the caller's outlets; outside them it is answered exactly like a missing tab (`400 VALIDATION_ORDER_NOT_FOUND`, the POS convention).
+
+  The receiver must be active at the property, hold a role granting `pos.operate`, and cover every tab's outlet (`VALIDATION_TRANSFER_RECIPIENT_INVALID` / `_NOT_AT_OUTLET`). One `transfer` audit row per tab, with before/after owner and the reason.
+- **`GET /pos/orders/transfer-candidates?outlet_id=`** lists who can take a tab there, name-sorted. It is outlet-guarded, so an assigned operator cannot list staff for another outlet.
+- **Register.** "Hand over" beside Rename on a tab you can change, and a "Hand over my tabs (n)" chip for every tab you own there, whether opened or received. A dialog picks the receiver; the tabs' current owners are not offered. Afterwards the tab reads as another operator's.
+
+**Tests**:
+- `tests/pos/tab-transfer.test.js` (14 tests): a handover keeps the opener, audits, and moves void/rename with the tab; someone else's tab is refused all-or-nothing unless a manager asks; five bad receivers (no Register access, inactive, nobody, another outlet, another tenant); guest and closed tabs refused; malformed requests; another outlet's tab answered exactly like a missing one; the candidate list and its outlet guard.
+- `tests/pos/tab-transfer-concurrency.test.js` (3 rounds, real pooled connections): two managers hand the same two tabs, named in opposite orders, to different people. Both succeed and both tabs end with one owner.
+
+Mutation-checked: locking tabs in the order the request names them deadlocks all 3 rounds (`ER_LOCK_DEADLOCK`); dropping the owner check, the receiver's permission check, the receiver's outlet check or the guest-tab refusal each fails its test. Frontend RegisterTab +3 (one tab, "my tabs", a server refusal). Backend 3713/3713 across 154 suites (incl. the purge-plan pin and the isolation suite), lint clean; frontend 1360/1360, lint (3 pre-existing warnings), stylelint, build and audit clean.
+
+**Production-shaped check**: the newest production backup was restored into a throwaway database and migrated (7 migrations): all 10 real tabs got a NULL owner; a re-run was a no-op; down/up round-tripped. As `alpha-motel`:
+- Handing the real open BAR tab #9 to the housekeeping user was refused (no Register access).
+- Once that user was re-roled to pos_operator, it appeared in the candidate list, took the tab and could rename it, then handed it back and could no longer rename it.
+- The opener stayed user 1 throughout, and two audit rows were written.
+
+The database was dropped afterwards.
+
+**Gaps**: no bell notification tells the receiver a tab was handed to them; there is no acceptance step (a transfer is immediate); a manager's rename still records no reason.
+
 ## Follow-up: void and rename belong to the tab opener (branch `gap-tab-owner-actions`)
 
 **User-requested**: "restrict void and rename to the tab opener too". This closes the review's remaining open policy item, after `gap-outlet-scope-register`. It is the same shape as shift closing (PR #159).

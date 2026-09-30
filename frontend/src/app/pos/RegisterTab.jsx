@@ -160,8 +160,9 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   // act on anyone's, and a tab with no opener (a guest QR order) is anyone's
   // at the outlet — the server's rule (`assertCanChangeTab`). An unknown
   // current user leaves every control in place for the server to decide.
-  const canChangeTab = (order) =>
-    currentUserId == null || canManageTabs || order?.opened_by_user_id == null || String(order.opened_by_user_id) === String(currentUserId);
+  // A tab's owner is whoever it was last handed to, else its opener.
+  const tabOwner = (order) => order?.owner_user_id ?? order?.opened_by_user_id ?? null;
+  const canChangeTab = (order) => currentUserId == null || canManageTabs || tabOwner(order) == null || String(tabOwner(order)) === String(currentUserId);
 
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState([]);
@@ -209,6 +210,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const [openingTab, setOpeningTab] = useState(false);
   // `{ mode: 'new', value }` or `{ mode: 'rename', orderId, value }` while the tab-name dialog is open.
   const [tabNameDialog, setTabNameDialog] = useState(null);
+  // Shift handover: {orders, candidates (null while loading), toUserId, submitting}.
+  const [handover, setHandover] = useState(null);
   // Bug fix (code-review pass on the settlement-preview fix): a preview
   // fetch has no natural cancellation — a cashier can switch tabs (or an
   // item change can fire a new fetch) while a slow fetch is still in
@@ -357,6 +360,43 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       setActiveOrder((current) => (current && String(current.order.id) === String(orderId) ? { ...current, order: { ...current.order, table_label: renamed.table_label } } : current));
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not rename this tab.');
+    }
+  }
+
+  /**
+   * Shift handover (user-requested): hand one tab, or every tab you own at
+   * this outlet, to another operator. The server checks who may give and
+   * who may take (`transferTabs`); this only offers staff who can take a
+   * tab here, never the tabs' current owners.
+   */
+  async function startHandover(orders) {
+    setError(null);
+    setHandover({ orders, candidates: null, toUserId: '', submitting: false });
+    try {
+      const candidates = await posApi.listTransferCandidates(outletId);
+      const owners = new Set(orders.map((order) => String(tabOwner(order))));
+      setHandover((current) => current && { ...current, candidates: candidates.filter((person) => !owners.has(String(person.id))) });
+    } catch (caught) {
+      setHandover(null);
+      setError(caught instanceof ApiError ? caught.message : 'Could not load who can take these tabs.');
+    }
+  }
+
+  async function submitHandover(event) {
+    event.preventDefault();
+    if (!handover?.toUserId || handover.submitting) return;
+    setHandover({ ...handover, submitting: true });
+    try {
+      const moved = await posApi.transferTabs({ orderIds: handover.orders.map((order) => order.id), toUserId: handover.toUserId });
+      const byId = new Map(moved.map((order) => [String(order.id), order]));
+      setOpenOrders((prev) => prev.map((order) => (byId.has(String(order.id)) ? { ...order, owner_user_id: byId.get(String(order.id)).owner_user_id } : order)));
+      setActiveOrder((current) =>
+        current && byId.has(String(current.order.id)) ? { ...current, order: { ...current.order, owner_user_id: byId.get(String(current.order.id)).owner_user_id } } : current
+      );
+      setHandover(null);
+    } catch (caught) {
+      setHandover(null);
+      setError(caught instanceof ApiError ? caught.message : 'Could not hand over these tabs.');
     }
   }
 
@@ -926,6 +966,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const capturedPayments = orderLoaded ? (activeOrder.registerPayments ?? []).filter((payment) => payment.status === 'CAPTURED') : [];
   const selectedTerminal = terminals.find((t) => t.id === terminalId);
   const selectedOutlet = (outlets ?? []).find((o) => o.id === outletId);
+  // The tabs this operator owns here, for "Hand over my tabs" at shift change.
+  const myTabs = currentUserId == null ? [] : openOrders.filter((order) => String(tabOwner(order)) === String(currentUserId));
 
   return (
     <>
@@ -1006,6 +1048,11 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                 <button type="button" className={styles.tabChip} onClick={handleNewTab} disabled={isOffline || openingTab || settling}>
                   + New tab
                 </button>
+                {myTabs.length > 0 && (
+                  <button type="button" className={styles.tabChip} onClick={() => startHandover(myTabs)} disabled={isOffline || settling}>
+                    Hand over my tabs ({myTabs.length})
+                  </button>
+                )}
               </div>
             )}
             {outletId && (
@@ -1121,17 +1168,33 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                   {activeOrder.order.table_label || `Tab #${activeOrder.order.id}`}
                   {' · '}
                   {canChangeTab(activeOrder.order) ? (
-                    <button
-                      type="button"
-                      className={styles.renameLink}
-                      onClick={() => setTabNameDialog({ mode: 'rename', orderId: activeOrder.order.id, value: activeOrder.order.table_label ?? '' })}
-                      disabled={isOffline || settling}
-                      aria-label={`Rename ${activeOrder.order.table_label || `Tab #${activeOrder.order.id}`}`}
-                    >
-                      Rename
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className={styles.renameLink}
+                        onClick={() => setTabNameDialog({ mode: 'rename', orderId: activeOrder.order.id, value: activeOrder.order.table_label ?? '' })}
+                        disabled={isOffline || settling}
+                        aria-label={`Rename ${activeOrder.order.table_label || `Tab #${activeOrder.order.id}`}`}
+                      >
+                        Rename
+                      </button>
+                      {tabOwner(activeOrder.order) != null && (
+                        <>
+                          {' · '}
+                          <button
+                            type="button"
+                            className={styles.renameLink}
+                            onClick={() => startHandover([activeOrder.order])}
+                            disabled={isOffline || settling}
+                            aria-label={`Hand over ${activeOrder.order.table_label || `Tab #${activeOrder.order.id}`}`}
+                          >
+                            Hand over
+                          </button>
+                        </>
+                      )}
+                    </>
                   ) : (
-                    'Opened by another operator — a manager can void or rename it'
+                    "Another operator's tab — a manager can void, rename or hand it over"
                   )}
                 </p>
 
@@ -1317,6 +1380,56 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                     {settling ? (paymentStage ?? 'Settling…') : 'Confirm settlement'}
                   </button>
                   <button type="button" className={styles.cancelButton} onClick={() => setSplitModalOpen(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {handover && (
+            <div className={styles.settlementOverlay} role="presentation" onClick={() => !handover.submitting && setHandover(null)}>
+              <form
+                className={styles.settlementPanel}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="handover-title"
+                onSubmit={submitHandover}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <h2 id="handover-title" className={styles.settlementTitle}>
+                  {handover.orders.length === 1 ? `Hand over ${handover.orders[0].table_label || `Tab #${handover.orders[0].id}`}` : `Hand over ${handover.orders.length} tabs`}
+                </h2>
+                {handover.candidates === null ? (
+                  <p>Loading who can take them…</p>
+                ) : handover.candidates.length === 0 ? (
+                  <p>Nobody else can take tabs at this outlet.</p>
+                ) : (
+                  <label className={formStyles.form}>
+                    <span className={styles.fieldLabel}>Hand to</span>
+                    <select
+                      className={styles.darkInput}
+                      value={handover.toUserId}
+                      onChange={(event) => setHandover({ ...handover, toUserId: event.target.value })}
+                      required
+                      autoFocus
+                    >
+                      <option value="" disabled>
+                        Choose a person
+                      </option>
+                      {handover.candidates.map((person) => (
+                        <option key={person.id} value={person.id}>
+                          {[person.first_name, person.last_name].filter(Boolean).join(' ') || `Staff #${person.id}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <div className={styles.modalActionsRow}>
+                  <button type="submit" className={styles.confirmButton} disabled={!handover.toUserId || handover.submitting}>
+                    {handover.submitting ? 'Handing over…' : 'Hand over'}
+                  </button>
+                  <button type="button" className={styles.cancelButton} onClick={() => setHandover(null)} disabled={handover.submitting}>
                     Cancel
                   </button>
                 </div>

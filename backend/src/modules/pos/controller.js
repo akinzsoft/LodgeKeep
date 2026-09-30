@@ -409,6 +409,37 @@ async function getMyOutlets(req, res, next) {
   }
 }
 
+/** Who may receive a tab at `?outlet_id=` (shift handover). */
+async function listTransferCandidates(req, res, next) {
+  try {
+    const outletId = req.query?.outlet_id;
+    if (!outletId) throw new ValidationError('MISSING_FIELD', '"outlet_id" is required.', [{ field: 'outlet_id', issue: 'missing' }]);
+    res.status(200).json(ok(await service.listTransferCandidates({ context: req.context, outletId })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** Hands open tabs to another operator — one audit row per tab, before and after. */
+async function transferTabs(req, res, next) {
+  try {
+    const canActForOthers = await holdsPermission(req.context, 'pos.manage');
+    const moved = await service.transferTabs({
+      context: req.context,
+      orderIds: req.body?.order_ids,
+      toUserId: req.body?.to_user_id,
+      userId: req.context.userId,
+      canActForOthers,
+    });
+    for (const { before, after } of moved) {
+      await req.audit({ entityType: 'pos_orders', entityId: after.id, action: 'transfer', beforeState: before, afterState: after, reason: req.body?.reason });
+    }
+    res.status(200).json(ok(moved.map(({ after }) => after)));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function listOrders(req, res, next) {
   try {
     const outletIds = await outletScope.scopeForRequest(req);
@@ -798,6 +829,8 @@ async function closeShift(req, res, next) {
 }
 
 module.exports = {
+  listTransferCandidates,
+  transferTabs,
   getMyOutlets,
   listOutlets,
   createOutlet,
