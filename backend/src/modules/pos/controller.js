@@ -430,6 +430,7 @@ async function transferTabs(req, res, next) {
       toUserId: req.body?.to_user_id,
       userId: req.context.userId,
       canActForOthers,
+      reason: typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 255) : null,
     });
     for (const { before, after } of moved) {
       await req.audit({ entityType: 'pos_orders', entityId: after.id, action: 'transfer', beforeState: before, afterState: after, reason: req.body?.reason });

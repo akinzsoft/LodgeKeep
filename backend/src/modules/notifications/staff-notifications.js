@@ -92,6 +92,14 @@ const NOTIFICATION_EVENTS = Object.freeze([
     defaultRoles: ['pos_operator', 'manager', 'admin', 'super_admin'],
   },
   {
+    eventType: 'pos.tabs_handed_over',
+    group: 'POS & QR orders',
+    label: 'Tabs handed to you',
+    description: 'Someone handed you their open tabs at shift change. Always goes to the person receiving them; tick a role to also tell everyone in it.',
+    // Addressed to the receiver by `transferTabs` (alsoUserIds), not by role.
+    defaultRoles: [],
+  },
+  {
     eventType: 'stock.reorder_level_reached',
     group: 'Inventory',
     label: 'Stock at reorder level',

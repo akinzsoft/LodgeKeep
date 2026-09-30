@@ -114,6 +114,18 @@ describe('helpers', () => {
     expect(notificationIntent({ type: 'guest.checked_in', payload: {} })).toBeNull();
   });
 
+  it('describes a handover: one tab by name, several by count, with who, where and why', () => {
+    const one = describeNotification({
+      type: 'pos.tabs_handed_over',
+      payload: JSON.stringify({ count: 1, tabs: [{ id: '9', label: 'Table 4' }], outletNames: ['Main Bar'], fromName: 'Ada Bello', reason: 'End of shift' }),
+    });
+    expect(one).toEqual({ title: 'Table 4 handed to you', detail: 'From Ada Bello · Main Bar · End of shift' });
+    const several = describeNotification({ type: 'pos.tabs_handed_over', payload: { count: 3, tabs: [], outletNames: ['Main Bar', 'Pool Bar'], fromName: null } });
+    expect(several).toEqual({ title: '3 tabs handed to you', detail: 'Main Bar, Pool Bar' });
+    expect(notificationIntent({ type: 'pos.tabs_handed_over', payload: {} })).toEqual({ posTab: 'register' });
+    expect(notificationTarget('pos.tabs_handed_over')).toBe('pos');
+  });
+
   it('notificationTarget maps each family to its screen', () => {
     expect(notificationTarget('qr_ordering.guest_order_placed')).toBe('pos');
     expect(notificationTarget('stock.out_of_stock')).toBe('pos');

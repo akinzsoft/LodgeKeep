@@ -2,6 +2,30 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Follow-up: the receiver of handed-over tabs gets a bell alert (branch `gap-tab-transfer-alert`)
+
+**User-requested**: "notify the receiver with a bell alert on handover". This closes the first gap `gap-tab-transfer` flagged.
+
+**What's real now**: a new staff notification type, `pos.tabs_handed_over` ("Tabs handed to you", group POS & QR orders), with **no default roles**. `transferTabs` addresses it to the receiver through `notifyStaff`'s `alsoUserIds`, inside the transfer's own transaction, so a refused or rolled-back transfer writes nothing. It is one bell entry per handover, not one per tab. The payload carries the count, each tab's id and label, the outlet names, the giver's name and the optional reason.
+
+It appears in Setup → Notifications like any other type, so an admin can tick roles to also tell, say, every manager. It is a plain bell entry, with no pop-up card or beep. The bell reads "Table 4 handed to you" or "3 tabs handed to you", with "From <giver> · <outlets> · <reason>". Clicking it opens POS on the Register (`notificationIntent` → `{posTab: 'register'}`).
+
+**Dependency fixes on the same branch**: new advisories published overnight would have failed both CI audit steps.
+- Frontend: `brace-expansion` 1.1.21 (high; via eslint-plugin-react) and `fast-uri` 3.1.8 (via stylelint). Both are dev-only.
+- Backend: `nodemailer` 10.0.12 (high). It is a runtime dependency, and one of its advisories is a process-wide DNS cache reusing a TLS `servername` across transports, which matters because this app builds one SMTP transport per property from each hotel's own Setup → Email settings.
+- Backend also: `multer` 2.4.0 (moderate, upload DoS), `ip-address` 10.7.2 (moderate, via express-rate-limit), and `brace-expansion` 2.1.7/5.0.12 (dev).
+
+All are within their current majors, so only the lockfiles changed. The real `nodemailer` 10.0.12 was smoke-tested offline (stream transport, the app's own from/html/text/attachment shape). The email tests mock it; the upload tests exercise `multer` for real.
+
+**Tests**: `tests/pos/tab-transfer.test.js` +3:
+- exactly one bell entry for the receiver, with the full payload, no pop-up, and none for the giver or a manager;
+- a refused handover writes none;
+- a role ticked in Setup is told too.
+
+Mutation-checked: sending a different event fails 2, and alerting the giver instead fails 1. Frontend `notificationText` +1 (one tab named, several counted, the detail line, intent and target). Backend 3716/3716 across 154 suites on the updated packages, lint clean; frontend 1361/1361, lint (3 pre-existing warnings), stylelint, build and audit clean.
+
+**Production-shaped check**: on a migrated copy of the newest production backup, the handover script from `gap-tab-transfer` was re-run. Its two real handovers wrote exactly one bell entry each, to the receiver, with the giver's real name and the reason. The refused handover to the housekeeping user wrote none. The receiver's `GET /notifications/bell` returned the alert. Dropped afterwards.
+
 ## New capability: hand tabs over at shift change (branch `gap-tab-transfer`)
 
 **User-requested**: "add a transfer tab action for shift handover". This closes the gap `gap-tab-owner-actions` left: without it, an open tab could only change hands through a manager.
