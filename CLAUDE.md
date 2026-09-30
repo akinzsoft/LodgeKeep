@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## New capability: automated encrypted off-site nightly backups (branch `gap-offsite-backups`)
+
+**User-requested** after the shared-catalogue incident: production had never had automated backups (only hand-made `backup-predeploy-*.sql` files). **Confirmed with the user**: restic to a Backblaze B2 bucket; also back up `property-logos` and `.env.production` (holds `ENCRYPTION_KEY`) beyond the three dirs first named; healthchecks.io alerting; systemd timer at 03:30; no Caddy volume.
+
+**What's real now**: `ops/backup/` (host-side, root, no app code touched). `lodgekeep-backup.sh` streams `mysqldump` (run as root inside the mysql container, `--single-transaction --routines --triggers --events --no-tablespaces`) straight into `restic backup --stdin-from-command`, so the dump never exists on disk and a failed dump makes no snapshot; then snapshots the four storage volumes plus `.env.production`; then `forget --prune` (7 daily/4 weekly/6 monthly, grouped by host+tags); Sunday `restic check --read-data-subset=5%`; pings healthchecks.io start/ok/fail. `install.sh` installs a **pinned restic 0.19.1 with SHA-256 verification** (Ubuntu 24.04's apt restic is 0.16.4, which lacks `--stdin-from-command`; `lib.sh` refuses < 0.17), writes the root-only `/etc/lodgekeep/backup.env` (mode 600 enforced on every run) and enables the timer. `restore-drill.sh` takes a fresh backup, restores it from B2 with the restic cache disabled into a throwaway database, compares `CHECKSUM TABLE` for every table and diffs every volume and `.env.production`; `QUIESCE=1` stops the backend for an exact comparison. `RESTORE.md` holds the procedures and the list of secrets to keep outside the server.
+
+**Independent review fixed before shipping**: exit code 3 (unreadable live file) is a warning, not a skipped prune; a new dump must carry mysqldump's `Dump completed` trailer and be >= `MIN_DUMP_BYTES` (default 20 KB) before retention may prune; the unit uses `Wants=` (not `Requires=`) on docker, sets a restic cache dir and retries failed runs; a locked run exits 75 so the drill cannot pass on a stale snapshot; the healthcheck URL goes to curl on stdin, not argv; RESTORE.md procedure B now snapshots the current DB first, drops/recreates the database (stale tables would break `migrate`) and uses `pipefail`.
+
+**Tested** against a local harness (real scripts, real mysql:8 container, seeded emoji/JSON/blob/view data, local restic repo, a `docker volume inspect` shim because the dev machine has no root): backup OK; unreadable file -> warning and still prunes; floor trip -> exit 1, no prune; lock held -> 75; mysql stopped → exit 1 and no new snapshot; drill PASS live and with `QUIESCE=1`; drill FAILS (exit 1) when a restored row or restored file is tampered with; RESTORE.md procedures A and B executed (damaged database restored over itself). shellcheck clean; systemd units verified. **Not yet proven against real B2 and the real VPS**; that run is the user's (see the drill result reported for this branch).
+
 ## Follow-up: the receiver of handed-over tabs gets a bell alert (branch `gap-tab-transfer-alert`)
 
 **User-requested**: "notify the receiver with a bell alert on handover". This closes the first gap `gap-tab-transfer` flagged.

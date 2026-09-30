@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly LodgeKeep off-site backup at 03:30 (VPS local time)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+# If the VPS was off at 03:30, run once as soon as it is back up.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
