@@ -67,6 +67,13 @@ export function describeNotification(notification) {
       return { title: `POS order settled — ${table}`, detail: money(p.total, p.currency) ?? '' };
     case 'pos.settlement_voided':
       return { title: `POS settlement voided — ${table}`, detail: join(money(p.total, p.currency), p.reason) };
+    case 'pos.tabs_handed_over': {
+      const tabs = Array.isArray(p.tabs) ? p.tabs : [];
+      const count = p.count ?? tabs.length;
+      const title = count === 1 && tabs[0] ? `${tabs[0].label} handed to you` : `${count} tabs handed to you`;
+      const outlets = Array.isArray(p.outletNames) ? p.outletNames.join(', ') : null;
+      return { title, detail: join(p.fromName ? `From ${p.fromName}` : null, outlets, p.reason) };
+    }
     case 'stock.reorder_level_reached':
       return {
         title: `Low stock: ${p.name ?? 'stock item'}`,
@@ -160,6 +167,8 @@ export function notificationTarget(type) {
  * ignores it).
  */
 export function notificationIntent(notification) {
+  // Handed-over tabs are worked on at the Register.
+  if (notification.type === 'pos.tabs_handed_over') return { posTab: 'register' };
   if (!notification.type.startsWith('stock.transfer_request')) return null;
   const requestId = parsePayload(notification).requestId;
   return { posTab: 'stock', stockTab: 'requests', requestId: requestId == null ? null : String(requestId) };

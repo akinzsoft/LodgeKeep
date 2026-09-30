@@ -45,9 +45,10 @@ describe('handing tabs over', () => {
 
   async function outlet(code) {
     const [outletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code, name: code, type: 'bar' });
+    // `code` doubles as the outlet's name in these tests.
     const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, device_ref: `${code}-T` });
     await insertMenuCategories(t.trx, [{ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Handover Drinks' }]);
-    return { outletId, terminalId };
+    return { outletId, terminalId, code };
   }
 
   beforeAll(async () => {
@@ -161,6 +162,48 @@ describe('handing tabs over', () => {
     const mine = await tabOf(opener);
     expect((await transfer(opener, { order_ids: [mine, '999999999'], to_user_id: colleague })).body.error.code).toBe('VALIDATION_ORDER_NOT_FOUND');
     expect((await row(mine)).owner_user_id).toBeNull();
+  });
+
+  describe("the receiver's bell", () => {
+    const bell = (userId) => t.trx('in_app_notifications').where({ user_id: userId, type: 'pos.tabs_handed_over' }).orderBy('id');
+    const parse = (value) => (typeof value === 'string' ? JSON.parse(value) : value);
+
+    it('tells only the receiver, once per handover, naming the tabs, outlet, giver and reason', async () => {
+      const before = { receiver: (await bell(colleague)).length, giver: (await bell(opener)).length, manager: (await bell(manager)).length };
+      const one = await tabOf(opener);
+      const two = await tabOf(opener);
+      expect((await transfer(opener, { order_ids: [one, two], to_user_id: colleague, reason: 'End of shift' })).status).toBe(200);
+
+      const rows = await bell(colleague);
+      expect(rows).toHaveLength(before.receiver + 1);
+      const payload = parse(rows[rows.length - 1].payload);
+      expect(payload.count).toBe(2);
+      expect(payload.tabs.map((tab) => String(tab.id))).toEqual([String(one), String(two)]);
+      expect(payload.outletNames).toEqual([A.code]);
+      expect(payload.fromName).toBe('Ada Bello');
+      expect(payload.reason).toBe('End of shift');
+      expect(Boolean(rows[rows.length - 1].popup)).toBe(false);
+      expect(await bell(opener)).toHaveLength(before.giver);
+      expect(await bell(manager)).toHaveLength(before.manager);
+    });
+
+    it('writes nothing when the handover is refused', async () => {
+      const before = (await bell(housekeeper)).length;
+      const tab = await tabOf(opener);
+      expect((await transfer(opener, { order_ids: [tab], to_user_id: housekeeper })).status).toBe(400);
+      expect(await bell(housekeeper)).toHaveLength(before);
+    });
+
+    it('also tells a role ticked in Setup → Notifications', async () => {
+      await t.trx('notification_role_rules').insert({ tenant_id: ctx.a.id, property_id: propertyId, event_type: 'pos.tabs_handed_over', role: 'manager', enabled: true });
+      try {
+        const before = (await bell(manager)).length;
+        expect((await transfer(opener, { order_ids: [await tabOf(opener)], to_user_id: colleague })).status).toBe(200);
+        expect(await bell(manager)).toHaveLength(before + 1);
+      } finally {
+        await t.trx('notification_role_rules').where({ tenant_id: ctx.a.id, event_type: 'pos.tabs_handed_over' }).delete();
+      }
+    });
   });
 
   it('lists who can take a tab at an outlet', async () => {

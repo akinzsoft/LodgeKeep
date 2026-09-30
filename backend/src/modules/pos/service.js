@@ -759,7 +759,7 @@ async function listTransferCandidates({ context, outletId }) {
  *
  * Returns each tab before and after, for the audit trail.
  */
-async function transferTabs({ context, orderIds, toUserId, userId, canActForOthers = false }) {
+async function transferTabs({ context, orderIds, toUserId, userId, canActForOthers = false, reason = null }) {
   if (!Array.isArray(orderIds) || orderIds.length === 0) throw invalidTransfer('TRANSFER_NO_TABS', 'Choose at least one tab to hand over.', 'order_ids');
   if (orderIds.length > MAX_TABS_PER_TRANSFER) throw invalidTransfer('TRANSFER_TOO_MANY_TABS', `Hand over at most ${MAX_TABS_PER_TRANSFER} tabs at once.`, 'order_ids');
   const ids = [...new Set(orderIds.map(String))];
@@ -795,6 +795,23 @@ async function transferTabs({ context, orderIds, toUserId, userId, canActForOthe
 
     await trx.table('pos_orders').whereIn('id', ids).update({ owner_user_id: toUserId });
     const after = await trx.table('pos_orders').whereIn('id', ids).orderBy('id');
+
+    // The receiver's bell (user-requested), in the same transaction, so an
+    // alert never outlives a transfer that rolled back.
+    const giver = await trx.table('users').where({ id: userId }).first('first_name', 'last_name');
+    const outletRows = await trx.table('pos_outlets').whereIn('id', [...new Set(orders.map((order) => order.outlet_id))]).select('id', 'name');
+    await notifyStaff({
+      trx,
+      eventType: 'pos.tabs_handed_over',
+      alsoUserIds: [toUserId],
+      payload: {
+        count: after.length,
+        tabs: after.map((order) => ({ id: order.id, label: order.table_label || `Tab #${order.id}` })),
+        outletNames: outletRows.map((outlet) => outlet.name),
+        fromName: [giver?.first_name, giver?.last_name].filter(Boolean).join(' ') || null,
+        reason: reason || null,
+      },
+    });
     return orders.map((before, index) => ({ before, after: after[index] }));
   });
 }
