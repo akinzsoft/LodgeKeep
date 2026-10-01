@@ -4,6 +4,7 @@ import { Money } from '../../shared/format/money.jsx';
 import { formatQuantity } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
 import { StockItemOptions } from './stockItemOptions.jsx';
+import { receivingOutlets } from './outletTypes.js';
 import formStyles from './POSForm.module.css';
 
 function emptyLine() {
@@ -129,12 +130,16 @@ export function StockGoodsReceivedTab({ activeProperty, isOffline = false }) {
         <span className={formStyles.label}>Outlet</span>
         <select className={formStyles.select} value={selectedOutletId} onChange={(event) => handleSelectOutlet(event.target.value)} disabled={isOffline}>
           <option value="">Select an outlet</option>
-          {(outlets ?? []).map((outlet) => (
+          {receivingOutlets(outlets).map((outlet) => (
             <option key={outlet.id} value={outlet.id}>
               {outlet.name}
             </option>
           ))}
         </select>
+        {/* With a store room, only it is offered: stock reaches an outlet by a stock request. */}
+        {(outlets ?? []).length > receivingOutlets(outlets).length && (
+          <span className={formStyles.hint}>Deliveries are received at the store room. To move stock to a bar or restaurant, use a stock request.</span>
+        )}
       </label>
 
       <Card title="New delivery">

@@ -468,6 +468,28 @@ describe('<StockItemsTab>', () => {
   });
 
   describe('the "Receive" quick action — records a real goods-received movement, never a direct edit of current_quantity', () => {
+    it('offers no Receive at a bar once the property has a store room, and says where deliveries go', async () => {
+      mocks.listOutlets.mockResolvedValue([outlet(), outlet({ id: '2', name: 'Main Store', type: 'store' })]);
+      mocks.listStockItems.mockResolvedValue([item()]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      const row = (await screen.findByText('Vodka')).closest('tr');
+
+      expect(within(row).queryByRole('button', { name: 'Receive' })).not.toBeInTheDocument();
+      expect(screen.getByText(/Deliveries are received at the store room \(Main Store\)/)).toBeInTheDocument();
+      // The other row actions are untouched.
+      expect(within(row).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    });
+
+    it('still offers Receive at the store room itself', async () => {
+      mocks.listOutlets.mockResolvedValue([outlet({ id: '2', name: 'Main Store', type: 'store' }), outlet()]);
+      mocks.listStockItems.mockResolvedValue([item({ outlet_id: '2' })]);
+      render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
+      const row = (await screen.findByText('Vodka')).closest('tr');
+
+      expect(within(row).getByRole('button', { name: 'Receive' })).toBeInTheDocument();
+      expect(screen.queryByText(/Deliveries are received at the store room/)).not.toBeInTheDocument();
+    });
+
     it('submits the exact same recordGoodsReceived shape the bulk Goods received tab uses, with a single-line array', async () => {
       mocks.listStockItems.mockResolvedValue([item()]);
       mocks.recordGoodsReceived.mockResolvedValue({ outletId: '1', count: 1, items: [item({ current_quantity: '110.000' })] });

@@ -101,6 +101,7 @@ const { createCategoryCatalogue } = require('../../shared/category-catalogue');
 const { notifyStaff, roleReceivesEvent } = require('../notifications/staff-notifications');
 const { recordAuditEntry } = require('../../audit');
 const outletMenu = require('../../shared/outlet-menu');
+const { STORE_OUTLET_TYPE } = require('../../shared/outlet-types');
 const { outletScopeForUser, scopeCovers } = require('../../shared/outlet-assignments');
 const { sumQuantity, negateQuantity, multiplyQuantityByInteger, compareQuantity, extendedCost } = require('../../shared/quantity');
 const {
@@ -115,6 +116,7 @@ const {
   StockCategoryInUseError,
   InsufficientStockOverrideRequiredError,
   InsufficientStockForTransferError,
+  ReceiveAtStoreOnlyError,
   SameOutletTransferError,
   StockTransferRequestNotFoundError,
   StockTransferRequestNotPendingError,
@@ -826,6 +828,20 @@ async function upsertMenuItemComponents({ context, menuItemId, components }) {
 // ---------------------------------------------------------------------
 
 /**
+ * Once a property has a store room, supplier deliveries are received THERE
+ * and reach a bar/restaurant by a stock request or transfer. Receiving at the
+ * outlet as well would add stock with nothing leaving the store, counting the
+ * same goods twice. A property with no store room at all keeps receiving
+ * directly at its outlets, exactly as before.
+ */
+async function assertReceivableOutlet(db, outlet) {
+  if (outlet.type === STORE_OUTLET_TYPE) return;
+  const stores = await db.table('pos_outlets').where({ type: STORE_OUTLET_TYPE, status: 'active' }).orderBy('name');
+  if (stores.length === 0) return;
+  throw new ReceiveAtStoreOnlyError({ outletId: outlet.id, outletName: outlet.name, storeNames: stores.map((store) => store.name) });
+}
+
+/**
  * `trx`-based, called from `runIdempotentMutation` — a real delivery,
  * financial in effect (it moves `purchase_cost`, ARCHITECTURE.md §7).
  * `lines`: `[{stockItemId, quantity, unitCost}]`, received INTO `outletId`
@@ -835,7 +851,8 @@ async function recordGoodsReceived({ trx, outletId, lines, reference, userId, bu
   if (!Array.isArray(lines) || lines.length === 0) {
     throw new ValidationError('MISSING_FIELD', 'At least one line is required.', [{ field: 'lines', issue: 'missing' }]);
   }
-  await assertOutlet(trx, outletId);
+  const outlet = await assertOutlet(trx, outletId);
+  await assertReceivableOutlet(trx, outlet);
 
   const stockItemIds = [...new Set(lines.map((line) => Number(line.stockItemId)))];
   const lockClosure = await resolveLockClosure({ trx, stockItemIds });

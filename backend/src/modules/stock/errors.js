@@ -108,6 +108,24 @@ class InsufficientStockForTransferError extends AppError {
   }
 }
 
+/**
+ * A delivery from a supplier was recorded at a bar/restaurant while the
+ * property has a store room. Goods enter at the store and reach an outlet by
+ * a stock request/transfer; receiving at the outlet too would count the same
+ * goods twice (the outlet's quantity up, the store's never down) and would
+ * overwrite the item's last cost with whatever was typed there.
+ */
+class ReceiveAtStoreOnlyError extends AppError {
+  constructor({ outletId, outletName, storeNames }) {
+    super(
+      'BUSINESS_RULE_RECEIVE_AT_STORE_ONLY',
+      `Goods are received at the store room (${storeNames.join(', ')}), not at "${outletName}". Receive the delivery at the store, then use a stock request to move it to this outlet.`,
+      422,
+      { outletId, storeNames },
+    );
+  }
+}
+
 class SameOutletTransferError extends ValidationError {
   constructor() {
     super('SAME_OUTLET_TRANSFER', 'Choose two different outlets — a transfer cannot go from an outlet to itself.', [{ field: 'to_outlet_id', issue: 'same_as_from' }]);
@@ -189,6 +207,7 @@ class InsufficientStockForIssueError extends AppError {
 }
 
 module.exports = {
+  ReceiveAtStoreOnlyError,
   InsufficientStockForIssueError,
   StockTransferRequestNotFoundError,
   StockTransferRequestNotPendingError,

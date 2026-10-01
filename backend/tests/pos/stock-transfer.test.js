@@ -158,7 +158,9 @@ describe('Stock transfer between outlets', () => {
 
     test('a source already negative from oversold sales cannot issue', async () => {
       const itemId = await newStockItem();
-      await receive(barId, itemId, '2.000');
+      // Goods enter at the store and reach the bar by transfer.
+      await receive(storeId, itemId, '2.000');
+      expect((await transfer({ stock_item_id: itemId, from_outlet_id: storeId, to_outlet_id: barId, quantity: '2.000' })).status).toBe(201);
       // A sale may go negative (never blocked); simulate one directly on the ledger.
       await t.trx('stock_movements').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: barId, stock_item_id: itemId, type: 'sold', quantity: '-3.000', business_date: BUSINESS_DATE });
       await t.trx('stock_levels').where({ outlet_id: barId, stock_item_id: itemId }).update({ current_quantity: '-1.000' });

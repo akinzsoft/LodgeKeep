@@ -17,3 +17,19 @@ export function isStoreOutlet(outlet) {
 export function pointOfSaleOutlets(outlets) {
   return (outlets ?? []).filter((outlet) => !isStoreOutlet(outlet));
 }
+
+/**
+ * Where a supplier delivery may be received. Once a property has a store room
+ * the store is the ONLY place (stock then reaches a bar or restaurant by a
+ * stock request or transfer; receiving there too would count the same goods
+ * twice). A property with no store keeps every outlet. The server enforces
+ * the same rule (`BUSINESS_RULE_RECEIVE_AT_STORE_ONLY`).
+ */
+export function receivingOutlets(outlets) {
+  const stores = (outlets ?? []).filter(isStoreOutlet);
+  return stores.length > 0 ? stores : (outlets ?? []);
+}
+
+export function canReceiveAt(outlets, outletId) {
+  return receivingOutlets(outlets).some((outlet) => String(outlet.id) === String(outletId));
+}
