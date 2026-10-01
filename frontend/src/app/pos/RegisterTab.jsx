@@ -5,6 +5,7 @@ import { sumMoney, multiplyMoney, percentOfMoney } from '../../shared/money.js';
 import { posApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { CategoryIcon, AllCategoriesIcon, PaymentMethodIcon, TrashIcon } from './registerCategoryIcons.jsx';
+import { TERMINAL_PROVIDERS, EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
 import formStyles from './POSForm.module.css';
 import styles from './RegisterTab.module.css';
 import { pointOfSaleOutlets } from './outletTypes.js';
@@ -29,12 +30,17 @@ const PAYMENT_METHODS = [
   { value: 'cash', label: 'Cash', tender: 'cash' },
   { value: 'card', label: 'Card', tender: 'card' },
   { value: 'card', label: 'NQR', tender: 'nqr' },
+  // A card sale taken on the hotel's OWN physical terminal (Moniepoint, Opay,
+  // a bank POS, ...): nothing to collect here, so unlike Card/NQR it settles
+  // the moment checkout is tapped. Needs no gateway and no setup, so every
+  // tenant has it from day one.
+  { value: 'terminal', label: EXTERNAL_TERMINAL_LABEL, tender: 'terminal' },
 ];
 
 /** A Paystack checkout that ended without captured money — its message is meant for the cashier as-is. */
 class PaymentNotCompletedError extends Error {}
 
-const TENDER_LABELS = { cash: 'Cash', card: 'Card', nqr: 'NQR', room_charge: 'Charge to room' };
+const TENDER_LABELS = { cash: 'Cash', card: 'Card', nqr: 'NQR', terminal: EXTERNAL_TERMINAL_LABEL, room_charge: 'Charge to room' };
 
 const ZERO = '0.00';
 
@@ -84,6 +90,9 @@ function defaultSettlementForm(splitGroup) {
     roomChargeResults: [],
     authMethod: 'pin',
     authReference: '',
+    // Card (external terminal) — both optional, never required to settle.
+    terminalProvider: '',
+    terminalReference: '',
   };
 }
 
@@ -649,6 +658,10 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
         method: form.method,
         paymentId: paymentIds.get(form.splitGroup),
         serviceCharge: serviceAmountForGroup(form.splitGroup) ?? ZERO,
+        terminal:
+          form.method === 'terminal'
+            ? { provider: form.terminalProvider || undefined, reference: form.terminalReference.trim() || undefined }
+            : undefined,
         roomCharge:
           form.method === 'room_charge'
             ? { reservationId: form.roomChargeGuest?.reservationId, authMethod: form.authMethod, authReference: form.authReference }
@@ -1832,6 +1845,32 @@ function SettlementFields({ form, preview, serviceAmount, grandTotal, currencyCo
           value={form.customerEmail}
           onChange={(e) => onPatch({ customerEmail: e.target.value })}
         />
+      )}
+
+      {form.method === 'terminal' && (
+        <div className={formStyles.form}>
+          <select
+            className={styles.darkSelect}
+            aria-label="Terminal provider"
+            value={form.terminalProvider}
+            onChange={(e) => onPatch({ terminalProvider: e.target.value })}
+          >
+            <option value="">Provider (optional)</option>
+            {TERMINAL_PROVIDERS.map((provider) => (
+              <option key={provider.value} value={provider.value}>
+                {provider.label}
+              </option>
+            ))}
+          </select>
+          <input
+            className={styles.darkInput}
+            aria-label="Terminal transaction reference"
+            placeholder="Transaction reference (optional)"
+            maxLength={60}
+            value={form.terminalReference}
+            onChange={(e) => onPatch({ terminalReference: e.target.value })}
+          />
+        </div>
       )}
 
       {form.method === 'room_charge' && (

@@ -260,6 +260,8 @@ export function settleOrder(orderId, settlements, { stockOverrideReason } = {}) 
         split_group: s.splitGroup ?? null,
         method: s.method,
         payment_id: s.paymentId,
+        terminal_provider: s.terminal?.provider,
+        terminal_reference: s.terminal?.reference,
         tip_amount: s.tipAmount,
         service_charge: s.serviceCharge,
         room_charge: s.roomCharge

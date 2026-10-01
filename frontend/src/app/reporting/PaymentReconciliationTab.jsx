@@ -3,10 +3,16 @@ import { Card, DataTable, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { reconciliationApi, ApiError } from '../../shared/api/index.js';
 import { triggerDownload } from '../../shared/download.js';
+import { terminalProviderLabel, EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
 import styles from './ReportingScreen.module.css';
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
+}
+
+/** `terminal` is a card sale taken on the hotel's own physical terminal; the rest read as stored. */
+function methodLabel(method) {
+  return method === 'terminal' ? EXTERNAL_TERMINAL_LABEL : method;
 }
 
 /** "Reconciliation Bar" or "Reconciliation Bar · QR" — a POS line's outlet plus a badge when a guest placed the order themselves; a folio line's source has no channel at all. */
@@ -122,13 +128,28 @@ export function PaymentReconciliationTab() {
         state={hasRun && (report.byMethod ?? []).length > 0 ? 'success' : 'empty'}
         emptyMessage={hasRun ? 'No payments in this range.' : 'Choose a date range and run the report.'}
         columns={[
-          { key: 'method', label: 'Method' },
+          { key: 'method', label: 'Method', render: (row) => methodLabel(row.method) },
           { key: 'count', label: 'Payments', align: 'right' },
           { key: 'grossTotal', label: 'Gross', align: 'right', render: (row) => <Money amount={row.grossTotal} currencyCode={row.currency} /> },
         ]}
         rows={report?.byMethod ?? []}
         rowKey={(row) => `${row.currency}-${row.method}`}
       />
+
+      {/* Match each total against that terminal provider's own end-of-day settlement report. */}
+      {(report?.byTerminalProvider ?? []).length > 0 && (
+        <DataTable
+          title="Card (external terminal) — by provider"
+          state="success"
+          columns={[
+            { key: 'provider', label: 'Provider', render: (row) => terminalProviderLabel(row.provider) },
+            { key: 'count', label: 'Sales', align: 'right' },
+            { key: 'grossTotal', label: 'Total', align: 'right', render: (row) => <Money amount={row.grossTotal} currencyCode={row.currency} /> },
+          ]}
+          rows={report.byTerminalProvider}
+          rowKey={(row) => `${row.currency}-${row.provider ?? 'none'}`}
+        />
+      )}
 
       <DataTable
         title="Every payment in range"
@@ -137,8 +158,8 @@ export function PaymentReconciliationTab() {
         columns={[
           { key: 'businessDate', label: 'Date' },
           { key: 'source', label: 'Source', render: (row) => describeSource(row.source) },
-          { key: 'method', label: 'Method' },
-          { key: 'providerChannel', label: 'Channel', render: (row) => row.providerChannel ?? '—' },
+          { key: 'method', label: 'Method', render: (row) => methodLabel(row.method) },
+          { key: 'providerChannel', label: 'Channel', render: (row) => row.providerChannel ?? (row.method === 'terminal' ? terminalProviderLabel(row.terminalProvider) : '—') },
           {
             key: 'grossAmount',
             label: 'Gross',
@@ -147,13 +168,14 @@ export function PaymentReconciliationTab() {
           },
           { key: 'feeAmount', label: 'Fee', align: 'right', render: (row) => <Money amount={row.feeAmount} currencyCode={row.currency} /> },
           { key: 'netAmount', label: 'Net', align: 'right', render: (row) => <Money amount={row.netAmount} currencyCode={row.currency} /> },
-          { key: 'providerReference', label: 'Reference', render: (row) => row.providerReference ?? '—' },
+          { key: 'providerReference', label: 'Reference', render: (row) => row.providerReference ?? row.terminalReference ?? '—' },
           { key: 'providerPaymentId', label: 'Provider payment id', render: (row) => row.providerPaymentId ?? '—' },
           { key: 'guestName', label: 'Guest', render: (row) => row.guestName ?? '—' },
           { key: 'roomNumber', label: 'Room', render: (row) => row.roomNumber ?? '—' },
         ]}
-        rows={lines}
-        rowKey={(row) => `${row.paymentId}-${row.isRefund ? 'refund' : 'payment'}-${row.capturedAt}`}
+        rows={lines.map((line, index) => ({ ...line, rowIndex: index }))}
+        // Cash and terminal sales have no payment id, and many share one captured second.
+        rowKey={(row) => `${row.rowIndex}-${row.paymentId}-${row.isRefund ? 'refund' : 'payment'}`}
       />
     </div>
   );

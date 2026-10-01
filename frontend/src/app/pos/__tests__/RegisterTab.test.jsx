@@ -124,6 +124,63 @@ describe('<RegisterTab>', () => {
     expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'cash', serviceCharge: '1.50' })], expect.objectContaining({}));
   });
 
+  describe('Card (external terminal)', () => {
+    async function openCheckout() {
+      const order = await openNewTab([orderItem()]);
+      mocks.settleOrder.mockResolvedValue({ order: { ...order, status: 'settled' }, settlements: [settlementRow({ method: 'terminal', tender: 'terminal' })] });
+      await screen.findByText('Subtotal');
+      return order;
+    }
+
+    it('sits beside Cash, Card and NQR (Paystack stays) and settles at once with no Paystack call', async () => {
+      await openCheckout();
+      for (const name of ['Cash', 'Card', 'NQR', 'Card (external terminal)']) {
+        expect(screen.getByRole('button', { name })).toBeInTheDocument();
+      }
+
+      await userEvent.click(screen.getByRole('button', { name: 'Card (external terminal)' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+      expect(mocks.startPaystackCheckout).not.toHaveBeenCalled();
+      expect(paystackMocks.openPaystackPopup).not.toHaveBeenCalled();
+      expect(mocks.settleOrder).toHaveBeenCalledWith(
+        '9',
+        [expect.objectContaining({ method: 'terminal', terminal: { provider: undefined, reference: undefined } })],
+        expect.objectContaining({})
+      );
+    });
+
+    it('sends the chosen provider and reference, both optional', async () => {
+      await openCheckout();
+      await userEvent.click(screen.getByRole('button', { name: 'Card (external terminal)' }));
+      await userEvent.selectOptions(screen.getByLabelText('Terminal provider'), 'moniepoint');
+      await userEvent.type(screen.getByLabelText('Terminal transaction reference'), ' 123456789012 ');
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+      expect(mocks.settleOrder).toHaveBeenCalledWith(
+        '9',
+        [expect.objectContaining({ method: 'terminal', terminal: { provider: 'moniepoint', reference: '123456789012' } })],
+        expect.objectContaining({})
+      );
+    });
+
+    it('shows no provider or reference fields for the other methods', async () => {
+      await openCheckout();
+      expect(screen.queryByLabelText('Terminal provider')).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Card (external terminal)' }));
+      expect(screen.getByLabelText('Terminal provider')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Cash' }));
+      expect(screen.queryByLabelText('Terminal provider')).not.toBeInTheDocument();
+    });
+
+    it('names the tender on the receipt', async () => {
+      await openCheckout();
+      await userEvent.click(screen.getByRole('button', { name: 'Card (external terminal)' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+      expect(await screen.findByText('Paid by Card (external terminal)')).toBeInTheDocument();
+    });
+  });
+
   describe('after checkout (bug fix: checkout used to leave what looked like a blank page)', () => {
     async function checkoutWith(tender, settlementOverrides = {}) {
       const order = await openNewTab([orderItem()]);

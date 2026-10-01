@@ -146,7 +146,7 @@ function NqrIcon() {
   );
 }
 
-const PAYMENT_METHOD_ICONS = { Cash: CashIcon, Card: CardIcon, NQR: NqrIcon };
+const PAYMENT_METHOD_ICONS = { Cash: CashIcon, Card: CardIcon, NQR: NqrIcon, 'Card (external terminal)': CardIcon };
 
 /** The 3-button payment-tender row's own small icons, one per real tender label (`RegisterTab.jsx`'s `PAYMENT_METHODS`). */
 export function PaymentMethodIcon({ method }) {
