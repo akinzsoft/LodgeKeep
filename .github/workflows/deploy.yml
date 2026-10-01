@@ -42,18 +42,29 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
+  # Manual redeploy of main through this same verified pipeline (Actions →
+  # Deploy to production → Run workflow). Exists so that "deploy by hand on
+  # the VPS" is never the only way to ship: an ad-hoc SSH deploy skips the
+  # branch/commit guard and the health verification below.
+  workflow_dispatch:
 
 jobs:
   deploy:
     name: Deploy to VPS
-    runs-on: ubuntu-latest
+    # Pinned, not `ubuntu-latest`: GitHub moves that label to Ubuntu 26 on
+    # 2026-10-19 and this job runs a Docker-based action (ssh-action); a
+    # silent runner change is exactly the kind of surprise a deploy must not get.
+    runs-on: ubuntu-24.04
     # workflow_run fires for every branch CI runs on — the real gate is
     # here, not in the trigger's own (unreliable for this event type)
     # `branches:` filter: only deploy a CI run that (a) was for `main` and
     # (b) actually passed. A red build on main must never reach this job.
+    # A manual dispatch is allowed only from main itself.
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main'
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
     # Serializes deploys rather than letting two overlapping runs interleave
     # `docker compose up --build` calls on the same box — queues, never
     # cancels a deploy that's already in flight partway through a rebuild.
@@ -88,12 +99,29 @@ jobs:
             # (shellcheck SC2086 — checked, this is the intended case).
             COMPOSE="docker compose --env-file .env.production -f docker-compose.prod.yml"
 
+            # The commit CI just verified (a manual dispatch uses main's tip).
+            EXPECTED_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+
             echo "::group::git pull"
-            # --ff-only, not a plain pull: if the VPS checkout ever has
-            # local/manual drift, this fails loudly and visibly rather
-            # than silently discarding it (or, worse, creating an
-            # unexpected merge commit on a box nobody is watching).
-            git pull --ff-only
+            # A plain `git pull --ff-only` pulls whatever branch the VPS
+            # checkout happens to be on. If someone left it on a feature
+            # branch (e.g. to try a PR), that pull is a silent no-op, the
+            # build is a cache hit, every health check passes, and the run
+            # goes GREEN without shipping main. So: require main, pull main
+            # explicitly, and prove the CI-verified commit is what we built.
+            branch="$(git branch --show-current)"
+            if [ "$branch" != "main" ]; then
+              echo "::error::The VPS checkout is on '${branch:-detached HEAD}', not main, so this deploy cannot ship main. Fix on the VPS: git checkout main"
+              exit 1
+            fi
+            # --ff-only: if the VPS checkout has local/manual drift this fails
+            # loudly rather than discarding it or creating a merge commit.
+            git pull --ff-only origin main
+            if ! git merge-base --is-ancestor "$EXPECTED_SHA" HEAD; then
+              echo "::error::VPS HEAD ($(git rev-parse --short HEAD)) does not contain the commit that passed CI (${EXPECTED_SHA:0:7})."
+              exit 1
+            fi
+            echo "Deploying: $(git log -1 --format='%h %s')"
             echo "::endgroup::"
 
             echo "::group::docker compose up --build (full stack — migrate and frontend included, never scoped to one service)"
@@ -168,4 +196,4 @@ jobs:
             fi
             echo "::endgroup::"
 
-            echo "Deploy verified: migrate ran clean, backend is healthy, frontend is serving."
+            echo "Deploy verified at $(git rev-parse --short HEAD): migrate ran clean, backend is healthy, frontend is serving."
