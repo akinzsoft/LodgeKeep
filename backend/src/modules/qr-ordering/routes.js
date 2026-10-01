@@ -25,6 +25,7 @@ const staffController = require('./staff-controller');
 const { resolveQrOrderToken } = require('./middleware');
 const { qrOrderIpRateLimiter } = require('./ip-rate-limit');
 const { requirePermission } = require('../../auth');
+const { guestOrderInScope } = require('../pos/outlet-scope');
 
 // Code-review fix (IMPORTANT) — dedicated per-IP counters for the
 // room-charge OTP flow, separate from order-creation's own
@@ -81,10 +82,10 @@ function qrOrderStaffRouter() {
   router.patch('/pos/outlets/:id/guest-order-policy', requirePermission('pos.manage'), staffController.updateGuestOrderPolicy);
 
   router.get('/pos/guest-orders', requirePermission('pos.operate'), staffController.listGuestOrders);
-  router.get('/pos/guest-orders/:id', requirePermission('pos.operate'), staffController.getGuestOrder);
-  router.post('/pos/guest-orders/:id/accept', requirePermission('pos.operate'), staffController.acceptGuestOrder);
-  router.post('/pos/guest-orders/:id/mark-on-the-way', requirePermission('pos.operate'), staffController.markOnTheWay);
-  router.post('/pos/guest-orders/:id/reject', requirePermission('pos.operate'), staffController.rejectGuestOrder);
+  router.get('/pos/guest-orders/:id', requirePermission('pos.operate'), guestOrderInScope, staffController.getGuestOrder);
+  router.post('/pos/guest-orders/:id/accept', requirePermission('pos.operate'), guestOrderInScope, staffController.acceptGuestOrder);
+  router.post('/pos/guest-orders/:id/mark-on-the-way', requirePermission('pos.operate'), guestOrderInScope, staffController.markOnTheWay);
+  router.post('/pos/guest-orders/:id/reject', requirePermission('pos.operate'), guestOrderInScope, staffController.rejectGuestOrder);
 
   return router;
 }

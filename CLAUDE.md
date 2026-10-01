@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Security fix: outlet assignments now limit Tickets and Guest orders (branch `gap-outlet-scope-tickets-guest-orders`)
+
+**From a security review**: `gap-outlet-scope-register` deliberately left Tickets and Guest orders out, so a bar-only operator could list and action the restaurant's kitchen tickets and QR orders. Same rule and middleware as the Register and Shifts (`pos/outlet-scope.js`): `GET /pos/tickets` and `GET /pos/guest-orders` list only the caller's outlets (naming another outlet gives an empty list); `POST /pos/tickets/:id/done` and get/accept/mark-on-the-way/reject on `/pos/guest-orders/:id` at another outlet are `404`, never 403, and change nothing (new `guestOrderInScope` resolves a guest order's outlet through its tab). Managers/admins/super_admins and operators with no assignment are unchanged. The staff alerts for a new and a rejected guest order now go only to the people at that outlet plus unrestricted roles (`outletIds`), since the pop-up carries guest name, items and total.
+
+**Tests**: `tests/pos/outlet-scope-tickets-guest-orders.test.js` (7): bar-only operator refused a restaurant ticket and guest order on every action, nothing changed; lists scoped; manager and unassigned operator allowed; both alerts. Mutation-checked: removing the ticket guard, the guest-order guards, either alert's `outletIds`, or the list filter each fails 1. Backend 3723 across 155 suites, lint clean.
+
+**Gaps, flagged**: the `pos.order_settled` and `pos.settlement_voided` bell alerts still go to every POS operator regardless of outlet (found in review, pre-existing from the Register scoping, not asked); the room-charge guest lookup and menu reads remain unscoped as before.
+
 ## New capability: automated encrypted off-site nightly backups (branch `gap-offsite-backups`)
 
 **User-requested** after the shared-catalogue incident: production had never had automated backups (only hand-made `backup-predeploy-*.sql` files). **Confirmed with the user**: restic to a Backblaze B2 bucket; also back up `property-logos` and `.env.production` (holds `ENCRYPTION_KEY`) beyond the three dirs first named; healthchecks.io alerting; systemd timer at 03:30; no Caddy volume.

@@ -810,10 +810,11 @@ async function updateGuestOrderPolicy({ context, outletId, changes }) {
 // Staff-facing — guest order queue
 // ---------------------------------------------------------------------
 
-async function listGuestOrders({ context, outletId, status }) {
+async function listGuestOrders({ context, outletId, status, outletIds = null }) {
   const db = scopedDb().for(context);
   let query = db.table('pos_guest_orders').joinScoped('pos_orders', (join) => join.on('pos_orders.id', '=', 'pos_guest_orders.pos_order_id'));
   if (outletId) query = query.where('pos_orders.outlet_id', outletId);
+  if (outletIds) query = query.whereIn('pos_orders.outlet_id', outletIds);
   const rows = await query
     .select('pos_guest_orders.*', 'pos_orders.table_label', 'pos_orders.outlet_id', 'pos_orders.status as pos_order_status')
     .orderBy('pos_guest_orders.id', 'desc');
@@ -872,6 +873,8 @@ async function rejectGuestOrder({ context, id, reason, userId }) {
   await notifyStaff({
     trx: db,
     eventType: 'qr_ordering.guest_order_rejected',
+    // Only the people at the outlet that was making it (and unrestricted roles).
+    outletIds: order ? [order.outlet_id] : null,
     payload: { guestOrderId: row.id, orderId: row.pos_order_id, tableLabel: order?.table_label ?? null, guestName: row.guest_name ?? null, reason },
   });
   return db.table('pos_guest_orders').where({ id }).first();

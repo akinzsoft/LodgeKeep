@@ -10,6 +10,7 @@
 const { ok, notFound } = require('../../shared/response');
 const { ValidationError } = require('../../shared/errors');
 const service = require('./service');
+const outletScope = require('../pos/outlet-scope');
 
 function require_(body, field) {
   const value = body?.[field];
@@ -133,7 +134,8 @@ async function updateGuestOrderPolicy(req, res, next) {
 
 async function listGuestOrders(req, res, next) {
   try {
-    res.status(200).json(ok(await service.listGuestOrders({ context: req.context, outletId: req.query.outlet_id, status: req.query.status })));
+    const outletIds = await outletScope.scopeForRequest(req);
+    res.status(200).json(ok(await service.listGuestOrders({ context: req.context, outletId: req.query.outlet_id, status: req.query.status, outletIds })));
   } catch (error) {
     next(error);
   }

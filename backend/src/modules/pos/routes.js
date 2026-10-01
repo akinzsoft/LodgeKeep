@@ -60,7 +60,7 @@ function posRouter() {
   router.get('/pos/my-outlets', requirePermission('pos.operate'), controller.getMyOutlets);
   router.get('/pos/orders', requirePermission('pos.operate'), controller.listOrders);
   router.get('/pos/tickets', requirePermission('pos.operate'), controller.listKitchenTickets);
-  router.post('/pos/tickets/:id/done', requirePermission('pos.operate'), controller.markTicketDone);
+  router.post('/pos/tickets/:id/done', requirePermission('pos.operate'), scope.orderInScope, controller.markTicketDone);
   // Shift handover — both before `/:id`, so neither word is read as a tab id.
   router.get('/pos/orders/transfer-candidates', requirePermission('pos.operate'), scope.queryOutletInScope, controller.listTransferCandidates);
   router.post('/pos/orders/transfer', requirePermission('pos.operate'), controller.transferTabs);
