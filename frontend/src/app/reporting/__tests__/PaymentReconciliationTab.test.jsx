@@ -125,4 +125,58 @@ describe('<PaymentReconciliationTab>', () => {
     expect(mocks.getPaymentReconciliationCsv).toHaveBeenCalledWith({ dateFrom: expect.any(String), dateTo: expect.any(String) });
     expect(mocks.triggerDownload).toHaveBeenCalled();
   });
+
+  it('shows card sales taken on a hotel terminal as their own method, grouped by provider, apart from Paystack', async () => {
+    const terminalLine = (overrides) => ({
+      paymentId: null,
+      businessDate: '2027-06-01',
+      capturedAt: '2027-06-01T12:00:00Z',
+      grossAmount: '23.00',
+      feeAmount: '0.00',
+      netAmount: '23.00',
+      currency: 'NGN',
+      method: 'terminal',
+      providerChannel: null,
+      providerReference: null,
+      providerPaymentId: null,
+      terminalProvider: 'moniepoint',
+      terminalReference: 'MP-0001',
+      source: { kind: 'pos', label: 'Reconciliation Bar', channel: 'staff' },
+      guestName: null,
+      roomNumber: null,
+      isRefund: false,
+      parentPaymentId: null,
+      ...overrides,
+    });
+    mocks.getPaymentReconciliation.mockResolvedValue({
+      ...REPORT,
+      byMethod: [...REPORT.byMethod, { currency: 'NGN', method: 'terminal', count: 3, grossTotal: '69.00' }],
+      byTerminalProvider: [
+        { currency: 'NGN', provider: 'moniepoint', count: 2, grossTotal: '46.00' },
+        { currency: 'NGN', provider: null, count: 1, grossTotal: '23.00' },
+      ],
+      // Same captured second and no payment id on every terminal line: keys must still be unique.
+      lines: [...REPORT.lines, terminalLine({}), terminalLine({ terminalReference: 'MP-0002' }), terminalLine({ terminalProvider: null, terminalReference: null })],
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<PaymentReconciliationTab />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+
+    expect(await screen.findByText('Card (external terminal) — by provider')).toBeInTheDocument();
+    expect(screen.getAllByText('Card (external terminal)').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Provider not given').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Moniepoint').length).toBeGreaterThan(0);
+    expect(screen.getByText('MP-0001')).toBeInTheDocument();
+    // Paystack lines keep their own reference and channel.
+    expect(screen.getByText('ref-abc')).toBeInTheDocument();
+    expect(consoleError.mock.calls.flat().join(' ')).not.toMatch(/same key/i);
+    consoleError.mockRestore();
+  });
+
+  it('shows no provider table when no terminal sale was taken', async () => {
+    render(<PaymentReconciliationTab />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+    await screen.findByText('ref-abc');
+    expect(screen.queryByText('Card (external terminal) — by provider')).not.toBeInTheDocument();
+  });
 });

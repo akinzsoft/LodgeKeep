@@ -601,6 +601,7 @@ async function settleOrder(req, res, next) {
             splitGroup: s.split_group ?? null,
             method: s.method,
             paymentId: s.payment_id,
+            terminal: { provider: s.terminal_provider, reference: s.terminal_reference },
             tipAmount: s.tip_amount,
             serviceCharge: s.service_charge,
             roomCharge: s.room_charge
@@ -686,6 +687,7 @@ async function verifyPaystackPayment(req, res, next) {
 function describeSettlementPayment(payment) {
   let text = payment.tender;
   if (payment.channel && payment.channel !== payment.tender) text += ` via ${payment.channel}`;
+  if (payment.tender === 'terminal' && payment.terminalProvider) text += ` via ${payment.terminalProvider}`;
   if (payment.roomNumber) text += ` Room ${payment.roomNumber}`;
   if (payment.guestName) text += ` (${payment.guestName})`;
   return text;

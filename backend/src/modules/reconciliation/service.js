@@ -366,7 +366,13 @@ function toFolioLine(row, roomNumberByReservation, parentFeeById) {
 
 function toPosSettlementLine(row) {
   const grossAmount = sumMoney([row.subtotal, row.tax_amount, row.tip_amount, row.service_charge]);
-  const isCard = row.tender !== 'cash';
+  // Only Paystack-funded tenders (card, nqr) carry gateway fields and a fee.
+  // A `terminal` sale was taken on the hotel's own physical terminal: no
+  // gateway fee is known to Lodgekeep (the terminal provider charges its own,
+  // visible only on its own settlement report), so net equals gross, and the
+  // provider/reference are what the hotel ticks against that report.
+  const isTerminal = row.tender === 'terminal';
+  const isCard = row.tender !== 'cash' && !isTerminal;
   const { feeAmount, netAmount } = isCard ? feeAndNet(grossAmount, row.platform_fee_percentage) : { feeAmount: '0.00', netAmount: grossAmount };
   return {
     paymentId: row.payment_id ?? null,
@@ -380,6 +386,8 @@ function toPosSettlementLine(row) {
     providerChannel: isCard ? row.provider_channel ?? null : null,
     providerReference: isCard ? row.provider_reference ?? null : null,
     providerPaymentId: isCard ? row.provider_payment_id ?? null : null,
+    terminalProvider: isTerminal ? row.terminal_provider ?? null : null,
+    terminalReference: isTerminal ? row.terminal_reference ?? null : null,
     source: { kind: 'pos', label: row.outlet_name ?? `Outlet #${row.outlet_id}`, channel: row.source ?? null },
     guestName: null,
     roomNumber: null,
@@ -475,6 +483,25 @@ function summarizeBySource(lines) {
     .sort((a, b) => compareMoney(b.grossTotal, a.grossTotal));
 }
 
+/**
+ * Card sales taken on the hotel's own physical terminals, one row per
+ * provider (a sale with no provider given groups under `null`), so the hotel
+ * can match each total against that provider's own end-of-day settlement
+ * report. Paystack and cash lines never appear here.
+ */
+function summarizeByTerminalProvider(lines) {
+  const terminalLines = lines.filter((line) => line.method === 'terminal');
+  const groups = groupBy(terminalLines, (line) => `${line.currency}\u0000${line.terminalProvider ?? ''}`);
+  return [...groups.values()]
+    .map((rows) => ({
+      currency: rows[0].currency,
+      provider: rows[0].terminalProvider ?? null,
+      count: rows.length,
+      grossTotal: sumMoney(rows.map((row) => row.grossAmount)),
+    }))
+    .sort((a, b) => compareMoney(b.grossTotal, a.grossTotal) || String(a.provider ?? '').localeCompare(String(b.provider ?? '')));
+}
+
 function summarizeByMethod(lines) {
   const groups = groupBy(lines, (line) => `${line.currency}\u0000${line.method}`);
   return [...groups.values()]
@@ -530,6 +557,7 @@ async function computePaymentReconciliation({ context, dateFrom, dateTo }) {
     summary: summarizeByCurrency(lines),
     bySource: summarizeBySource(lines),
     byMethod: summarizeByMethod(lines),
+    byTerminalProvider: summarizeByTerminalProvider(lines),
     lines,
   };
 }
@@ -541,6 +569,8 @@ const CSV_COLUMNS = [
   'sourceChannel',
   'method',
   'providerChannel',
+  'terminalProvider',
+  'terminalReference',
   'grossAmount',
   'feeAmount',
   'netAmount',

@@ -25,7 +25,7 @@ const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, compareMoney, toCents, fromCents } = require('../../shared/money');
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
 
-const TENDERS = ['cash', 'card', 'nqr', 'room_charge'];
+const TENDERS = ['cash', 'card', 'nqr', 'terminal', 'room_charge'];
 const TOP_ITEMS_LIMIT = 20;
 
 function groupKey(splitGroup) {
@@ -64,6 +64,8 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
       'pos_order_settlements.split_group as split_group',
       'pos_order_settlements.method as method',
       'pos_order_settlements.tender as tender',
+      'pos_order_settlements.terminal_provider as terminal_provider',
+      'pos_order_settlements.terminal_reference as terminal_reference',
       'pos_order_settlements.subtotal as subtotal',
       'pos_order_settlements.tax_amount as tax_amount',
       'pos_order_settlements.tip_amount as tip_amount',
@@ -237,6 +239,8 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
     tab.payments.push({
       tender,
       channel: row.provider_channel ?? null,
+      // Only a terminal sale carries one; every other tender's entry is unchanged.
+      ...(tender === 'terminal' ? { terminalProvider: row.terminal_provider ?? null } : {}),
       roomNumber: target?.roomNumber ?? null,
       guestName: target?.guestName ?? null,
       total,

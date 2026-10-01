@@ -970,6 +970,31 @@ async function previewSettlement({ context, orderId }) {
   return { orderId: order.id, currency: property?.base_currency, groups };
 }
 
+/** Methods `settleOrder` accepts. `terminal` = a card sale taken on the hotel's own physical terminal (no gateway). */
+const SETTLEMENT_METHODS = ['cash', 'card', 'terminal', 'room_charge'];
+/** Terminal providers the Register offers. Optional on every sale; `other` covers any bank POS not listed. */
+const TERMINAL_PROVIDERS = ['moniepoint', 'opay', 'gtbank', 'other'];
+const TERMINAL_REFERENCE_MAX = 60;
+
+/** Provider and reference are both OPTIONAL: only checked when given, never required. */
+function normalizeTerminalDetails({ provider, reference } = {}) {
+  // Only strings (or nothing) are meaningful; anything else is a malformed request, not a blank field.
+  for (const [field, value] of [['terminal_provider', provider], ['terminal_reference', reference]]) {
+    if (value !== undefined && value !== null && typeof value !== 'string') {
+      throw new ValidationError(`INVALID_${field.toUpperCase()}`, `"${field}" must be text.`, [{ field, issue: 'invalid' }]);
+    }
+  }
+  const normalizedProvider = typeof provider === 'string' && provider.trim() ? provider.trim().toLowerCase() : null;
+  if (normalizedProvider && !TERMINAL_PROVIDERS.includes(normalizedProvider)) {
+    throw new ValidationError('INVALID_TERMINAL_PROVIDER', `"terminal_provider" must be one of: ${TERMINAL_PROVIDERS.join(', ')}.`, [{ field: 'terminal_provider', issue: 'invalid' }]);
+  }
+  const normalizedReference = reference === undefined || reference === null ? '' : String(reference).trim();
+  if (normalizedReference.length > TERMINAL_REFERENCE_MAX) {
+    throw new ValidationError('INVALID_TERMINAL_REFERENCE', `"terminal_reference" must be at most ${TERMINAL_REFERENCE_MAX} characters.`, [{ field: 'terminal_reference', issue: 'too_long' }]);
+  }
+  return { terminal_provider: normalizedProvider, terminal_reference: normalizedReference || null };
+}
+
 /**
  * `trx`-based — called from `runIdempotentMutation`'s handler (financial
  * mutation, ARCHITECTURE.md §7). Locks the order, verifies the requested
@@ -982,7 +1007,10 @@ async function previewSettlement({ context, orderId }) {
  * trusts an earlier search result), posts through `cashieringService.postCharge`,
  * and posts any nonzero tip/service charge as a separate, untaxed
  * `postAdjustment` line on the same folio; `cash`/`card` compute tax
- * directly and record the settlement with no folio involved at all.
+ * directly and record the settlement with no folio involved at all;
+ * `terminal` follows the cash path (tax, tip) but is a card taken on the
+ * hotel's own physical terminal: nothing to collect or verify, and it is
+ * never counted in the drawer's expected cash.
  */
 async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOverrideReason }) {
   if (!Array.isArray(settlements) || settlements.length === 0) {
@@ -1048,8 +1076,8 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
 
   const results = [];
   for (const settlement of settlements) {
-    if (settlement.method !== 'room_charge' && settlement.method !== 'cash' && settlement.method !== 'card') {
-      throw new ValidationError('INVALID_SETTLEMENT_METHOD', `"${settlement.method}" is not a supported settlement method — use "cash", "card", or "room_charge".`);
+    if (!SETTLEMENT_METHODS.includes(settlement.method)) {
+      throw new ValidationError('INVALID_SETTLEMENT_METHOD', `"${settlement.method}" is not a supported settlement method — use "cash", "card", "terminal", or "room_charge".`);
     }
 
     const groupItems = items.filter((item) => groupKey(item.split_group) === groupKey(settlement.splitGroup));
@@ -1147,8 +1175,13 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
         subtotal: netAmount,
         tax_amount: taxAmount,
         currency: property?.base_currency,
-        tender: 'cash',
+        tender: settlement.method === 'terminal' ? 'terminal' : 'cash',
       });
+
+      // A card sale taken on the hotel's own physical terminal: nothing to
+      // collect or verify (no gateway, no `payments` row), only the optional
+      // provider/reference to reconcile against that terminal's own report.
+      if (settlement.method === 'terminal') Object.assign(fields, normalizeTerminalDetails(settlement.terminal));
 
       // Card and NQR only settle against money Paystack actually captured
       // for this exact check — never on the cashier's word alone.
@@ -1511,6 +1544,7 @@ async function closeShift({ trx, shiftId, countedCash, userId, canCloseForOthers
 }
 
 module.exports = {
+  TERMINAL_PROVIDERS,
   listTransferCandidates,
   transferTabs,
   listOutlets,

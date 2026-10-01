@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { DataTable, Button, ConfirmDialog, Toast } from '../../shared/components/index.js';
+import { terminalProviderLabel } from '../../shared/terminalProviders.js';
 import { Money } from '../../shared/format/money.jsx';
 import { posApi, cashieringApi, ApiError } from '../../shared/api/index.js';
 import { triggerDownload } from '../../shared/download.js';
@@ -7,7 +8,7 @@ import formStyles from './POSForm.module.css';
 import styles from './SalesTab.module.css';
 import { pointOfSaleOutlets } from './outletTypes.js';
 
-const TENDER_LABELS = { cash: 'Cash', card: 'Card', nqr: 'NQR', room_charge: 'Charge to room' };
+const TENDER_LABELS = { cash: 'Cash', card: 'Card', nqr: 'NQR', terminal: 'Card (external terminal)', room_charge: 'Charge to room' };
 
 // Paystack's own channel names, for a Card checkout paid some other way.
 const CHANNEL_LABELS = { card: 'card', ussd: 'USSD', bank: 'bank', bank_transfer: 'bank transfer', qr: 'QR', mobile_money: 'mobile money', eft: 'EFT', apple_pay: 'Apple Pay' };
@@ -22,6 +23,7 @@ function describePayment(payment) {
   if (payment.channel && payment.channel !== payment.tender && !(payment.tender === 'nqr' && payment.channel === 'qr')) {
     parts.push(CHANNEL_LABELS[payment.channel] ?? payment.channel);
   }
+  if (payment.tender === 'terminal' && payment.terminalProvider) parts.push(terminalProviderLabel(payment.terminalProvider));
   if (payment.roomNumber) parts.push(`Room ${payment.roomNumber}${payment.guestName ? ` (${payment.guestName})` : ''}`);
   return parts.join(' · ');
 }
