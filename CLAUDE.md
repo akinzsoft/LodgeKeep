@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Fix: the deploy workflow can no longer go green without shipping main (branch `gap-deploy-workflow-guards`)
+
+**User-reported**: "#167 didn't auto-deploy; I had to deploy manually; second time." Diagnosed from the GitHub run history first: the "Deploy to production" run for merge `96f34f5` **did fire and succeeded** (10:43:09-10:44:37 UTC); the one for #166 also ran (24 s, docs-only). Both start about **5.5 minutes after the merge**, because the deploy is gated on the push-to-main CI run finishing first, which reads as "didn't fire". The "skipped" runs in the list are PR-branch CI runs correctly rejected by the `head_branch == 'main'` gate. Job logs need admin auth, so what happened on the VPS itself could not be seen from here.
+
+**Real weaknesses fixed**: (1) `git pull --ff-only` pulls whatever branch the VPS checkout is on; if it was left on a feature branch (the backup instructions had the user check one out), the pull is a no-op, the build is a cache hit, every health check passes and the run is **green without shipping main**. The deploy now requires the VPS to be on `main`, pulls `origin main` explicitly, and fails unless the commit CI verified is an ancestor of HEAD; it prints the commit it deployed. (2) New `workflow_dispatch` (main only) so a redeploy is a button in Actions through the same guarded pipeline instead of an ad-hoc SSH deploy that skips every check. (3) `runs-on` pinned to `ubuntu-24.04` (the `ubuntu-latest` label moves to Ubuntu 26 on 2026-10-19; `ci.yml` still uses `ubuntu-latest`).
+
+**Verified**: actionlint + shellcheck clean; the branch/commit guard was run against throwaway git repos (stale main -> pulled and passes; feature branch -> fails; unreachable CI commit -> fails). Not testable here: a real run on the VPS.
+
 ## Security fix: outlet assignments now limit Tickets and Guest orders (branch `gap-outlet-scope-tickets-guest-orders`)
 
 **From a security review**: `gap-outlet-scope-register` deliberately left Tickets and Guest orders out, so a bar-only operator could list and action the restaurant's kitchen tickets and QR orders. Same rule and middleware as the Register and Shifts (`pos/outlet-scope.js`): `GET /pos/tickets` and `GET /pos/guest-orders` list only the caller's outlets (naming another outlet gives an empty list); `POST /pos/tickets/:id/done` and get/accept/mark-on-the-way/reject on `/pos/guest-orders/:id` at another outlet are `404`, never 403, and change nothing (new `guestOrderInScope` resolves a guest order's outlet through its tab). Managers/admins/super_admins and operators with no assignment are unchanged. The staff alerts for a new and a rejected guest order now go only to the people at that outlet plus unrestricted roles (`outletIds`), since the pop-up carries guest name, items and total.
