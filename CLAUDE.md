@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Fix: supplier deliveries are received at the store room only (branch `gap-receive-store-only`)
+
+**User-requested**: "since outlets get stock from the store room, make Receive impossible to use by mistake." Receiving at a bar as well as at the store counts the same goods twice (the bar's quantity goes up, the store's never goes down) and overwrites the item's last cost with whatever was typed there. **Confirmed with the user**: block it on the server, no manager override.
+
+**What's real now**: `recordGoodsReceived` (`stock/service.js`) refuses an outlet that is not a store with `422 BUSINESS_RULE_RECEIVE_AT_STORE_ONLY`, naming the store(s), whenever the property has an ACTIVE store outlet; nothing is written and the item's cost is untouched. A property with no store room (or only an archived one) keeps receiving at its outlets exactly as before. Stock reaches a bar by a stock request or transfer, unchanged. Frontend: Stock items hides the per-row Receive action at a non-store outlet and says where deliveries go; the Goods received outlet picker lists only the store(s) when one exists (`receivingOutlets`/`canReceiveAt` in `app/pos/outletTypes.js`).
+
+**Tests**: `tests/pos/receive-store-only.test.js` (5): refused at a bar and a restaurant, store named, no movement/level written, cost unchanged; the same delivery at the store works; receive at the store then transfer reaches the bar; a property with no store keeps working; an archived store does not count. One existing transfer test set its scenario up by receiving at a bar and now stocks it by transfer. Mutation-checked: removing the server check fails 2, removing the UI guard fails 1. Frontend +4. Backend 3728/3728, frontend 1365/1365.
+
+**Gaps, flagged**: a hotel whose supplier genuinely delivers straight to a bar must now receive at the store and transfer; no override exists (the user's choice). Historical deliveries already received at outlets are not rewritten.
+
 ## Fix: the deploy workflow can no longer go green without shipping main (branch `gap-deploy-workflow-guards`)
 
 **User-reported**: "#167 didn't auto-deploy; I had to deploy manually; second time." Diagnosed from the GitHub run history first: the "Deploy to production" run for merge `96f34f5` **did fire and succeeded** (10:43:09-10:44:37 UTC); the one for #166 also ran (24 s, docs-only). Both start about **5.5 minutes after the merge**, because the deploy is gated on the push-to-main CI run finishing first, which reads as "didn't fire". The "skipped" runs in the list are PR-branch CI runs correctly rejected by the `head_branch == 'main'` gate. Job logs need admin auth, so what happened on the VPS itself could not be seen from here.

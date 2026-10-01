@@ -6,6 +6,7 @@ import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
 import { StockCategoriesCard } from './StockCategoriesCard.jsx';
 import { computeCategorySections } from './categorySections.js';
 import { SellInRegisterFields } from './SellInRegisterFields.jsx';
+import { canReceiveAt, receivingOutlets } from './outletTypes.js';
 import { choiceFromSelection, classifyStockItem, defaultCategorySelection, sellStockItemInRegister, validateSellFields } from './sellInRegister.js';
 import formStyles from './POSForm.module.css';
 
@@ -551,6 +552,14 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
       )}
       {isOffline && <p className={formStyles.disabledNotice}>You are offline. Stock items cannot be added, edited, received, or archived until connectivity returns.</p>}
 
+      {/* Deliveries are received at the store room only; an outlet gets stock by a stock request. */}
+      {outlets && outletFilter && !canReceiveAt(outlets, outletFilter) && (
+        <p className={formStyles.hint}>
+          Deliveries are received at the store room ({receivingOutlets(outlets).map((outlet) => outlet.name).join(', ')}), so there is no Receive action here. To get stock into{' '}
+          {selectedOutletName ?? 'this outlet'}, send a request from the Requests tab.
+        </p>
+      )}
+
       {/* Outside any Card/DataTable's own success-only slot, deliberately —
           Card only renders `children` while `state === 'success'`, and
           "Low stock only" routinely shows zero rows by design. A filter
@@ -675,9 +684,11 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                 rowKey={(row) => row.id}
                 actions={(row) => (
                   <>
-                    <Button size="compact" variant="ghost" disabled={isOffline} onClick={() => openReceive(row)}>
-                      Receive
-                    </Button>
+                    {canReceiveAt(outlets, row.outlet_id ?? outletFilter) && (
+                      <Button size="compact" variant="ghost" disabled={isOffline} onClick={() => openReceive(row)}>
+                        Receive
+                      </Button>
+                    )}
                     {linksLoaded && registerState(row).kind !== 'direct' && (
                       <Button size="compact" variant="ghost" disabled={isOffline} onClick={() => openSell(row)}>
                         Sell in Register
@@ -816,8 +827,8 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                     here.
                   </p>
                   <p className={formStyles.hint}>
-                    On hand is {formatQuantity(editingItem.current_quantity, editingItem.unit)} — quantity only changes through a recorded event, not a direct edit. Use the{' '}
-                    <strong>Receive</strong> action to log a delivery, or Sales, Wastage, or a Stock take for the other ways it moves.
+                    On hand is {formatQuantity(editingItem.current_quantity, editingItem.unit)} — quantity only changes through a recorded event, not a direct edit. A delivery is logged with{' '}
+                    <strong>Receive</strong> at the store room; an outlet gets stock by a request. Sales, Wastage, and a Stock take are the other ways it moves.
                   </p>
                   {editingRegisterState?.kind === 'direct' && (
                     <p className={formStyles.hint}>Sold in the Register as &quot;{editingRegisterState.menuItemName}&quot; — change its price or category under POS → Setup → Menu items.</p>

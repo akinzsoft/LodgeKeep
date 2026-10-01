@@ -40,6 +40,22 @@ describe('<StockGoodsReceivedTab>', () => {
     mocks.listStockMovements.mockResolvedValue([]);
   });
 
+  it('offers only the store room as the place to receive once the property has one', async () => {
+    mocks.listOutlets.mockResolvedValue([OUTLET, { id: '2', name: 'Main Store', type: 'store' }]);
+    render(<StockGoodsReceivedTab activeProperty={{ base_currency: 'NGN' }} />);
+    await screen.findByRole('option', { name: 'Main Store' });
+    expect(screen.queryByRole('option', { name: 'Main Bar' })).not.toBeInTheDocument();
+    expect(screen.getByText(/To move stock to a bar or restaurant, use a stock request/)).toBeInTheDocument();
+  });
+
+  it('offers every outlet when the property has no store room, with no note', async () => {
+    mocks.listOutlets.mockResolvedValue([OUTLET, { id: '3', name: 'Rooftop', type: 'bar' }]);
+    render(<StockGoodsReceivedTab activeProperty={{ base_currency: 'NGN' }} />);
+    await screen.findByRole('option', { name: 'Rooftop' });
+    expect(screen.getByRole('option', { name: 'Main Bar' })).toBeInTheDocument();
+    expect(screen.queryByText(/use a stock request/)).not.toBeInTheDocument();
+  });
+
   it('shows the delivery form with the real outlet stock items once an outlet is selected', async () => {
     await selectOutlet();
     expect(screen.getByRole('option', { name: 'Vodka (ml)' })).toBeInTheDocument();
