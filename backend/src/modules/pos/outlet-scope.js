@@ -24,10 +24,17 @@
  * concurrent request could move between this check and the handler's own
  * locks.
  *
- * Deliberately NOT covered (not asked): Tickets, Guest orders, the room-
- * charge guest lookup, menu reads, and closing a shift — the opener may
- * always close their own till even if reassigned since, and anyone else
- * needs `pos.manage`, which only unrestricted roles hold.
+ * Tickets (the kitchen/bar queue) and Guest orders (the QR queue) follow the
+ * same rule (a security review found a restricted operator could list and
+ * action other outlets' work there): both lists show only the caller's
+ * outlets, and marking a ticket done or viewing/accepting/advancing/rejecting
+ * a guest order at another outlet is `404`. A guest order's outlet is its
+ * tab's, which never changes, so the same no-race argument applies.
+ *
+ * Deliberately NOT covered (not asked): the room-charge guest lookup, menu
+ * reads, and closing a shift — the opener may always close their own till
+ * even if reassigned since, and anyone else needs `pos.manage`, which only
+ * unrestricted roles hold.
  */
 
 const { scopedDb } = require('../../db');
@@ -102,6 +109,12 @@ const orderItemInScope = requireExistingInScope(async (db, req) => {
   return item ? outletOfOrder(db, item.pos_order_id) : undefined;
 });
 
+/** A guest order's outlet is its tab's (`pos_guest_orders.pos_order_id`). */
+const guestOrderInScope = requireExistingInScope(async (db, req) => {
+  const guestOrder = await db.table('pos_guest_orders').where({ id: req.params.id }).first('pos_order_id');
+  return guestOrder ? outletOfOrder(db, guestOrder.pos_order_id) : undefined;
+});
+
 const shiftInScope = requireExistingInScope(async (db, req) => {
   const shift = await db.table('pos_shifts').where({ id: req.params.id }).first('terminal_id');
   return shift ? outletOfTerminal(db, shift.terminal_id) : undefined;
@@ -128,6 +141,7 @@ module.exports = {
   describeScope,
   orderInScope,
   orderItemInScope,
+  guestOrderInScope,
   shiftInScope,
   newOrderOutletInScope,
   availabilityOutletInScope,

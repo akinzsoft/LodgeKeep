@@ -452,7 +452,8 @@ async function listOrders(req, res, next) {
 
 async function listKitchenTickets(req, res, next) {
   try {
-    res.status(200).json(ok(await service.listKitchenTickets({ context: req.context, outletId: req.query.outlet_id })));
+    const outletIds = await outletScope.scopeForRequest(req);
+    res.status(200).json(ok(await service.listKitchenTickets({ context: req.context, outletId: req.query.outlet_id, outletIds })));
   } catch (error) {
     next(error);
   }

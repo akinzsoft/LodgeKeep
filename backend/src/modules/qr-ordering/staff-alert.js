@@ -46,6 +46,8 @@ async function notifyGuestOrderReceived({ db, guestOrderId, total, currency }) {
     trx: db,
     eventType: 'qr_ordering.guest_order_placed',
     popup: true,
+    // Only the people at the outlet that must make it (and unrestricted roles).
+    outletIds: order ? [order.outlet_id] : null,
     payload: {
       guestOrderId: guestOrder.id,
       orderId: guestOrder.pos_order_id,

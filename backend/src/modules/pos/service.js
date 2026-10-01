@@ -474,7 +474,7 @@ async function listOrders({ context, outletId, status, outletIds = null }) {
  */
 const TICKET_GUEST_STATUSES = ['received', 'preparing'];
 
-async function listKitchenTickets({ context, outletId }) {
+async function listKitchenTickets({ context, outletId, outletIds = null }) {
   const db = scopedDb().for(context);
   let query = db
     .table('pos_orders')
@@ -483,6 +483,7 @@ async function listKitchenTickets({ context, outletId }) {
     .whereIn('pos_orders.status', ['open', 'settled'])
     .whereNull('pos_orders.ticket_done_at');
   if (outletId) query = query.where('pos_orders.outlet_id', outletId);
+  if (outletIds) query = query.whereIn('pos_orders.outlet_id', outletIds);
   const orders = await query
     .select(
       'pos_orders.id',
