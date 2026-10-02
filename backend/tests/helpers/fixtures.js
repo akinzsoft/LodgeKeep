@@ -151,6 +151,7 @@ async function seedTwoTenants(trx) {
     posMenuItems: [],
     posMenuCategories: [],
     posOutletCategories: [],
+    posOutletTerminalAccounts: [],
     posOutletMenuItems: [],
     stockLevels: [],
     posOrders: [],
@@ -862,6 +863,18 @@ async function seedTwoTenants(trx) {
         property_id: property.id,
         outlet_id: t.posOutlets[0].id,
         category_id: t.posMenuCategories[0].id,
+      }),
+      property_id: property.id,
+    });
+    // The fixture bar records a GTBank account; every other provider is unrecorded.
+    t.posOutletTerminalAccounts.push({
+      id: await insertReturningId(trx, 'pos_outlet_terminal_accounts', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: t.posOutlets[0].id,
+        provider: 'gtbank',
+        account_number: '0123456789',
+        account_label: 'Fixture GTB',
       }),
       property_id: property.id,
     });

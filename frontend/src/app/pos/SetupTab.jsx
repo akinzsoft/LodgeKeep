@@ -5,6 +5,7 @@ import formStyles from './POSForm.module.css';
 import styles from './SetupTab.module.css';
 import { MenuItemsTab } from './MenuItemsTab.jsx';
 import { OutletCategoriesCard } from './OutletCategoriesCard.jsx';
+import { OutletTerminalAccountsCard } from './OutletTerminalAccountsCard.jsx';
 import { STORE_OUTLET_TYPE, isStoreOutlet } from './outletTypes.js';
 
 /**
@@ -54,6 +55,7 @@ const OUTLET_SECTIONS = [
   { key: 'categories', label: 'Categories sold here' },
   { key: 'menu', label: 'Menu & prices here' },
   { key: 'terminals', label: 'Terminals' },
+  { key: 'accounts', label: 'Terminal accounts' },
 ];
 
 export function SetupTab({ activeProperty, isOffline = false }) {
@@ -378,6 +380,15 @@ export function SetupTab({ activeProperty, isOffline = false }) {
           )}
 
           {outletSection === 'menu' && <MenuItemsTab activeProperty={activeProperty} outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} />}
+
+          {outletSection === 'accounts' &&
+            (isStoreOutlet(selectedOutlet) ? (
+              <Card title={`Terminal accounts — ${selectedOutlet.name}`}>
+                <p className={formStyles.hint}>{STORE_HINT}</p>
+              </Card>
+            ) : (
+              <OutletTerminalAccountsCard outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} />
+            ))}
 
           {outletSection === 'terminals' && (
             <Card title={`Terminals — ${selectedOutlet.name}`}>

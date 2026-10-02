@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { DataTable, Button, ConfirmDialog, Toast } from '../../shared/components/index.js';
-import { terminalProviderLabel } from '../../shared/terminalProviders.js';
+import { terminalProviderLabel, terminalAccountText } from '../../shared/terminalProviders.js';
 import { Money } from '../../shared/format/money.jsx';
 import { posApi, cashieringApi, ApiError } from '../../shared/api/index.js';
 import { triggerDownload } from '../../shared/download.js';
@@ -24,6 +24,8 @@ function describePayment(payment) {
     parts.push(CHANNEL_LABELS[payment.channel] ?? payment.channel);
   }
   if (payment.tender === 'terminal' && payment.terminalProvider) parts.push(terminalProviderLabel(payment.terminalProvider));
+  const account = payment.tender === 'terminal' ? terminalAccountText(payment.terminalAccountLabel, payment.terminalAccountLast4) : null;
+  if (account) parts.push(account);
   if (payment.roomNumber) parts.push(`Room ${payment.roomNumber}${payment.guestName ? ` (${payment.guestName})` : ''}`);
   return parts.join(' · ');
 }

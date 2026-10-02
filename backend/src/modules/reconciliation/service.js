@@ -388,6 +388,8 @@ function toPosSettlementLine(row) {
     providerPaymentId: isCard ? row.provider_payment_id ?? null : null,
     terminalProvider: isTerminal ? row.terminal_provider ?? null : null,
     terminalReference: isTerminal ? row.terminal_reference ?? null : null,
+    terminalAccountLabel: isTerminal ? row.terminal_account_label ?? null : null,
+    terminalAccountLast4: isTerminal ? row.terminal_account_last4 ?? null : null,
     source: { kind: 'pos', label: row.outlet_name ?? `Outlet #${row.outlet_id}`, channel: row.source ?? null },
     guestName: null,
     roomNumber: null,
@@ -491,15 +493,29 @@ function summarizeBySource(lines) {
  */
 function summarizeByTerminalProvider(lines) {
   const terminalLines = lines.filter((line) => line.method === 'terminal');
-  const groups = groupBy(terminalLines, (line) => `${line.currency}\u0000${line.terminalProvider ?? ''}`);
+  // Per outlet AND provider AND recorded account: the hotel matches each row
+  // against that account's own settlement report. A sale with no provider, or
+  // no account recorded for it, groups under null (never merged into a named one).
+  const groups = groupBy(
+    terminalLines,
+    (line) => [line.currency, line.source?.label ?? '', line.terminalProvider ?? '', line.terminalAccountLast4 ?? '', line.terminalAccountLabel ?? ''].join('\u0000')
+  );
   return [...groups.values()]
     .map((rows) => ({
       currency: rows[0].currency,
+      outlet: rows[0].source?.label ?? null,
       provider: rows[0].terminalProvider ?? null,
+      accountLabel: rows[0].terminalAccountLabel ?? null,
+      accountLast4: rows[0].terminalAccountLast4 ?? null,
       count: rows.length,
       grossTotal: sumMoney(rows.map((row) => row.grossAmount)),
     }))
-    .sort((a, b) => compareMoney(b.grossTotal, a.grossTotal) || String(a.provider ?? '').localeCompare(String(b.provider ?? '')));
+    .sort(
+      (a, b) =>
+        compareMoney(b.grossTotal, a.grossTotal) ||
+        String(a.outlet ?? '').localeCompare(String(b.outlet ?? '')) ||
+        String(a.provider ?? '').localeCompare(String(b.provider ?? ''))
+    );
 }
 
 function summarizeByMethod(lines) {
@@ -571,6 +587,8 @@ const CSV_COLUMNS = [
   'providerChannel',
   'terminalProvider',
   'terminalReference',
+  'terminalAccountLabel',
+  'terminalAccountLast4',
   'grossAmount',
   'feeAmount',
   'netAmount',

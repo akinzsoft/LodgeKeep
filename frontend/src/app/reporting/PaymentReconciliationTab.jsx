@@ -3,7 +3,7 @@ import { Card, DataTable, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { reconciliationApi, ApiError } from '../../shared/api/index.js';
 import { triggerDownload } from '../../shared/download.js';
-import { terminalProviderLabel, EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
+import { terminalProviderLabel, terminalAccountText, EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
 import styles from './ReportingScreen.module.css';
 
 function todayIso() {
@@ -139,15 +139,17 @@ export function PaymentReconciliationTab() {
       {/* Match each total against that terminal provider's own end-of-day settlement report. */}
       {(report?.byTerminalProvider ?? []).length > 0 && (
         <DataTable
-          title="Card (external terminal) — by provider"
+          title="Card (external terminal) — by outlet, provider and account"
           state="success"
           columns={[
+            { key: 'outlet', label: 'Outlet', render: (row) => row.outlet ?? '—' },
             { key: 'provider', label: 'Provider', render: (row) => terminalProviderLabel(row.provider) },
+            { key: 'account', label: 'Recorded account', render: (row) => terminalAccountText(row.accountLabel, row.accountLast4) ?? 'Not recorded' },
             { key: 'count', label: 'Sales', align: 'right' },
             { key: 'grossTotal', label: 'Total', align: 'right', render: (row) => <Money amount={row.grossTotal} currencyCode={row.currency} /> },
           ]}
           rows={report.byTerminalProvider}
-          rowKey={(row) => `${row.currency}-${row.provider ?? 'none'}`}
+          rowKey={(row) => `${row.currency}-${row.outlet ?? ''}-${row.provider ?? 'none'}-${row.accountLast4 ?? ''}-${row.accountLabel ?? ''}`}
         />
       )}
 
@@ -159,7 +161,7 @@ export function PaymentReconciliationTab() {
           { key: 'businessDate', label: 'Date' },
           { key: 'source', label: 'Source', render: (row) => describeSource(row.source) },
           { key: 'method', label: 'Method', render: (row) => methodLabel(row.method) },
-          { key: 'providerChannel', label: 'Channel', render: (row) => row.providerChannel ?? (row.method === 'terminal' ? terminalProviderLabel(row.terminalProvider) : '—') },
+          { key: 'providerChannel', label: 'Channel', render: (row) => row.providerChannel ?? (row.method === 'terminal' ? [terminalProviderLabel(row.terminalProvider), terminalAccountText(row.terminalAccountLabel, row.terminalAccountLast4)].filter(Boolean).join(' · ') : '—') },
           {
             key: 'grossAmount',
             label: 'Gross',

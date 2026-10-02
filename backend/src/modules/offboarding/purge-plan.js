@@ -164,6 +164,7 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'pos_menu_items',
   'pos_outlet_categories',
   'pos_menu_categories',
+  'pos_outlet_terminal_accounts',
   'pos_outlets',
   // night audit and reservations
   'daily_reports',
