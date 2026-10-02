@@ -65,6 +65,34 @@
 		X-Frame-Options "DENY"
 	}
 
+	# Baseline noindex posture — privacy hardening, not SEO. Every response
+	# (the staff app on every tenant subdomain, /platform, /qr-order, the
+	# portal's auth/checkout/account pages, /assets, the API) tells crawlers
+	# not to index it, EXCEPT the explicit allow-list of `/` and `/signup`.
+	# Portal landing pages are deliberately noindex for now: whether a hotel
+	# wants to be findable is a per-hotel decision made separately. Note that
+	# `/` on a tenant subdomain is the staff sign-in page, which this
+	# allow-list leaves indexable by design of the request.
+	@noindex not path / /signup
+	header @noindex X-Robots-Tag "noindex, nofollow"
+
+	# A real robots.txt and a clean sitemap 404 — without these, both paths
+	# fell through to the SPA shell and returned index.html with a 200.
+	# robots.txt's `$` anchors make `Allow` exact-match, and the longer rule
+	# wins over `Disallow: /` (RFC 9309), so only `/` and `/signup` are open.
+	handle /robots.txt {
+		header Content-Type "text/plain; charset=utf-8"
+		header Cache-Control "public, max-age=3600"
+		respond `User-agent: *
+Allow: /$
+Allow: /signup$
+Disallow: /
+` 200
+	}
+	handle /sitemap.xml {
+		respond "Not found" 404
+	}
+
 	# A REAL BUG THIS PASS FOUND AND FIXED, confirmed against the actual
 	# compiled Caddy config (`caddy adapt`), not assumed from reading the
 	# Caddyfile: named matchers (`@api path /api/v1/*` on a bare
