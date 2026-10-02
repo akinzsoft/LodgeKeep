@@ -158,8 +158,12 @@ async function updateOutlet({ context, id, changes }) {
 // migration 20261116090000 for the full reasoning.
 // ---------------------------------------------------------------------
 
-/** Providers that can hold an outlet account. `other` is deliberately absent: it has no single account. */
-const ACCOUNT_PROVIDERS = ['moniepoint', 'opay', 'gtbank'];
+/**
+ * Providers that can hold an outlet account. `other` covers any terminal not
+ * listed; with no provider name of its own, its account is identified by its
+ * label, which is therefore required (the bank is free text, never validated).
+ */
+const ACCOUNT_PROVIDERS = ['moniepoint', 'opay', 'gtbank', 'other'];
 
 function lastFour(accountNumber) {
   return String(accountNumber).replace(/\s+/g, '').slice(-4);
@@ -198,6 +202,9 @@ async function setOutletTerminalAccount({ context, outletId, provider, accountNu
   const label = typeof accountLabel === 'string' && accountLabel.trim() ? accountLabel.trim() : null;
   if (label && label.length > 80) {
     throw new ValidationError('INVALID_ACCOUNT_LABEL', '"account_label" must be at most 80 characters.', [{ field: 'account_label', issue: 'too_long' }]);
+  }
+  if (normalizedProvider === 'other' && !label) {
+    throw new ValidationError('MISSING_ACCOUNT_LABEL', 'An "Other" account needs a label naming the terminal provider and bank (e.g. "Zenith POS — Zenith Bank").', [{ field: 'account_label', issue: 'missing' }]);
   }
   return db.transaction(async (trx) => {
     const outlet = await trx.table('pos_outlets').where({ id: outletId }).forUpdate().first();

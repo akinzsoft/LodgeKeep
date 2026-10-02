@@ -114,8 +114,9 @@ describe('POS outlet terminal accounts (recording only)', () => {
       expect((await as(managerId).delete(accountUrl('gtbank'))).status).toBe(404);
     });
 
-    it('rejects "other", unknown providers, bad numbers and long labels, writing nothing', async () => {
-      expect((await setAccount('other', { account_number: '0123456789' })).status).toBe(400);
+    it('rejects unknown providers, bad numbers, long labels, and an Other account with no label, writing nothing', async () => {
+      expect((await setAccount('other', { account_number: '0123456789' })).status).toBe(400); // Other is identified by its label
+      expect((await setAccount('other', { account_number: '0123456789', account_label: '   ' })).status).toBe(400);
       expect((await setAccount('zenith', { account_number: '0123456789' })).status).toBe(400);
       expect((await setAccount('opay', { account_number: 'abc' })).status).toBe(400);
       expect((await setAccount('opay', { account_number: '12' })).status).toBe(400);
@@ -128,6 +129,18 @@ describe('POS outlet terminal accounts (recording only)', () => {
       const foreign = ctx.b.posOutlets[0].id;
       expect((await as(managerId).put(accountUrl('opay', foreign)).send({ account_number: '0123456789' })).status).toBe(400);
       expect((await as(managerId).get(`/api/v1/pos/outlets/${foreign}/terminal-accounts`)).status).toBe(400);
+    });
+
+    it('takes any bank as free text, and records an Other account identified by its label', async () => {
+      const bank = await setAccount('gtbank', { account_number: '0123456789', account_label: 'Some Brand New Microfinance Bank — Bar' });
+      expect(bank.status).toBe(200);
+      expect(bank.body.data.account_label).toBe('Some Brand New Microfinance Bank — Bar');
+
+      const other = await setAccount('other', { account_number: '7070707070', account_label: ' Zenith POS — Zenith Bank ' });
+      expect(other.status).toBe(200);
+      expect(other.body.data).toMatchObject({ provider: 'other', account_label: 'Zenith POS — Zenith Bank', account_number_last4: '7070' });
+      await as(managerId).delete(accountUrl('gtbank'));
+      await as(managerId).delete(accountUrl('other'));
     });
 
     it('is audited, with who changed what', async () => {
@@ -155,6 +168,16 @@ describe('POS outlet terminal accounts (recording only)', () => {
         expect(row.terminal_account_label).toBeNull();
         expect(row.terminal_account_last4).toBeNull();
       }
+    });
+
+    it("snapshots an Other account's label and last 4, and nothing once it is removed", async () => {
+      await setAccount('other', { account_number: '7070707070', account_label: 'Zenith POS — Zenith Bank' });
+      const row = await settleTerminal({ method: 'terminal', terminal_provider: 'other' });
+      expect(row).toMatchObject({ terminal_provider: 'other', terminal_account_label: 'Zenith POS — Zenith Bank', terminal_account_last4: '7070' });
+      await as(managerId).delete(accountUrl('other'));
+      const after = await settleTerminal({ method: 'terminal', terminal_provider: 'other' });
+      expect(after.terminal_account_label).toBeNull();
+      expect(await t.trx('pos_order_settlements').where({ id: row.id }).first()).toMatchObject({ terminal_account_label: 'Zenith POS — Zenith Bank' });
     });
 
     it('does not trust a client-supplied account', async () => {
@@ -191,6 +214,8 @@ describe('POS outlet terminal accounts (recording only)', () => {
       await settleTerminal({ method: 'terminal', terminal_provider: 'moniepoint' });
       await settleTerminal({ method: 'terminal', terminal_provider: 'moniepoint' });
       await settleTerminal({ method: 'terminal', terminal_provider: 'gtbank' }); // no account recorded
+      await setAccount('other', { account_number: '7070707070', account_label: 'Zenith POS — Zenith Bank' });
+      await settleTerminal({ method: 'terminal', terminal_provider: 'other' });
       // Same provider, a changed account: its own row, never merged with the first.
       await setAccount('moniepoint', { account_number: '4040404040', account_label: 'Bar Moniepoint 2' });
       await settleTerminal({ method: 'terminal', terminal_provider: 'moniepoint' });
@@ -206,12 +231,13 @@ describe('POS outlet terminal accounts (recording only)', () => {
       expect(find('moniepoint', '1010')).toMatchObject({ count: 2, grossTotal: '46.00', accountLabel: 'Bar Moniepoint' });
       expect(find('moniepoint', '4040')).toMatchObject({ count: 1, grossTotal: '23.00', accountLabel: 'Bar Moniepoint 2' });
       expect(find('gtbank', null)).toMatchObject({ count: 1, accountLabel: null });
-      expect(rows.reduce((n, row) => n + row.count, 0)).toBe(4);
+      expect(find('other', '7070')).toMatchObject({ count: 1, accountLabel: 'Zenith POS — Zenith Bank' });
+      expect(rows.reduce((n, row) => n + row.count, 0)).toBe(5);
     });
 
     it('carries the account on terminal lines only, and in the CSV', async () => {
       const terminal = report.lines.filter((line) => line.method === 'terminal');
-      expect(terminal.map((line) => line.terminalAccountLast4).sort()).toEqual(['1010', '1010', '4040', null]);
+      expect(terminal.map((line) => line.terminalAccountLast4).sort()).toEqual(['1010', '1010', '4040', '7070', null]);
       const csv = (await as(managerId).get(`/api/v1/reconciliation/payments?date_from=${DATE}&date_to=${DATE}&format=csv`)).text;
       expect(csv.split('\n')[0]).toContain('terminalAccountLast4');
       expect(csv).toContain('Bar Moniepoint 2');
@@ -220,7 +246,7 @@ describe('POS outlet terminal accounts (recording only)', () => {
     it('adds the account to terminal payments in the Sales report, and to nothing else', async () => {
       const res = await as(managerId).get(`/api/v1/pos/reports/sales?date_from=${DATE}&date_to=${DATE}`);
       const payments = res.body.data.tabs.flatMap((tab) => tab.payments).filter((p) => p.tender === 'terminal');
-      expect(payments.map((p) => p.terminalAccountLast4).sort()).toEqual(['1010', '1010', '4040', null]);
+      expect(payments.map((p) => p.terminalAccountLast4).sort()).toEqual(['1010', '1010', '4040', '7070', null]);
     });
   });
 });

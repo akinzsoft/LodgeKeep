@@ -120,10 +120,21 @@ export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = f
             <span className={formStyles.label}>Account number</span>
             <input className={formStyles.input} inputMode="numeric" value={form.accountNumber} onChange={(e) => setForm({ ...form, accountNumber: e.target.value })} required />
           </label>
-          <label className={formStyles.field}>
-            <span className={formStyles.label}>Label (optional)</span>
-            <input className={formStyles.input} value={form.accountLabel} maxLength={80} onChange={(e) => setForm({ ...form, accountLabel: e.target.value })} />
-          </label>
+          <div className={formStyles.field}>
+            <label className={formStyles.label} htmlFor="terminal-account-label">
+              {editing === 'other' ? 'Provider and bank' : 'Bank / label (optional)'}
+            </label>
+            <input
+              id="terminal-account-label"
+              className={formStyles.input}
+              value={form.accountLabel}
+              maxLength={80}
+              required={editing === 'other'}
+              placeholder={editing === 'other' ? 'e.g. Zenith POS — Zenith Bank' : 'e.g. Zenith Bank — Pool bar'}
+              onChange={(e) => setForm({ ...form, accountLabel: e.target.value })}
+            />
+            <span className={formStyles.hint}>Type any bank. It is only a label for matching reports, not checked against a list.</span>
+          </div>
           <div className={formStyles.actionsRow}>
             <Button type="submit" loading={saving} disabled={isOffline}>
               Save account

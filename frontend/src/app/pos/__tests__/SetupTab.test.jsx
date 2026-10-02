@@ -89,16 +89,29 @@ describe('<SetupTab>', () => {
       await screen.findByRole('heading', { name: 'Terminal accounts — Main Bar' });
     }
 
-    it('offers the three providers (never "Other"), masking a recorded number to its last 4', async () => {
+    it('offers the three providers plus Other, masking a recorded number to its last 4', async () => {
       mocks.listOutletTerminalAccounts.mockResolvedValue([{ id: '5', provider: 'gtbank', account_number: '0123456789', account_number_last4: '6789', account_label: 'Bar GTB' }]);
       await openAccounts();
 
       expect(await screen.findByText('Bar GTB ····6789')).toBeInTheDocument();
       expect(screen.queryByText('0123456789')).not.toBeInTheDocument();
-      expect(screen.getAllByText('No account recorded')).toHaveLength(2);
+      expect(screen.getAllByText('No account recorded')).toHaveLength(3);
       expect(screen.getByText('Moniepoint')).toBeInTheDocument();
       expect(screen.getByText('Opay')).toBeInTheDocument();
-      expect(screen.queryByText('Other')).not.toBeInTheDocument();
+      expect(screen.getByText('Other')).toBeInTheDocument();
+    });
+
+    it('records an Other account identified by a required label naming any provider and bank', async () => {
+      mocks.setOutletTerminalAccount.mockResolvedValue({});
+      await openAccounts();
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Record Other account' }));
+      expect(screen.getByLabelText('Provider and bank')).toBeRequired();
+      await userEvent.type(screen.getByLabelText('Provider and bank'), 'Zenith POS — Zenith Bank');
+      await userEvent.type(screen.getByLabelText('Account number'), '7070707070');
+      await userEvent.click(screen.getByRole('button', { name: 'Save account' }));
+
+      expect(mocks.setOutletTerminalAccount).toHaveBeenCalledWith('1', 'other', { accountNumber: '7070707070', accountLabel: 'Zenith POS — Zenith Bank' });
     });
 
     it('records an account through the API and reloads', async () => {
@@ -107,7 +120,7 @@ describe('<SetupTab>', () => {
 
       await userEvent.click(await screen.findByRole('button', { name: 'Record Opay account' }));
       await userEvent.type(screen.getByLabelText('Account number'), '2020202020');
-      await userEvent.type(screen.getByLabelText('Label (optional)'), 'Bar Opay');
+      await userEvent.type(screen.getByLabelText('Bank / label (optional)'), 'Bar Opay');
       await userEvent.click(screen.getByRole('button', { name: 'Save account' }));
 
       expect(mocks.setOutletTerminalAccount).toHaveBeenCalledWith('1', 'opay', { accountNumber: '2020202020', accountLabel: 'Bar Opay' });

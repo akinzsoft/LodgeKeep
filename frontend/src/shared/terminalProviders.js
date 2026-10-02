@@ -22,8 +22,8 @@ export function terminalProviderLabel(value) {
   return LABELS[value] ?? value;
 }
 
-/** Providers that can hold a recorded account (`other` has no single account). Matches the backend's `ACCOUNT_PROVIDERS`. */
-export const ACCOUNT_PROVIDERS = TERMINAL_PROVIDERS.filter((p) => p.value !== 'other');
+/** Providers that can hold a recorded account. `other` covers any terminal not listed, identified by its label. Matches the backend's `ACCOUNT_PROVIDERS`. */
+export const ACCOUNT_PROVIDERS = TERMINAL_PROVIDERS;
 
 /** "Bar GTB ····6789", "····6789" or null when no account was recorded. Only the last 4 digits ever reach a report. */
 export function terminalAccountText(label, last4) {
