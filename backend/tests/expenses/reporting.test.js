@@ -11,7 +11,7 @@
  * a proper P&L statement" — the original per-day "profit summary" shape
  * is gone).
  *
- * Also covers `itemsSoldWithoutRecipeCost` — a real, user-reported gap
+ * Also covers `itemsSoldWithoutCost` — a real, user-reported gap
  * closure: a menu item sold with no recipe never contributes to Cost of
  * Sales (see `expenses/reporting.js`'s own header), which silently
  * overstates Gross Profit unless flagged.
@@ -135,7 +135,7 @@ describe('Expense report and profit summary', () => {
     expect(Number(statement.revenue.posRevenue)).toBeGreaterThanOrEqual(20); // the real ₦20 sale
     expect(statement.revenue.totalRevenue).toBe(sumMoneyForTest([statement.revenue.roomRevenue, statement.revenue.posRevenue]));
     expect(statement.costOfSales).toBe('0.00'); // the settled item in beforeAll has no recipe/BOM
-    expect(statement.itemsSoldWithoutRecipeCost).toBe(1); // flagged, not silently zeroed — exactly the beforeAll item
+    expect(statement.itemsSoldWithoutCost).toBe(1); // flagged, not silently zeroed — exactly the beforeAll item
     expect(statement.grossProfit).toBe(statement.revenue.totalRevenue); // gross profit = revenue when cost of sales is zero
     // Exact identity: grossProfit - totalOperatingExpenses === netProfit (BigInt-cents, never float).
     const expectedNetProfitCents = Math.round(Number(statement.grossProfit) * 100) - Math.round(Number(statement.operatingExpenses.total) * 100);
@@ -179,7 +179,148 @@ describe('Expense report and profit summary', () => {
     expect(statement.grossProfit).toBe(sumMoneyForTest([statement.revenue.totalRevenue, '-8.00']));
     // The recipe-linked item sold here is correctly excluded from the
     // warning — only the beforeAll item (still no recipe) counts.
-    expect(statement.itemsSoldWithoutRecipeCost).toBe(1);
+    expect(statement.itemsSoldWithoutCost).toBe(1);
+  });
+
+  describe('cost_price fallback (menu items sold with no stock movement)', () => {
+    const propertyId = () => ctx.a.properties[0].id;
+    let outletId;
+    let terminalId;
+    let counter = 0;
+
+    beforeAll(async () => {
+      const suffix = Date.now().toString(36);
+      [outletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId(), code: `CPF-${suffix}`, name: 'CP Fallback Outlet', type: 'bar' });
+      [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: propertyId(), outlet_id: outletId, device_ref: `CPF-TERM-${suffix}` });
+    });
+
+    async function newItem({ costPrice = null, price = '400.00' } = {}) {
+      counter += 1;
+      const [id] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId(), outlet_id: outletId, name: `CPF Item ${counter}`, category: 'Beverages', price, cost_price: costPrice });
+      return id;
+    }
+
+    async function addRecipe(menuItemId, purchaseCost = '4.00') {
+      counter += 1;
+      const [stockItemId] = await insertStockItem(t.trx, {
+        tenant_id: ctx.a.id, property_id: propertyId(), outlet_id: outletId, name: `CPF Stock ${counter}`, unit: 'ml', purchase_cost: purchaseCost, reorder_level: '0.000', current_quantity: '10000.000',
+      });
+      const res = await t.request
+        .put(`/api/v1/pos/stock/menu-items/${menuItemId}/components`)
+        .set('Authorization', `Bearer ${manager()}`)
+        .send({ components: [{ stock_item_id: stockItemId, quantity: '1.000' }] });
+      expect(res.status).toBe(200);
+      return stockItemId;
+    }
+
+    async function sell(lines) {
+      const order = await t.request.post('/api/v1/pos/orders').set('Authorization', `Bearer ${manager()}`).send({ outlet_id: outletId, terminal_id: terminalId, table_label: `CPF${(counter += 1)}` });
+      for (const [menuItemId, quantity] of lines) {
+        const added = await t.request.post(`/api/v1/pos/orders/${order.body.data.id}/items`).set('Authorization', `Bearer ${manager()}`).send({ menu_item_id: menuItemId, quantity });
+        expect(added.status).toBe(200);
+      }
+      const settled = await t.request.post(`/api/v1/pos/orders/${order.body.data.id}/settle`).set('Authorization', `Bearer ${manager()}`).set('Idempotency-Key', idemKey()).send({ settlements: [{ method: 'cash' }] });
+      expect(settled.status).toBe(200);
+      return { orderId: order.body.data.id, settlementId: settled.body.data.settlements[0].id };
+    }
+
+    async function statement() {
+      const res = await t.request.get(`/api/v1/expenses/reports/profit?date_from=${BUSINESS_DATE}&date_to=${BUSINESS_DATE}`).set('Authorization', `Bearer ${manager()}`);
+      expect(res.status).toBe(200);
+      return res.body.data;
+    }
+
+    const delta = (after, before, key) => sumMoneyForTest([after[key], `-${before[key]}`]);
+
+    it('an item with no recipe is costed at quantity x cost_price, shown as its own sub-line, and gross profit falls by exactly that', async () => {
+      const item = await newItem({ costPrice: '600.00' });
+      const before = await statement();
+      await sell([[item, 2]]);
+      const after = await statement();
+
+      expect(delta(after, before, 'costOfSales')).toBe('1200.00');
+      expect(delta(after, before, 'costOfSalesFromCostPrice')).toBe('1200.00');
+      expect(delta(after, before, 'grossProfit')).toBe(sumMoneyForTest([delta(after.revenue, before.revenue, 'totalRevenue'), '-1200.00']));
+      expect(after.itemsSoldWithoutCost).toBe(before.itemsSoldWithoutCost);
+    });
+
+    it('a recipe item is costed from the stock ledger only, even when it also carries a cost_price (never counted twice)', async () => {
+      const item = await newItem({ costPrice: '999.00' });
+      await addRecipe(item, '4.00');
+      const before = await statement();
+      await sell([[item, 3]]);
+      const after = await statement();
+
+      expect(delta(after, before, 'costOfSales')).toBe('12.00'); // 3 x 4.00 from the ledger, none of the 999.00
+      expect(delta(after, before, 'costOfSalesFromCostPrice')).toBe('0.00');
+    });
+
+    it('a recipe removed after the sale is not double counted: the ledger already holds it, so the item is flagged instead', async () => {
+      const item = await newItem({ costPrice: '50.00' });
+      await addRecipe(item, '4.00');
+      const before = await statement();
+      await sell([[item, 1]]);
+      await t.request.put(`/api/v1/pos/stock/menu-items/${item}/components`).set('Authorization', `Bearer ${manager()}`).send({ components: [] });
+      const after = await statement();
+
+      expect(delta(after, before, 'costOfSales')).toBe('4.00'); // the ledger movement only
+      expect(delta(after, before, 'costOfSalesFromCostPrice')).toBe('0.00');
+      expect(after.itemsSoldWithoutCost).toBe(before.itemsSoldWithoutCost + 1);
+    });
+
+    it('a recipe added after the sale does not hide it: no movement was written, so cost_price covers that sale', async () => {
+      const item = await newItem({ costPrice: '30.00' });
+      const before = await statement();
+      await sell([[item, 2]]);
+      await addRecipe(item, '4.00');
+      const after = await statement();
+
+      expect(delta(after, before, 'costOfSalesFromCostPrice')).toBe('60.00');
+      expect(delta(after, before, 'costOfSales')).toBe('60.00');
+    });
+
+    it('in a mixed tab each line is judged on its own: recipe item from the ledger, plain item from cost_price', async () => {
+      const recipeItem = await newItem({});
+      await addRecipe(recipeItem, '4.00');
+      const plainItem = await newItem({ costPrice: '100.00' });
+      const before = await statement();
+      await sell([[recipeItem, 1], [plainItem, 2]]);
+      const after = await statement();
+
+      expect(delta(after, before, 'costOfSales')).toBe('204.00'); // 4.00 ledger + 2 x 100.00
+      expect(delta(after, before, 'costOfSalesFromCostPrice')).toBe('200.00');
+    });
+
+    it('an item with no recipe and no cost_price adds no cost and is flagged', async () => {
+      const item = await newItem({});
+      const before = await statement();
+      await sell([[item, 1]]);
+      const after = await statement();
+
+      expect(delta(after, before, 'costOfSales')).toBe('0.00');
+      expect(after.itemsSoldWithoutCost).toBe(before.itemsSoldWithoutCost + 1);
+    });
+
+    it('a voided settlement adds nothing', async () => {
+      const item = await newItem({ costPrice: '77.00' });
+      const before = await statement();
+      const { orderId, settlementId } = await sell([[item, 1]]);
+      const voided = await t.request
+        .post(`/api/v1/pos/orders/${orderId}/settlements/${settlementId}/void`)
+        .set('Authorization', `Bearer ${manager()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ reason: 'test void' });
+      expect(voided.status).toBe(200);
+      const after = await statement();
+
+      expect(delta(after, before, 'costOfSales')).toBe('0.00');
+      expect(delta(after, before, 'costOfSalesFromCostPrice')).toBe('0.00');
+    });
+
+    it('CSV carries the cost-price estimate note', async () => {
+      const csv = await t.request.get(`/api/v1/expenses/reports/profit?date_from=${BUSINESS_DATE}&date_to=${BUSINESS_DATE}&format=csv`).set('Authorization', `Bearer ${manager()}`);
+      expect(csv.text).toContain('estimated from item cost price');
+    });
   });
 
   it('a period with real revenue but zero expenses: net profit exactly equals gross profit', async () => {
@@ -189,7 +330,7 @@ describe('Expense report and profit summary', () => {
     const statement = res.body.data;
     expect(statement.revenue.totalRevenue).toBe('0.00');
     expect(statement.costOfSales).toBe('0.00');
-    expect(statement.itemsSoldWithoutRecipeCost).toBe(0); // honestly zero, not a stale warning
+    expect(statement.itemsSoldWithoutCost).toBe(0); // honestly zero, not a stale warning
     expect(statement.operatingExpenses.total).toBe('0.00');
     expect(statement.netProfit).toBe('0.00');
   });
@@ -288,7 +429,7 @@ describe('Expense report and profit summary', () => {
     expect(profitCsv.headers['content-type']).toContain('text/csv');
     // BUSINESS_DATE carries the beforeAll no-recipe sale by this point in
     // the file — the CSV export must carry the same warning the JSON does.
-    expect(profitCsv.text).toContain('no recipe configured');
+    expect(profitCsv.text).toContain('no cost (no recipe deduction and no cost price)');
   });
 
   it('RBAC: housekeeping (no expenses.view) is refused both reports', async () => {

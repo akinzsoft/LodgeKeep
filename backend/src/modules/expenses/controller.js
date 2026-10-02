@@ -296,13 +296,12 @@ function flattenProfitAndLossForCsv(statement) {
     { line: 'Cost of sales', amount: statement.costOfSales },
     { line: 'Gross profit', amount: statement.grossProfit },
   ];
-  // Flagged rather than hidden, matching this statement's own printed
-  // letterhead discipline — a recipe-less menu item's cost never reaches
-  // the Cost of sales line above, so Gross profit can be overstated with
-  // no other signal of it anywhere in this export.
-  if (statement.itemsSoldWithoutRecipeCost > 0) {
+  if (statement.costOfSalesFromCostPrice !== '0.00') {
+    rows.push({ line: 'Note: of which estimated from item cost price (current cost price, not stock ledger)', amount: statement.costOfSalesFromCostPrice });
+  }
+  if (statement.itemsSoldWithoutCost > 0) {
     rows.push({
-      line: `Note: ${statement.itemsSoldWithoutRecipeCost} menu item(s) sold in this range with no recipe configured, cost excluded from Cost of sales above`,
+      line: `Note: ${statement.itemsSoldWithoutCost} menu item(s) sold in this range with no cost (no recipe deduction and no cost price), cost excluded from Cost of sales above`,
       amount: '',
     });
   }
