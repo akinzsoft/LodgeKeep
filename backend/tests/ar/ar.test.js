@@ -721,6 +721,157 @@ describe('Accounts Receivable (PLAN.md Phase 4)', () => {
       expect(invoice.status).toBe('paid');
     });
 
+    describe('payment guards (accounting integrity)', () => {
+      // Two companies at the SAME property, each with its own AR account and a 100.00 invoice.
+      async function twoAccountsWithInvoices() {
+        const out = {};
+        for (const key of ['a', 'b']) {
+          const company = await createCompany({ name: `Guard Co ${key} ${Date.now()}-${Math.random()}` });
+          const account = await createAccount({ companyProfileId: company.id, creditLimit: '500.00' });
+          const folio = await openFolio(ctx.a, { companyProfileId: company.id });
+          await postAdjustment(folio.id, '100.00');
+          const invoiceRes = await generateInvoiceFor(account.id);
+          expect(invoiceRes.status).toBe(201);
+          out[key] = { account, invoiceId: invoiceRes.body.data.id };
+        }
+        return out;
+      }
+
+      // Everything a refused payment must leave alone: payments, applications, invoice status, account balances.
+      async function ledgerSnapshot(pair) {
+        const accountIds = [pair.a.account.id, pair.b.account.id];
+        return {
+          payments: await t.trx('ar_payments').whereIn('ar_account_id', accountIds).orderBy('id').select('id', 'amount', 'voided_at'),
+          applications: await t.trx('ar_payment_applications').whereIn('ar_invoice_id', [pair.a.invoiceId, pair.b.invoiceId]).orderBy('id').select('id', 'ar_invoice_id', 'amount'),
+          invoices: await t.trx('ar_invoices').whereIn('id', [pair.a.invoiceId, pair.b.invoiceId]).orderBy('id').select('id', 'status'),
+          balances: await t.trx('ar_accounts').whereIn('id', accountIds).orderBy('id').select('id', 'current_balance'),
+        };
+      }
+
+      it("refuses Company A's payment applied to Company B's invoice, at record time, changing nothing", async () => {
+        const pair = await twoAccountsWithInvoices();
+        const before = await ledgerSnapshot(pair);
+        const res = await recordPayment(pair.a.account.id, {
+          amount: '100.00',
+          currency: 'NGN',
+          method_label: 'wire',
+          received_at: '2027-02-01',
+          applications: [{ invoice_id: pair.b.invoiceId, amount: '100.00' }],
+        });
+        expect(res.status).toBe(422);
+        expect(res.body.error.code).toBe('VALIDATION_INVOICE_NOT_ON_PAYMENT_ACCOUNT');
+        expect(await ledgerSnapshot(pair)).toEqual(before);
+      });
+
+      it("refuses applying Company A's existing payment to Company B's invoice, changing nothing", async () => {
+        const pair = await twoAccountsWithInvoices();
+        const paymentRes = await recordPayment(pair.a.account.id, { amount: '100.00', currency: 'NGN', method_label: 'wire', received_at: '2027-02-01' });
+        expect(paymentRes.status).toBe(201);
+        const before = await ledgerSnapshot(pair);
+        const res = await t.request
+          .post(`/api/v1/ar/payments/${paymentRes.body.data.id}/apply`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ applications: [{ invoice_id: pair.b.invoiceId, amount: '100.00' }] });
+        expect(res.status).toBe(422);
+        expect(res.body.error.code).toBe('VALIDATION_INVOICE_NOT_ON_PAYMENT_ACCOUNT');
+        expect(await ledgerSnapshot(pair)).toEqual(before);
+      });
+
+      it('still applies a payment to its own account\'s invoice', async () => {
+        const pair = await twoAccountsWithInvoices();
+        const res = await recordPayment(pair.a.account.id, {
+          amount: '100.00',
+          currency: 'NGN',
+          method_label: 'wire',
+          received_at: '2027-02-01',
+          applications: [{ invoice_id: pair.a.invoiceId, amount: '100.00' }],
+        });
+        expect(res.status).toBe(201);
+        expect((await t.trx('ar_invoices').where({ id: pair.a.invoiceId }).first()).status).toBe('paid');
+      });
+
+      it.each([
+        ['a zero payment', { amount: '0.00' }],
+        ['a zero payment written "0"', { amount: '0' }],
+        ['a negative payment', { amount: '-50.00' }],
+        ['a non-numeric payment', { amount: 'abc' }],
+        ['a payment with more than 2 decimals', { amount: '10.005' }],
+      ])('refuses %s, changing nothing', async (_label, override) => {
+        const pair = await twoAccountsWithInvoices();
+        const before = await ledgerSnapshot(pair);
+        const res = await recordPayment(pair.a.account.id, { currency: 'NGN', method_label: 'wire', received_at: '2027-02-01', ...override });
+        expect(res.status).toBe(400);
+        expect(res.body.error.code).toBe('VALIDATION_INVALID_AMOUNT');
+        expect(await ledgerSnapshot(pair)).toEqual(before);
+      });
+
+      it.each([
+        ['a negative application', '-10.00'],
+        ['a zero application', '0.00'],
+      ])('refuses %s at record time, changing nothing', async (_label, amount) => {
+        const pair = await twoAccountsWithInvoices();
+        const before = await ledgerSnapshot(pair);
+        const res = await recordPayment(pair.a.account.id, {
+          amount: '50.00',
+          currency: 'NGN',
+          method_label: 'wire',
+          received_at: '2027-02-01',
+          applications: [{ invoice_id: pair.a.invoiceId, amount }],
+        });
+        expect(res.status).toBe(400);
+        expect(res.body.error.code).toBe('VALIDATION_INVALID_AMOUNT');
+        expect(await ledgerSnapshot(pair)).toEqual(before);
+      });
+
+      it('refuses a negative application on the apply endpoint — it would otherwise grow the invoice\'s open amount', async () => {
+        const pair = await twoAccountsWithInvoices();
+        const paymentRes = await recordPayment(pair.a.account.id, {
+          amount: '60.00',
+          currency: 'NGN',
+          method_label: 'wire',
+          received_at: '2027-02-01',
+          applications: [{ invoice_id: pair.a.invoiceId, amount: '60.00' }],
+        });
+        expect(paymentRes.status).toBe(201);
+        const before = await ledgerSnapshot(pair);
+        const res = await t.request
+          .post(`/api/v1/ar/payments/${paymentRes.body.data.id}/apply`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ applications: [{ invoice_id: pair.a.invoiceId, amount: '-20.00' }] });
+        expect(res.status).toBe(400);
+        expect(res.body.error.code).toBe('VALIDATION_INVALID_AMOUNT');
+        expect(await ledgerSnapshot(pair)).toEqual(before);
+      });
+
+      it("refuses a payment whose currency differs from the account's, changing nothing", async () => {
+        const pair = await twoAccountsWithInvoices();
+        const before = await ledgerSnapshot(pair);
+        const res = await recordPayment(pair.a.account.id, { amount: '100.00', currency: 'USD', method_label: 'wire', received_at: '2027-02-01' });
+        expect(res.status).toBe(422);
+        expect(res.body.error.code).toBe('VALIDATION_CURRENCY_MISMATCH');
+        expect(await ledgerSnapshot(pair)).toEqual(before);
+      });
+
+      it("refuses applying a payment to an invoice in a different currency than the payment, changing nothing", async () => {
+        const pair = await twoAccountsWithInvoices();
+        const paymentRes = await recordPayment(pair.a.account.id, { amount: '100.00', currency: 'NGN', method_label: 'wire', received_at: '2027-02-01' });
+        expect(paymentRes.status).toBe(201);
+        // Same account, but the invoice is (somehow) not in the payment's currency.
+        await t.trx('ar_invoices').where({ id: pair.a.invoiceId }).update({ currency: 'USD' });
+        const before = await ledgerSnapshot(pair);
+        const res = await t.request
+          .post(`/api/v1/ar/payments/${paymentRes.body.data.id}/apply`)
+          .set('Authorization', `Bearer ${tokenFor()}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ applications: [{ invoice_id: pair.a.invoiceId, amount: '100.00' }] });
+        expect(res.status).toBe(422);
+        expect(res.body.error.code).toBe('VALIDATION_CURRENCY_MISMATCH');
+        expect(await ledgerSnapshot(pair)).toEqual(before);
+      });
+    });
+
     it('rejects applying more than an invoice has remaining', async () => {
       const company = await createCompany();
       const account = await createAccount({ companyProfileId: company.id, creditLimit: '500.00' });
