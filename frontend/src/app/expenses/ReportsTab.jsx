@@ -164,6 +164,22 @@ export function ReportsTab({ activeProperty }) {
                   <Money amount={statement.revenue.posRevenue} currencyCode={currency} />
                 </td>
               </tr>
+              {(statement.revenue.otherIncome?.fees ?? '0.00') !== '0.00' || (statement.revenue.otherIncome?.discounts ?? '0.00') !== '0.00' ? (
+                <>
+                  <tr className={formStyles.statementRow}>
+                    <td className={formStyles.statementIndent}>Fees and other charges</td>
+                    <td className={formStyles.statementAmount}>
+                      <Money amount={statement.revenue.otherIncome.fees} currencyCode={currency} />
+                    </td>
+                  </tr>
+                  <tr className={formStyles.statementRow}>
+                    <td className={formStyles.statementIndent}>Discounts and corrections (net)</td>
+                    <td className={formStyles.statementAmount}>
+                      <Money amount={statement.revenue.otherIncome.discounts} currencyCode={currency} />
+                    </td>
+                  </tr>
+                </>
+              ) : null}
               <tr className={formStyles.statementSubtotal}>
                 <td>Total revenue</td>
                 <td className={formStyles.statementAmount}>
@@ -226,6 +242,12 @@ export function ReportsTab({ activeProperty }) {
               </tr>
             </tbody>
           </table>
+
+          {statement.adjustmentsInOtherCurrency > 0 && (
+            <p className={formStyles.costWarningBanner} role="alert">
+              {statement.adjustmentsInOtherCurrency} folio adjustment(s) in another currency are not included in revenue above.
+            </p>
+          )}
 
           {statement.itemsSoldWithoutCost > 0 && (
             <p className={formStyles.costWarningBanner} role="alert">

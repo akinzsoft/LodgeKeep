@@ -419,6 +419,98 @@ describe('Expense report and profit summary', () => {
     });
   });
 
+  describe('Other income (folio adjustments)', () => {
+    const profit = (from, to, extra = '') =>
+      t.request.get(`/api/v1/expenses/reports/profit?date_from=${from}&date_to=${to}${extra}`).set('Authorization', `Bearer ${manager()}`);
+
+    async function line(tenant, { type = 'adjustment', amount, date, currency = 'NGN', related = null, voided = false, description = 'Other income test' }) {
+      const folio = tenant.folios[0];
+      const [id] = await t.trx('folio_line_items').insert({
+        tenant_id: tenant.id,
+        property_id: folio.property_id,
+        folio_id: folio.id,
+        type,
+        description,
+        amount,
+        currency,
+        business_date: date,
+        related_line_item_id: related,
+        ...(voided ? { voided_at: new Date(), void_reason: 'test', voided_by_user_id: tenant.users[0].id } : {}),
+      });
+      return id;
+    }
+
+    it('with no adjustments the statement is unchanged: other income is zero and total revenue is room + POS', async () => {
+      const day = '2032-02-01';
+      const { revenue } = (await profit(day, day)).body.data;
+      expect(revenue.otherIncome).toEqual({ fees: '0.00', discounts: '0.00', total: '0.00' });
+      expect(revenue.totalRevenue).toBe(sumMoneyForTest([revenue.roomRevenue, revenue.posRevenue]));
+    });
+
+    it('a fee adds and a discount subtracts, flowing through to gross and net profit', async () => {
+      const day = '2032-02-02';
+      await line(ctx.a, { amount: '500.00', date: day, description: 'Late checkout fee' });
+      await line(ctx.a, { amount: '-120.00', date: day, description: 'Goodwill discount' });
+      const statement = (await profit(day, day)).body.data;
+
+      expect(statement.revenue.otherIncome).toEqual({ fees: '500.00', discounts: '-120.00', total: '380.00' });
+      expect(statement.revenue.totalRevenue).toBe('380.00');
+      expect(statement.grossProfit).toBe('380.00');
+      expect(statement.netProfit).toBe('380.00');
+    });
+
+    it('voided adjustments, pos_charge, room_charge, tax, payments and POS-tip adjustments are never counted', async () => {
+      const day = '2032-02-03';
+      await line(ctx.a, { amount: '70.00', date: day, voided: true });
+      await line(ctx.a, { type: 'room_charge', amount: '999.00', date: day });
+      await line(ctx.a, { type: 'tax', amount: '75.00', date: day });
+      await line(ctx.a, { type: 'payment', amount: '-999.00', date: day });
+      const posCharge = await line(ctx.a, { type: 'pos_charge', amount: '400.00', date: day });
+      await line(ctx.a, { amount: '30.00', date: day, related: posCharge, description: 'POS tip/service charge' });
+      const statement = (await profit(day, day)).body.data;
+
+      expect(statement.revenue.otherIncome.total).toBe('0.00');
+      expect(statement.revenue.totalRevenue).toBe(sumMoneyForTest([statement.revenue.roomRevenue, statement.revenue.posRevenue]));
+    });
+
+    it('an adjustment correcting a room charge is counted (it is not a POS tip)', async () => {
+      const day = '2032-02-04';
+      const roomLine = await line(ctx.a, { type: 'room_charge', amount: '200.00', date: day });
+      await line(ctx.a, { amount: '-50.00', date: day, related: roomLine, description: 'Rate correction' });
+      expect((await profit(day, day)).body.data.revenue.otherIncome.discounts).toBe('-50.00');
+    });
+
+    it('adjustments in another currency are not summed, and are reported', async () => {
+      const day = '2032-02-05';
+      await line(ctx.a, { amount: '100.00', date: day, currency: 'USD' });
+      await line(ctx.a, { amount: '10.00', date: day });
+      const statement = (await profit(day, day)).body.data;
+
+      expect(statement.revenue.otherIncome.total).toBe('10.00');
+      expect(statement.adjustmentsInOtherCurrency).toBe(1);
+      const csv = (await profit(day, day, '&format=csv')).text;
+      expect(csv).toContain('1 folio adjustment(s) in another currency are not included in revenue');
+    });
+
+    it('only adjustments dated inside the range count, and another tenant\'s never do', async () => {
+      await line(ctx.a, { amount: '11.00', date: '2032-02-10' });
+      await line(ctx.a, { amount: '22.00', date: '2032-02-11' });
+      await line(ctx.a, { amount: '33.00', date: '2032-02-12' });
+      await line(ctx.b, { amount: '9000.00', date: '2032-02-11' });
+
+      expect((await profit('2032-02-11', '2032-02-11')).body.data.revenue.otherIncome.total).toBe('22.00');
+      expect((await profit('2032-02-10', '2032-02-12')).body.data.revenue.otherIncome.total).toBe('66.00');
+    });
+
+    it('the CSV shows the two other-income lines only when there are adjustments', async () => {
+      const withAdj = (await profit('2032-02-02', '2032-02-02', '&format=csv')).text;
+      expect(withAdj).toContain('Fees and other charges');
+      expect(withAdj).toContain('Discounts and corrections (net)');
+      const without = (await profit('2032-02-01', '2032-02-01', '&format=csv')).text;
+      expect(without).not.toContain('Fees and other charges');
+    });
+  });
+
   it('exports both reports as CSV', async () => {
     const summaryCsv = await t.request.get(`/api/v1/expenses/reports/summary?date_from=${BUSINESS_DATE}&date_to=${BUSINESS_DATE}&format=csv`).set('Authorization', `Bearer ${manager()}`);
     expect(summaryCsv.status).toBe(200);

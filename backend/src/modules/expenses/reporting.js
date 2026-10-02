@@ -38,6 +38,13 @@
  * with no cost anywhere (no ledger movement, no cost price, or an
  * ambiguous case), whose cost is still missing from Cost of Sales.
  *
+ * Revenue = room + POS + Other income, where Other income is the non-voided
+ * folio `adjustment` lines in range (`cashiering`'s `listOtherFolioIncome`:
+ * fees add, discounts subtract; `pos_charge`, `room_charge`, tax, payments
+ * and POS tip/service adjustments are excluded so nothing counts twice).
+ * Adjustment lines in a non-base currency are not summed and are counted in
+ * `adjustmentsInOtherCurrency`.
+ *
  * `unauditedDates` names the exact days in range with no Night Audit
  * snapshot, so the caveat can say which days instead of a bare "not fully
  * reconciled". Revenue computation is not affected by it.
@@ -63,6 +70,7 @@ const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
 const { computeRevenue } = require('../reporting/service');
 const { computeDailyPosRevenueTotals } = require('../pos/sales-report');
+const { listOtherFolioIncome } = require('../cashiering/service');
 const { computeCostOfSales, computeCostPriceFallback } = require('../stock/reporting');
 
 /** Every non-voided expense in range, joined to its category name. */
@@ -137,17 +145,18 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
   const db = scopedDb().for(context);
   const property = await db.table('properties').first('base_currency');
 
-  const [revenueDays, posRevenueByDate, ledgerCostOfSales, expenseRows, costPriceFallback] = await Promise.all([
+  const [revenueDays, posRevenueByDate, ledgerCostOfSales, expenseRows, costPriceFallback, otherIncome] = await Promise.all([
     computeRevenue({ context, dateFrom, dateTo }),
     computeDailyPosRevenueTotals({ db, dateFrom, dateTo }),
     computeCostOfSales({ context, dateFrom, dateTo }),
     listExpenseRowsWithCategory({ db, dateFrom, dateTo }),
     computeCostPriceFallback({ context, dateFrom, dateTo }),
+    listOtherFolioIncome({ db, dateFrom, dateTo, baseCurrency: property?.base_currency }),
   ]);
 
   const roomRevenue = sumMoney(revenueDays.map((day) => day.roomRevenue));
   const posRevenue = sumMoney([...posRevenueByDate.values()]);
-  const totalRevenue = sumMoney([roomRevenue, posRevenue]);
+  const totalRevenue = sumMoney([roomRevenue, posRevenue, otherIncome.total]);
   const unauditedDates = revenueDays.filter((day) => !day.audited).map((day) => day.date);
   const roomRevenueFullyAudited = revenueDays.length > 0 && unauditedDates.length === 0;
 
@@ -174,7 +183,15 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
     dateFrom,
     dateTo,
     currency: property?.base_currency ?? null,
-    revenue: { roomRevenue, posRevenue, totalRevenue, roomRevenueFullyAudited, unauditedDates },
+    revenue: {
+      roomRevenue,
+      posRevenue,
+      otherIncome: { fees: otherIncome.fees, discounts: otherIncome.discounts, total: otherIncome.total },
+      totalRevenue,
+      roomRevenueFullyAudited,
+      unauditedDates,
+    },
+    adjustmentsInOtherCurrency: otherIncome.otherCurrencyLineCount,
     costOfSales: costOfSalesTotal,
     costOfSalesFromCostPrice: costPriceFallback.totalCost,
     itemsSoldWithoutCost: costPriceFallback.itemsWithoutCost,

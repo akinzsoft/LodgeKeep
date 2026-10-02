@@ -122,6 +122,38 @@ describe('ReportsTab', () => {
     expect(screen.queryByText(/of which from item cost price/i)).not.toBeInTheDocument();
   });
 
+  it('shows the two other-income lines only when folio adjustments exist', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue({
+      ...EMPTY_STATEMENT,
+      revenue: { ...EMPTY_STATEMENT.revenue, otherIncome: { fees: '500.00', discounts: '-120.00', total: '380.00' }, totalRevenue: '380.00' },
+    });
+    render(<ReportsTab activeProperty={activeProperty} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    expect(await screen.findByText('Fees and other charges')).toBeInTheDocument();
+    expect(screen.getByText('Discounts and corrections (net)')).toBeInTheDocument();
+  });
+
+  it('omits the other-income lines when there are no adjustments', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue({
+      ...EMPTY_STATEMENT,
+      revenue: { ...EMPTY_STATEMENT.revenue, otherIncome: { fees: '0.00', discounts: '0.00', total: '0.00' } },
+    });
+    render(<ReportsTab activeProperty={activeProperty} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    await screen.findByText(/Gross profit/i);
+    expect(screen.queryByText('Fees and other charges')).not.toBeInTheDocument();
+  });
+
+  it('warns when folio adjustments in another currency were left out of revenue', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue({ ...EMPTY_STATEMENT, adjustmentsInOtherCurrency: 2 });
+    render(<ReportsTab activeProperty={activeProperty} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    expect(await screen.findByText(/2 folio adjustment\(s\) in another currency/)).toBeInTheDocument();
+  });
+
   it('shows "None recorded" when no operating expenses exist in range, and an honest zero net profit', async () => {
     mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
     mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT);

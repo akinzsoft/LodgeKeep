@@ -1493,8 +1493,53 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
   });
 }
 
+/**
+ * Non-room, non-POS income posted to folios, for the P&L's "Other income"
+ * lines: the non-voided `adjustment` lines whose `business_date` is in range
+ * (checkout fees, staff adjustments and discounts). Signed, so a fee adds
+ * and a discount subtracts. Adjustments carry no tax, so the amount is the
+ * whole income.
+ *
+ * Deliberately NOT counted (each is already counted elsewhere or is not
+ * income): `room_charge` (room revenue), `pos_charge` (counted once as a POS
+ * settlement), `tax`, `payment`/`refund`, voided lines, and any adjustment
+ * linked to a `pos_charge` line (the POS tip/service charge, which POS
+ * revenue also leaves out). Lines in a currency other than `baseCurrency`
+ * are not summed into the single-currency statement; they are counted in
+ * `otherCurrencyLineCount` so the report can say so.
+ */
+async function listOtherFolioIncome({ db, dateFrom, dateTo, baseCurrency }) {
+  const adjustments = await db
+    .table('folio_line_items')
+    .where({ type: 'adjustment' })
+    .whereNull('voided_at')
+    .whereBetween('business_date', [dateFrom, dateTo])
+    .select('id', 'amount', 'currency', 'related_line_item_id');
+
+  const relatedIds = [...new Set(adjustments.map((row) => row.related_line_item_id).filter((id) => id != null))];
+  const related = relatedIds.length ? await db.table('folio_line_items').whereIn('id', relatedIds).select('id', 'type') : [];
+  const relatedTypeById = new Map(related.map((row) => [String(row.id), row.type]));
+
+  const fees = [];
+  const discounts = [];
+  let otherCurrencyLineCount = 0;
+  for (const row of adjustments) {
+    if (row.related_line_item_id != null && relatedTypeById.get(String(row.related_line_item_id)) === 'pos_charge') continue;
+    if (baseCurrency && row.currency !== baseCurrency) {
+      otherCurrencyLineCount += 1;
+      continue;
+    }
+    if (compareMoney(row.amount, '0.00') >= 0) fees.push(row.amount);
+    else discounts.push(row.amount);
+  }
+  const feesTotal = sumMoney(fees);
+  const discountsTotal = sumMoney(discounts);
+  return { fees: feesTotal, discounts: discountsTotal, total: sumMoney([feesTotal, discountsTotal]), otherCurrencyLineCount };
+}
+
 module.exports = {
   LATE_ROOM_CHARGE_PREFIX,
+  listOtherFolioIncome,
   postLateRoomCharges,
   recomputeFolioBalance,
   getFolio,
