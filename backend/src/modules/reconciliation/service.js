@@ -390,6 +390,8 @@ function toPosSettlementLine(row) {
     terminalReference: isTerminal ? row.terminal_reference ?? null : null,
     terminalAccountLabel: isTerminal ? row.terminal_account_label ?? null : null,
     terminalAccountLast4: isTerminal ? row.terminal_account_last4 ?? null : null,
+    terminalAccountBankName: isTerminal ? row.terminal_account_bank_name ?? null : null,
+    terminalProviderName: isTerminal ? row.terminal_account_provider_name ?? null : null,
     source: { kind: 'pos', label: row.outlet_name ?? `Outlet #${row.outlet_id}`, channel: row.source ?? null },
     guestName: null,
     roomNumber: null,
@@ -498,7 +500,7 @@ function summarizeByTerminalProvider(lines) {
   // no account recorded for it, groups under null (never merged into a named one).
   const groups = groupBy(
     terminalLines,
-    (line) => [line.currency, line.source?.label ?? '', line.terminalProvider ?? '', line.terminalAccountLast4 ?? '', line.terminalAccountLabel ?? ''].join('\u0000')
+    (line) => [line.currency, line.source?.label ?? '', line.terminalProvider ?? '', line.terminalAccountLast4 ?? '', line.terminalAccountLabel ?? '', line.terminalAccountBankName ?? '', line.terminalProviderName ?? ''].join('\u0000')
   );
   return [...groups.values()]
     .map((rows) => ({
@@ -507,6 +509,8 @@ function summarizeByTerminalProvider(lines) {
       provider: rows[0].terminalProvider ?? null,
       accountLabel: rows[0].terminalAccountLabel ?? null,
       accountLast4: rows[0].terminalAccountLast4 ?? null,
+      accountBankName: rows[0].terminalAccountBankName ?? null,
+      providerName: rows[0].terminalProviderName ?? null,
       count: rows.length,
       grossTotal: sumMoney(rows.map((row) => row.grossAmount)),
     }))
@@ -589,6 +593,8 @@ const CSV_COLUMNS = [
   'terminalReference',
   'terminalAccountLabel',
   'terminalAccountLast4',
+  'terminalAccountBankName',
+  'terminalProviderName',
   'grossAmount',
   'feeAmount',
   'netAmount',

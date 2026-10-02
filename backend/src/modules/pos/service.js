@@ -158,8 +158,8 @@ async function updateOutlet({ context, id, changes }) {
 // migration 20261116090000 for the full reasoning.
 // ---------------------------------------------------------------------
 
-/** Providers that can hold an outlet account. `other` is deliberately absent: it has no single account. */
-const ACCOUNT_PROVIDERS = ['moniepoint', 'opay', 'gtbank'];
+/** Providers that can hold an outlet account. `other` takes a typed provider name and covers any terminal not listed. */
+const ACCOUNT_PROVIDERS = ['moniepoint', 'opay', 'gtbank', 'other'];
 
 function lastFour(accountNumber) {
   return String(accountNumber).replace(/\s+/g, '').slice(-4);
@@ -185,7 +185,7 @@ async function listOutletTerminalAccounts({ context, outletId }) {
   return rows.map(withLastFour);
 }
 
-async function setOutletTerminalAccount({ context, outletId, provider, accountNumber, accountLabel }) {
+async function setOutletTerminalAccount({ context, outletId, provider, accountNumber, accountLabel, bankName, providerName }) {
   const db = scopedDb().for(context);
   const normalizedProvider = normalizeAccountProvider(provider);
   const number = typeof accountNumber === 'string' ? accountNumber.trim() : '';
@@ -199,11 +199,32 @@ async function setOutletTerminalAccount({ context, outletId, provider, accountNu
   if (label && label.length > 80) {
     throw new ValidationError('INVALID_ACCOUNT_LABEL', '"account_label" must be at most 80 characters.', [{ field: 'account_label', issue: 'too_long' }]);
   }
+  // The bank is free text, never checked against a list: this only labels a sale.
+  for (const [field, value] of [['bank_name', bankName], ['provider_name', providerName]]) {
+    if (value !== undefined && value !== null && typeof value !== 'string') {
+      throw new ValidationError(`INVALID_${field.toUpperCase()}`, `"${field}" must be text.`, [{ field, issue: 'invalid' }]);
+    }
+  }
+  const bank = typeof bankName === 'string' && bankName.trim() ? bankName.trim() : null;
+  if (bank && bank.length > 80) {
+    throw new ValidationError('INVALID_BANK_NAME', '"bank_name" must be at most 80 characters.', [{ field: 'bank_name', issue: 'too_long' }]);
+  }
+  let providerLabel = typeof providerName === 'string' && providerName.trim() ? providerName.trim() : null;
+  if (normalizedProvider === 'other') {
+    if (!providerLabel) {
+      throw new ValidationError('MISSING_PROVIDER_NAME', 'Type the terminal provider\'s name for an "Other" account.', [{ field: 'provider_name', issue: 'missing' }]);
+    }
+    if (providerLabel.length > 60) {
+      throw new ValidationError('INVALID_PROVIDER_NAME', '"provider_name" must be at most 60 characters.', [{ field: 'provider_name', issue: 'too_long' }]);
+    }
+  } else {
+    providerLabel = null; // only "Other" carries a typed name; a named provider is its own label
+  }
   return db.transaction(async (trx) => {
     const outlet = await trx.table('pos_outlets').where({ id: outletId }).forUpdate().first();
     if (!outlet || outlet.status !== 'active') throw new OutletNotFoundError();
     const existing = await trx.table('pos_outlet_terminal_accounts').where({ outlet_id: outletId, provider: normalizedProvider }).first();
-    const values = { account_number: number, account_label: label };
+    const values = { account_number: number, account_label: label, bank_name: bank, provider_name: providerLabel };
     if (existing) {
       await trx.table('pos_outlet_terminal_accounts').where({ id: existing.id }).update(values);
     } else {
@@ -1269,6 +1290,8 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
           if (account) {
             fields.terminal_account_label = account.account_label;
             fields.terminal_account_last4 = lastFour(account.account_number);
+            fields.terminal_account_bank_name = account.bank_name;
+            fields.terminal_account_provider_name = account.provider_name;
           }
         }
       }

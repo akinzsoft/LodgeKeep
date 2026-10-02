@@ -114,8 +114,12 @@ describe('POS outlet terminal accounts (recording only)', () => {
       expect((await as(managerId).delete(accountUrl('gtbank'))).status).toBe(404);
     });
 
-    it('rejects "other", unknown providers, bad numbers and long labels, writing nothing', async () => {
-      expect((await setAccount('other', { account_number: '0123456789' })).status).toBe(400);
+    it('rejects unknown providers, bad numbers, long text, and an Other account with no provider name, writing nothing', async () => {
+      expect((await setAccount('other', { account_number: '0123456789' })).status).toBe(400); // Other needs a typed provider name
+      expect((await setAccount('other', { account_number: '0123456789', provider_name: '  ' })).status).toBe(400);
+      expect((await setAccount('other', { account_number: '0123456789', provider_name: 'x'.repeat(61) })).status).toBe(400);
+      expect((await setAccount('gtbank', { account_number: '0123456789', bank_name: 'x'.repeat(81) })).status).toBe(400);
+      expect((await setAccount('gtbank', { account_number: '0123456789', bank_name: 42 })).status).toBe(400);
       expect((await setAccount('zenith', { account_number: '0123456789' })).status).toBe(400);
       expect((await setAccount('opay', { account_number: 'abc' })).status).toBe(400);
       expect((await setAccount('opay', { account_number: '12' })).status).toBe(400);
@@ -128,6 +132,22 @@ describe('POS outlet terminal accounts (recording only)', () => {
       const foreign = ctx.b.posOutlets[0].id;
       expect((await as(managerId).put(accountUrl('opay', foreign)).send({ account_number: '0123456789' })).status).toBe(400);
       expect((await as(managerId).get(`/api/v1/pos/outlets/${foreign}/terminal-accounts`)).status).toBe(400);
+    });
+
+    it('takes any bank as free text, and an Other account under a typed provider name', async () => {
+      const bank = await setAccount('gtbank', { account_number: '0123456789', bank_name: 'Some Brand New Microfinance Bank' });
+      expect(bank.status).toBe(200);
+      expect(bank.body.data).toMatchObject({ bank_name: 'Some Brand New Microfinance Bank', provider_name: null });
+
+      const other = await setAccount('other', { account_number: '7070707070', provider_name: ' Zenith POS ', bank_name: 'Zenith Bank' });
+      expect(other.status).toBe(200);
+      expect(other.body.data).toMatchObject({ provider: 'other', provider_name: 'Zenith POS', bank_name: 'Zenith Bank', account_number_last4: '7070' });
+
+      // A named provider never keeps a typed provider name, even if one is sent.
+      const named = await setAccount('gtbank', { account_number: '0123456789', provider_name: 'Ignored' });
+      expect(named.body.data.provider_name).toBeNull();
+      await as(managerId).delete(accountUrl('gtbank'));
+      await as(managerId).delete(accountUrl('other'));
     });
 
     it('is audited, with who changed what', async () => {
@@ -149,12 +169,29 @@ describe('POS outlet terminal accounts (recording only)', () => {
       expect(row).toMatchObject({ terminal_provider: 'moniepoint', terminal_account_label: 'Bar Moniepoint', terminal_account_last4: '1010', payment_id: null });
     });
 
-    it('leaves the label null when no provider is named, "other" is chosen, or no account is recorded', async () => {
+    it('leaves the label null when no provider is named, or no account is recorded for it (including Other)', async () => {
       for (const settlement of [{ method: 'terminal' }, { method: 'terminal', terminal_provider: 'other' }, { method: 'terminal', terminal_provider: 'gtbank' }]) {
         const row = await settleTerminal(settlement);
         expect(row.terminal_account_label).toBeNull();
         expect(row.terminal_account_last4).toBeNull();
       }
+    });
+
+    it('captures an Other account with its typed provider name and bank, and none once removed', async () => {
+      await setAccount('other', { account_number: '7070707070', provider_name: 'Zenith POS', bank_name: 'Zenith Bank', account_label: 'Pool bar' });
+      const row = await settleTerminal({ method: 'terminal', terminal_provider: 'other' });
+      expect(row).toMatchObject({
+        terminal_provider: 'other',
+        terminal_account_provider_name: 'Zenith POS',
+        terminal_account_bank_name: 'Zenith Bank',
+        terminal_account_label: 'Pool bar',
+        terminal_account_last4: '7070',
+      });
+      await as(managerId).delete(accountUrl('other'));
+      const after = await settleTerminal({ method: 'terminal', terminal_provider: 'other' });
+      expect(after.terminal_account_provider_name).toBeNull();
+      expect(after.terminal_account_bank_name).toBeNull();
+      expect(await t.trx('pos_order_settlements').where({ id: row.id }).first()).toMatchObject({ terminal_account_provider_name: 'Zenith POS' });
     });
 
     it('does not trust a client-supplied account', async () => {
@@ -191,6 +228,8 @@ describe('POS outlet terminal accounts (recording only)', () => {
       await settleTerminal({ method: 'terminal', terminal_provider: 'moniepoint' });
       await settleTerminal({ method: 'terminal', terminal_provider: 'moniepoint' });
       await settleTerminal({ method: 'terminal', terminal_provider: 'gtbank' }); // no account recorded
+      await setAccount('other', { account_number: '7070707070', provider_name: 'Zenith POS', bank_name: 'Zenith Bank' });
+      await settleTerminal({ method: 'terminal', terminal_provider: 'other' });
       // Same provider, a changed account: its own row, never merged with the first.
       await setAccount('moniepoint', { account_number: '4040404040', account_label: 'Bar Moniepoint 2' });
       await settleTerminal({ method: 'terminal', terminal_provider: 'moniepoint' });
@@ -206,12 +245,13 @@ describe('POS outlet terminal accounts (recording only)', () => {
       expect(find('moniepoint', '1010')).toMatchObject({ count: 2, grossTotal: '46.00', accountLabel: 'Bar Moniepoint' });
       expect(find('moniepoint', '4040')).toMatchObject({ count: 1, grossTotal: '23.00', accountLabel: 'Bar Moniepoint 2' });
       expect(find('gtbank', null)).toMatchObject({ count: 1, accountLabel: null });
-      expect(rows.reduce((n, row) => n + row.count, 0)).toBe(4);
+      expect(find('other', '7070')).toMatchObject({ count: 1, providerName: 'Zenith POS', accountBankName: 'Zenith Bank' });
+      expect(rows.reduce((n, row) => n + row.count, 0)).toBe(5);
     });
 
     it('carries the account on terminal lines only, and in the CSV', async () => {
       const terminal = report.lines.filter((line) => line.method === 'terminal');
-      expect(terminal.map((line) => line.terminalAccountLast4).sort()).toEqual(['1010', '1010', '4040', null]);
+      expect(terminal.map((line) => line.terminalAccountLast4).sort()).toEqual(['1010', '1010', '4040', '7070', null]);
       const csv = (await as(managerId).get(`/api/v1/reconciliation/payments?date_from=${DATE}&date_to=${DATE}&format=csv`)).text;
       expect(csv.split('\n')[0]).toContain('terminalAccountLast4');
       expect(csv).toContain('Bar Moniepoint 2');
@@ -220,7 +260,8 @@ describe('POS outlet terminal accounts (recording only)', () => {
     it('adds the account to terminal payments in the Sales report, and to nothing else', async () => {
       const res = await as(managerId).get(`/api/v1/pos/reports/sales?date_from=${DATE}&date_to=${DATE}`);
       const payments = res.body.data.tabs.flatMap((tab) => tab.payments).filter((p) => p.tender === 'terminal');
-      expect(payments.map((p) => p.terminalAccountLast4).sort()).toEqual(['1010', '1010', '4040', null]);
+      expect(payments.map((p) => p.terminalAccountLast4).sort()).toEqual(['1010', '1010', '4040', '7070', null]);
+      expect(payments.find((p) => p.terminalAccountLast4 === '7070')).toMatchObject({ terminalProviderName: 'Zenith POS', terminalAccountBankName: 'Zenith Bank' });
     });
   });
 });

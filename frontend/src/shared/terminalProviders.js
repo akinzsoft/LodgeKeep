@@ -22,12 +22,20 @@ export function terminalProviderLabel(value) {
   return LABELS[value] ?? value;
 }
 
-/** Providers that can hold a recorded account (`other` has no single account). Matches the backend's `ACCOUNT_PROVIDERS`. */
-export const ACCOUNT_PROVIDERS = TERMINAL_PROVIDERS.filter((p) => p.value !== 'other');
+/** Providers that can hold a recorded account. `other` takes a typed provider name, so any terminal can record an account. */
+export const ACCOUNT_PROVIDERS = TERMINAL_PROVIDERS;
 
-/** "Bar GTB ····6789", "····6789" or null when no account was recorded. Only the last 4 digits ever reach a report. */
-export function terminalAccountText(label, last4) {
-  if (!last4 && !label) return null;
-  const masked = last4 ? `····${last4}` : '';
-  return [label, masked].filter(Boolean).join(' ');
+/**
+ * "Pool bar · Zenith Bank · ····6789", any part optional; null when nothing was recorded.
+ * Only the last 4 digits ever reach a report. The bank is free text, never validated.
+ */
+export function terminalAccountText(label, last4, bankName) {
+  const parts = [label, bankName, last4 ? `····${last4}` : null].filter(Boolean);
+  return parts.length ? parts.join(' · ') : null;
+}
+
+/** A provider's display name, using the typed name for an "Other" account ("Other (Zenith POS)"). */
+export function terminalProviderDisplay(value, providerName) {
+  if (value === 'other' && providerName) return `Other (${providerName})`;
+  return terminalProviderLabel(value);
 }

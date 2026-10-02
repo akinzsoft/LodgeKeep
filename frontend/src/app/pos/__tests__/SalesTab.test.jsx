@@ -279,7 +279,23 @@ describe('<SalesTab>', () => {
     await selectWhenLoaded('Outlet', 'Main Bar');
     await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
 
-    expect(await screen.findByText('Card (external terminal) · Opay · Bar Opay ····2020')).toBeInTheDocument();
+    expect(await screen.findByText('Card (external terminal) · Opay · Bar Opay · ····2020')).toBeInTheDocument();
+    expect(screen.getAllByText('Card (external terminal)').length).toBeGreaterThan(0);
+  });
+
+  it('names an Other terminal by its typed provider and shows its bank', async () => {
+    mocks.getSalesReport.mockResolvedValue({
+      ...REPORT,
+      byTender: [...REPORT.byTender, { tender: 'terminal', checks: 1, total: '23.00' }],
+      tabs: [
+        { orderId: '12', tableLabel: 'Table 7', source: 'staff', businessDate: '2027-03-01', settledAt: '2027-03-01T22:00:00Z', cashier: 'Ada Bello', tenders: ['terminal'], payments: [{ tender: 'terminal', channel: null, terminalProvider: 'other', terminalProviderName: 'Zenith POS', terminalAccountBankName: 'Zenith Bank', terminalAccountLabel: null, terminalAccountLast4: '7070', roomNumber: null, guestName: null, total: '23.00' }], itemCount: 1, total: '23.00' },
+      ],
+    });
+    render(<SalesTab activeProperty={PROPERTY} />);
+    await selectWhenLoaded('Outlet', 'Main Bar');
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+
+    expect(await screen.findByText('Card (external terminal) · Other (Zenith POS) · Zenith Bank · ····7070')).toBeInTheDocument();
     expect(screen.getAllByText('Card (external terminal)').length).toBeGreaterThan(0);
   });
 });

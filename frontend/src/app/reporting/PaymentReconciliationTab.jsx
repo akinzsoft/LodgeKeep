@@ -3,7 +3,7 @@ import { Card, DataTable, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { reconciliationApi, ApiError } from '../../shared/api/index.js';
 import { triggerDownload } from '../../shared/download.js';
-import { terminalProviderLabel, terminalAccountText, EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
+import { terminalProviderDisplay, terminalAccountText, EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
 import styles from './ReportingScreen.module.css';
 
 function todayIso() {
@@ -143,13 +143,13 @@ export function PaymentReconciliationTab() {
           state="success"
           columns={[
             { key: 'outlet', label: 'Outlet', render: (row) => row.outlet ?? '—' },
-            { key: 'provider', label: 'Provider', render: (row) => terminalProviderLabel(row.provider) },
-            { key: 'account', label: 'Recorded account', render: (row) => terminalAccountText(row.accountLabel, row.accountLast4) ?? 'Not recorded' },
+            { key: 'provider', label: 'Provider', render: (row) => terminalProviderDisplay(row.provider, row.providerName) },
+            { key: 'account', label: 'Recorded account', render: (row) => terminalAccountText(row.accountLabel, row.accountLast4, row.accountBankName) ?? 'Not recorded' },
             { key: 'count', label: 'Sales', align: 'right' },
             { key: 'grossTotal', label: 'Total', align: 'right', render: (row) => <Money amount={row.grossTotal} currencyCode={row.currency} /> },
           ]}
           rows={report.byTerminalProvider}
-          rowKey={(row) => `${row.currency}-${row.outlet ?? ''}-${row.provider ?? 'none'}-${row.accountLast4 ?? ''}-${row.accountLabel ?? ''}`}
+          rowKey={(row) => `${row.currency}-${row.outlet ?? ''}-${row.provider ?? 'none'}-${row.accountLast4 ?? ''}-${row.accountLabel ?? ''}-${row.accountBankName ?? ''}-${row.providerName ?? ''}`}
         />
       )}
 
@@ -161,7 +161,7 @@ export function PaymentReconciliationTab() {
           { key: 'businessDate', label: 'Date' },
           { key: 'source', label: 'Source', render: (row) => describeSource(row.source) },
           { key: 'method', label: 'Method', render: (row) => methodLabel(row.method) },
-          { key: 'providerChannel', label: 'Channel', render: (row) => row.providerChannel ?? (row.method === 'terminal' ? [terminalProviderLabel(row.terminalProvider), terminalAccountText(row.terminalAccountLabel, row.terminalAccountLast4)].filter(Boolean).join(' · ') : '—') },
+          { key: 'providerChannel', label: 'Channel', render: (row) => row.providerChannel ?? (row.method === 'terminal' ? [terminalProviderDisplay(row.terminalProvider, row.terminalProviderName), terminalAccountText(row.terminalAccountLabel, row.terminalAccountLast4, row.terminalAccountBankName)].filter(Boolean).join(' · ') : '—') },
           {
             key: 'grossAmount',
             label: 'Gross',

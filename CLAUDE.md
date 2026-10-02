@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Follow-up: free-text bank name and "Other" terminal accounts (branch `gap-terminal-account-bank-other`)
+
+**User-requested** ("bank not in the list"), after confirming what Feature 2 did: it had no bank field and no bank list; the only closed list was the provider (Moniepoint/Opay/GTBank/Other), and `other` could not record an account. **Reversed an earlier decision with the user's explicit OK: "Other" now CAN hold an account.** `pos_outlet_terminal_accounts` gained `bank_name` (free text, optional, never validated against a list) and `provider_name` (required for `other`, the typed terminal provider such as "Zenith POS"; ignored for a named provider); one `other` account per outlet. Settlements snapshot `terminal_account_bank_name` and `terminal_account_provider_name` (`20261117090000`, additive, no FK). Reports show "Other (Zenith POS)" and the bank beside the last 4; reconciliation groups on them too. Tests: 15 account tests, mutation-checked (dropping the provider-name rule fails 7, dropping the bank snapshot fails 3); backend 3776/3776, frontend 1379/1379. Production-shaped: the new migration applied on top of an existing account row (kept intact), down/up round trip, and over HTTP on Stical's data an Other account with a bank on no list was recorded and snapshotted, a missing provider name was refused, and `payments` rows and the property subaccount were untouched.
+
+**Feature 1 design note (not built):** the bank list must come from Paystack's live `GET /bank`, never a hardcoded list; today's Setup → Payments takes a free-text bank code. A bank Paystack cannot settle to must show "Paystack can't settle to this bank. Use a different account, or take payment via terminal/cash." instead of a generic error.
+
 ## New capability: per-outlet external-terminal account recording (branch `gap-terminal-account-recording`)
 
 **User-requested**, as Feature 2 of two (Feature 1, per-outlet Paystack subaccounts, is a separate later PR): external-terminal payments never touch Paystack, so Lodgekeep cannot route that money. It can only RECORD which bank account an outlet's terminal pays into, so the hotel can match reconciliation against that account's own settlement report. **Changes no money flow.** Confirmed with the user: plaintext account numbers with last-4 masking in lists; only a named provider gets a label (`other` stays null); cash is out of scope; only `pos.manage` can set it.

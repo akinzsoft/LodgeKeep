@@ -159,6 +159,8 @@ async function setOutletTerminalAccount(req, res, next) {
       provider: req.params.provider,
       accountNumber: req.body?.account_number,
       accountLabel: req.body?.account_label,
+      bankName: req.body?.bank_name,
+      providerName: req.body?.provider_name,
     });
     await req.audit({ entityType: 'pos_outlet_terminal_accounts', entityId: after.id, action: before ? 'update' : 'create', beforeState: before ?? undefined, afterState: after });
     res.status(200).json(ok(after));

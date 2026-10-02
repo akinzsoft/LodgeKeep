@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Card, Button } from '../../shared/components/index.js';
 import { posApi, ApiError } from '../../shared/api/index.js';
-import { ACCOUNT_PROVIDERS, EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
+import { ACCOUNT_PROVIDERS, EXTERNAL_TERMINAL_LABEL, terminalAccountText, terminalProviderDisplay } from '../../shared/terminalProviders.js';
 import formStyles from './POSForm.module.css';
 
 /**
@@ -17,7 +17,7 @@ export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = f
   const [accounts, setAccounts] = useState(null);
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(null); // provider being edited
-  const [form, setForm] = useState({ accountNumber: '', accountLabel: '' });
+  const [form, setForm] = useState({ accountNumber: '', accountLabel: '', bankName: '', providerName: '' });
   const [saving, setSaving] = useState(false);
   // A slow answer for the outlet just switched away from must not land.
   const outletRef = useRef(outletId);
@@ -51,7 +51,12 @@ export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = f
     const existing = byProvider.get(provider);
     setEditing(provider);
     setError(null);
-    setForm({ accountNumber: existing?.account_number ?? '', accountLabel: existing?.account_label ?? '' });
+    setForm({
+      accountNumber: existing?.account_number ?? '',
+      accountLabel: existing?.account_label ?? '',
+      bankName: existing?.bank_name ?? '',
+      providerName: existing?.provider_name ?? '',
+    });
   }
 
   async function handleSave(event) {
@@ -99,8 +104,8 @@ export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = f
             const row = byProvider.get(provider.value);
             return (
               <li key={provider.value} className={formStyles.actionsRow}>
-                <strong>{provider.label}</strong>
-                <span>{row ? `${row.account_label ? `${row.account_label} ` : ''}····${row.account_number_last4}` : 'No account recorded'}</span>
+                <strong>{row ? terminalProviderDisplay(provider.value, row.provider_name) : provider.label}</strong>
+                <span>{row ? terminalAccountText(row.account_label, row.account_number_last4, row.bank_name) : 'No account recorded'}</span>
                 <Button size="compact" variant="ghost" onClick={() => startEdit(provider.value)} disabled={isOffline} aria-label={`${row ? 'Edit' : 'Record'} ${provider.label} account`}>
                   {row ? 'Edit' : 'Record account'}
                 </Button>
@@ -116,6 +121,16 @@ export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = f
       )}
       {editing && (
         <form className={formStyles.row} onSubmit={handleSave} aria-label={`${editing} account`}>
+          {editing === 'other' && (
+            <label className={formStyles.field}>
+              <span className={formStyles.label}>Terminal provider name</span>
+              <input className={formStyles.input} value={form.providerName} maxLength={60} placeholder="e.g. Zenith POS" onChange={(e) => setForm({ ...form, providerName: e.target.value })} required />
+            </label>
+          )}
+          <label className={formStyles.field}>
+            <span className={formStyles.label}>Bank name (optional)</span>
+            <input className={formStyles.input} value={form.bankName} maxLength={80} placeholder="Type any bank" onChange={(e) => setForm({ ...form, bankName: e.target.value })} />
+          </label>
           <label className={formStyles.field}>
             <span className={formStyles.label}>Account number</span>
             <input className={formStyles.input} inputMode="numeric" value={form.accountNumber} onChange={(e) => setForm({ ...form, accountNumber: e.target.value })} required />

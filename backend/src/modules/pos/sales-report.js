@@ -68,6 +68,8 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
       'pos_order_settlements.terminal_reference as terminal_reference',
       'pos_order_settlements.terminal_account_label as terminal_account_label',
       'pos_order_settlements.terminal_account_last4 as terminal_account_last4',
+      'pos_order_settlements.terminal_account_bank_name as terminal_account_bank_name',
+      'pos_order_settlements.terminal_account_provider_name as terminal_account_provider_name',
       'pos_order_settlements.subtotal as subtotal',
       'pos_order_settlements.tax_amount as tax_amount',
       'pos_order_settlements.tip_amount as tip_amount',
@@ -247,6 +249,8 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
             terminalProvider: row.terminal_provider ?? null,
             terminalAccountLabel: row.terminal_account_label ?? null,
             terminalAccountLast4: row.terminal_account_last4 ?? null,
+            terminalAccountBankName: row.terminal_account_bank_name ?? null,
+            terminalProviderName: row.terminal_account_provider_name ?? null,
           }
         : {}),
       roomNumber: target?.roomNumber ?? null,

@@ -103,8 +103,11 @@ export function listOutletTerminalAccounts(outletId) {
   return request(`/pos/outlets/${outletId}/terminal-accounts`);
 }
 
-export function setOutletTerminalAccount(outletId, provider, { accountNumber, accountLabel }) {
-  return request(`/pos/outlets/${outletId}/terminal-accounts/${provider}`, { method: 'PUT', body: { account_number: accountNumber, account_label: accountLabel } });
+export function setOutletTerminalAccount(outletId, provider, { accountNumber, accountLabel, bankName, providerName }) {
+  return request(`/pos/outlets/${outletId}/terminal-accounts/${provider}`, {
+    method: 'PUT',
+    body: { account_number: accountNumber, account_label: accountLabel, bank_name: bankName, provider_name: providerName },
+  });
 }
 
 export function removeOutletTerminalAccount(outletId, provider) {
