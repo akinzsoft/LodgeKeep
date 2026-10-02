@@ -158,6 +158,22 @@ export function ReportsTab({ activeProperty }) {
                   <Money amount={statement.revenue.roomRevenue} currencyCode={currency} />
                 </td>
               </tr>
+              {(statement.revenue.roomRevenueEstimated ?? '0.00') !== '0.00' && (
+                <>
+                  <tr className={formStyles.statementRow}>
+                    <td className={`${formStyles.statementLabel} ${formStyles.statementIndent}`}>of which audited (actual)</td>
+                    <td className={formStyles.statementAmount}>
+                      <Money amount={statement.revenue.roomRevenueAudited} currencyCode={currency} />
+                    </td>
+                  </tr>
+                  <tr className={formStyles.statementRow}>
+                    <td className={`${formStyles.statementLabel} ${formStyles.statementIndent}`}>of which open days (estimate from booked rates)</td>
+                    <td className={formStyles.statementAmount}>
+                      <Money amount={statement.revenue.roomRevenueEstimated} currencyCode={currency} />
+                    </td>
+                  </tr>
+                </>
+              )}
               <tr className={formStyles.statementRow}>
                 <td className={formStyles.statementIndent}>POS revenue</td>
                 <td className={formStyles.statementAmount}>
@@ -242,6 +258,16 @@ export function ReportsTab({ activeProperty }) {
               </tr>
             </tbody>
           </table>
+
+          {statement.revenue.estimateVariance?.days?.length > 0 && (
+            <p className={formStyles.costWarningBanner} role="alert">
+              On open days, the booked-rate estimate differs from the room charges actually posted:{' '}
+              {statement.revenue.estimateVariance.days
+                .map((day) => `${day.date} (estimate ${day.estimated}, posted ${day.posted})`)
+                .join('; ')}
+              .
+            </p>
+          )}
 
           {statement.adjustmentsInOtherCurrency > 0 && (
             <p className={formStyles.costWarningBanner} role="alert">

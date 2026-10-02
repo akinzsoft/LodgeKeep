@@ -45,6 +45,13 @@
  * Adjustment lines in a non-base currency are not summed and are counted in
  * `adjustmentsInOtherCurrency`.
  *
+ * `roomRevenueAudited` / `roomRevenueEstimated` split room revenue into the
+ * Night Audit snapshot (actual) and the live booked-rate estimate for
+ * unaudited days; they add up to `roomRevenue`. `estimateVariance` lists the
+ * unaudited days whose estimate differs from the room charges actually
+ * posted for that date (a diagnostic only: no total uses it, and nights after
+ * the current business date still count as before).
+ *
  * `unauditedDates` names the exact days in range with no Night Audit
  * snapshot, so the caveat can say which days instead of a bare "not fully
  * reconciled". Revenue computation is not affected by it.
@@ -70,7 +77,7 @@ const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
 const { computeRevenue } = require('../reporting/service');
 const { computeDailyPosRevenueTotals } = require('../pos/sales-report');
-const { listOtherFolioIncome } = require('../cashiering/service');
+const { listOtherFolioIncome, sumPostedRoomChargesByDate } = require('../cashiering/service');
 const { computeCostOfSales, computeCostPriceFallback } = require('../stock/reporting');
 
 /** Every non-voided expense in range, joined to its category name. */
@@ -160,6 +167,23 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
   const unauditedDates = revenueDays.filter((day) => !day.audited).map((day) => day.date);
   const roomRevenueFullyAudited = revenueDays.length > 0 && unauditedDates.length === 0;
 
+  // Audited days are the Night Audit snapshot (actual); every other day is a
+  // live estimate from booked nightly rates. The two add up to `roomRevenue`.
+  const roomRevenueAudited = sumMoney(revenueDays.filter((day) => day.audited).map((day) => day.roomRevenue));
+  const roomRevenueEstimated = sumMoney(revenueDays.filter((day) => !day.audited).map((day) => day.roomRevenue));
+
+  // For the estimated days only: where the booked-rate estimate differs from
+  // the room charges actually posted for that date, say so. Differences only;
+  // a day where they agree is not listed. Nothing here changes any total.
+  const postedByDate = await sumPostedRoomChargesByDate({ db, dates: unauditedDates, baseCurrency: property?.base_currency });
+  const estimateVarianceDays = revenueDays
+    .filter((day) => !day.audited)
+    .map((day) => {
+      const posted = postedByDate.get(day.date) ?? '0.00';
+      return { date: day.date, estimated: day.roomRevenue, posted, difference: sumMoney([day.roomRevenue, negateMoney(posted)]) };
+    })
+    .filter((day) => compareMoney(day.difference, '0.00') !== 0);
+
   // Ledger cost (real stock movements) plus, for sale lines the ledger did
   // not cover, quantity x cost_price — see `computeCostPriceFallback` for the
   // per-sale guard that keeps the two from ever counting the same sale.
@@ -188,6 +212,9 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
       posRevenue,
       otherIncome: { fees: otherIncome.fees, discounts: otherIncome.discounts, total: otherIncome.total },
       totalRevenue,
+      roomRevenueAudited,
+      roomRevenueEstimated,
+      estimateVariance: { days: estimateVarianceDays, total: sumMoney(estimateVarianceDays.map((day) => day.difference)) },
       roomRevenueFullyAudited,
       unauditedDates,
     },
