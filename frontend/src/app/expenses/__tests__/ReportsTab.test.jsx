@@ -154,6 +154,58 @@ describe('ReportsTab', () => {
     expect(await screen.findByText(/2 folio adjustment\(s\) in another currency/)).toBeInTheDocument();
   });
 
+  it('splits room revenue into audited and estimated lines only when there is an estimate', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue({
+      ...EMPTY_STATEMENT,
+      revenue: { ...EMPTY_STATEMENT.revenue, roomRevenue: '280.00', roomRevenueAudited: '255.00', roomRevenueEstimated: '25.00', estimateVariance: { days: [], total: '0.00' } },
+    });
+    render(<ReportsTab activeProperty={activeProperty} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    expect(await screen.findByText('of which audited (actual)')).toBeInTheDocument();
+    expect(screen.getByText('of which open days (estimate from booked rates)')).toBeInTheDocument();
+  });
+
+  it('omits the audited/estimated split when nothing is estimated', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue({
+      ...EMPTY_STATEMENT,
+      revenue: { ...EMPTY_STATEMENT.revenue, roomRevenueAudited: '100.00', roomRevenueEstimated: '0.00', estimateVariance: { days: [], total: '0.00' } },
+    });
+    render(<ReportsTab activeProperty={activeProperty} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    await screen.findByText(/Gross profit/i);
+    expect(screen.queryByText('of which audited (actual)')).not.toBeInTheDocument();
+  });
+
+  it('names the open days whose booked-rate estimate differs from the posted room charges', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue({
+      ...EMPTY_STATEMENT,
+      revenue: {
+        ...EMPTY_STATEMENT.revenue,
+        roomRevenueAudited: '0.00',
+        roomRevenueEstimated: '25.00',
+        estimateVariance: { days: [{ date: '2026-09-24', estimated: '25.00', posted: '0.00', difference: '25.00' }], total: '25.00' },
+      },
+    });
+    render(<ReportsTab activeProperty={activeProperty} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    expect(await screen.findByText(/2026-09-24 \(estimate 25\.00, posted 0\.00\)/)).toBeInTheDocument();
+  });
+
+  it('shows no variance note when estimates and posted charges agree', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue({
+      ...EMPTY_STATEMENT,
+      revenue: { ...EMPTY_STATEMENT.revenue, estimateVariance: { days: [], total: '0.00' } },
+    });
+    render(<ReportsTab activeProperty={activeProperty} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    await screen.findByText(/Gross profit/i);
+    expect(screen.queryByText(/differs from the room charges actually posted/)).not.toBeInTheDocument();
+  });
+
   it('shows "None recorded" when no operating expenses exist in range, and an honest zero net profit', async () => {
     mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
     mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT);

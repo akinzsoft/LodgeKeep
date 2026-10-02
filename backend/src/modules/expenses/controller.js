@@ -291,6 +291,12 @@ async function getExpenseReport(req, res, next) {
 function flattenProfitAndLossForCsv(statement) {
   const rows = [
     { line: 'Room revenue', amount: statement.revenue.roomRevenue },
+    ...(statement.revenue.roomRevenueEstimated === '0.00'
+      ? []
+      : [
+          { line: 'Room revenue: audited (actual)', amount: statement.revenue.roomRevenueAudited },
+          { line: 'Room revenue: open days (estimate from booked rates)', amount: statement.revenue.roomRevenueEstimated },
+        ]),
     { line: 'POS revenue', amount: statement.revenue.posRevenue },
     ...(statement.revenue.otherIncome.fees === '0.00' && statement.revenue.otherIncome.discounts === '0.00'
       ? []
@@ -313,6 +319,9 @@ function flattenProfitAndLossForCsv(statement) {
       line: `Note: ${statement.itemsSoldWithoutCost} menu item(s) sold in this range with no cost (no recipe deduction and no cost price), cost excluded from Cost of sales above`,
       amount: '',
     });
+  }
+  for (const day of statement.revenue.estimateVariance.days) {
+    rows.push({ line: `Note: ${day.date} estimate ${day.estimated} differs from posted room charges ${day.posted} by ${day.difference}`, amount: '' });
   }
   if (statement.revenue.unauditedDates.length > 0) {
     rows.push({

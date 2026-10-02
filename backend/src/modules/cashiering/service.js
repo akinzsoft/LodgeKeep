@@ -1537,8 +1537,42 @@ async function listOtherFolioIncome({ db, dateFrom, dateTo, baseCurrency }) {
   return { fees: feesTotal, discounts: discountsTotal, total: sumMoney([feesTotal, discountsTotal]), otherCurrencyLineCount };
 }
 
+/**
+ * Room charges actually posted to folios, per business date, for the given
+ * dates only — the "actual" the P&L compares a still-unaudited day's
+ * booked-rate estimate against. Non-voided `room_charge` lines in
+ * `baseCurrency`. `Late room charge` lines (an Extend Stay posting nights
+ * whose audit already ran) are left out: they are dated on the day they were
+ * posted but belong to an earlier night, whose revenue is already counted at
+ * that night through its booked rate, so including them would manufacture a
+ * variance on the day they happened to be posted.
+ */
+async function sumPostedRoomChargesByDate({ db, dates, baseCurrency }) {
+  const wanted = new Set(dates);
+  if (wanted.size === 0) return new Map();
+  const sorted = [...wanted].sort();
+  const lines = await db
+    .table('folio_line_items')
+    .where({ type: 'room_charge' })
+    .whereNull('voided_at')
+    .whereBetween('business_date', [sorted[0], sorted[sorted.length - 1]])
+    .select('amount', 'currency', 'description', 'business_date');
+
+  const amountsByDate = new Map();
+  for (const line of lines) {
+    const date = String(line.business_date);
+    if (!wanted.has(date)) continue;
+    if (baseCurrency && line.currency !== baseCurrency) continue;
+    if (String(line.description ?? '').startsWith(LATE_ROOM_CHARGE_PREFIX)) continue;
+    if (!amountsByDate.has(date)) amountsByDate.set(date, []);
+    amountsByDate.get(date).push(line.amount);
+  }
+  return new Map([...amountsByDate.entries()].map(([date, amounts]) => [date, sumMoney(amounts)]));
+}
+
 module.exports = {
   LATE_ROOM_CHARGE_PREFIX,
+  sumPostedRoomChargesByDate,
   listOtherFolioIncome,
   postLateRoomCharges,
   recomputeFolioBalance,

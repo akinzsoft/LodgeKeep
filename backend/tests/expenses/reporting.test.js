@@ -419,6 +419,112 @@ describe('Expense report and profit summary', () => {
     });
   });
 
+  describe('room revenue: audited (actual) vs open days (estimate), and the estimate-vs-posted variance', () => {
+    // BUSINESS_DATE (2027-04-01) carries the one real booked night from
+    // beforeAll and has no Night Audit snapshot, so it is an estimated day.
+    const AUDITED = ['2027-03-30', '2027-03-31'];
+    const profit = (from, to, extra = '') =>
+      t.request.get(`/api/v1/expenses/reports/profit?date_from=${from}&date_to=${to}${extra}`).set('Authorization', `Bearer ${manager()}`);
+
+    async function closeDay(date, revenue) {
+      const [runId] = await t.trx('night_audit_runs').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        business_date: date,
+        status: 'COMPLETED',
+        worker_id: 'estimate-vs-actual-test',
+        heartbeat_at: new Date(),
+        started_at: new Date(),
+        completed_at: new Date(),
+      });
+      await t.trx('daily_reports').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        night_audit_run_id: runId,
+        business_date: date,
+        room_revenue: revenue,
+        pos_revenue: '0.00',
+        payments_collected: '0.00',
+        occupancy_pct: '10.00',
+        adr: '100.00',
+        revpar: '10.00',
+      });
+    }
+
+    async function postedRoomCharge(tenant, { amount, date, currency = 'NGN', description = 'Room charge', voided = false }) {
+      const folio = tenant.folios[0];
+      const [id] = await t.trx('folio_line_items').insert({
+        tenant_id: tenant.id,
+        property_id: folio.property_id,
+        folio_id: folio.id,
+        type: 'room_charge',
+        description,
+        amount,
+        currency,
+        business_date: date,
+        ...(voided ? { voided_at: new Date(), void_reason: 'test', voided_by_user_id: tenant.users[0].id } : {}),
+      });
+      return id;
+    }
+
+    beforeAll(async () => {
+      await closeDay(AUDITED[0], '100.00');
+      await closeDay(AUDITED[1], '100.00');
+    });
+
+    it('splits room revenue into audited + estimated, and the two always add up to room revenue', async () => {
+      const { revenue } = (await profit(AUDITED[0], BUSINESS_DATE)).body.data;
+      expect(revenue.roomRevenueAudited).toBe('200.00');
+      expect(Number(revenue.roomRevenueEstimated)).toBeGreaterThan(0); // the real booked night on BUSINESS_DATE
+      expect(sumMoneyForTest([revenue.roomRevenueAudited, revenue.roomRevenueEstimated])).toBe(revenue.roomRevenue);
+    });
+
+    it('a fully audited range has no estimate and no variance, and the CSV shows no split lines', async () => {
+      const { revenue } = (await profit(AUDITED[0], AUDITED[1])).body.data;
+      expect(revenue.roomRevenueAudited).toBe('200.00');
+      expect(revenue.roomRevenueEstimated).toBe('0.00');
+      expect(revenue.estimateVariance).toEqual({ days: [], total: '0.00' });
+      const csv = (await profit(AUDITED[0], AUDITED[1], '&format=csv')).text;
+      expect(csv).not.toContain('open days (estimate');
+    });
+
+    it('lists an estimated day whose booked rate differs from what was posted, and the variance clears when they agree', async () => {
+      const before = (await profit(BUSINESS_DATE, BUSINESS_DATE)).body.data.revenue;
+      const estimated = before.roomRevenueEstimated;
+      expect(before.estimateVariance.days).toEqual([{ date: BUSINESS_DATE, estimated, posted: '0.00', difference: estimated }]);
+
+      const line = await postedRoomCharge(ctx.a, { amount: estimated, date: BUSINESS_DATE });
+      expect((await profit(BUSINESS_DATE, BUSINESS_DATE)).body.data.revenue.estimateVariance).toEqual({ days: [], total: '0.00' });
+
+      // A different posted amount is a variance again, and the CSV names the day.
+      await t.trx('folio_line_items').where({ id: line }).update({ amount: '1.00' });
+      const off = (await profit(BUSINESS_DATE, BUSINESS_DATE)).body.data.revenue.estimateVariance;
+      expect(off.days).toEqual([{ date: BUSINESS_DATE, estimated, posted: '1.00', difference: sumMoneyForTest([estimated, '-1.00']) }]);
+      expect((await profit(BUSINESS_DATE, BUSINESS_DATE, '&format=csv')).text).toContain(`Note: ${BUSINESS_DATE} estimate ${estimated} differs from posted room charges 1.00`);
+      await t.trx('folio_line_items').where({ id: line }).update({ amount: estimated });
+    });
+
+    it('voided, other-currency, Late room charge and other-tenant lines are never treated as posted', async () => {
+      const day = BUSINESS_DATE;
+      const base = (await profit(day, day)).body.data.revenue.estimateVariance;
+      await postedRoomCharge(ctx.a, { amount: '50.00', date: day, voided: true });
+      await postedRoomCharge(ctx.a, { amount: '50.00', date: day, currency: 'USD' });
+      await postedRoomCharge(ctx.a, { amount: '50.00', date: day, description: 'Late room charge — 2027-03-20' });
+      await postedRoomCharge(ctx.b, { amount: '50.00', date: day });
+      expect((await profit(day, day)).body.data.revenue.estimateVariance).toEqual(base);
+    });
+
+    it('does not change any total: room revenue is the same with or without posted charges', async () => {
+      const day = '2027-03-29'; // a day with no booking, no snapshot
+      const a = (await profit(day, day)).body.data;
+      await postedRoomCharge(ctx.a, { amount: '75.00', date: day });
+      const b = (await profit(day, day)).body.data;
+      expect(b.revenue.roomRevenue).toBe(a.revenue.roomRevenue);
+      expect(b.revenue.totalRevenue).toBe(a.revenue.totalRevenue);
+      expect(b.revenue.estimateVariance.days).toEqual([{ date: day, estimated: '0.00', posted: '75.00', difference: '-75.00' }]);
+    });
+  });
+
   describe('Other income (folio adjustments)', () => {
     const profit = (from, to, extra = '') =>
       t.request.get(`/api/v1/expenses/reports/profit?date_from=${from}&date_to=${to}${extra}`).set('Authorization', `Bearer ${manager()}`);
