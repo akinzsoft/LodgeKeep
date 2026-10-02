@@ -80,6 +80,31 @@ describe('ReportsTab', () => {
     expect(await screen.findByText(/not yet fully reconciled by Night Audit/i)).toBeInTheDocument();
   });
 
+  it('names the un-audited days, collapsing consecutive ones into a range', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue({
+      ...EMPTY_STATEMENT,
+      revenue: { ...EMPTY_STATEMENT.revenue, unauditedDates: ['2026-09-06', '2026-09-07', '2026-09-08', '2026-09-12'] },
+    });
+    render(<ReportsTab activeProperty={activeProperty} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    expect(await screen.findByText(/no Night Audit for: 2026-09-06 to 2026-09-08, 2026-09-12/)).toBeInTheDocument();
+  });
+
+  it('shows no un-audited day list when every day is reconciled', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue({
+      ...EMPTY_STATEMENT,
+      revenue: { ...EMPTY_STATEMENT.revenue, roomRevenueFullyAudited: true, unauditedDates: [] },
+    });
+    render(<ReportsTab activeProperty={activeProperty} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    expect(await screen.findByText(/fully reconciled by Night Audit/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no Night Audit for/)).not.toBeInTheDocument();
+  });
+
   it('shows "None recorded" when no operating expenses exist in range, and an honest zero net profit', async () => {
     mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
     mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT);

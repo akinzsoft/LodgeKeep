@@ -9,6 +9,30 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function nextDay(iso) {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+/** Collapses sorted ISO dates into "a to b, c" so a long run of unaudited days stays readable. */
+function describeDates(dates) {
+  const parts = [];
+  let start = null;
+  let prev = null;
+  for (const date of dates) {
+    if (start !== null && nextDay(prev) === date) {
+      prev = date;
+      continue;
+    }
+    if (start !== null) parts.push(start === prev ? start : `${start} to ${prev}`);
+    start = date;
+    prev = date;
+  }
+  if (start !== null) parts.push(start === prev ? start : `${start} to ${prev}`);
+  return parts.join(', ');
+}
+
 /**
  * ReportsTab — a proper P&L statement for the chosen period (Revenue →
  * Cost of Sales → Gross Profit → Operating Expenses → Net Profit,
@@ -203,8 +227,12 @@ export function ReportsTab({ activeProperty }) {
           )}
 
           <p className={formStyles.hint}>
-            Room revenue is {statement.revenue.roomRevenueFullyAudited ? 'fully reconciled by Night Audit' : 'not yet fully reconciled by Night Audit'} for this
-            range. Cost of sales, POS revenue, and operating expenses are always freshly computed, regardless.
+            Room revenue is {statement.revenue.roomRevenueFullyAudited ? 'fully reconciled by Night Audit' : 'not yet fully reconciled by Night Audit'}
+            {!statement.revenue.roomRevenueFullyAudited && statement.revenue.unauditedDates?.length > 0
+              ? ` (no Night Audit for: ${describeDates(statement.revenue.unauditedDates)})`
+              : ''}{' '}
+            for this range. Cost of sales, POS revenue, and operating expenses are always freshly computed,
+            regardless.
           </p>
 
           <div className={`${formStyles.actionsRow} ${formStyles.noPrint}`.trim()}>

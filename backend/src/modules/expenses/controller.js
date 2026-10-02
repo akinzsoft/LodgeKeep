@@ -306,6 +306,12 @@ function flattenProfitAndLossForCsv(statement) {
       amount: '',
     });
   }
+  if (statement.revenue.unauditedDates.length > 0) {
+    rows.push({
+      line: `Note: room revenue is not reconciled by Night Audit for ${statement.revenue.unauditedDates.length} day(s): ${statement.revenue.unauditedDates.join(' ')}`,
+      amount: '',
+    });
+  }
   for (const category of statement.operatingExpenses.byCategory) {
     rows.push({ line: category.categoryName, amount: category.total });
   }
