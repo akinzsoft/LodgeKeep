@@ -5,7 +5,7 @@ import { sumMoney, multiplyMoney, percentOfMoney } from '../../shared/money.js';
 import { posApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { CategoryIcon, AllCategoriesIcon, PaymentMethodIcon, TrashIcon } from './registerCategoryIcons.jsx';
-import { TERMINAL_PROVIDERS, EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
+import { EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
 import formStyles from './POSForm.module.css';
 import styles from './RegisterTab.module.css';
 import { pointOfSaleOutlets } from './outletTypes.js';
@@ -91,7 +91,7 @@ function defaultSettlementForm(splitGroup) {
     authMethod: 'pin',
     authReference: '',
     // Card (external terminal) — both optional, never required to settle.
-    terminalProvider: '',
+    terminalAccountId: '',
     terminalReference: '',
   };
 }
@@ -175,6 +175,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
 
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState([]);
+  const [terminalAccounts, setTerminalAccounts] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
   // Registered Register (menu) categories — so a category the manager just
   // created shows in the rail even before it holds an item (user-reported:
@@ -296,6 +297,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       setMenuItems(menuList);
       setOpenOrders(orders);
       setRegisteredCategories(categoryList);
+      // Best-effort: with none recorded (or a failed read) a terminal sale simply carries no account.
+      setTerminalAccounts(await posApi.listOutletTerminalAccountOptions(id).catch(() => []));
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not load this outlet.');
     }
@@ -315,6 +318,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   function handleSelectOutlet(id) {
     setSettleResult(null);
     setOutletId(id);
+    setTerminalAccounts([]); // never offer the previous outlet's accounts while this one loads
     setTerminalId('');
     setActiveOrderId(null);
     setActiveOrder(null);
@@ -660,7 +664,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
         serviceCharge: serviceAmountForGroup(form.splitGroup) ?? ZERO,
         terminal:
           form.method === 'terminal'
-            ? { provider: form.terminalProvider || undefined, reference: form.terminalReference.trim() || undefined }
+            ? { accountId: form.terminalAccountId || undefined, reference: form.terminalReference.trim() || undefined }
             : undefined,
         roomCharge:
           form.method === 'room_charge'
@@ -1294,6 +1298,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                             currencyCode={activeProperty.base_currency}
                             isOffline={isOffline}
                             onPatch={(patch) => patchSettlementForm(singleSettlementForm.splitGroup, patch)}
+                            terminalAccounts={terminalAccounts}
                             onGuestSearch={(query) => handleGuestSearch(singleSettlementForm.splitGroup, query)}
                           />
                           <div className={styles.checkoutActions}>
@@ -1383,6 +1388,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                       currencyCode={activeProperty.base_currency}
                       isOffline={isOffline}
                       onPatch={(patch) => patchSettlementForm(form.splitGroup, patch)}
+                      terminalAccounts={terminalAccounts}
                       onGuestSearch={(query) => handleGuestSearch(form.splitGroup, query)}
                     />
                   </div>
@@ -1765,7 +1771,7 @@ function PreviewErrorBanner({ message, onRetry }) {
  * for why `form` still carries no `tipAmount` field at all rather than a
  * dead one nothing ever sets.
  */
-function SettlementFields({ form, preview, serviceAmount, grandTotal, currencyCode, isOffline, onPatch, onGuestSearch }) {
+function SettlementFields({ terminalAccounts = [], form, preview, serviceAmount, grandTotal, currencyCode, isOffline, onPatch, onGuestSearch }) {
   return (
     <>
       {preview ? (
@@ -1851,14 +1857,14 @@ function SettlementFields({ form, preview, serviceAmount, grandTotal, currencyCo
         <div className={formStyles.form}>
           <select
             className={styles.darkSelect}
-            aria-label="Terminal provider"
-            value={form.terminalProvider}
-            onChange={(e) => onPatch({ terminalProvider: e.target.value })}
+            aria-label="Terminal account"
+            value={form.terminalAccountId}
+            onChange={(e) => onPatch({ terminalAccountId: e.target.value })}
           >
-            <option value="">Provider (optional)</option>
-            {TERMINAL_PROVIDERS.map((provider) => (
-              <option key={provider.value} value={provider.value}>
-                {provider.label}
+            <option value="">Account (optional)</option>
+            {terminalAccounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {[account.name, `····${account.last4}`].filter(Boolean).join(' ')}
               </option>
             ))}
           </select>

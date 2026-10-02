@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   listTerminals: vi.fn(),
   listMenuItems: vi.fn(),
   listMenuCategories: vi.fn(),
+  listOutletTerminalAccountOptions: vi.fn(),
   listOrders: vi.fn(),
   openOrder: vi.fn(),
   getOrder: vi.fn(),
@@ -145,32 +146,47 @@ describe('<RegisterTab>', () => {
       expect(paystackMocks.openPaystackPopup).not.toHaveBeenCalled();
       expect(mocks.settleOrder).toHaveBeenCalledWith(
         '9',
-        [expect.objectContaining({ method: 'terminal', terminal: { provider: undefined, reference: undefined } })],
+        [expect.objectContaining({ method: 'terminal', terminal: { accountId: undefined, reference: undefined } })],
         expect.objectContaining({})
       );
     });
 
-    it('sends the chosen provider and reference, both optional', async () => {
+    it("offers this outlet's recorded accounts (name and last 4 only) and sends the chosen one with the reference", async () => {
+      mocks.listOutletTerminalAccountOptions.mockResolvedValue([
+        { id: '3', name: 'ZENITH BANK', provider: 'other', last4: '9668' },
+        { id: '4', name: 'GTBank · Bar', provider: 'gtbank', last4: '6789' },
+      ]);
       await openCheckout();
       await userEvent.click(screen.getByRole('button', { name: 'Card (external terminal)' }));
-      await userEvent.selectOptions(screen.getByLabelText('Terminal provider'), 'moniepoint');
+      expect(screen.queryByLabelText('Terminal provider')).not.toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'ZENITH BANK ····9668' })).toBeInTheDocument();
+      await userEvent.selectOptions(screen.getByLabelText('Terminal account'), '3');
       await userEvent.type(screen.getByLabelText('Terminal transaction reference'), ' 123456789012 ');
       await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
 
       expect(mocks.settleOrder).toHaveBeenCalledWith(
         '9',
-        [expect.objectContaining({ method: 'terminal', terminal: { provider: 'moniepoint', reference: '123456789012' } })],
+        [expect.objectContaining({ method: 'terminal', terminal: { accountId: '3', reference: '123456789012' } })],
         expect.objectContaining({})
       );
     });
 
+    it('still settles with no account when the outlet has none recorded or the lookup fails', async () => {
+      mocks.listOutletTerminalAccountOptions.mockRejectedValue(new Error('boom'));
+      await openCheckout();
+      await userEvent.click(screen.getByRole('button', { name: 'Card (external terminal)' }));
+      expect(screen.getByLabelText('Terminal account').querySelectorAll('option')).toHaveLength(1);
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+      expect(mocks.settleOrder).toHaveBeenCalled();
+    });
+
     it('shows no provider or reference fields for the other methods', async () => {
       await openCheckout();
-      expect(screen.queryByLabelText('Terminal provider')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Terminal account')).not.toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: 'Card (external terminal)' }));
-      expect(screen.getByLabelText('Terminal provider')).toBeInTheDocument();
+      expect(screen.getByLabelText('Terminal account')).toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: 'Cash' }));
-      expect(screen.queryByLabelText('Terminal provider')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Terminal account')).not.toBeInTheDocument();
     });
 
     it('names the tender on the receipt', async () => {

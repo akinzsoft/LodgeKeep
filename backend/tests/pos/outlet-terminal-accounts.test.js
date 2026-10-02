@@ -53,11 +53,20 @@ describe('POS outlet terminal accounts (recording only)', () => {
     get: (url) => t.request.get(url).set('Authorization', `Bearer ${tokenFor(userId, tenant)}`),
     post: (url) => t.request.post(url).set('Authorization', `Bearer ${tokenFor(userId, tenant)}`),
     put: (url) => t.request.put(url).set('Authorization', `Bearer ${tokenFor(userId, tenant)}`),
+    patch: (url) => t.request.patch(url).set('Authorization', `Bearer ${tokenFor(userId, tenant)}`),
     delete: (url) => t.request.delete(url).set('Authorization', `Bearer ${tokenFor(userId, tenant)}`),
   });
   const idemKey = () => `acct-${(counter += 1)}`;
-  const accountUrl = (provider, outletId = outlet.outletId) => `/api/v1/pos/outlets/${outletId}/terminal-accounts/${provider}`;
-  const setAccount = (provider, body, userId = managerId) => as(userId).put(accountUrl(provider)).send(body);
+  const listUrl = (outletId = outlet.outletId) => `/api/v1/pos/outlets/${outletId}/terminal-accounts`;
+  const optionsUrl = (outletId = outlet.outletId) => `/api/v1/pos/outlets/${outletId}/terminal-account-options`;
+  let adminId;
+  // Adds an account (admin by default) and returns its id; tests clean up through removeAccount.
+  async function addAccount(body, userId = adminId) {
+    const res = await as(userId).post(listUrl()).send(body);
+    expect(res.status).toBe(201);
+    return res.body.data.id;
+  }
+  const removeAccount = (id) => as(adminId).delete(`${listUrl()}/${id}`);
 
   async function setRole(userId, role) {
     const existing = await t.trx('user_property_access').where({ user_id: userId, property_id: propertyId }).first('id');
@@ -81,6 +90,8 @@ describe('POS outlet terminal accounts (recording only)', () => {
     await t.trx('properties').where({ id: propertyId }).update({ current_business_date: '2027-08-01' });
     managerId = ctx.a.users[0].id;
     operatorId = ctx.a.users[1].id;
+    [adminId] = await t.trx('users').insert({ tenant_id: ctx.a.id, email: `admin-${Date.now().toString(36)}@example.com`, first_name: 'Ada', last_name: 'Min', password_hash: ctx.a.users[0].passwordHash ?? 'x', status: 'active' });
+    await setRole(adminId, 'admin');
     await setRole(managerId, 'manager');
     await setRole(operatorId, 'pos_operator');
     const suffix = Date.now().toString(36).slice(-6);
@@ -90,117 +101,169 @@ describe('POS outlet terminal accounts (recording only)', () => {
     outlet = { outletId, terminalId, menuItemId };
   });
 
-  describe('managing the setting', () => {
-    it('is pos.manage only: an operator can neither read nor change it', async () => {
-      expect((await as(operatorId).get(`/api/v1/pos/outlets/${outlet.outletId}/terminal-accounts`)).status).toBe(403);
-      expect((await setAccount('gtbank', { account_number: '0123456789' }, operatorId)).status).toBe(403);
-      expect((await as(operatorId).delete(accountUrl('gtbank'))).status).toBe(403);
+  describe('managing the list', () => {
+    it('is setup.manage only: operators and outlet managers can neither read nor change it', async () => {
+      for (const userId of [operatorId, managerId]) {
+        expect((await as(userId).get(listUrl())).status).toBe(403);
+        expect((await as(userId).post(listUrl()).send({ account_number: '0123456789', account_label: 'X' })).status).toBe(403);
+        expect((await as(userId).patch(`${listUrl()}/1`).send({ account_number: '0123456789', account_label: 'X' })).status).toBe(403);
+        expect((await as(userId).delete(`${listUrl()}/1`)).status).toBe(403);
+      }
     });
 
-    it('records, lists with the last 4, replaces in place, and removes', async () => {
-      const created = await setAccount('gtbank', { account_number: '0123456789', account_label: ' Bar GTB ' });
-      expect(created.status).toBe(200);
-      expect(created.body.data).toMatchObject({ provider: 'gtbank', account_number: '0123456789', account_number_last4: '6789', account_label: 'Bar GTB' });
-
-      const replaced = await setAccount('gtbank', { account_number: '0222233334' });
-      expect(replaced.body.data).toMatchObject({ account_number_last4: '3334', account_label: null });
-
-      const listed = await as(managerId).get(`/api/v1/pos/outlets/${outlet.outletId}/terminal-accounts`);
-      expect(listed.body.data).toHaveLength(1);
-      expect(listed.body.data[0].id).toBe(created.body.data.id);
-
-      expect((await as(managerId).delete(accountUrl('gtbank'))).status).toBe(200);
-      expect((await as(managerId).get(`/api/v1/pos/outlets/${outlet.outletId}/terminal-accounts`)).body.data).toEqual([]);
-      expect((await as(managerId).delete(accountUrl('gtbank'))).status).toBe(404);
+    it('records several accounts per outlet, including two for one provider and one with no provider', async () => {
+      const a = await addAccount({ provider: 'gtbank', account_number: '0123 456 789', account_label: ' Bar GTB ' });
+      const b = await addAccount({ provider: 'gtbank', account_number: '0222233334', account_label: 'Bar GTB 2' });
+      const c = await addAccount({ account_number: '5550001111', bank_name: 'Some New Microfinance Bank' });
+      const listed = (await as(adminId).get(listUrl())).body.data;
+      expect(listed.map((r) => r.id)).toEqual([a, b, c]);
+      expect(listed[0]).toMatchObject({ provider: 'gtbank', account_number: '0123456789', account_number_last4: '6789', account_label: 'Bar GTB' });
+      expect(listed[2]).toMatchObject({ provider: null, bank_name: 'Some New Microfinance Bank' });
+      for (const id of [a, b, c]) await removeAccount(id);
     });
 
-    it('rejects unknown providers, bad numbers, long labels, and an Other account with no label, writing nothing', async () => {
-      expect((await setAccount('other', { account_number: '0123456789' })).status).toBe(400); // Other is identified by its label
-      expect((await setAccount('other', { account_number: '0123456789', account_label: '   ' })).status).toBe(400);
-      expect((await setAccount('zenith', { account_number: '0123456789' })).status).toBe(400);
-      expect((await setAccount('opay', { account_number: 'abc' })).status).toBe(400);
-      expect((await setAccount('opay', { account_number: '12' })).status).toBe(400);
-      expect((await setAccount('opay', {})).status).toBe(400);
-      expect((await setAccount('opay', { account_number: '0123456789', account_label: 'x'.repeat(81) })).status).toBe(400);
+    it('edits in place by id, and removes; a missing id is 404', async () => {
+      const id = await addAccount({ provider: 'opay', account_number: '0123456789' });
+      const edited = await as(adminId).patch(`${listUrl()}/${id}`).send({ provider: 'opay', account_number: '0333344445', bank_name: 'Zenith Bank' });
+      expect(edited.status).toBe(200);
+      expect(edited.body.data).toMatchObject({ id, account_number_last4: '4445', bank_name: 'Zenith Bank' });
+      expect((await removeAccount(id)).status).toBe(200);
+      expect((await removeAccount(id)).status).toBe(404);
+      expect((await as(adminId).patch(`${listUrl()}/${id}`).send({ account_number: '0333344445', bank_name: 'X' })).status).toBe(404);
+    });
+
+    it('refuses the same account number twice for one outlet (spacing ignored), but allows it at another outlet', async () => {
+      const id = await addAccount({ provider: 'opay', account_number: '0123456789' });
+      const dup = await as(adminId).post(listUrl()).send({ provider: 'gtbank', account_number: '0123 4567 89' });
+      expect(dup.status).toBe(409);
+      const other = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: `TB-${Date.now().toString(36).slice(-6)}`, name: 'Second Bar', type: 'bar' });
+      expect((await as(adminId).post(listUrl(other[0])).send({ provider: 'opay', account_number: '0123456789' })).status).toBe(201);
+      await removeAccount(id);
+    });
+
+    it('rejects unknown providers, bad numbers, long text, and an account with no name at all, writing nothing', async () => {
+      const bad = [
+        { account_number: '0123456789' }, // nothing names it
+        { provider: 'other', account_number: '0123456789', account_label: '   ' },
+        { provider: 'zenith', account_number: '0123456789', account_label: 'x' },
+        { provider: 'opay', account_number: 'abc' },
+        { provider: 'opay', account_number: '12' },
+        { provider: 'opay' },
+        { provider: 'opay', account_number: '0123456789', account_label: 'x'.repeat(81) },
+        { provider: 'opay', account_number: '0123456789', bank_name: 'x'.repeat(81) },
+      ];
+      for (const body of bad) expect((await as(adminId).post(listUrl()).send(body)).status).toBe(400);
       expect(await t.trx('pos_outlet_terminal_accounts').where({ outlet_id: outlet.outletId })).toEqual([]);
     });
 
-    it("cannot reach another tenant's outlet (answered as a missing outlet)", async () => {
+    it("cannot reach another tenant's outlet or account", async () => {
       const foreign = ctx.b.posOutlets[0].id;
-      expect((await as(managerId).put(accountUrl('opay', foreign)).send({ account_number: '0123456789' })).status).toBe(400);
-      expect((await as(managerId).get(`/api/v1/pos/outlets/${foreign}/terminal-accounts`)).status).toBe(400);
-    });
-
-    it('takes any bank as free text, and records an Other account identified by its label', async () => {
-      const bank = await setAccount('gtbank', { account_number: '0123456789', account_label: 'Some Brand New Microfinance Bank — Bar' });
-      expect(bank.status).toBe(200);
-      expect(bank.body.data.account_label).toBe('Some Brand New Microfinance Bank — Bar');
-
-      const other = await setAccount('other', { account_number: '7070707070', account_label: ' Zenith POS — Zenith Bank ' });
-      expect(other.status).toBe(200);
-      expect(other.body.data).toMatchObject({ provider: 'other', account_label: 'Zenith POS — Zenith Bank', account_number_last4: '7070' });
-      await as(managerId).delete(accountUrl('gtbank'));
-      await as(managerId).delete(accountUrl('other'));
+      expect((await as(adminId).post(listUrl(foreign)).send({ provider: 'opay', account_number: '0123456789' })).status).toBe(400);
+      expect((await as(adminId).get(listUrl(foreign))).status).toBe(400);
+      const foreignAccount = ctx.b.posOutletTerminalAccounts[0].id;
+      expect((await as(adminId).delete(`${listUrl(foreign)}/${foreignAccount}`)).status).toBe(404);
+      expect((await as(adminId).delete(`${listUrl()}/${foreignAccount}`)).status).toBe(404);
     });
 
     it('is audited, with who changed what', async () => {
-      await setAccount('opay', { account_number: '5550001111' });
-      const row = await t.trx('audit_log').where({ entity_type: 'pos_outlet_terminal_accounts', action: 'create' }).orderBy('id', 'desc').first();
+      const id = await addAccount({ provider: 'opay', account_number: '5550001111' });
+      const row = await t.trx('audit_log').where({ entity_type: 'pos_outlet_terminal_accounts', action: 'create', entity_id: id }).first();
       expect(row).toBeTruthy();
-      await as(managerId).delete(accountUrl('opay'));
+      await removeAccount(id);
+    });
+  });
+
+  describe('what the Register may see', () => {
+    it('shows an operator id, name and last 4 only — never the full number — and nothing is writable', async () => {
+      const id = await addAccount({ provider: 'gtbank', account_number: '0123456789', account_label: 'Bar GTB', bank_name: 'GTBank' });
+      const res = await as(operatorId).get(optionsUrl());
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([{ id, name: 'GTBank · Bar GTB', provider: 'gtbank', last4: '6789' }]);
+      expect(JSON.stringify(res.body)).not.toContain('0123456789');
+      await removeAccount(id);
+    });
+
+    it("limits an assigned operator to their own outlets (another outlet's list is a 404)", async () => {
+      const [otherOutlet] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: `TC-${Date.now().toString(36).slice(-6)}`, name: 'Elsewhere', type: 'bar' });
+      await t.trx('user_outlet_assignments').insert({ tenant_id: ctx.a.id, property_id: propertyId, user_id: operatorId, outlet_id: otherOutlet });
+      expect((await as(operatorId).get(optionsUrl())).status).toBe(404);
+      expect((await as(operatorId).get(optionsUrl(otherOutlet))).status).toBe(200);
+      await t.trx('user_outlet_assignments').where({ user_id: operatorId }).delete();
     });
   });
 
   describe('capturing the account on a terminal sale', () => {
+    let gtb;
+    let opay;
+    let namedOnly;
     beforeAll(async () => {
-      await setAccount('moniepoint', { account_number: '1010101010', account_label: 'Bar Moniepoint' });
-      await setAccount('opay', { account_number: '2020202020' });
+      gtb = await addAccount({ provider: 'gtbank', account_number: '1010101010', account_label: 'Bar GTB', bank_name: 'GTBank' });
+      opay = await addAccount({ provider: 'opay', account_number: '2020202020' });
+      namedOnly = await addAccount({ provider: 'other', account_number: '7070707070', account_label: 'ZENITH BANK' });
     });
 
-    it("snapshots the outlet's account for the chosen provider", async () => {
-      const row = await settleTerminal({ method: 'terminal', terminal_provider: 'moniepoint', terminal_reference: 'R1' });
-      expect(row).toMatchObject({ terminal_provider: 'moniepoint', terminal_account_label: 'Bar Moniepoint', terminal_account_last4: '1010', payment_id: null });
+    afterAll(async () => {
+      for (const id of [gtb, namedOnly]) await removeAccount(id);
     });
 
-    it('leaves the label null when no provider is named, "other" is chosen, or no account is recorded', async () => {
-      for (const settlement of [{ method: 'terminal' }, { method: 'terminal', terminal_provider: 'other' }, { method: 'terminal', terminal_provider: 'gtbank' }]) {
+    it("snapshots the chosen account's name and last 4, and reports its provider", async () => {
+      const row = await settleTerminal({ method: 'terminal', terminal_account_id: gtb, terminal_reference: 'R1' });
+      expect(row).toMatchObject({ terminal_provider: 'gtbank', terminal_account_label: 'GTBank · Bar GTB', terminal_account_last4: '1010', payment_id: null });
+    });
+
+    it('surfaces a provider=other account named only by its label (the production shape) as a normal account', async () => {
+      const row = await settleTerminal({ method: 'terminal', terminal_account_id: namedOnly });
+      expect(row).toMatchObject({ terminal_provider: 'other', terminal_account_label: 'ZENITH BANK', terminal_account_last4: '7070' });
+      const options = (await as(operatorId).get(optionsUrl())).body.data;
+      expect(options.find((o) => o.id === namedOnly)).toMatchObject({ name: 'ZENITH BANK', last4: '7070' });
+    });
+
+    it('leaves both null when no account is picked, and a cash sale never captures one', async () => {
+      for (const settlement of [{ method: 'terminal' }, { method: 'cash', terminal_account_id: gtb }]) {
         const row = await settleTerminal(settlement);
         expect(row.terminal_account_label).toBeNull();
         expect(row.terminal_account_last4).toBeNull();
       }
     });
 
-    it("snapshots an Other account's label and last 4, and nothing once it is removed", async () => {
-      await setAccount('other', { account_number: '7070707070', account_label: 'Zenith POS — Zenith Bank' });
-      const row = await settleTerminal({ method: 'terminal', terminal_provider: 'other' });
-      expect(row).toMatchObject({ terminal_provider: 'other', terminal_account_label: 'Zenith POS — Zenith Bank', terminal_account_last4: '7070' });
-      await as(managerId).delete(accountUrl('other'));
-      const after = await settleTerminal({ method: 'terminal', terminal_provider: 'other' });
-      expect(after.terminal_account_label).toBeNull();
-      expect(await t.trx('pos_order_settlements').where({ id: row.id }).first()).toMatchObject({ terminal_account_label: 'Zenith POS — Zenith Bank' });
+    it("refuses an account that is not this outlet's (another outlet's or another tenant's), leaving the tab open", async () => {
+      const foreign = ctx.b.posOutletTerminalAccounts[0].id;
+      const [sibling] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: `TD-${Date.now().toString(36).slice(-6)}`, name: 'Sibling Bar', type: 'bar' });
+      const siblingAccount = (await as(adminId).post(listUrl(sibling)).send({ provider: 'opay', account_number: '8080808080' })).body.data.id;
+      const opened = await as(operatorId).post('/api/v1/pos/orders').send({ outlet_id: outlet.outletId, terminal_id: outlet.terminalId, table_label: 'Z1' });
+      const orderId = opened.body.data.id;
+      await as(operatorId).post(`/api/v1/pos/orders/${orderId}/items`).send({ menu_item_id: outlet.menuItemId, quantity: 1 });
+      const res = await as(operatorId).post(`/api/v1/pos/orders/${orderId}/settle`).set('Idempotency-Key', idemKey()).send({ settlements: [{ method: 'terminal', terminal_account_id: foreign }] });
+      expect(res.status).toBe(400);
+      const sameTenant = await as(operatorId).post(`/api/v1/pos/orders/${orderId}/settle`).set('Idempotency-Key', idemKey()).send({ settlements: [{ method: 'terminal', terminal_account_id: siblingAccount }] });
+      expect(sameTenant.status).toBe(400);
+      expect((await t.trx('pos_orders').where({ id: orderId }).first()).status).toBe('open');
     });
 
-    it('does not trust a client-supplied account', async () => {
-      const row = await settleTerminal({ method: 'terminal', terminal_provider: 'gtbank', terminal_account_label: 'FORGED', terminal_account_last4: '9999' });
+    it('does not trust a client-supplied label or last 4', async () => {
+      const row = await settleTerminal({ method: 'terminal', terminal_account_label: 'FORGED', terminal_account_last4: '9999' });
       expect(row.terminal_account_label).toBeNull();
       expect(row.terminal_account_last4).toBeNull();
     });
 
-    it('never captures an account on a cash sale', async () => {
-      const row = await settleTerminal({ method: 'cash' });
-      expect(row.terminal_account_label).toBeNull();
-      expect(row.terminal_account_last4).toBeNull();
-    });
+    it('keeps history exactly as recorded when the account is later edited or REMOVED', async () => {
+      const before = await settleTerminal({ method: 'terminal', terminal_account_id: opay });
+      expect(before).toMatchObject({ terminal_account_last4: '2020', terminal_provider: 'opay' });
+      const snapshot = { label: before.terminal_account_label, last4: before.terminal_account_last4, provider: before.terminal_provider };
 
-    it('keeps history when the setting is later edited or removed', async () => {
-      const before = await settleTerminal({ method: 'terminal', terminal_provider: 'opay' });
-      expect(before.terminal_account_last4).toBe('2020');
-      await setAccount('opay', { account_number: '3030303030', account_label: 'New Opay' });
-      const after = await settleTerminal({ method: 'terminal', terminal_provider: 'opay' });
+      // Edited: the next sale sees the new details, the old one is unchanged.
+      await as(adminId).patch(`${listUrl()}/${opay}`).send({ provider: 'opay', account_number: '3030303030', account_label: 'New Opay' });
+      const after = await settleTerminal({ method: 'terminal', terminal_account_id: opay });
       expect(after).toMatchObject({ terminal_account_last4: '3030', terminal_account_label: 'New Opay' });
-      await as(managerId).delete(accountUrl('opay'));
-      const reread = await t.trx('pos_order_settlements').where({ id: before.id }).first();
-      expect(reread).toMatchObject({ terminal_account_last4: '2020', terminal_account_label: null });
+      // Removed: the old sales do not break, blank out or lose their snapshot.
+      expect((await removeAccount(opay)).status).toBe(200);
+      for (const [row, want] of [[before, snapshot], [after, { label: 'New Opay', last4: '3030', provider: 'opay' }]]) {
+        const reread = await t.trx('pos_order_settlements').where({ id: row.id }).first();
+        expect({ label: reread.terminal_account_label, last4: reread.terminal_account_last4, provider: reread.terminal_provider }).toEqual(want);
+      }
+      const rec = await as(managerId).get(`/api/v1/reconciliation/payments?date_from=2027-08-01&date_to=2027-08-01`);
+      expect(rec.status).toBe(200);
+      expect(rec.body.data.lines.some((l) => l.terminalAccountLast4 === '2020')).toBe(true);
     });
   });
 
@@ -210,15 +273,15 @@ describe('POS outlet terminal accounts (recording only)', () => {
 
     beforeAll(async () => {
       await t.trx('properties').where({ id: propertyId }).update({ current_business_date: DATE });
-      await setAccount('moniepoint', { account_number: '1010101010', account_label: 'Bar Moniepoint' });
-      await settleTerminal({ method: 'terminal', terminal_provider: 'moniepoint' });
-      await settleTerminal({ method: 'terminal', terminal_provider: 'moniepoint' });
-      await settleTerminal({ method: 'terminal', terminal_provider: 'gtbank' }); // no account recorded
-      await setAccount('other', { account_number: '7070707070', account_label: 'Zenith POS — Zenith Bank' });
-      await settleTerminal({ method: 'terminal', terminal_provider: 'other' });
-      // Same provider, a changed account: its own row, never merged with the first.
-      await setAccount('moniepoint', { account_number: '4040404040', account_label: 'Bar Moniepoint 2' });
-      await settleTerminal({ method: 'terminal', terminal_provider: 'moniepoint' });
+      const first = await addAccount({ provider: 'moniepoint', account_number: '1010101010', account_label: 'Bar Moniepoint' });
+      await settleTerminal({ method: 'terminal', terminal_account_id: first });
+      await settleTerminal({ method: 'terminal', terminal_account_id: first });
+      await settleTerminal({ method: 'terminal', terminal_provider: 'gtbank' }); // no account picked
+      const other = await addAccount({ provider: 'other', account_number: '7070707070', account_label: 'Zenith POS — Zenith Bank' });
+      await settleTerminal({ method: 'terminal', terminal_account_id: other });
+      // Same provider, a second account: its own row, never merged with the first.
+      const second = await addAccount({ provider: 'moniepoint', account_number: '4040404040', account_label: 'Bar Moniepoint 2' });
+      await settleTerminal({ method: 'terminal', terminal_account_id: second });
       const got = await as(managerId).get(`/api/v1/reconciliation/payments?date_from=${DATE}&date_to=${DATE}`);
       expect(got.status).toBe(200);
       report = got.body.data;

@@ -21,7 +21,8 @@ const mocks = vi.hoisted(() => ({
   listMenuCategories: vi.fn(),
   setOutletCategories: vi.fn(),
   listOutletTerminalAccounts: vi.fn(),
-  setOutletTerminalAccount: vi.fn(),
+  createOutletTerminalAccount: vi.fn(),
+  updateOutletTerminalAccount: vi.fn(),
   removeOutletTerminalAccount: vi.fn(),
 }));
 
@@ -89,58 +90,56 @@ describe('<SetupTab>', () => {
       await screen.findByRole('heading', { name: 'Terminal accounts — Main Bar' });
     }
 
-    it('offers the three providers plus Other, masking a recorded number to its last 4', async () => {
-      mocks.listOutletTerminalAccounts.mockResolvedValue([{ id: '5', provider: 'gtbank', account_number: '0123456789', account_number_last4: '6789', account_label: 'Bar GTB' }]);
+    const ROW = { id: '5', provider: 'gtbank', account_number: '0123456789', account_number_last4: '6789', bank_name: 'GTBank', account_label: 'Bar GTB' };
+
+    it('lists accounts by name with the last 4 only, including one named only by its label', async () => {
+      mocks.listOutletTerminalAccounts.mockResolvedValue([ROW, { id: '3', provider: 'other', account_number: '9999999668', account_number_last4: '9668', bank_name: null, account_label: 'ZENITH BANK' }]);
       await openAccounts();
 
-      expect(await screen.findByText('Bar GTB ····6789')).toBeInTheDocument();
+      expect(await screen.findByText('GTBank · Bar GTB')).toBeInTheDocument();
+      expect(screen.getByText('ZENITH BANK')).toBeInTheDocument();
+      expect(screen.getByText('····9668')).toBeInTheDocument();
       expect(screen.queryByText('0123456789')).not.toBeInTheDocument();
-      expect(screen.getAllByText('No account recorded')).toHaveLength(3);
-      expect(screen.getByText('Moniepoint')).toBeInTheDocument();
-      expect(screen.getByText('Opay')).toBeInTheDocument();
-      expect(screen.getByText('Other')).toBeInTheDocument();
     });
 
-    it('records an Other account identified by a required label naming any provider and bank', async () => {
-      mocks.setOutletTerminalAccount.mockResolvedValue({});
+    it('adds an account with a free-text bank, no provider required', async () => {
+      mocks.createOutletTerminalAccount.mockResolvedValue({});
       await openAccounts();
 
-      await userEvent.click(await screen.findByRole('button', { name: 'Record Other account' }));
-      expect(screen.getByLabelText('Provider and bank')).toBeRequired();
-      await userEvent.type(screen.getByLabelText('Provider and bank'), 'Zenith POS — Zenith Bank');
+      await userEvent.click(await screen.findByRole('button', { name: 'Add account' }));
       await userEvent.type(screen.getByLabelText('Account number'), '7070707070');
+      await userEvent.type(screen.getByLabelText('Bank (optional)'), 'Some Brand New Bank');
       await userEvent.click(screen.getByRole('button', { name: 'Save account' }));
 
-      expect(mocks.setOutletTerminalAccount).toHaveBeenCalledWith('1', 'other', { accountNumber: '7070707070', accountLabel: 'Zenith POS — Zenith Bank' });
-    });
-
-    it('records an account through the API and reloads', async () => {
-      mocks.setOutletTerminalAccount.mockResolvedValue({});
-      await openAccounts();
-
-      await userEvent.click(await screen.findByRole('button', { name: 'Record Opay account' }));
-      await userEvent.type(screen.getByLabelText('Account number'), '2020202020');
-      await userEvent.type(screen.getByLabelText('Bank / label (optional)'), 'Bar Opay');
-      await userEvent.click(screen.getByRole('button', { name: 'Save account' }));
-
-      expect(mocks.setOutletTerminalAccount).toHaveBeenCalledWith('1', 'opay', { accountNumber: '2020202020', accountLabel: 'Bar Opay' });
+      expect(mocks.createOutletTerminalAccount).toHaveBeenCalledWith('1', { provider: '', accountNumber: '7070707070', bankName: 'Some Brand New Bank', accountLabel: '' });
       expect(mocks.listOutletTerminalAccounts.mock.calls.length).toBeGreaterThan(1);
     });
 
-    it('shows the real server error when saving is refused, and removes an account', async () => {
+    it('shows the real server error when saving is refused, then removes an account by id', async () => {
       const { ApiError } = await import('../../../shared/api/index.js');
-      mocks.listOutletTerminalAccounts.mockResolvedValue([{ id: '5', provider: 'gtbank', account_number: '0123456789', account_number_last4: '6789', account_label: null }]);
-      mocks.setOutletTerminalAccount.mockRejectedValue(new ApiError({ status: 400, code: 'VALIDATION_INVALID_ACCOUNT_NUMBER', message: 'Account number must be digits only.' }));
+      mocks.listOutletTerminalAccounts.mockResolvedValue([ROW]);
+      mocks.updateOutletTerminalAccount.mockRejectedValue(new ApiError({ status: 409, code: 'CONFLICT_DUPLICATE_ENTRY', message: 'This account number is already recorded for this outlet.' }));
       mocks.removeOutletTerminalAccount.mockResolvedValue({ removed: true });
       await openAccounts();
 
-      await userEvent.click(await screen.findByRole('button', { name: 'Edit GTBank account' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Edit GTBank · Bar GTB account' }));
       expect(screen.getByLabelText('Account number')).toHaveValue('0123456789');
       await userEvent.click(screen.getByRole('button', { name: 'Save account' }));
-      expect(await screen.findByRole('alert')).toHaveTextContent('Account number must be digits only.');
+      expect(await screen.findByRole('alert')).toHaveTextContent('already recorded');
+      expect(mocks.updateOutletTerminalAccount).toHaveBeenCalledWith('1', '5', expect.objectContaining({ accountNumber: '0123456789' }));
 
-      await userEvent.click(screen.getByRole('button', { name: 'Remove GTBank account' }));
-      expect(mocks.removeOutletTerminalAccount).toHaveBeenCalledWith('1', 'gtbank');
+      await userEvent.click(screen.getByRole('button', { name: 'Remove GTBank · Bar GTB account' }));
+      expect(mocks.removeOutletTerminalAccount).toHaveBeenCalledWith('1', '5');
+    });
+
+    it('tells a non-admin it is for administrators and never calls the admin list', async () => {
+      mocks.listOutletTerminalAccounts.mockClear();
+      render(<SetupTab activeProperty={{ base_currency: 'NGN' }} canManageAccounts={false} />);
+      await userEvent.click(screen.getByRole('tab', { name: 'Outlets' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+      await userEvent.click(screen.getByRole('tab', { name: 'Terminal accounts' }));
+      expect(await screen.findByText(/Only an administrator/)).toBeInTheDocument();
+      expect(mocks.listOutletTerminalAccounts).not.toHaveBeenCalled();
     });
   });
 
