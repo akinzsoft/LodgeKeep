@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 
 const stockMocks = vi.hoisted(() => ({
   listStockItems: vi.fn(),
+  listMenuItemComponents: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -58,6 +59,7 @@ describe('<SetupTab>', () => {
     mocks.listOutletTerminalAccounts.mockResolvedValue([]);
     mocks.getOutletPayoutAccount.mockResolvedValue({ account: null, settles_to: { source: 'property', bank_name: 'Zenith Bank', account_number_last4: '1784', account_name: 'Hotel Ltd' } });
     stockMocks.listStockItems.mockResolvedValue([]);
+    stockMocks.listMenuItemComponents.mockResolvedValue([]);
   });
 
   it('lists outlets and creates a new one', async () => {
@@ -331,5 +333,33 @@ describe('<SetupTab>', () => {
     expect(await screen.findByRole('heading', { name: 'Menu categories sold at Supermarket' })).toBeInTheDocument();
     expect(mocks.listMenuCategories).toHaveBeenLastCalledWith({ outletId: '3' });
     expect(mocks.listTerminals).toHaveBeenLastCalledWith('3');
+  });
+
+  describe('restocking from the Menu & prices screen (deliveries go to the store room only)', () => {
+    async function manageOutlet(rowIndex) {
+      mocks.listOutlets.mockResolvedValue([
+        { id: '1', code: 'BAR', name: 'Main Bar', type: 'bar' },
+        { id: '9', code: 'STORE-01', name: 'Store-1', type: 'store' },
+      ]);
+      mocks.listMenuCategories.mockResolvedValue([{ id: '1', name: 'Drinks', sort_order: 0, item_count: 1 }]);
+      mocks.listMenuItems.mockResolvedValue([{ id: '5', name: 'Cocktail', category: 'Drinks', price: '20.00', cost_price: null, is_available: true, image_url: null }]);
+      stockMocks.listStockItems.mockResolvedValue([{ id: '30', name: 'Cocktail', unit: 'unit', purchase_cost: '4.00', reorder_level: '5.000', current_quantity: '12.000' }]);
+      stockMocks.listMenuItemComponents.mockResolvedValue([{ stock_item_id: '30', quantity: '1' }]);
+      await renderOutlets();
+      await userEvent.click((await screen.findAllByRole('button', { name: 'Manage' }))[rowIndex]);
+      await userEvent.click(screen.getByRole('tab', { name: 'Menu & prices here' }));
+      return (await screen.findByRole('heading', { name: 'Restock — Drinks' })).closest('section');
+    }
+
+    it('disables Restock at a bar when the property has a store room', async () => {
+      const restockCard = await manageOutlet(0);
+      expect(within(restockCard).getByText(/Deliveries are received at the store room \(Store-1\)/)).toBeInTheDocument();
+      expect(await within(restockCard).findByLabelText('Quantity')).toBeDisabled();
+    });
+
+    it('keeps Restock enabled at the store room itself', async () => {
+      const restockCard = await manageOutlet(1);
+      expect(await within(restockCard).findByLabelText('Quantity')).toBeEnabled();
+    });
   });
 });

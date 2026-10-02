@@ -7,7 +7,7 @@ import { MenuItemsTab } from './MenuItemsTab.jsx';
 import { OutletCategoriesCard } from './OutletCategoriesCard.jsx';
 import { OutletTerminalAccountsCard } from './OutletTerminalAccountsCard.jsx';
 import { OutletPayoutAccountCard } from './OutletPayoutAccountCard.jsx';
-import { STORE_OUTLET_TYPE, isStoreOutlet } from './outletTypes.js';
+import { STORE_OUTLET_TYPE, isStoreOutlet, canReceiveAt, receivingOutlets } from './outletTypes.js';
 
 /**
  * SetupTab — PLAN.md Phase 4's POS core: outlets, terminals. Menu
@@ -381,7 +381,14 @@ export function SetupTab({ activeProperty, isOffline = false, canManageAccounts 
             <OutletCategoriesCard outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} onSaved={() => setOutletSection('menu')} />
           )}
 
-          {outletSection === 'menu' && <MenuItemsTab activeProperty={activeProperty} outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} />}
+          {outletSection === 'menu' && <MenuItemsTab
+              activeProperty={activeProperty}
+              outletId={selectedOutlet.id}
+              outletName={selectedOutlet.name}
+              isOffline={isOffline}
+              canReceiveStock={canReceiveAt(outlets, selectedOutlet.id)}
+              receivingOutletNames={receivingOutlets(outlets).map((outlet) => outlet.name)}
+            />}
 
           {outletSection === 'accounts' &&
             (isStoreOutlet(selectedOutlet) ? (

@@ -59,7 +59,12 @@ const DEFAULT_UNIT = 'unit';
  * case already established — never a silent rollback attempt (there is no
  * delete endpoint for a stock item to roll one back with, only archive).
  */
-export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline = false }) {
+export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline = false, canReceiveStock = true, receivingOutletNames = [] }) {
+  // Once a property has a store room, deliveries are received there only
+  // (the server refuses it elsewhere with BUSINESS_RULE_RECEIVE_AT_STORE_ONLY).
+  // At any other outlet the Restock form and "Qty supplied" are disabled.
+  const stockEntryBlocked = Boolean(outletId) && !canReceiveStock;
+  const storeNote = `Deliveries are received at the store room${receivingOutletNames.length ? ` (${receivingOutletNames.join(', ')})` : ''}, so quantity cannot be added here. Stock reaches this outlet by a stock request or transfer.`;
   const [categories, setCategories] = useState(null);
   const [menuItems, setMenuItems] = useState(null);
   const [stockItems, setStockItems] = useState(null);
@@ -267,7 +272,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
       setAddSubmitting(false);
       return;
     }
-    if (addForm.qty_supplied && !addForm.unit_cost) {
+    if (!stockEntryBlocked && addForm.qty_supplied && !addForm.unit_cost) {
       setAddError('Unit cost is required to record the quantity supplied.');
       setAddSubmitting(false);
       return;
@@ -279,7 +284,8 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
     // be renamed while its own Add panel stays open.
     const liveSection = sections?.find((section) => section.key === activePanel.sectionKey);
     const categoryName = liveSection ? liveSection.categoryName : activePanel.categoryName;
-    const form = addForm;
+    // Never send a quantity from an outlet that may not receive deliveries.
+    const form = stockEntryBlocked ? { ...addForm, qty_supplied: '' } : addForm;
 
     let menuItem = null;
     try {
@@ -408,6 +414,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
 
   async function handleRestockSubmit(event) {
     event.preventDefault();
+    if (stockEntryBlocked) return;
     setRestockSubmitting(true);
     setRestockError(null);
     setRestockSaved(false);
@@ -578,6 +585,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                       />
                     </label>
                     {outletId && (
+                    <>
                     <label className={formStyles.field}>
                       <span className={formStyles.label}>Qty supplied (optional)</span>
                       <input
@@ -585,11 +593,13 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                         type="number"
                         step="0.001"
                         min="0"
-                        value={addForm.qty_supplied}
+                        value={stockEntryBlocked ? '' : addForm.qty_supplied}
                         onChange={(e) => setAddForm({ ...addForm, qty_supplied: e.target.value })}
-                        disabled={isOffline}
+                        disabled={isOffline || stockEntryBlocked}
                       />
                     </label>
+                    {stockEntryBlocked && <p className={formStyles.hint}>Only the store room receives stock.</p>}
+                    </>
                     )}
                     <label className={formStyles.field}>
                       <span className={formStyles.label}>Reorder level (optional)</span>
@@ -773,6 +783,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                   </p>
                 )}
                 {restockSaved && <p className={formStyles.hint}>Stock recorded.</p>}
+                {stockEntryBlocked && <p className={formStyles.disabledNotice}>{storeNote}</p>}
                 {restockableItems.length === 0 ? (
                   <p className={formStyles.hint}>No stock-tracked items in this menu category yet — add one above with Qty supplied/Unit cost filled in, or link a recipe via Stock → Recipes.</p>
                 ) : (
@@ -784,7 +795,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                         value={restockForm.menu_item_id}
                         onChange={(e) => setRestockForm({ ...restockForm, menu_item_id: e.target.value })}
                         required
-                        disabled={isOffline}
+                        disabled={isOffline || stockEntryBlocked}
                       >
                         <option value="" disabled>
                           Select an item
@@ -806,7 +817,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                         value={restockForm.quantity}
                         onChange={(e) => setRestockForm({ ...restockForm, quantity: e.target.value })}
                         required
-                        disabled={isOffline}
+                        disabled={isOffline || stockEntryBlocked}
                       />
                     </label>
                     <label className={formStyles.field}>
@@ -819,7 +830,7 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                         value={restockForm.unit_cost}
                         onChange={(e) => setRestockForm({ ...restockForm, unit_cost: e.target.value })}
                         required
-                        disabled={isOffline}
+                        disabled={isOffline || stockEntryBlocked}
                       />
                     </label>
                     <label className={formStyles.field}>
@@ -829,11 +840,11 @@ export function MenuItemsTab({ activeProperty, outletId, outletName, isOffline =
                         placeholder="Delivery note number"
                         value={restockForm.reference}
                         onChange={(e) => setRestockForm({ ...restockForm, reference: e.target.value })}
-                        disabled={isOffline}
+                        disabled={isOffline || stockEntryBlocked}
                       />
                     </label>
                     <div className={formStyles.actionsRow}>
-                      <Button type="submit" loading={restockSubmitting} disabled={isOffline}>
+                      <Button type="submit" loading={restockSubmitting} disabled={isOffline || stockEntryBlocked}>
                         Record stock
                       </Button>
                     </div>
