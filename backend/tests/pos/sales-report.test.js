@@ -264,6 +264,58 @@ describe('POS sales report', () => {
     expect(res.body.data.unsettledCardPayments).toEqual([]);
   });
 
+  describe('by outlet', () => {
+    let quietId;
+    beforeAll(async () => {
+      const propertyId = ctx.a.properties[0].id;
+      const base = { tenant_id: ctx.a.id, property_id: propertyId };
+      [quietId] = await t.trx('pos_outlets').insert({ ...base, code: 'QUIET', name: 'Quiet Lounge', type: 'restaurant' });
+      await t.trx('pos_outlets').insert({ ...base, code: 'STORE1', name: 'Main Store', type: 'store' });
+      await t.trx('pos_outlets').insert({ ...base, code: 'OLD', name: 'Old Bar', type: 'bar', status: 'archived' });
+    });
+
+    it('breaks the total down per outlet, with a zero row for an outlet that sold nothing', async () => {
+      const rows = (await getReport({ date_from: BUSINESS_DATE, date_to: BUSINESS_DATE })).body.data.byOutlet;
+      const bar = rows.find((row) => row.name === 'Sales Bar');
+      const quiet = rows.find((row) => row.name === 'Quiet Lounge');
+      expect(bar.total).toBe(report.summary.total);
+      expect(bar.tabs).toBe(report.summary.tabs);
+      expect(bar.checks).toBe(report.summary.checks);
+      expect(quiet).toEqual({ outletId: String(quietId), name: 'Quiet Lounge', tabs: 0, checks: 0, subtotal: '0.00', tax: '0.00', serviceCharge: '0.00', tips: '0.00', total: '0.00' });
+      // Busiest first, so the quiet outlet sorts after the bar.
+      expect(rows.indexOf(bar)).toBeLessThan(rows.indexOf(quiet));
+    });
+
+    it('leaves out stores and archived outlets that sold nothing, and the rows add up to the total', async () => {
+      const body = (await getReport({ date_from: BUSINESS_DATE, date_to: BUSINESS_DATE })).body.data;
+      expect(body.byOutlet.map((row) => row.name).sort()).toEqual(['Fixture Bar', 'Quiet Lounge', 'Sales Bar']);
+      const sum = body.byOutlet.reduce((acc, row) => acc + Math.round(Number(row.total) * 100), 0);
+      expect(sum).toBe(Math.round(Number(body.summary.total) * 100));
+    });
+
+    it('with an outlet filter, shows only that outlet; an unknown outlet shows none', async () => {
+      const one = (await getReport({ date_from: BUSINESS_DATE, date_to: BUSINESS_DATE, outlet_id: String(quietId) })).body.data;
+      expect(one.byOutlet.map((row) => row.name)).toEqual(['Quiet Lounge']);
+      const none = (await getReport({ date_from: BUSINESS_DATE, date_to: BUSINESS_DATE, outlet_id: '999999' })).body.data;
+      expect(none.byOutlet).toEqual([]);
+    });
+
+    it('exports the per-outlet section as CSV', async () => {
+      const res = await getReport({ date_from: BUSINESS_DATE, date_to: BUSINESS_DATE, format: 'csv', section: 'outlets' });
+      expect(res.status).toBe(200);
+      const [header, ...lines] = res.text.trim().split('\n');
+      expect(header).toBe('name,tabs,checks,subtotal,tax,serviceCharge,tips,total');
+      expect(lines.some((line) => line.startsWith('Quiet Lounge,0,0,0.00'))).toBe(true);
+    });
+
+    it("never lists another tenant's outlets", async () => {
+      const otherToken = tokenFor(ctx.b, ctx.b.users[0].id);
+      await setRole(ctx.b, 0, 'manager');
+      const res = await getReport({ date_from: BUSINESS_DATE, date_to: BUSINESS_DATE }, otherToken);
+      expect(res.body.data.byOutlet.map((row) => row.name)).not.toContain('Sales Bar');
+    });
+  });
+
   it('exports each section as CSV, quoting values that contain commas', async () => {
     const items = await getReport({ date_from: BUSINESS_DATE, date_to: BUSINESS_DATE, format: 'csv', section: 'items' });
     expect(items.status).toBe(200);

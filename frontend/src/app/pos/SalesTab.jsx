@@ -221,6 +221,27 @@ export function SalesTab({ activeProperty, isOffline = false }) {
       )}
 
       <DataTable
+        title="Sales by outlet"
+        state={tableState(report?.byOutlet ?? [])}
+        emptyMessage={emptyMessage}
+        toolbar={
+          <Button type="button" size="compact" variant="secondary" disabled={exportDisabled(report?.byOutlet ?? [])} loading={exporting === 'outlets'} onClick={() => handleExport('outlets')}>
+            Export CSV
+          </Button>
+        }
+        columns={[
+          { key: 'name', label: 'Outlet' },
+          { key: 'tabs', label: 'Tabs', align: 'right' },
+          { key: 'subtotal', label: 'Sales (before tax)', align: 'right', render: (row) => <Money amount={row.subtotal} currencyCode={currencyCode} /> },
+          { key: 'tax', label: 'Tax', align: 'right', render: (row) => <Money amount={row.tax} currencyCode={currencyCode} /> },
+          { key: 'serviceCharge', label: 'Service charge', align: 'right', render: (row) => <Money amount={row.serviceCharge} currencyCode={currencyCode} /> },
+          { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={currencyCode} /> },
+        ]}
+        rows={report?.byOutlet ?? []}
+        rowKey={(row) => row.outletId}
+      />
+
+      <DataTable
         title="Totals by payment method"
         state={tableState(report?.byTender ?? [])}
         emptyMessage={emptyMessage}
