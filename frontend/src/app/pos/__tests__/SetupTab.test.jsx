@@ -24,6 +24,10 @@ const mocks = vi.hoisted(() => ({
   createOutletTerminalAccount: vi.fn(),
   updateOutletTerminalAccount: vi.fn(),
   removeOutletTerminalAccount: vi.fn(),
+  getOutletPayoutAccount: vi.fn(),
+  resolveOutletPayoutBankAccount: vi.fn(),
+  setOutletPayoutAccount: vi.fn(),
+  clearOutletPayoutAccount: vi.fn(),
 }));
 
 const stockMocks = vi.hoisted(() => ({
@@ -52,6 +56,7 @@ describe('<SetupTab>', () => {
     mocks.listMenuItems.mockResolvedValue([]);
     mocks.listMenuCategories.mockResolvedValue([]);
     mocks.listOutletTerminalAccounts.mockResolvedValue([]);
+    mocks.getOutletPayoutAccount.mockResolvedValue({ account: null, settles_to: { source: 'property', bank_name: 'Zenith Bank', account_number_last4: '1784', account_name: 'Hotel Ltd' } });
     stockMocks.listStockItems.mockResolvedValue([]);
   });
 
@@ -80,6 +85,70 @@ describe('<SetupTab>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Add terminal' }));
 
     expect(mocks.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ outletId: '1', deviceRef: 'TERM-1' }));
+  });
+
+  describe('online payout account', () => {
+    async function openPayout(props = {}) {
+      render(<SetupTab activeProperty={{ base_currency: 'NGN' }} {...props} />);
+      await userEvent.click(screen.getByRole('tab', { name: 'Outlets' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+      await userEvent.click(screen.getByRole('tab', { name: 'Online payout account' }));
+      await screen.findByRole('heading', { name: 'Online payout account — Main Bar' });
+    }
+
+    it('says an outlet with no account of its own settles to the property account', async () => {
+      await openPayout();
+      expect(await screen.findByText(/settles to the/i)).toHaveTextContent('property account');
+      expect(screen.getByText(/ending 1784/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Set outlet account' })).toBeInTheDocument();
+    });
+
+    it('checks the account name first, then saves; the save call carries the bank fields', async () => {
+      mocks.resolveOutletPayoutBankAccount.mockResolvedValue({ accountName: 'BAR LTD' });
+      mocks.setOutletPayoutAccount.mockResolvedValue({ account: { id: '1' }, settles_to: { source: 'outlet', bank_name: 'Zenith Bank', account_number_last4: '4321', account_name: 'BAR LTD' } });
+      await openPayout();
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Set outlet account' }));
+      await userEvent.type(screen.getByLabelText('Bank name'), 'Zenith Bank');
+      await userEvent.type(screen.getByLabelText('Bank code'), '057');
+      await userEvent.type(screen.getByLabelText('Account number'), '0000004321');
+      await userEvent.click(screen.getByRole('button', { name: 'Check account name' }));
+      expect(await screen.findByText('BAR LTD')).toBeInTheDocument();
+      expect(mocks.setOutletPayoutAccount).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Save payout account' }));
+      expect(mocks.setOutletPayoutAccount).toHaveBeenCalledWith('1', { bankName: 'Zenith Bank', bankCode: '057', accountNumber: '0000004321' });
+      expect(await screen.findByText(/own account/i)).toBeInTheDocument();
+    });
+
+    it('shows the "already used" message from the server and keeps the form', async () => {
+      const { ApiError } = await import('../../../shared/api/index.js');
+      mocks.resolveOutletPayoutBankAccount.mockResolvedValue({ accountName: 'BAR LTD' });
+      mocks.setOutletPayoutAccount.mockRejectedValue(new ApiError({ status: 409, code: 'CONFLICT_PAYOUT_ACCOUNT_ALREADY_USED', message: 'This bank account is already used by another payout account.' }));
+      await openPayout();
+      await userEvent.click(await screen.findByRole('button', { name: 'Set outlet account' }));
+      await userEvent.type(screen.getByLabelText('Bank name'), 'Zenith Bank');
+      await userEvent.type(screen.getByLabelText('Bank code'), '057');
+      await userEvent.type(screen.getByLabelText('Account number'), '0000004321');
+      await userEvent.click(screen.getByRole('button', { name: 'Check account name' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Save payout account' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('already used by another payout account');
+    });
+
+    it('lets an admin go back to the property account', async () => {
+      mocks.getOutletPayoutAccount.mockResolvedValue({ account: { id: '1' }, settles_to: { source: 'outlet', bank_name: 'Zenith Bank', account_number_last4: '4321', account_name: 'BAR LTD' } });
+      mocks.clearOutletPayoutAccount.mockResolvedValue({ account: null, settles_to: { source: 'property', bank_name: 'Zenith Bank', account_number_last4: '1784', account_name: 'Hotel Ltd' } });
+      await openPayout();
+      await userEvent.click(await screen.findByRole('button', { name: 'Use the property account instead' }));
+      expect(mocks.clearOutletPayoutAccount).toHaveBeenCalledWith('1');
+      expect(await screen.findByText(/settles to the/i)).toHaveTextContent('property account');
+    });
+
+    it('is read-only guidance for anyone who is not an admin, and never loads the account', async () => {
+      await openPayout({ canManageAccounts: false });
+      expect(screen.getByText(/Only an administrator/i)).toBeInTheDocument();
+      expect(mocks.getOutletPayoutAccount).not.toHaveBeenCalled();
+    });
   });
 
   describe('terminal accounts (recording only)', () => {

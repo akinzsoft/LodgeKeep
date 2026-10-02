@@ -195,6 +195,54 @@ async function removeOutletTerminalAccount(req, res, next) {
   }
 }
 
+async function getOutletPayoutAccount(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.getOutletPayoutAccount({ context: req.context, outletId: req.params.id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function resolveOutletPayoutBankAccount(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.resolveOutletPayoutBankAccount({ context: req.context, outletId: req.params.id, bankCode: req.body?.bank_code, accountNumber: req.body?.account_number })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function setOutletPayoutAccount(req, res, next) {
+  try {
+    const result = await service.setOutletPayoutAccount({
+      context: req.context,
+      outletId: req.params.id,
+      bankCode: req.body?.bank_code,
+      bankName: req.body?.bank_name,
+      accountNumber: req.body?.account_number,
+    });
+    await req.audit({
+      entityType: 'pos_outlet_payment_subaccounts',
+      entityId: result.current.id,
+      action: result.previous ? 'replace' : 'create',
+      beforeState: result.previous ?? undefined,
+      afterState: { outletId: result.current.outlet_id, bankName: result.current.bank_name, accountNumberLast4: result.current.account_number_last4 },
+    });
+    res.status(200).json(ok(await service.getOutletPayoutAccount({ context: req.context, outletId: req.params.id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function clearOutletPayoutAccount(req, res, next) {
+  try {
+    const removed = await service.clearOutletPayoutAccount({ context: req.context, outletId: req.params.id });
+    if (removed) await req.audit({ entityType: 'pos_outlet_payment_subaccounts', entityId: removed.id, action: 'deactivate', beforeState: removed });
+    res.status(200).json(ok(await service.getOutletPayoutAccount({ context: req.context, outletId: req.params.id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function archiveOutlet(req, res, next) {
   try {
     const before = await service.getOutlet({ context: req.context, id: req.params.id });
@@ -912,6 +960,10 @@ module.exports = {
   updateOutletTerminalAccount,
   listOutletTerminalAccountOptions,
   removeOutletTerminalAccount,
+  getOutletPayoutAccount,
+  resolveOutletPayoutBankAccount,
+  setOutletPayoutAccount,
+  clearOutletPayoutAccount,
   uploadMenuItemImage,
   removeMenuItemImage,
   archiveMenuItem,

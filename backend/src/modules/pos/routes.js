@@ -39,6 +39,12 @@ function posRouter() {
   router.post('/pos/outlets/:id/terminal-accounts', requirePermission('setup.manage'), controller.createOutletTerminalAccount);
   router.patch('/pos/outlets/:id/terminal-accounts/:accountId', requirePermission('setup.manage'), controller.updateOutletTerminalAccount);
   router.delete('/pos/outlets/:id/terminal-accounts/:accountId', requirePermission('setup.manage'), controller.removeOutletTerminalAccount);
+  // Where an outlet's ONLINE card payments settle (its own Paystack subaccount,
+  // else the property's). Admin / super_admin only, like the property account.
+  router.get('/pos/outlets/:id/payout-account', requirePermission('setup.view'), controller.getOutletPayoutAccount);
+  router.post('/pos/outlets/:id/payout-account/resolve-bank-account', requirePermission('setup.manage'), controller.resolveOutletPayoutBankAccount);
+  router.put('/pos/outlets/:id/payout-account', requirePermission('setup.manage'), controller.setOutletPayoutAccount);
+  router.delete('/pos/outlets/:id/payout-account', requirePermission('setup.manage'), controller.clearOutletPayoutAccount);
   // What the Register shows an operator: id, name and last 4 only.
   router.get('/pos/outlets/:id/terminal-account-options', requirePermission('pos.operate'), scope.outletParamInScope, controller.listOutletTerminalAccountOptions);
   router.put('/pos/outlets/:id/categories', requirePermission('pos.manage'), controller.setOutletCategories);

@@ -136,6 +136,23 @@ export function PaymentReconciliationTab() {
         rowKey={(row) => `${row.currency}-${row.method}`}
       />
 
+      {/* Paystack money by the bank account it settles to — tick each total against that account's own statement. */}
+      {(report?.bySettlementAccount ?? []).length > 0 && (
+        <DataTable
+          title="Online payments — by settlement account"
+          state="success"
+          columns={[
+            { key: 'account', label: 'Settles to', render: (row) => (row.subaccountCode ? (row.source === 'outlet' ? `${row.outlet ?? 'Outlet'} account` : 'Property account') : 'No account recorded') },
+            { key: 'bank', label: 'Bank account', render: (row) => (row.bankName ? `${row.bankName} ····${row.accountLast4 ?? ''}` : '—') },
+            { key: 'count', label: 'Payments', align: 'right' },
+            { key: 'grossTotal', label: 'Gross', align: 'right', render: (row) => <Money amount={row.grossTotal} currencyCode={row.currency} /> },
+            { key: 'netTotal', label: 'Net', align: 'right', render: (row) => <Money amount={row.netTotal} currencyCode={row.currency} /> },
+          ]}
+          rows={report.bySettlementAccount}
+          rowKey={(row) => `${row.currency}-${row.subaccountCode ?? 'none'}`}
+        />
+      )}
+
       {/* Match each total against that terminal provider's own end-of-day settlement report. */}
       {(report?.byTerminalProvider ?? []).length > 0 && (
         <DataTable

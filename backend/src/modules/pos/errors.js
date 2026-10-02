@@ -152,6 +152,18 @@ class OutletNotFoundError extends ValidationError {
   }
 }
 
+class PayoutAccountAlreadyUsedError extends AppError {
+  constructor() {
+    super('CONFLICT_PAYOUT_ACCOUNT_ALREADY_USED', 'This bank account is already used by another payout account. Use a different account, or remove the other payout account first.', 409);
+  }
+}
+
+class PayoutAccountRejectedError extends AppError {
+  constructor(message) {
+    super('PAYOUT_ACCOUNT_REJECTED', `Paystack could not set up this bank account: ${message}`, 422);
+  }
+}
+
 class TerminalNotFoundError extends ValidationError {
   constructor() {
     super('TERMINAL_NOT_FOUND', 'The specified terminal does not exist.');
@@ -216,6 +228,8 @@ module.exports = {
   SettlementPaidByGatewayError,
   MenuCategoryInUseError,
   OutletNotFoundError,
+  PayoutAccountAlreadyUsedError,
+  PayoutAccountRejectedError,
   TerminalNotFoundError,
   MenuItemNotFoundError,
   OrderNotFoundError,

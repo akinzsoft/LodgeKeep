@@ -665,6 +665,25 @@ async function initiatePosRegisterPaymentIntent({ trx, posOrderId, splitGroup, t
 }
 
 /**
+ * Which Paystack subaccount a payment settles to: the outlet's own account when
+ * the payment funds a POS order at an outlet that has one, else the property's,
+ * else none (the caller refuses the checkout — never the platform account).
+ * Folio and portal payments carry no `pos_order_id`, so they always take the
+ * property's. `source` is stamped on the payment next to `subaccount_code`.
+ */
+async function resolvePayoutSubaccount(db, payment) {
+  if (payment.pos_order_id) {
+    const order = await db.table('pos_orders').where({ id: payment.pos_order_id }).first('outlet_id');
+    if (order) {
+      const outletRow = await db.table('pos_outlet_payment_subaccounts').where({ outlet_id: order.outlet_id, is_active: true }).first();
+      if (outletRow) return { row: outletRow, source: 'outlet' };
+    }
+  }
+  const propertyRow = await db.table('property_payment_subaccounts').where({ property_id: payment.property_id, is_active: true }).first();
+  return propertyRow ? { row: propertyRow, source: 'property' } : { row: null, source: null };
+}
+
+/**
  * Phase 2 of 2 — the real external call, deliberately OUTSIDE any
  * transaction (ARCHITECTURE.md §6.4). Idempotent by construction: a payment
  * not still `INITIATED` (already progressed by a prior successful call, a
@@ -715,7 +734,7 @@ async function startPaystackCheckout({ context, paymentId, guestEmail, callbackU
   await assertAllowedCallbackUrl(db, { callbackUrl });
 
   const { adapter } = await paystack.resolveAdapterForCurrency(db, payment.currency);
-  const subaccountRow = await db.table('property_payment_subaccounts').where({ property_id: payment.property_id, is_active: true }).first();
+  const { row: subaccountRow, source: subaccountSource } = await resolvePayoutSubaccount(db, payment);
   if (!subaccountRow) throw new paystack.PropertyPayoutNotConfiguredError(payment.property_id);
 
   const init = await adapter.initializeTransaction({
@@ -735,6 +754,7 @@ async function startPaystackCheckout({ context, paymentId, guestEmail, callbackU
       status: 'PENDING',
       provider_access_code: init.accessCode ?? null,
       subaccount_code: subaccountRow.subaccount_code,
+      subaccount_source: subaccountSource,
       // Snapshot, not a live join — see that column's own migration header
       // (the payment reconciliation report's gap closure) for why this must
       // be captured now rather than re-derived from the property's current,

@@ -6,6 +6,7 @@ import styles from './SetupTab.module.css';
 import { MenuItemsTab } from './MenuItemsTab.jsx';
 import { OutletCategoriesCard } from './OutletCategoriesCard.jsx';
 import { OutletTerminalAccountsCard } from './OutletTerminalAccountsCard.jsx';
+import { OutletPayoutAccountCard } from './OutletPayoutAccountCard.jsx';
 import { STORE_OUTLET_TYPE, isStoreOutlet } from './outletTypes.js';
 
 /**
@@ -56,6 +57,7 @@ const OUTLET_SECTIONS = [
   { key: 'menu', label: 'Menu & prices here' },
   { key: 'terminals', label: 'Terminals' },
   { key: 'accounts', label: 'Terminal accounts' },
+  { key: 'payout', label: 'Online payout account' },
 ];
 
 export function SetupTab({ activeProperty, isOffline = false, canManageAccounts = true }) {
@@ -388,6 +390,15 @@ export function SetupTab({ activeProperty, isOffline = false, canManageAccounts 
               </Card>
             ) : (
               <OutletTerminalAccountsCard outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} canManage={canManageAccounts} />
+            ))}
+
+          {outletSection === 'payout' &&
+            (isStoreOutlet(selectedOutlet) ? (
+              <Card title={`Online payout account — ${selectedOutlet.name}`}>
+                <p className={formStyles.hint}>{STORE_HINT}</p>
+              </Card>
+            ) : (
+              <OutletPayoutAccountCard outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} canManage={canManageAccounts} />
             ))}
 
           {outletSection === 'terminals' && (

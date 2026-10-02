@@ -51,6 +51,7 @@
  */
 
 const { scopedDb } = require('../../db');
+const paystackAdapter = require('../cashiering/paystack-adapter');
 const { ValidationError, withDuplicateMapping } = require('../../shared/errors');
 const { createCategoryCatalogue } = require('../../shared/category-catalogue');
 const { sumMoney, negateMoney, compareMoney, percentOfMoney } = require('../../shared/money');
@@ -86,6 +87,8 @@ const {
   SettlementGroupsMismatchError,
   ShiftAlreadyOpenError,
   OutletNotFoundError,
+  PayoutAccountAlreadyUsedError,
+  PayoutAccountRejectedError,
   TerminalNotFoundError,
   MenuItemNotFoundError,
   OrderNotFoundError,
@@ -265,6 +268,136 @@ async function removeOutletTerminalAccount({ context, outletId, accountId }) {
   if (!existing) return null;
   await db.table('pos_outlet_terminal_accounts').where({ id: existing.id }).delete();
   return withLastFour(existing);
+}
+
+// ---------------------------------------------------------------------
+// Outlet payout accounts — the Paystack subaccount an outlet's ONLINE card
+// payments (QR orders, Register card/NQR) settle to. See migration
+// 20261118090000. An outlet with none uses the property's account.
+// ---------------------------------------------------------------------
+
+const PAYOUT_PERCENTAGE_CHARGE = '0.00';
+
+function publicPayoutAccount(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    outlet_id: row.outlet_id,
+    bank_code: row.bank_code,
+    bank_name: row.bank_name,
+    account_number_last4: row.account_number_last4,
+    account_name: row.account_name,
+    percentage_charge: row.percentage_charge,
+    created_at: row.created_at,
+  };
+}
+
+function requirePayoutBankFields({ bankCode, bankName, accountNumber }) {
+  const missing = [];
+  if (!bankCode) missing.push({ field: 'bank_code', issue: 'missing' });
+  if (!bankName) missing.push({ field: 'bank_name', issue: 'missing' });
+  if (!accountNumber) missing.push({ field: 'account_number', issue: 'missing' });
+  if (missing.length) throw new ValidationError('MISSING_FIELD', '"bank_code", "bank_name" and "account_number" are required.', missing);
+  if (!/^[0-9]{6,20}$/.test(String(accountNumber).replace(/\s+/g, ''))) {
+    throw new ValidationError('INVALID_ACCOUNT_NUMBER', '"account_number" must be digits only.', [{ field: 'account_number', issue: 'invalid' }]);
+  }
+}
+
+async function getPayableOutlet(db, outletId) {
+  const outlet = await db.table('pos_outlets').where({ id: outletId }).first();
+  if (!outlet || outlet.status !== 'active') throw new OutletNotFoundError();
+  return outlet;
+}
+
+/** The outlet's own account (if any) and where its online payments actually go right now. */
+async function getOutletPayoutAccount({ context, outletId }) {
+  const db = scopedDb().for(context);
+  const outlet = await db.table('pos_outlets').where({ id: outletId }).first();
+  if (!outlet) throw new OutletNotFoundError();
+  const own = await db.table('pos_outlet_payment_subaccounts').where({ outlet_id: outletId, is_active: true }).first();
+  const property = own ? null : await db.table('property_payment_subaccounts').where({ property_id: context.propertyId, is_active: true }).first();
+  const settlesTo = own
+    ? { source: 'outlet', bank_name: own.bank_name, account_number_last4: own.account_number_last4, account_name: own.account_name }
+    : property
+      ? { source: 'property', bank_name: property.bank_name, account_number_last4: property.account_number_last4, account_name: property.account_name }
+      : { source: null };
+  return { account: publicPayoutAccount(own), settles_to: settlesTo };
+}
+
+async function resolveOutletPayoutBankAccount({ context, outletId, bankCode, accountNumber }) {
+  if (!bankCode || !accountNumber) throw new ValidationError('MISSING_FIELD', 'Both "bank_code" and "account_number" are required.', [{ field: !bankCode ? 'bank_code' : 'account_number', issue: 'missing' }]);
+  const db = scopedDb().for(context);
+  await getPayableOutlet(db, outletId);
+  const property = await db.table('properties').where({ id: context.propertyId }).first();
+  const { adapter } = await paystackAdapter.resolveAdapterForCurrency(db, property.base_currency);
+  return adapter.resolveBankAccount({ bankCode, accountNumber });
+}
+
+/**
+ * Creates a Paystack subaccount named "<Property> — <Outlet>" and makes it the
+ * outlet's active account. The previous active row (if any) is deactivated, not
+ * updated, so payments already routed through it keep resolving. The external
+ * call runs OUTSIDE any transaction. If Paystack refuses because the account
+ * number is already attached to another subaccount, that is reported and the
+ * admin resolves it — an existing subaccount is never reused by guessing.
+ */
+async function setOutletPayoutAccount({ context, outletId, bankCode, bankName, accountNumber }) {
+  requirePayoutBankFields({ bankCode, bankName, accountNumber });
+  const number = String(accountNumber).replace(/\s+/g, '');
+  const db = scopedDb().for(context);
+  const outlet = await getPayableOutlet(db, outletId);
+  if (!isPointOfSaleOutlet(outlet)) throw new StoreOutletNotAPointOfSaleError(outlet.name);
+  const property = await db.table('properties').where({ id: context.propertyId }).first();
+  const { integration, adapter } = await paystackAdapter.resolveAdapterForCurrency(db, property.base_currency);
+
+  let created;
+  try {
+    created = await adapter.createSubaccount({
+      businessName: `${property.name} — ${outlet.name}`,
+      bankCode,
+      accountNumber: number,
+      percentageCharge: PAYOUT_PERCENTAGE_CHARGE,
+    });
+  } catch (error) {
+    if (error?.code === 'PAYMENT_GATEWAY_ERROR' && error.details?.httpStatus && error.details.httpStatus < 500) {
+      const message = String(error.details?.body?.message ?? '');
+      if (/already|exist|duplicate|in use/i.test(message)) throw new PayoutAccountAlreadyUsedError();
+      throw new PayoutAccountRejectedError(message || 'the account details were not accepted.');
+    }
+    throw error;
+  }
+
+  const result = await db.transaction(async (trx) => {
+    await trx.table('pos_outlets').where({ id: outletId }).forUpdate().first('id');
+    const previous = await trx.table('pos_outlet_payment_subaccounts').where({ outlet_id: outletId, is_active: true }).first();
+    if (previous) await trx.table('pos_outlet_payment_subaccounts').where({ id: previous.id }).update({ is_active: false });
+    const [id] = await trx.table('pos_outlet_payment_subaccounts').insert({
+      outlet_id: outletId,
+      platform_payment_integration_id: integration.id,
+      subaccount_code: created.subaccountCode,
+      bank_code: bankCode,
+      bank_name: bankName,
+      account_number_last4: number.slice(-4),
+      account_name: created.accountName,
+      percentage_charge: PAYOUT_PERCENTAGE_CHARGE,
+      is_active: true,
+    });
+    return { previous: publicPayoutAccount(previous), current: publicPayoutAccount(await trx.table('pos_outlet_payment_subaccounts').where({ id }).first()) };
+  });
+  return result;
+}
+
+/** Deactivates the outlet's account; its online payments go back to the property's. Past payments keep their snapshot. */
+async function clearOutletPayoutAccount({ context, outletId }) {
+  const db = scopedDb().for(context);
+  return db.transaction(async (trx) => {
+    const outlet = await trx.table('pos_outlets').where({ id: outletId }).forUpdate().first();
+    if (!outlet) throw new OutletNotFoundError();
+    const existing = await trx.table('pos_outlet_payment_subaccounts').where({ outlet_id: outletId, is_active: true }).first();
+    if (!existing) return null;
+    await trx.table('pos_outlet_payment_subaccounts').where({ id: existing.id }).update({ is_active: false });
+    return publicPayoutAccount(existing);
+  });
 }
 
 async function archiveOutlet({ context, id }) {
@@ -1704,6 +1837,10 @@ module.exports = {
   updateOutletTerminalAccount,
   listOutletTerminalAccountOptions,
   removeOutletTerminalAccount,
+  getOutletPayoutAccount,
+  resolveOutletPayoutBankAccount,
+  setOutletPayoutAccount,
+  clearOutletPayoutAccount,
   archiveMenuItem,
   setMenuItemImage,
   removeMenuItemImage,

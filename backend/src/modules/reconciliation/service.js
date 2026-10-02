@@ -518,6 +518,73 @@ function summarizeByTerminalProvider(lines) {
     );
 }
 
+/**
+ * Adds `settlementAccount` to every Paystack-funded line: which Paystack
+ * subaccount (and therefore which bank account) the payment settled to, from
+ * the snapshot on the `payments` row (`subaccount_code` + `subaccount_source`),
+ * never from the property's or outlet's CURRENT config. A refund line has no
+ * snapshot of its own, so it takes its parent payment's. The account's bank
+ * details are looked up by code in the outlet table (append-only history, so a
+ * replaced account still resolves) and then the property table. NULL source
+ * with a code is a pre-outlet-account payment: reported as 'property'. Cash,
+ * terminal and pre-subaccount payments carry `settlementAccount: null`.
+ */
+async function attachSettlementAccounts({ db, lines }) {
+  const lookupId = (line) => (line.isRefund && line.parentPaymentId ? line.parentPaymentId : line.paymentId);
+  const ids = [...new Set(lines.filter((line) => line.method !== 'cash' && line.method !== 'terminal').map(lookupId).filter(Boolean).map(String))];
+  const paymentById = ids.length ? new Map((await db.table('payments').whereIn('id', ids).select('id', 'subaccount_code', 'subaccount_source')).map((row) => [String(row.id), row])) : new Map();
+  const codes = [...new Set([...paymentById.values()].map((row) => row.subaccount_code).filter(Boolean))];
+  const outletAccounts = codes.length ? await db.table('pos_outlet_payment_subaccounts').whereIn('subaccount_code', codes) : [];
+  const propertyAccounts = codes.length ? await db.table('property_payment_subaccounts').whereIn('subaccount_code', codes) : [];
+  const outletIds = [...new Set(outletAccounts.map((row) => String(row.outlet_id)))];
+  const outlets = outletIds.length ? await db.table('pos_outlets').whereIn('id', outletIds).select('id', 'name') : [];
+  const outletNameById = new Map(outlets.map((row) => [String(row.id), row.name]));
+  const outletByCode = new Map(outletAccounts.map((row) => [row.subaccount_code, row]));
+  const propertyByCode = new Map(propertyAccounts.map((row) => [row.subaccount_code, row]));
+
+  for (const line of lines) {
+    const payment = paymentById.get(String(lookupId(line)));
+    if (!payment?.subaccount_code) {
+      line.settlementAccount = null;
+      continue;
+    }
+    const source = payment.subaccount_source ?? 'property';
+    const account = source === 'outlet' ? outletByCode.get(payment.subaccount_code) : propertyByCode.get(payment.subaccount_code);
+    line.settlementAccount = {
+      source,
+      subaccountCode: payment.subaccount_code,
+      outletName: source === 'outlet' && account ? outletNameById.get(String(account.outlet_id)) ?? null : null,
+      bankName: account?.bank_name ?? null,
+      accountLast4: account?.account_number_last4 ?? null,
+      accountName: account?.account_name ?? null,
+    };
+  }
+}
+
+/** Paystack-funded money grouped by the account it settles to, so each total can be ticked against that account's own statement. */
+function summarizeBySettlementAccount(lines) {
+  const paystackLines = lines.filter((line) => line.method !== 'cash' && line.method !== 'terminal');
+  const groups = groupBy(paystackLines, (line) => `${line.currency}\u0000${line.settlementAccount?.subaccountCode ?? ''}`);
+  return [...groups.values()]
+    .map((rows) => {
+      const account = rows[0].settlementAccount;
+      return {
+        currency: rows[0].currency,
+        source: account?.source ?? null,
+        outlet: account?.outletName ?? null,
+        bankName: account?.bankName ?? null,
+        accountLast4: account?.accountLast4 ?? null,
+        accountName: account?.accountName ?? null,
+        subaccountCode: account?.subaccountCode ?? null,
+        count: rows.length,
+        grossTotal: sumMoney(rows.map((row) => row.grossAmount)),
+        feeTotal: sumMoney(rows.map((row) => row.feeAmount)),
+        netTotal: sumMoney(rows.map((row) => row.netAmount)),
+      };
+    })
+    .sort((a, b) => compareMoney(b.grossTotal, a.grossTotal) || String(a.outlet ?? '').localeCompare(String(b.outlet ?? '')));
+}
+
 function summarizeByMethod(lines) {
   const groups = groupBy(lines, (line) => `${line.currency}\u0000${line.method}`);
   return [...groups.values()]
@@ -565,6 +632,7 @@ async function computePaymentReconciliation({ context, dateFrom, dateTo }) {
     if (a.businessDate !== b.businessDate) return a.businessDate < b.businessDate ? 1 : -1;
     return new Date(b.capturedAt) - new Date(a.capturedAt);
   });
+  await attachSettlementAccounts({ db, lines });
 
   return {
     dateFrom,
@@ -574,6 +642,7 @@ async function computePaymentReconciliation({ context, dateFrom, dateTo }) {
     bySource: summarizeBySource(lines),
     byMethod: summarizeByMethod(lines),
     byTerminalProvider: summarizeByTerminalProvider(lines),
+    bySettlementAccount: summarizeBySettlementAccount(lines),
     lines,
   };
 }
@@ -589,6 +658,10 @@ const CSV_COLUMNS = [
   'terminalReference',
   'terminalAccountLabel',
   'terminalAccountLast4',
+  'settlementSource',
+  'settlementOutlet',
+  'settlementBank',
+  'settlementAccountLast4',
   'grossAmount',
   'feeAmount',
   'netAmount',
@@ -605,6 +678,10 @@ function toCsvRows(lines) {
     ...line,
     sourceLabel: line.source.label,
     sourceChannel: line.source.channel ?? '',
+    settlementSource: line.settlementAccount?.source ?? '',
+    settlementOutlet: line.settlementAccount?.outletName ?? '',
+    settlementBank: line.settlementAccount?.bankName ?? '',
+    settlementAccountLast4: line.settlementAccount?.accountLast4 ?? '',
   }));
 }
 
