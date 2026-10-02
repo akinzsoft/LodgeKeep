@@ -292,10 +292,19 @@ function flattenProfitAndLossForCsv(statement) {
   const rows = [
     { line: 'Room revenue', amount: statement.revenue.roomRevenue },
     { line: 'POS revenue', amount: statement.revenue.posRevenue },
+    ...(statement.revenue.otherIncome.fees === '0.00' && statement.revenue.otherIncome.discounts === '0.00'
+      ? []
+      : [
+          { line: 'Fees and other charges', amount: statement.revenue.otherIncome.fees },
+          { line: 'Discounts and corrections (net)', amount: statement.revenue.otherIncome.discounts },
+        ]),
     { line: 'Total revenue', amount: statement.revenue.totalRevenue },
     { line: 'Cost of sales', amount: statement.costOfSales },
     { line: 'Gross profit', amount: statement.grossProfit },
   ];
+  if (statement.adjustmentsInOtherCurrency > 0) {
+    rows.push({ line: `Note: ${statement.adjustmentsInOtherCurrency} folio adjustment(s) in another currency are not included in revenue`, amount: '' });
+  }
   if (statement.costOfSalesFromCostPrice !== '0.00') {
     rows.push({ line: 'Note: of which estimated from item cost price (current cost price, not stock ledger)', amount: statement.costOfSalesFromCostPrice });
   }
