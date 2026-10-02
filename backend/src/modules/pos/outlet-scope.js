@@ -120,6 +120,9 @@ const shiftInScope = requireExistingInScope(async (db, req) => {
   return shift ? outletOfTerminal(db, shift.terminal_id) : undefined;
 });
 
+/** An outlet named in the URL (`/pos/outlets/:id/...`): another outlet is `404`. */
+const outletParamInScope = requireExistingInScope(async (db, req) => req.params.id);
+
 const newOrderOutletInScope = requireNamedOutletInScope('outlet_id', async (db, req) => req.body?.outlet_id);
 const availabilityOutletInScope = requireNamedOutletInScope('outlet_id', async (db, req) => req.body?.outlet_id);
 const queryOutletInScope = requireNamedOutletInScope('outlet_id', async (db, req) => req.query?.outlet_id);
@@ -137,6 +140,7 @@ async function describeScope(req) {
 }
 
 module.exports = {
+  outletParamInScope,
   scopeForRequest,
   describeScope,
   orderInScope,

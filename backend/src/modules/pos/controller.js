@@ -151,17 +151,34 @@ async function listOutletTerminalAccounts(req, res, next) {
   }
 }
 
-async function setOutletTerminalAccount(req, res, next) {
+function accountInput(body) {
+  return { provider: body?.provider, accountNumber: body?.account_number, accountLabel: body?.account_label, bankName: body?.bank_name };
+}
+
+async function listOutletTerminalAccountOptions(req, res, next) {
   try {
-    const { before, after } = await service.setOutletTerminalAccount({
-      context: req.context,
-      outletId: req.params.id,
-      provider: req.params.provider,
-      accountNumber: req.body?.account_number,
-      accountLabel: req.body?.account_label,
-    });
-    await req.audit({ entityType: 'pos_outlet_terminal_accounts', entityId: after.id, action: before ? 'update' : 'create', beforeState: before ?? undefined, afterState: after });
-    res.status(200).json(ok(after));
+    res.status(200).json(ok(await service.listOutletTerminalAccountOptions({ context: req.context, outletId: req.params.id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createOutletTerminalAccount(req, res, next) {
+  try {
+    const created = await service.createOutletTerminalAccount({ context: req.context, outletId: req.params.id, input: accountInput(req.body) });
+    await req.audit({ entityType: 'pos_outlet_terminal_accounts', entityId: created.id, action: 'create', afterState: created });
+    res.status(201).json(ok(created));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateOutletTerminalAccount(req, res, next) {
+  try {
+    const result = await service.updateOutletTerminalAccount({ context: req.context, outletId: req.params.id, accountId: req.params.accountId, input: accountInput(req.body) });
+    if (!result) return notFound(res);
+    await req.audit({ entityType: 'pos_outlet_terminal_accounts', entityId: result.after.id, action: 'update', beforeState: result.before, afterState: result.after });
+    res.status(200).json(ok(result.after));
   } catch (error) {
     next(error);
   }
@@ -169,7 +186,7 @@ async function setOutletTerminalAccount(req, res, next) {
 
 async function removeOutletTerminalAccount(req, res, next) {
   try {
-    const removed = await service.removeOutletTerminalAccount({ context: req.context, outletId: req.params.id, provider: req.params.provider });
+    const removed = await service.removeOutletTerminalAccount({ context: req.context, outletId: req.params.id, accountId: req.params.accountId });
     if (!removed) return notFound(res);
     await req.audit({ entityType: 'pos_outlet_terminal_accounts', entityId: removed.id, action: 'delete', beforeState: removed });
     res.status(200).json(ok({ removed: true }));
@@ -637,6 +654,7 @@ async function settleOrder(req, res, next) {
             method: s.method,
             paymentId: s.payment_id,
             terminal: { provider: s.terminal_provider, reference: s.terminal_reference },
+            terminalAccountId: s.terminal_account_id,
             tipAmount: s.tip_amount,
             serviceCharge: s.service_charge,
             roomCharge: s.room_charge
@@ -890,7 +908,9 @@ module.exports = {
   setOutletMenuItemPrice,
   setOutletCategories,
   listOutletTerminalAccounts,
-  setOutletTerminalAccount,
+  createOutletTerminalAccount,
+  updateOutletTerminalAccount,
+  listOutletTerminalAccountOptions,
   removeOutletTerminalAccount,
   uploadMenuItemImage,
   removeMenuItemImage,

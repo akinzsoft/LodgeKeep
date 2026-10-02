@@ -98,17 +98,30 @@ export function setOutletCategories(outletId, categoryIds) {
   return request(`/pos/outlets/${outletId}/categories`, { method: 'PUT', body: { category_ids: categoryIds } });
 }
 
-/** Bank accounts an outlet's external card terminals pay into, per provider. Recording only (no money routing). */
+/** Bank accounts an outlet's external card terminals pay into (admin only). Recording only (no money routing). */
 export function listOutletTerminalAccounts(outletId) {
   return request(`/pos/outlets/${outletId}/terminal-accounts`);
 }
 
-export function setOutletTerminalAccount(outletId, provider, { accountNumber, accountLabel }) {
-  return request(`/pos/outlets/${outletId}/terminal-accounts/${provider}`, { method: 'PUT', body: { account_number: accountNumber, account_label: accountLabel } });
+function accountBody({ provider, accountNumber, bankName, accountLabel }) {
+  return { provider: provider || undefined, account_number: accountNumber, bank_name: bankName || undefined, account_label: accountLabel || undefined };
 }
 
-export function removeOutletTerminalAccount(outletId, provider) {
-  return request(`/pos/outlets/${outletId}/terminal-accounts/${provider}`, { method: 'DELETE' });
+export function createOutletTerminalAccount(outletId, account) {
+  return request(`/pos/outlets/${outletId}/terminal-accounts`, { method: 'POST', body: accountBody(account) });
+}
+
+export function updateOutletTerminalAccount(outletId, accountId, account) {
+  return request(`/pos/outlets/${outletId}/terminal-accounts/${accountId}`, { method: 'PATCH', body: accountBody(account) });
+}
+
+export function removeOutletTerminalAccount(outletId, accountId) {
+  return request(`/pos/outlets/${outletId}/terminal-accounts/${accountId}`, { method: 'DELETE' });
+}
+
+/** What the Register offers an operator: `{id, name, provider, last4}` only — never the full number. */
+export function listOutletTerminalAccountOptions(outletId) {
+  return request(`/pos/outlets/${outletId}/terminal-account-options`);
 }
 
 export function updateMenuCategory(id, { name, sortOrder }) {
@@ -275,6 +288,7 @@ export function settleOrder(orderId, settlements, { stockOverrideReason } = {}) 
         payment_id: s.paymentId,
         terminal_provider: s.terminal?.provider,
         terminal_reference: s.terminal?.reference,
+        terminal_account_id: s.terminal?.accountId,
         tip_amount: s.tipAmount,
         service_charge: s.serviceCharge,
         room_charge: s.roomCharge

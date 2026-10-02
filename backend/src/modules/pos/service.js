@@ -173,7 +173,9 @@ function withLastFour(row) {
   return row ? { ...row, account_number_last4: lastFour(row.account_number) } : row;
 }
 
+/** Optional provider: absent/blank is allowed (an account need not belong to a listed provider). */
 function normalizeAccountProvider(provider) {
+  if (provider === undefined || provider === null || (typeof provider === 'string' && !provider.trim())) return null;
   const normalized = typeof provider === 'string' ? provider.trim().toLowerCase() : '';
   if (!ACCOUNT_PROVIDERS.includes(normalized)) {
     throw new ValidationError('INVALID_TERMINAL_PROVIDER', `"provider" must be one of: ${ACCOUNT_PROVIDERS.join(', ')}.`, [{ field: 'provider', issue: 'invalid' }]);
@@ -181,54 +183,85 @@ function normalizeAccountProvider(provider) {
   return normalized;
 }
 
+function optionalText(value, field, max) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw new ValidationError(`INVALID_${field.toUpperCase()}`, `"${field}" must be text.`, [{ field, issue: 'invalid' }]);
+  const trimmed = value.trim();
+  if (trimmed.length > max) throw new ValidationError(`INVALID_${field.toUpperCase()}`, `"${field}" must be at most ${max} characters.`, [{ field, issue: 'too_long' }]);
+  return trimmed || null;
+}
+
+/** What a sale (and every list) calls an account: "<bank> · <label>", either part optional. Display only, never parsed back. */
+function accountDisplayName(row) {
+  return [row.bank_name, row.account_label].filter(Boolean).join(' · ') || null;
+}
+
+/** Validates a create body, or a full replacement of an account's editable fields. */
+function normalizeAccountInput({ provider, accountNumber, accountLabel, bankName }) {
+  const normalizedProvider = normalizeAccountProvider(provider);
+  const raw = typeof accountNumber === 'string' ? accountNumber.trim() : '';
+  const number = raw.replace(/\s+/g, '');
+  if (!/^[0-9]{4,40}$/.test(number)) {
+    throw new ValidationError('INVALID_ACCOUNT_NUMBER', '"account_number" must be digits only (at least 4).', [{ field: 'account_number', issue: 'invalid' }]);
+  }
+  const label = optionalText(accountLabel, 'account_label', 80);
+  const bank = optionalText(bankName, 'bank_name', 80);
+  // An account must be identifiable on a report: a listed provider, a bank, or a label.
+  if ((!normalizedProvider || normalizedProvider === 'other') && !label && !bank) {
+    throw new ValidationError('MISSING_ACCOUNT_LABEL', 'Name this account: give a bank or a label (or pick a listed provider).', [{ field: 'account_label', issue: 'missing' }]);
+  }
+  return { provider: normalizedProvider, account_number: number, account_label: label, bank_name: bank };
+}
+
 async function listOutletTerminalAccounts({ context, outletId }) {
   const db = scopedDb().for(context);
   const outlet = await db.table('pos_outlets').where({ id: outletId }).first('id');
   if (!outlet) throw new OutletNotFoundError();
-  const rows = await db.table('pos_outlet_terminal_accounts').where({ outlet_id: outletId }).orderBy('provider');
+  const rows = await db.table('pos_outlet_terminal_accounts').where({ outlet_id: outletId }).orderBy('id');
   return rows.map(withLastFour);
 }
 
-async function setOutletTerminalAccount({ context, outletId, provider, accountNumber, accountLabel }) {
+/**
+ * What the Register may show an operator: id, name and last 4 ONLY — never the
+ * full number. Outlet scope is enforced by the route middleware.
+ */
+async function listOutletTerminalAccountOptions({ context, outletId }) {
   const db = scopedDb().for(context);
-  const normalizedProvider = normalizeAccountProvider(provider);
-  const number = typeof accountNumber === 'string' ? accountNumber.trim() : '';
-  if (!/^[0-9 ]{4,40}$/.test(number) || number.replace(/\s+/g, '').length < 4) {
-    throw new ValidationError('INVALID_ACCOUNT_NUMBER', '"account_number" must be digits only (at least 4).', [{ field: 'account_number', issue: 'invalid' }]);
-  }
-  if (accountLabel !== undefined && accountLabel !== null && typeof accountLabel !== 'string') {
-    throw new ValidationError('INVALID_ACCOUNT_LABEL', '"account_label" must be text.', [{ field: 'account_label', issue: 'invalid' }]);
-  }
-  const label = typeof accountLabel === 'string' && accountLabel.trim() ? accountLabel.trim() : null;
-  if (label && label.length > 80) {
-    throw new ValidationError('INVALID_ACCOUNT_LABEL', '"account_label" must be at most 80 characters.', [{ field: 'account_label', issue: 'too_long' }]);
-  }
-  if (normalizedProvider === 'other' && !label) {
-    throw new ValidationError('MISSING_ACCOUNT_LABEL', 'An "Other" account needs a label naming the terminal provider and bank (e.g. "Zenith POS — Zenith Bank").', [{ field: 'account_label', issue: 'missing' }]);
-  }
+  const rows = await db.table('pos_outlet_terminal_accounts').where({ outlet_id: outletId }).orderBy('id');
+  return rows.map((row) => ({ id: row.id, name: accountDisplayName(row), provider: row.provider, last4: lastFour(row.account_number) }));
+}
+
+async function createOutletTerminalAccount({ context, outletId, input }) {
+  const db = scopedDb().for(context);
+  const values = normalizeAccountInput(input);
   return db.transaction(async (trx) => {
     const outlet = await trx.table('pos_outlets').where({ id: outletId }).forUpdate().first();
     if (!outlet || outlet.status !== 'active') throw new OutletNotFoundError();
-    const existing = await trx.table('pos_outlet_terminal_accounts').where({ outlet_id: outletId, provider: normalizedProvider }).first();
-    const values = { account_number: number, account_label: label };
-    if (existing) {
-      await trx.table('pos_outlet_terminal_accounts').where({ id: existing.id }).update(values);
-    } else {
-      await trx.table('pos_outlet_terminal_accounts').insert({ outlet_id: outletId, provider: normalizedProvider, ...values });
-    }
-    return {
-      before: withLastFour(existing),
-      after: withLastFour(await trx.table('pos_outlet_terminal_accounts').where({ outlet_id: outletId, provider: normalizedProvider }).first()),
-    };
+    const id = await withDuplicateMapping('pos_outlet_terminal_accounts', 'This account number is already recorded for this outlet.', async () => {
+      const [insertedId] = await trx.table('pos_outlet_terminal_accounts').insert({ outlet_id: outletId, ...values });
+      return insertedId;
+    });
+    return withLastFour(await trx.table('pos_outlet_terminal_accounts').where({ id }).first());
   });
 }
 
-async function removeOutletTerminalAccount({ context, outletId, provider }) {
+async function updateOutletTerminalAccount({ context, outletId, accountId, input }) {
   const db = scopedDb().for(context);
-  const normalizedProvider = normalizeAccountProvider(provider);
-  const outlet = await db.table('pos_outlets').where({ id: outletId }).first('id');
-  if (!outlet) throw new OutletNotFoundError();
-  const existing = await db.table('pos_outlet_terminal_accounts').where({ outlet_id: outletId, provider: normalizedProvider }).first();
+  const values = normalizeAccountInput(input);
+  return db.transaction(async (trx) => {
+    const existing = await trx.table('pos_outlet_terminal_accounts').where({ id: accountId, outlet_id: outletId }).forUpdate().first();
+    if (!existing) return null;
+    await withDuplicateMapping('pos_outlet_terminal_accounts', 'This account number is already recorded for this outlet.', async () => {
+      await trx.table('pos_outlet_terminal_accounts').where({ id: existing.id }).update(values);
+    });
+    return { before: withLastFour(existing), after: withLastFour(await trx.table('pos_outlet_terminal_accounts').where({ id: existing.id }).first()) };
+  });
+}
+
+/** Removing an account never touches past sales: their snapshot has no foreign key to this row. */
+async function removeOutletTerminalAccount({ context, outletId, accountId }) {
+  const db = scopedDb().for(context);
+  const existing = await db.table('pos_outlet_terminal_accounts').where({ id: accountId, outlet_id: outletId }).first();
   if (!existing) return null;
   await db.table('pos_outlet_terminal_accounts').where({ id: existing.id }).delete();
   return withLastFour(existing);
@@ -1264,19 +1297,19 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
       // provider/reference to reconcile against that terminal's own report.
       if (settlement.method === 'terminal') {
         Object.assign(fields, normalizeTerminalDetails(settlement.terminal));
-        // Snapshot which account the outlet recorded for this provider, so
-        // reconciliation can be matched against that account's own report.
-        // Resolved HERE, not from the client; no provider (or "other", or no
-        // recorded account) leaves both columns null. Label only, no routing.
-        if (fields.terminal_provider) {
-          const account = await trx
-            .table('pos_outlet_terminal_accounts')
-            .where({ outlet_id: order.outlet_id, provider: fields.terminal_provider })
-            .first();
-          if (account) {
-            fields.terminal_account_label = account.account_label;
-            fields.terminal_account_last4 = lastFour(account.account_number);
+        // The cashier picks one of THIS outlet's recorded accounts; its name and
+        // last 4 are snapshotted here (no foreign key, so a later edit or removal
+        // never rewrites this sale). Resolved HERE from the id, never from client
+        // text. No pick leaves both null. The account's provider, when it has
+        // one, is what the sale reports. Label only, no routing.
+        if (settlement.terminalAccountId !== undefined && settlement.terminalAccountId !== null && settlement.terminalAccountId !== '') {
+          const account = await trx.table('pos_outlet_terminal_accounts').where({ id: settlement.terminalAccountId, outlet_id: order.outlet_id }).first();
+          if (!account) {
+            throw new ValidationError('INVALID_TERMINAL_ACCOUNT', 'That account is not recorded for this outlet.', [{ field: 'terminal_account_id', issue: 'not_found' }]);
           }
+          fields.terminal_account_label = (accountDisplayName(account) ?? '').slice(0, 80) || null;
+          fields.terminal_account_last4 = lastFour(account.account_number);
+          if (account.provider) fields.terminal_provider = account.provider;
         }
       }
 
@@ -1667,7 +1700,9 @@ module.exports = {
   setOutletMenuItemPrice,
   setOutletCategories,
   listOutletTerminalAccounts,
-  setOutletTerminalAccount,
+  createOutletTerminalAccount,
+  updateOutletTerminalAccount,
+  listOutletTerminalAccountOptions,
   removeOutletTerminalAccount,
   archiveMenuItem,
   setMenuItemImage,

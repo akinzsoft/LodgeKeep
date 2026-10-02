@@ -1817,8 +1817,8 @@ const ENTITIES = [
 
   {
     table: 'pos_outlet_terminal_accounts',
-    uniqueKeys: [['outlet_id', 'provider']],
-    // The fixture bar records GTBank only, so Opay is free for a new row.
+    uniqueKeys: [['outlet_id', 'account_number']],
+    // The fixture bar records account 0123456789 only, so 2020202020 is free for a new row.
     newRow: (ctx, t) => ({
       tenant_id: t.id,
       property_id: t.properties[0].id,
@@ -1831,7 +1831,7 @@ const ENTITIES = [
       property_id: t.properties[0].id,
       outlet_id: t.posOutlets[0].id,
       provider: 'gtbank',
-      account_number: '9999999999',
+      account_number: '0123456789',
     }),
     crossTenant: [
       {

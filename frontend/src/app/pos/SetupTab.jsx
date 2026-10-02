@@ -58,7 +58,7 @@ const OUTLET_SECTIONS = [
   { key: 'accounts', label: 'Terminal accounts' },
 ];
 
-export function SetupTab({ activeProperty, isOffline = false }) {
+export function SetupTab({ activeProperty, isOffline = false, canManageAccounts = true }) {
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState(null);
   const [selectedOutletId, setSelectedOutletId] = useState(null);
@@ -387,7 +387,7 @@ export function SetupTab({ activeProperty, isOffline = false }) {
                 <p className={formStyles.hint}>{STORE_HINT}</p>
               </Card>
             ) : (
-              <OutletTerminalAccountsCard outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} />
+              <OutletTerminalAccountsCard outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} canManage={canManageAccounts} />
             ))}
 
           {outletSection === 'terminals' && (

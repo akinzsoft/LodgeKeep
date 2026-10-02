@@ -33,9 +33,14 @@ function posRouter() {
   router.post('/pos/outlets', requirePermission('pos.manage'), controller.createOutlet);
   router.patch('/pos/outlets/:id', requirePermission('pos.manage'), controller.updateOutlet);
   router.post('/pos/outlets/:id/archive', requirePermission('pos.manage'), controller.archiveOutlet);
-  router.get('/pos/outlets/:id/terminal-accounts', requirePermission('pos.manage'), controller.listOutletTerminalAccounts);
-  router.put('/pos/outlets/:id/terminal-accounts/:provider', requirePermission('pos.manage'), controller.setOutletTerminalAccount);
-  router.delete('/pos/outlets/:id/terminal-accounts/:provider', requirePermission('pos.manage'), controller.removeOutletTerminalAccount);
+  // Recording which bank accounts an outlet's external terminals pay into is
+  // Setup (admin / super_admin: `setup.manage`), not an outlet manager's call.
+  router.get('/pos/outlets/:id/terminal-accounts', requirePermission('setup.manage'), controller.listOutletTerminalAccounts);
+  router.post('/pos/outlets/:id/terminal-accounts', requirePermission('setup.manage'), controller.createOutletTerminalAccount);
+  router.patch('/pos/outlets/:id/terminal-accounts/:accountId', requirePermission('setup.manage'), controller.updateOutletTerminalAccount);
+  router.delete('/pos/outlets/:id/terminal-accounts/:accountId', requirePermission('setup.manage'), controller.removeOutletTerminalAccount);
+  // What the Register shows an operator: id, name and last 4 only.
+  router.get('/pos/outlets/:id/terminal-account-options', requirePermission('pos.operate'), scope.outletParamInScope, controller.listOutletTerminalAccountOptions);
   router.put('/pos/outlets/:id/categories', requirePermission('pos.manage'), controller.setOutletCategories);
 
   router.get('/pos/terminals', requirePermission('pos.operate'), controller.listTerminals);
