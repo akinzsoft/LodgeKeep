@@ -67,6 +67,30 @@ class PaymentApplicationExceedsPaymentError extends AppError {
   }
 }
 
+/** A payment was applied to an invoice that belongs to a DIFFERENT AR account (another company) — would move the wrong company's ledger. */
+class InvoiceNotOnPaymentAccountError extends AppError {
+  constructor({ invoiceId, paymentAccountId }) {
+    super(
+      'VALIDATION_INVOICE_NOT_ON_PAYMENT_ACCOUNT',
+      `Invoice ${invoiceId} belongs to a different AR account than this payment, so the payment cannot be applied to it.`,
+      422,
+      { invoiceId, paymentAccountId }
+    );
+  }
+}
+
+/** A payment's currency differs from its AR account's, or an invoice's currency differs from the payment's — amounts in two currencies are never mixed (ARCHITECTURE.md section 1). */
+class CurrencyMismatchError extends AppError {
+  constructor({ expected, received, subject }) {
+    super(
+      'VALIDATION_CURRENCY_MISMATCH',
+      `${subject} is in ${expected}, but ${received} was supplied. Payments and applications must be in the same currency as the account and invoice.`,
+      422,
+      { expected, received }
+    );
+  }
+}
+
 class PaymentAlreadyVoidError extends AppError {
   constructor(paymentId) {
     super('CONFLICT_PAYMENT_ALREADY_VOID', `AR payment ${paymentId} has already been voided.`, 409, { paymentId });
@@ -88,6 +112,8 @@ module.exports = {
   InvoiceAlreadyVoidError,
   PaymentApplicationExceedsInvoiceError,
   PaymentApplicationExceedsPaymentError,
+  InvoiceNotOnPaymentAccountError,
+  CurrencyMismatchError,
   PaymentAlreadyVoidError,
   CreditLimitOverrideReasonRequiredError,
 };

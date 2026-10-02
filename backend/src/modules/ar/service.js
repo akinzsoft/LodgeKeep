@@ -50,6 +50,8 @@ const {
   PaymentApplicationExceedsPaymentError,
   PaymentAlreadyVoidError,
   CreditLimitOverrideReasonRequiredError,
+  InvoiceNotOnPaymentAccountError,
+  CurrencyMismatchError,
 } = require('./errors');
 
 const CHARGE_TYPES_FOR_AR_BALANCE = ['room_charge', 'pos_charge', 'tax', 'adjustment'];
@@ -384,6 +386,60 @@ async function listInvoicesForAccount({ context, arAccountId }) {
 // ---------------------------------------------------------------------
 
 /**
+ * A payment or application amount must be a positive monetary value: digits with at most two decimals, strictly
+ * greater than zero. Returns the trimmed string. Zero, negative, NaN-ish and over-precise values are all refused
+ * BEFORE any write — a negative "payment" would otherwise raise the account's balance and a zero one is noise.
+ */
+function requirePositiveAmount(value, field) {
+  const text = String(value ?? '').trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(text) || compareMoney(text, '0.00') <= 0) {
+    throw new ValidationError('INVALID_AMOUNT', `"${field}" must be a positive amount greater than zero with at most 2 decimal places.`, [{ field, issue: 'invalid' }]);
+  }
+  return text;
+}
+
+/** Validates the shape and amounts of an applications list; returns it normalized. No database access. */
+function normalizeApplicationList(applications) {
+  if (!Array.isArray(applications) || applications.length === 0) {
+    throw new ValidationError('MISSING_FIELD', '"applications" must be a non-empty list.', [{ field: 'applications', issue: 'missing' }]);
+  }
+  return applications.map((row, index) => {
+    if (row?.invoiceId === undefined || row?.invoiceId === null || row?.invoiceId === '') {
+      throw new ValidationError('MISSING_FIELD', `applications[${index}].invoice_id is required.`, [{ field: `applications[${index}].invoice_id`, issue: 'missing' }]);
+    }
+    return { invoiceId: row.invoiceId, amount: requirePositiveAmount(row.amount, `applications[${index}].amount`) };
+  });
+}
+
+function normalizeCurrency(value) {
+  return String(value ?? '').trim().toUpperCase();
+}
+
+/**
+ * Locks (ascending id order) and validates every invoice a payment is to be applied to: it must exist and not be
+ * void, belong to THE SAME AR ACCOUNT as the payment, and be in the payment's currency. Runs before any write so a
+ * refusal changes nothing. Returns a Map keyed by the application's own invoiceId.
+ */
+async function loadApplicationInvoices({ trx, arAccountId, currency, applications }) {
+  const uniqueInvoiceIds = [...new Set(applications.map((row) => row.invoiceId))].sort((a, b) => a - b);
+  const invoicesById = new Map();
+  for (const invoiceId of uniqueInvoiceIds) {
+    const invoice = await trx.table('ar_invoices').where({ id: invoiceId }).forUpdate().first();
+    if (!invoice || invoice.status === 'void') {
+      throw new ValidationError('INVOICE_NOT_FOUND', 'The specified AR invoice does not exist or has been voided.');
+    }
+    if (String(invoice.ar_account_id) !== String(arAccountId)) {
+      throw new InvoiceNotOnPaymentAccountError({ invoiceId, paymentAccountId: arAccountId });
+    }
+    if (normalizeCurrency(invoice.currency) !== normalizeCurrency(currency)) {
+      throw new CurrencyMismatchError({ expected: normalizeCurrency(invoice.currency), received: normalizeCurrency(currency), subject: `Invoice ${invoiceId}` });
+    }
+    invoicesById.set(invoiceId, invoice);
+  }
+  return invoicesById;
+}
+
+/**
  * Shared by `recordPayment` (applications supplied inline) and `applyPayment`
  * (a separate call against an already-recorded payment).
  *
@@ -415,17 +471,7 @@ async function listInvoicesForAccount({ context, arAccountId }) {
  * invoice or payment could each compute "remaining" from stale data and
  * together exceed what's actually owed or actually paid.
  */
-async function applyPaymentApplications({ trx, paymentId, paymentAmount, applications }) {
-  const uniqueInvoiceIds = [...new Set(applications.map((row) => row.invoiceId))].sort((a, b) => a - b);
-  const invoicesById = new Map();
-  for (const invoiceId of uniqueInvoiceIds) {
-    const invoice = await trx.table('ar_invoices').where({ id: invoiceId }).forUpdate().first();
-    if (!invoice || invoice.status === 'void') {
-      throw new ValidationError('INVOICE_NOT_FOUND', 'The specified AR invoice does not exist or has been voided.');
-    }
-    invoicesById.set(invoiceId, invoice);
-  }
-
+async function applyPaymentApplications({ trx, paymentId, paymentAmount, applications, invoicesById }) {
   const existingForPayment = await trx.table('ar_payment_applications').where({ ar_payment_id: paymentId }).whereNull('voided_at').forUpdate();
   const alreadyApplied = sumMoney(existingForPayment.map((row) => row.amount));
   const requestedTotal = sumMoney(applications.map((row) => row.amount));
@@ -456,14 +502,27 @@ async function applyPaymentApplications({ trx, paymentId, paymentAmount, applica
 
 /** The full `amount` reduces the account's real exposure immediately, regardless of `applications` — see file header. */
 async function recordPayment({ trx, arAccountId, amount, currency, methodLabel, reference, receivedAt, businessDate, applications, userId }) {
+  // Pure validation first — nothing below runs, and nothing is written, if it fails.
+  const paymentAmount = requirePositiveAmount(amount, 'amount');
+  const normalizedApplications = applications && applications.length ? normalizeApplicationList(applications) : null;
+
   const account = await trx.table('ar_accounts').where({ id: arAccountId }).forUpdate().first();
   if (!account || account.status !== 'active') throw new ArAccountNotFoundError();
+
+  const paymentCurrency = normalizeCurrency(currency ?? account.currency);
+  if (paymentCurrency !== normalizeCurrency(account.currency)) {
+    throw new CurrencyMismatchError({ expected: normalizeCurrency(account.currency), received: paymentCurrency, subject: 'This AR account' });
+  }
+  // Invoices are locked and checked (same account, same currency) BEFORE the payment row exists.
+  const invoicesById = normalizedApplications
+    ? await loadApplicationInvoices({ trx, arAccountId, currency: paymentCurrency, applications: normalizedApplications })
+    : null;
 
   const effectiveBusinessDate = businessDate ?? (await propertyBusinessDate({ trx, propertyId: account.property_id }));
   const [paymentId] = await trx.table('ar_payments').insert({
     ar_account_id: arAccountId,
-    amount,
-    currency: currency ?? account.currency,
+    amount: paymentAmount,
+    currency: paymentCurrency,
     method_label: methodLabel,
     reference: reference ?? null,
     received_at: receivedAt ?? effectiveBusinessDate,
@@ -471,8 +530,8 @@ async function recordPayment({ trx, arAccountId, amount, currency, methodLabel, 
     recorded_by_user_id: userId ?? null,
   });
 
-  if (applications && applications.length) {
-    await applyPaymentApplications({ trx, paymentId, paymentAmount: amount, applications });
+  if (normalizedApplications) {
+    await applyPaymentApplications({ trx, paymentId, paymentAmount, applications: normalizedApplications, invoicesById });
   }
 
   await recomputeArAccountBalance({ trx, arAccountId });
@@ -484,7 +543,7 @@ async function recordPayment({ trx, arAccountId, amount, currency, methodLabel, 
     aggregateType: 'ar_payments',
     aggregateId: paymentId,
     propertyId: account.property_id,
-    payload: { recipientEmail: company.billing_email, companyName: company.name, amount, currency: currency ?? account.currency },
+    payload: { recipientEmail: company.billing_email, companyName: company.name, amount: paymentAmount, currency: paymentCurrency },
   });
 
   return trx.table('ar_payments').where({ id: paymentId }).first();
@@ -495,7 +554,14 @@ async function applyPayment({ trx, paymentId, applications }) {
   if (!payment) throw new ValidationError('PAYMENT_NOT_FOUND', 'The specified AR payment does not exist.');
   if (payment.voided_at) throw new PaymentAlreadyVoidError(paymentId);
 
-  await applyPaymentApplications({ trx, paymentId, paymentAmount: payment.amount, applications });
+  const normalizedApplications = normalizeApplicationList(applications);
+  const invoicesById = await loadApplicationInvoices({
+    trx,
+    arAccountId: payment.ar_account_id,
+    currency: payment.currency,
+    applications: normalizedApplications,
+  });
+  await applyPaymentApplications({ trx, paymentId, paymentAmount: payment.amount, applications: normalizedApplications, invoicesById });
   return trx.table('ar_payments').where({ id: paymentId }).first();
 }
 
