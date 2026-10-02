@@ -110,7 +110,8 @@ describe('per-outlet payout subaccounts (online card payments)', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     paystack.initializeTransaction.mockImplementation(async ({ reference }) => ({ authorizationUrl: 'https://paystack.test/pay', accessCode: `ac-${counter}`, reference }));
-    paystackAdapterModule.resolveAdapterForCurrency.mockImplementation(async () => ({ integration: { id: 1, currency: 'NGN' }, adapter: paystack }));
+    // The REAL seeded integration id: the new table has a foreign key to it, and in a full run earlier suites leave id 1 unused.
+    paystackAdapterModule.resolveAdapterForCurrency.mockImplementation(async () => ({ integration: { id: ctx.platformPaymentIntegrations.ngn, currency: 'NGN' }, adapter: paystack }));
   });
 
   describe('routing', () => {
