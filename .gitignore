@@ -21,3 +21,5 @@ backend/storage/imports/
 backend/storage/menu-images/
 # Property logos — uploaded per property, local-disk storage per PROPERTY_LOGO_STORAGE_DIR.
 backend/storage/property-logos/
+*.sql
+prod-*.sql
