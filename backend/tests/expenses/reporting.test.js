@@ -221,6 +221,63 @@ describe('Expense report and profit summary', () => {
     expect(String(byCategory[0].categoryId)).toBe(String(secondCategory.body.data.id));
   });
 
+  describe('unauditedDates (which days the room-revenue caveat is about)', () => {
+    const DAYS = ['2031-05-01', '2031-05-02', '2031-05-03', '2031-05-04'];
+
+    async function closeDay(date) {
+      const [runId] = await t.trx('night_audit_runs').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        business_date: date,
+        status: 'COMPLETED',
+        worker_id: 'unaudited-dates-test',
+        heartbeat_at: new Date(),
+        started_at: new Date(),
+        completed_at: new Date(),
+      });
+      await t.trx('daily_reports').insert({
+        tenant_id: ctx.a.id,
+        property_id: ctx.a.properties[0].id,
+        night_audit_run_id: runId,
+        business_date: date,
+        room_revenue: '100.00',
+        pos_revenue: '0.00',
+        payments_collected: '0.00',
+        occupancy_pct: '10.00',
+        adr: '100.00',
+        revpar: '10.00',
+      });
+    }
+
+    const profit = (from, to, extra = '') =>
+      t.request.get(`/api/v1/expenses/reports/profit?date_from=${from}&date_to=${to}${extra}`).set('Authorization', `Bearer ${manager()}`);
+
+    it('lists exactly the days with no Night Audit snapshot; fully audited when none are missing', async () => {
+      await closeDay(DAYS[0]);
+      await closeDay(DAYS[1]);
+      await closeDay(DAYS[3]);
+
+      const gap = (await profit(DAYS[0], DAYS[3])).body.data.revenue;
+      expect(gap.unauditedDates).toEqual([DAYS[2]]);
+      expect(gap.roomRevenueFullyAudited).toBe(false);
+
+      const clean = (await profit(DAYS[0], DAYS[1])).body.data.revenue;
+      expect(clean.unauditedDates).toEqual([]);
+      expect(clean.roomRevenueFullyAudited).toBe(true);
+    });
+
+    it('does not change any revenue figure, and the CSV names the unaudited day', async () => {
+      const withGap = (await profit(DAYS[0], DAYS[3])).body.data;
+      // Audited days read the snapshot (100.00 each x3); the unaudited day is the live figure (no bookings that night).
+      expect(withGap.revenue.roomRevenue).toBe('300.00');
+
+      const csv = await profit(DAYS[0], DAYS[3], '&format=csv');
+      expect(csv.text).toContain(`not reconciled by Night Audit for 1 day(s): ${DAYS[2]}`);
+      const cleanCsv = await profit(DAYS[0], DAYS[1], '&format=csv');
+      expect(cleanCsv.text).not.toContain('not reconciled by Night Audit');
+    });
+  });
+
   it('exports both reports as CSV', async () => {
     const summaryCsv = await t.request.get(`/api/v1/expenses/reports/summary?date_from=${BUSINESS_DATE}&date_to=${BUSINESS_DATE}&format=csv`).set('Authorization', `Bearer ${manager()}`);
     expect(summaryCsv.status).toBe(200);

@@ -45,6 +45,10 @@
  * though this pass doesn't attempt to say by how much.
  *
 
+ * `unauditedDates` names the exact days in range with no Night Audit
+ * snapshot, so the caveat can say which days instead of a bare "not fully
+ * reconciled". Revenue computation is not affected by it.
+ *
  * `roomRevenueFullyAudited` is a single, honest boolean for the whole
  * period — true only when EVERY day in range has already been closed by
  * Night Audit (`computeRevenue`'s own per-day `audited` flag, sourced from
@@ -151,7 +155,8 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
   const roomRevenue = sumMoney(revenueDays.map((day) => day.roomRevenue));
   const posRevenue = sumMoney([...posRevenueByDate.values()]);
   const totalRevenue = sumMoney([roomRevenue, posRevenue]);
-  const roomRevenueFullyAudited = revenueDays.length > 0 && revenueDays.every((day) => day.audited);
+  const unauditedDates = revenueDays.filter((day) => !day.audited).map((day) => day.date);
+  const roomRevenueFullyAudited = revenueDays.length > 0 && unauditedDates.length === 0;
 
   const grossProfit = sumMoney([totalRevenue, negateMoney(costOfSales.totalCost)]);
 
@@ -176,7 +181,7 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
     dateFrom,
     dateTo,
     currency: property?.base_currency ?? null,
-    revenue: { roomRevenue, posRevenue, totalRevenue, roomRevenueFullyAudited },
+    revenue: { roomRevenue, posRevenue, totalRevenue, roomRevenueFullyAudited, unauditedDates },
     costOfSales: costOfSales.totalCost,
     itemsSoldWithoutRecipeCost,
     grossProfit,
