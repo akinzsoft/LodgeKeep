@@ -33,6 +33,9 @@ function posRouter() {
   router.post('/pos/outlets', requirePermission('pos.manage'), controller.createOutlet);
   router.patch('/pos/outlets/:id', requirePermission('pos.manage'), controller.updateOutlet);
   router.post('/pos/outlets/:id/archive', requirePermission('pos.manage'), controller.archiveOutlet);
+  router.get('/pos/outlets/:id/terminal-accounts', requirePermission('pos.manage'), controller.listOutletTerminalAccounts);
+  router.put('/pos/outlets/:id/terminal-accounts/:provider', requirePermission('pos.manage'), controller.setOutletTerminalAccount);
+  router.delete('/pos/outlets/:id/terminal-accounts/:provider', requirePermission('pos.manage'), controller.removeOutletTerminalAccount);
   router.put('/pos/outlets/:id/categories', requirePermission('pos.manage'), controller.setOutletCategories);
 
   router.get('/pos/terminals', requirePermission('pos.operate'), controller.listTerminals);

@@ -143,6 +143,41 @@ async function updateOutlet(req, res, next) {
   }
 }
 
+async function listOutletTerminalAccounts(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.listOutletTerminalAccounts({ context: req.context, outletId: req.params.id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function setOutletTerminalAccount(req, res, next) {
+  try {
+    const { before, after } = await service.setOutletTerminalAccount({
+      context: req.context,
+      outletId: req.params.id,
+      provider: req.params.provider,
+      accountNumber: req.body?.account_number,
+      accountLabel: req.body?.account_label,
+    });
+    await req.audit({ entityType: 'pos_outlet_terminal_accounts', entityId: after.id, action: before ? 'update' : 'create', beforeState: before ?? undefined, afterState: after });
+    res.status(200).json(ok(after));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function removeOutletTerminalAccount(req, res, next) {
+  try {
+    const removed = await service.removeOutletTerminalAccount({ context: req.context, outletId: req.params.id, provider: req.params.provider });
+    if (!removed) return notFound(res);
+    await req.audit({ entityType: 'pos_outlet_terminal_accounts', entityId: removed.id, action: 'delete', beforeState: removed });
+    res.status(200).json(ok({ removed: true }));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function archiveOutlet(req, res, next) {
   try {
     const before = await service.getOutlet({ context: req.context, id: req.params.id });
@@ -854,6 +889,9 @@ module.exports = {
   setMenuItemAvailability,
   setOutletMenuItemPrice,
   setOutletCategories,
+  listOutletTerminalAccounts,
+  setOutletTerminalAccount,
+  removeOutletTerminalAccount,
   uploadMenuItemImage,
   removeMenuItemImage,
   archiveMenuItem,

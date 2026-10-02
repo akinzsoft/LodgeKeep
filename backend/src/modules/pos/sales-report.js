@@ -66,6 +66,8 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
       'pos_order_settlements.tender as tender',
       'pos_order_settlements.terminal_provider as terminal_provider',
       'pos_order_settlements.terminal_reference as terminal_reference',
+      'pos_order_settlements.terminal_account_label as terminal_account_label',
+      'pos_order_settlements.terminal_account_last4 as terminal_account_last4',
       'pos_order_settlements.subtotal as subtotal',
       'pos_order_settlements.tax_amount as tax_amount',
       'pos_order_settlements.tip_amount as tip_amount',
@@ -240,7 +242,13 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
       tender,
       channel: row.provider_channel ?? null,
       // Only a terminal sale carries one; every other tender's entry is unchanged.
-      ...(tender === 'terminal' ? { terminalProvider: row.terminal_provider ?? null } : {}),
+      ...(tender === 'terminal'
+        ? {
+            terminalProvider: row.terminal_provider ?? null,
+            terminalAccountLabel: row.terminal_account_label ?? null,
+            terminalAccountLast4: row.terminal_account_last4 ?? null,
+          }
+        : {}),
       roomNumber: target?.roomNumber ?? null,
       guestName: target?.guestName ?? null,
       total,

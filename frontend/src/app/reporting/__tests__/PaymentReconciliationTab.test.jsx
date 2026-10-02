@@ -152,17 +152,20 @@ describe('<PaymentReconciliationTab>', () => {
       ...REPORT,
       byMethod: [...REPORT.byMethod, { currency: 'NGN', method: 'terminal', count: 3, grossTotal: '69.00' }],
       byTerminalProvider: [
-        { currency: 'NGN', provider: 'moniepoint', count: 2, grossTotal: '46.00' },
-        { currency: 'NGN', provider: null, count: 1, grossTotal: '23.00' },
+        { currency: 'NGN', outlet: 'Reconciliation Bar', provider: 'moniepoint', accountLabel: 'Bar Moniepoint', accountLast4: '1010', count: 2, grossTotal: '46.00' },
+        { currency: 'NGN', outlet: 'Reconciliation Bar', provider: 'moniepoint', accountLabel: null, accountLast4: null, count: 1, grossTotal: '23.00' },
       ],
       // Same captured second and no payment id on every terminal line: keys must still be unique.
-      lines: [...REPORT.lines, terminalLine({}), terminalLine({ terminalReference: 'MP-0002' }), terminalLine({ terminalProvider: null, terminalReference: null })],
+      lines: [...REPORT.lines, terminalLine({ terminalAccountLabel: 'Bar Moniepoint', terminalAccountLast4: '1010' }), terminalLine({ terminalReference: 'MP-0002' }), terminalLine({ terminalProvider: null, terminalReference: null })],
     });
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     render(<PaymentReconciliationTab />);
     await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
 
-    expect(await screen.findByText('Card (external terminal) — by provider')).toBeInTheDocument();
+    expect(await screen.findByText('Card (external terminal) — by outlet, provider and account')).toBeInTheDocument();
+    // The recorded account (last 4 only) per outlet and provider, and "Not recorded" when none was.
+    expect(screen.getAllByText('Bar Moniepoint ····1010').length).toBeGreaterThan(0);
+    expect(screen.getByText('Not recorded')).toBeInTheDocument();
     expect(screen.getAllByText('Card (external terminal)').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Provider not given').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Moniepoint').length).toBeGreaterThan(0);
@@ -177,6 +180,6 @@ describe('<PaymentReconciliationTab>', () => {
     render(<PaymentReconciliationTab />);
     await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
     await screen.findByText('ref-abc');
-    expect(screen.queryByText('Card (external terminal) — by provider')).not.toBeInTheDocument();
+    expect(screen.queryByText('Card (external terminal) — by outlet, provider and account')).not.toBeInTheDocument();
   });
 });

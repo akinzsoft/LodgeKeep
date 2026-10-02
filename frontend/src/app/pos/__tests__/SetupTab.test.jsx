@@ -20,6 +20,9 @@ const mocks = vi.hoisted(() => ({
   listMenuItems: vi.fn(),
   listMenuCategories: vi.fn(),
   setOutletCategories: vi.fn(),
+  listOutletTerminalAccounts: vi.fn(),
+  setOutletTerminalAccount: vi.fn(),
+  removeOutletTerminalAccount: vi.fn(),
 }));
 
 const stockMocks = vi.hoisted(() => ({
@@ -47,6 +50,7 @@ describe('<SetupTab>', () => {
     mocks.listTerminals.mockResolvedValue([]);
     mocks.listMenuItems.mockResolvedValue([]);
     mocks.listMenuCategories.mockResolvedValue([]);
+    mocks.listOutletTerminalAccounts.mockResolvedValue([]);
     stockMocks.listStockItems.mockResolvedValue([]);
   });
 
@@ -75,6 +79,56 @@ describe('<SetupTab>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Add terminal' }));
 
     expect(mocks.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ outletId: '1', deviceRef: 'TERM-1' }));
+  });
+
+  describe('terminal accounts (recording only)', () => {
+    async function openAccounts() {
+      await renderOutlets();
+      await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+      await userEvent.click(screen.getByRole('tab', { name: 'Terminal accounts' }));
+      await screen.findByRole('heading', { name: 'Terminal accounts — Main Bar' });
+    }
+
+    it('offers the three providers (never "Other"), masking a recorded number to its last 4', async () => {
+      mocks.listOutletTerminalAccounts.mockResolvedValue([{ id: '5', provider: 'gtbank', account_number: '0123456789', account_number_last4: '6789', account_label: 'Bar GTB' }]);
+      await openAccounts();
+
+      expect(await screen.findByText('Bar GTB ····6789')).toBeInTheDocument();
+      expect(screen.queryByText('0123456789')).not.toBeInTheDocument();
+      expect(screen.getAllByText('No account recorded')).toHaveLength(2);
+      expect(screen.getByText('Moniepoint')).toBeInTheDocument();
+      expect(screen.getByText('Opay')).toBeInTheDocument();
+      expect(screen.queryByText('Other')).not.toBeInTheDocument();
+    });
+
+    it('records an account through the API and reloads', async () => {
+      mocks.setOutletTerminalAccount.mockResolvedValue({});
+      await openAccounts();
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Record Opay account' }));
+      await userEvent.type(screen.getByLabelText('Account number'), '2020202020');
+      await userEvent.type(screen.getByLabelText('Label (optional)'), 'Bar Opay');
+      await userEvent.click(screen.getByRole('button', { name: 'Save account' }));
+
+      expect(mocks.setOutletTerminalAccount).toHaveBeenCalledWith('1', 'opay', { accountNumber: '2020202020', accountLabel: 'Bar Opay' });
+      expect(mocks.listOutletTerminalAccounts.mock.calls.length).toBeGreaterThan(1);
+    });
+
+    it('shows the real server error when saving is refused, and removes an account', async () => {
+      const { ApiError } = await import('../../../shared/api/index.js');
+      mocks.listOutletTerminalAccounts.mockResolvedValue([{ id: '5', provider: 'gtbank', account_number: '0123456789', account_number_last4: '6789', account_label: null }]);
+      mocks.setOutletTerminalAccount.mockRejectedValue(new ApiError({ status: 400, code: 'VALIDATION_INVALID_ACCOUNT_NUMBER', message: 'Account number must be digits only.' }));
+      mocks.removeOutletTerminalAccount.mockResolvedValue({ removed: true });
+      await openAccounts();
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Edit GTBank account' }));
+      expect(screen.getByLabelText('Account number')).toHaveValue('0123456789');
+      await userEvent.click(screen.getByRole('button', { name: 'Save account' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Account number must be digits only.');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove GTBank account' }));
+      expect(mocks.removeOutletTerminalAccount).toHaveBeenCalledWith('1', 'gtbank');
+    });
   });
 
   it('shows a real error rather than an empty list on load failure', async () => {

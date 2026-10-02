@@ -98,6 +98,19 @@ export function setOutletCategories(outletId, categoryIds) {
   return request(`/pos/outlets/${outletId}/categories`, { method: 'PUT', body: { category_ids: categoryIds } });
 }
 
+/** Bank accounts an outlet's external card terminals pay into, per provider. Recording only (no money routing). */
+export function listOutletTerminalAccounts(outletId) {
+  return request(`/pos/outlets/${outletId}/terminal-accounts`);
+}
+
+export function setOutletTerminalAccount(outletId, provider, { accountNumber, accountLabel }) {
+  return request(`/pos/outlets/${outletId}/terminal-accounts/${provider}`, { method: 'PUT', body: { account_number: accountNumber, account_label: accountLabel } });
+}
+
+export function removeOutletTerminalAccount(outletId, provider) {
+  return request(`/pos/outlets/${outletId}/terminal-accounts/${provider}`, { method: 'DELETE' });
+}
+
 export function updateMenuCategory(id, { name, sortOrder }) {
   return request(`/pos/menu-categories/${id}`, { method: 'PATCH', body: { name, sort_order: sortOrder } });
 }

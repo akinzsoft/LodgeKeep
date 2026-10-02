@@ -1816,6 +1816,38 @@ const ENTITIES = [
   },
 
   {
+    table: 'pos_outlet_terminal_accounts',
+    uniqueKeys: [['outlet_id', 'provider']],
+    // The fixture bar records GTBank only, so Opay is free for a new row.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      provider: 'opay',
+      account_number: '2020202020',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      provider: 'gtbank',
+      account_number: '9999999999',
+    }),
+    crossTenant: [
+      {
+        name: "records an account against another tenant's outlet",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          provider: 'opay',
+          account_number: '2020202020',
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'pos_outlet_categories',
     uniqueKeys: [['outlet_id', 'category_id']],
     // The fixture bar carries Cocktails; Mocktails (posMenuCategories[1]) is deliberately uncarried.

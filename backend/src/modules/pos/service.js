@@ -153,6 +153,80 @@ async function updateOutlet({ context, id, changes }) {
   });
 }
 
+// ---------------------------------------------------------------------
+// Outlet terminal accounts — RECORDING ONLY (no money routing). See
+// migration 20261116090000 for the full reasoning.
+// ---------------------------------------------------------------------
+
+/** Providers that can hold an outlet account. `other` is deliberately absent: it has no single account. */
+const ACCOUNT_PROVIDERS = ['moniepoint', 'opay', 'gtbank'];
+
+function lastFour(accountNumber) {
+  return String(accountNumber).replace(/\s+/g, '').slice(-4);
+}
+
+function withLastFour(row) {
+  return row ? { ...row, account_number_last4: lastFour(row.account_number) } : row;
+}
+
+function normalizeAccountProvider(provider) {
+  const normalized = typeof provider === 'string' ? provider.trim().toLowerCase() : '';
+  if (!ACCOUNT_PROVIDERS.includes(normalized)) {
+    throw new ValidationError('INVALID_TERMINAL_PROVIDER', `"provider" must be one of: ${ACCOUNT_PROVIDERS.join(', ')}.`, [{ field: 'provider', issue: 'invalid' }]);
+  }
+  return normalized;
+}
+
+async function listOutletTerminalAccounts({ context, outletId }) {
+  const db = scopedDb().for(context);
+  const outlet = await db.table('pos_outlets').where({ id: outletId }).first('id');
+  if (!outlet) throw new OutletNotFoundError();
+  const rows = await db.table('pos_outlet_terminal_accounts').where({ outlet_id: outletId }).orderBy('provider');
+  return rows.map(withLastFour);
+}
+
+async function setOutletTerminalAccount({ context, outletId, provider, accountNumber, accountLabel }) {
+  const db = scopedDb().for(context);
+  const normalizedProvider = normalizeAccountProvider(provider);
+  const number = typeof accountNumber === 'string' ? accountNumber.trim() : '';
+  if (!/^[0-9 ]{4,40}$/.test(number) || number.replace(/\s+/g, '').length < 4) {
+    throw new ValidationError('INVALID_ACCOUNT_NUMBER', '"account_number" must be digits only (at least 4).', [{ field: 'account_number', issue: 'invalid' }]);
+  }
+  if (accountLabel !== undefined && accountLabel !== null && typeof accountLabel !== 'string') {
+    throw new ValidationError('INVALID_ACCOUNT_LABEL', '"account_label" must be text.', [{ field: 'account_label', issue: 'invalid' }]);
+  }
+  const label = typeof accountLabel === 'string' && accountLabel.trim() ? accountLabel.trim() : null;
+  if (label && label.length > 80) {
+    throw new ValidationError('INVALID_ACCOUNT_LABEL', '"account_label" must be at most 80 characters.', [{ field: 'account_label', issue: 'too_long' }]);
+  }
+  return db.transaction(async (trx) => {
+    const outlet = await trx.table('pos_outlets').where({ id: outletId }).forUpdate().first();
+    if (!outlet || outlet.status !== 'active') throw new OutletNotFoundError();
+    const existing = await trx.table('pos_outlet_terminal_accounts').where({ outlet_id: outletId, provider: normalizedProvider }).first();
+    const values = { account_number: number, account_label: label };
+    if (existing) {
+      await trx.table('pos_outlet_terminal_accounts').where({ id: existing.id }).update(values);
+    } else {
+      await trx.table('pos_outlet_terminal_accounts').insert({ outlet_id: outletId, provider: normalizedProvider, ...values });
+    }
+    return {
+      before: withLastFour(existing),
+      after: withLastFour(await trx.table('pos_outlet_terminal_accounts').where({ outlet_id: outletId, provider: normalizedProvider }).first()),
+    };
+  });
+}
+
+async function removeOutletTerminalAccount({ context, outletId, provider }) {
+  const db = scopedDb().for(context);
+  const normalizedProvider = normalizeAccountProvider(provider);
+  const outlet = await db.table('pos_outlets').where({ id: outletId }).first('id');
+  if (!outlet) throw new OutletNotFoundError();
+  const existing = await db.table('pos_outlet_terminal_accounts').where({ outlet_id: outletId, provider: normalizedProvider }).first();
+  if (!existing) return null;
+  await db.table('pos_outlet_terminal_accounts').where({ id: existing.id }).delete();
+  return withLastFour(existing);
+}
+
 async function archiveOutlet({ context, id }) {
   return updateOutlet({ context, id, changes: { status: 'archived' } });
 }
@@ -1181,7 +1255,23 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
       // A card sale taken on the hotel's own physical terminal: nothing to
       // collect or verify (no gateway, no `payments` row), only the optional
       // provider/reference to reconcile against that terminal's own report.
-      if (settlement.method === 'terminal') Object.assign(fields, normalizeTerminalDetails(settlement.terminal));
+      if (settlement.method === 'terminal') {
+        Object.assign(fields, normalizeTerminalDetails(settlement.terminal));
+        // Snapshot which account the outlet recorded for this provider, so
+        // reconciliation can be matched against that account's own report.
+        // Resolved HERE, not from the client; no provider (or "other", or no
+        // recorded account) leaves both columns null. Label only, no routing.
+        if (fields.terminal_provider) {
+          const account = await trx
+            .table('pos_outlet_terminal_accounts')
+            .where({ outlet_id: order.outlet_id, provider: fields.terminal_provider })
+            .first();
+          if (account) {
+            fields.terminal_account_label = account.account_label;
+            fields.terminal_account_last4 = lastFour(account.account_number);
+          }
+        }
+      }
 
       // Card and NQR only settle against money Paystack actually captured
       // for this exact check — never on the cashier's word alone.
@@ -1569,6 +1659,9 @@ module.exports = {
   setMenuItemAvailability,
   setOutletMenuItemPrice,
   setOutletCategories,
+  listOutletTerminalAccounts,
+  setOutletTerminalAccount,
+  removeOutletTerminalAccount,
   archiveMenuItem,
   setMenuItemImage,
   removeMenuItemImage,
