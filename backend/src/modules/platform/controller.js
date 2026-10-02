@@ -104,6 +104,17 @@ async function reactivateTenant(req, res, next) {
   }
 }
 
+async function extendTrial(req, res, next) {
+  try {
+    const days = require_(req.body, 'days');
+    const reason = require_(req.body, 'reason');
+    const result = await service.extendTrial({ context: req.context, tenantId: req.params.id, days, reason, ...requestMeta(req) });
+    res.status(200).json(ok(result));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function offboardTenant(req, res, next) {
   try {
     const result = await service.offboardTenant({
@@ -178,5 +189,6 @@ module.exports = {
   listImpersonationSessionsForTenant,
   suspendTenant,
   reactivateTenant,
+  extendTrial,
   offboardTenant,
 };

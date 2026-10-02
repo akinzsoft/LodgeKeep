@@ -92,6 +92,11 @@ export function reactivateTenant(tenantId, reason) {
   return request(`/platform/tenants/${tenantId}/reactivate`, { method: 'POST', body: { reason: reason || undefined } });
 }
 
+/** Extends a trial by `days` (admin tier). Refused server-side for a tenant that has a subscription. */
+export function extendTrial(tenantId, days, reason) {
+  return request(`/platform/tenants/${tenantId}/extend-trial`, { method: 'POST', body: { days: Number(days), reason } });
+}
+
 /** PLAN.md Phase 5 (tenant offboarding) — the platform-initiated half; `src/modules/offboarding/service.js`'s own `requestOwnOffboarding` is the tenant self-service half. */
 export function offboardTenant(tenantId, reason) {
   return request(`/platform/tenants/${tenantId}/offboard`, { method: 'POST', body: { reason: reason || undefined } });

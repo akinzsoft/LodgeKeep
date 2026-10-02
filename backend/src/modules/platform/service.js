@@ -32,7 +32,7 @@ const { signAccessToken } = require('../../auth/tokens');
 const { writeAuthEvent } = require('../../auth/events');
 const { recordAuditEntry } = require('../../audit');
 const { SessionInvalidError } = require('../../auth/errors');
-const { ValidationError } = require('../../shared/errors');
+const { ValidationError, AppError } = require('../../shared/errors');
 const { TenantNotFoundError, PropertyNotInTenantError, InvalidTenantLifecycleTransitionError, assertNotPurging, assertNotPurgingFresh } = require('./errors');
 const { OFFBOARDABLE_FROM_STATUSES, computeRetentionExpiresAt, createExportAttempt } = require('../offboarding/service');
 const { enqueueTenantDataExportJob } = require('../../jobs/tenant-data-export');
@@ -428,6 +428,80 @@ async function reactivateTenant({ context, tenantId, reason, ip, userAgent, requ
   });
 }
 
+/** Longest single extension, so a typo ("3650") cannot hand a tenant ten free years. Repeat the action for more. */
+const MAX_TRIAL_EXTENSION_DAYS = 365;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Extends a tenant's trial by a chosen number of days — the only way to set
+ * a specific expiry short of editing the database. Works from `trial` (still
+ * running or lapsed-but-not-yet-swept) and from `suspended` (a lapsed trial
+ * or a manual suspension); a suspended tenant comes back as `trial`, not
+ * `active`, so the trial sweep and the read-only gate apply to the new date.
+ *
+ * The new `trial_ends_at` is `max(now, current trial_ends_at) + days`: extending
+ * a trial that still has 3 days left adds to those 3 days, and extending a
+ * long-lapsed one counts from today rather than from a date already in the past.
+ *
+ * REFUSED for a tenant that has a `subscriptions` row: once a card is on file
+ * the billing sweep owns status transitions (see `src/jobs/trial-expiry.js`'s
+ * own exclusion), so a new `trial_ends_at` would be ignored by the sweep and
+ * silently misleading. Such a tenant's lifecycle is changed with
+ * suspend/reactivate or billing, not here.
+ */
+async function extendTrial({ context, tenantId, days, reason, ip, userAgent, requestId }) {
+  const dayCount = Number(days);
+  if (!Number.isInteger(dayCount) || dayCount < 1 || dayCount > MAX_TRIAL_EXTENSION_DAYS) {
+    throw new ValidationError('INVALID_DAYS', `"days" must be a whole number from 1 to ${MAX_TRIAL_EXTENSION_DAYS}.`, [{ field: 'days', issue: 'invalid' }]);
+  }
+  if (!reason || !String(reason).trim()) {
+    throw new ValidationError('MISSING_FIELD', '"reason" is required to extend a trial.', [{ field: 'reason', issue: 'missing' }]);
+  }
+
+  return scopedDb().for(context).transaction(async (db) => {
+    const lifecycle = db.platformTenantLifecycle();
+    // Locking read: the base date must be the committed value, and a concurrent
+    // extension or purge claim must queue behind this one.
+    const before = await db.platformDirectory().table('tenants').where({ id: tenantId }).forUpdate().first();
+    if (!before) throw new TenantNotFoundError();
+    assertNotPurging(before);
+    if (!['trial', 'suspended'].includes(before.status)) {
+      throw new InvalidTenantLifecycleTransitionError(before.status, 'trial');
+    }
+    const subscription = await db.platform().table('subscriptions').where({ tenant_id: tenantId }).first('id');
+    if (subscription) {
+      throw new AppError(
+        'BUSINESS_RULE_TENANT_HAS_SUBSCRIPTION',
+        'This tenant has a subscription on file, so billing controls its status and a trial extension would have no effect. Use suspend/reactivate instead.',
+        422
+      );
+    }
+
+    const now = Date.now();
+    const base = Math.max(now, before.trial_ends_at ? new Date(before.trial_ends_at).getTime() : 0);
+    const trialEndsAt = new Date(base + dayCount * MS_PER_DAY);
+
+    const updated = await lifecycle.changeStatus(tenantId, ['trial', 'suspended'], { status: 'trial', trial_ends_at: trialEndsAt });
+    if (!updated) throw new InvalidTenantLifecycleTransitionError(before.status, 'trial');
+
+    const tenantDb = lifecycle.withContext(workerContext({ tenantId }));
+    await recordAuditEntry(tenantDb, {
+      entityType: 'tenants',
+      entityId: tenantId,
+      action: 'extend_trial',
+      source: 'api',
+      beforeState: { status: before.status, trial_ends_at: before.trial_ends_at ?? null },
+      afterState: { status: 'trial', trial_ends_at: trialEndsAt.toISOString(), days_added: dayCount },
+      reason: String(reason).trim(),
+      requestId,
+      ipAddress: ip,
+      userAgent,
+    });
+
+    return { tenantId: String(tenantId), status: 'trial', trial_ends_at: trialEndsAt.toISOString() };
+  });
+}
+
 /**
  * Platform-initiated offboarding — PLAN.md Phase 5, PRODUCT_REQUIREMENTS.md
  * §3.22. The confirmed "Both" trigger-audiences decision's other half:
@@ -525,5 +599,6 @@ module.exports = {
   listImpersonationSessionsForTenant,
   suspendTenant,
   reactivateTenant,
+  extendTrial,
   offboardTenant,
 };

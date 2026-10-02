@@ -45,6 +45,7 @@ function platformConsoleRouter() {
   router.post('/tenants/:id/impersonate', requirePlatformRole('admin'), controller.startImpersonation);
   router.post('/tenants/:id/suspend', requirePlatformRole('admin'), controller.suspendTenant);
   router.post('/tenants/:id/reactivate', requirePlatformRole('admin'), controller.reactivateTenant);
+  router.post('/tenants/:id/extend-trial', requirePlatformRole('admin'), controller.extendTrial);
   router.post('/tenants/:id/offboard', requirePlatformRole('admin'), controller.offboardTenant);
   // Whole-database backups, emailed (user-requested): starting one is admin-only — it sends
   // every hotel's data out of the server; the history is readable by both tiers.
