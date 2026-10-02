@@ -421,6 +421,55 @@ describe('<MenuItemsTab>', () => {
     expect(mocks.setMenuItemAvailability).toHaveBeenCalledWith('5', false, '1');
   });
 
+  describe('an outlet that may not receive deliveries (the property has a store room)', () => {
+    const blocked = { canReceiveStock: false, receivingOutletNames: ['Store-1'] };
+
+    function linkedCocktail() {
+      mocks.listMenuItems.mockResolvedValue([menuItem()]);
+      stockMocks.listStockItems.mockResolvedValue([stockItem()]);
+      stockMocks.listMenuItemComponents.mockResolvedValue([{ stock_item_id: '30', quantity: '1' }]);
+    }
+
+    it('disables every Restock control and says where deliveries go', async () => {
+      linkedCocktail();
+      renderTab(blocked);
+
+      const restockCard = (await screen.findByRole('heading', { name: 'Restock — Drinks' })).closest('section');
+      expect(within(restockCard).getByText(/Deliveries are received at the store room \(Store-1\)/)).toBeInTheDocument();
+      expect(await within(restockCard).findByLabelText('Item')).toBeDisabled();
+      expect(within(restockCard).getByLabelText('Quantity')).toBeDisabled();
+      expect(within(restockCard).getByLabelText('Unit cost')).toBeDisabled();
+      expect(within(restockCard).getByLabelText('Reference (optional)')).toBeDisabled();
+      expect(within(restockCard).getByRole('button', { name: 'Record stock' })).toBeDisabled();
+    });
+
+    it('disables "Qty supplied" on Add item, and never records a delivery when an item is added', async () => {
+      mocks.createMenuItem.mockResolvedValue(menuItem({ id: '7', name: 'Soda' }));
+      stockMocks.createStockItem.mockResolvedValue(stockItem({ id: '40', name: 'Soda' }));
+      renderTab(blocked);
+
+      await userEvent.click(within(await categoryHeading(/^Items — Drinks/)).getByRole('button', { name: 'Add item' }));
+      const addCard = screen.getByRole('heading', { name: 'Add item — Drinks' }).closest('section');
+      expect(within(addCard).getByLabelText('Qty supplied (optional)')).toBeDisabled();
+      await userEvent.type(within(addCard).getByLabelText('Name'), 'Soda');
+      await userEvent.type(within(addCard).getByLabelText('Selling price'), '5');
+      await userEvent.type(within(addCard).getByLabelText('Unit cost (optional)'), '2');
+      await userEvent.click(within(addCard).getByRole('button', { name: 'Add item' }));
+
+      await waitFor(() => expect(stockMocks.createStockItem).toHaveBeenCalled());
+      expect(stockMocks.recordGoodsReceived).not.toHaveBeenCalled();
+    });
+
+    it('leaves Restock and Qty supplied enabled where deliveries are allowed (the store, or a property with no store)', async () => {
+      linkedCocktail();
+      renderTab({ canReceiveStock: true });
+
+      const restockCard = (await screen.findByRole('heading', { name: 'Restock — Drinks' })).closest('section');
+      expect(await within(restockCard).findByLabelText('Quantity')).toBeEnabled();
+      expect(within(restockCard).queryByText(/Deliveries are received at the store room/)).not.toBeInTheDocument();
+    });
+  });
+
   describe('restock', () => {
     it('shows a message instead of a form when nothing in the category is stock-tracked', async () => {
       mocks.listMenuItems.mockResolvedValue([menuItem()]);
