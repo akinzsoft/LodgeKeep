@@ -801,10 +801,11 @@ const SALES_CSV_SECTIONS = {
   },
   items: { columns: ['name', 'quantity', 'sales', 'cost', 'profit'], rows: (report) => report.topItems },
   tenders: { columns: ['tender', 'checks', 'total'], rows: (report) => report.byTender },
+  outlets: { columns: ['name', 'tabs', 'checks', 'subtotal', 'tax', 'serviceCharge', 'tips', 'total'], rows: (report) => report.byOutlet },
 };
 
 /**
- * `GET /pos/reports/sales?date_from&date_to[&outlet_id][&format=csv&section=tabs|items|tenders]`.
+ * `GET /pos/reports/sales?date_from&date_to[&outlet_id][&format=csv&section=tabs|items|tenders|outlets]`.
  * Allow-listed query params only. CSV exports one section at a time,
  * reflecting the same filters as the on-screen report.
  */
@@ -827,7 +828,7 @@ async function salesReport(req, res, next) {
 
     if (req.query?.format === 'csv') {
       const section = SALES_CSV_SECTIONS[req.query?.section ?? 'tabs'];
-      if (!section) throw new ValidationError('INVALID_SECTION', '"section" must be tabs, items, or tenders.', [{ field: 'section', issue: 'invalid' }]);
+      if (!section) throw new ValidationError('INVALID_SECTION', '"section" must be tabs, items, tenders, or outlets.', [{ field: 'section', issue: 'invalid' }]);
       const name = req.query?.section ?? 'tabs';
       res
         .status(200)

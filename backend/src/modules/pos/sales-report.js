@@ -24,6 +24,7 @@
 const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, compareMoney, toCents, fromCents } = require('../../shared/money');
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
+const { isPointOfSaleOutlet } = require('../../shared/outlet-types');
 
 const TENDERS = ['cash', 'card', 'nqr', 'terminal', 'room_charge'];
 const TOP_ITEMS_LIMIT = 20;
@@ -194,6 +195,50 @@ async function listUnsettledCardPayments({ db, outletId }) {
     }));
 }
 
+/**
+ * One row per point-of-sale outlet: what it took over the range. Every
+ * active selling outlet appears, a quiet one with zeros, so "nothing sold
+ * at the pool bar" is visible rather than missing. An archived outlet only
+ * appears if it sold something in the range. Stores never sell and are
+ * left out. `total` is the same figure as the report's `summary.total`
+ * (items + tax + tip + service charge), so the rows add up to it.
+ */
+async function buildOutletRows({ db, settlements, outletId }) {
+  let query = db.table('pos_outlets').select('id', 'name', 'type', 'status');
+  if (outletId) query = query.where({ id: outletId });
+  const outlets = (await query).filter(isPointOfSaleOutlet);
+
+  const byOutlet = new Map();
+  const rowFor = (id, name) => {
+    const key = String(id);
+    if (!byOutlet.has(key)) byOutlet.set(key, { outletId: id, name, orders: new Set(), checks: 0, subtotal: [], tax: [], serviceCharge: [], tips: [] });
+    return byOutlet.get(key);
+  };
+  for (const outlet of outlets) {
+    if (outlet.status === 'active') rowFor(outlet.id, outlet.name);
+  }
+  for (const row of settlements) {
+    const outlet = outlets.find((candidate) => String(candidate.id) === String(row.outlet_id));
+    if (!outlet) continue; // a store, or an outlet outside the filter
+    const entry = rowFor(row.outlet_id, outlet.name);
+    entry.orders.add(String(row.pos_order_id));
+    entry.checks += 1;
+    entry.subtotal.push(row.subtotal);
+    entry.tax.push(row.tax_amount);
+    entry.serviceCharge.push(row.service_charge);
+    entry.tips.push(row.tip_amount);
+  }
+  return [...byOutlet.values()]
+    .map((entry) => {
+      const subtotal = sumMoney(entry.subtotal);
+      const tax = sumMoney(entry.tax);
+      const serviceCharge = sumMoney(entry.serviceCharge);
+      const tips = sumMoney(entry.tips);
+      return { outletId: entry.outletId, name: entry.name, tabs: entry.orders.size, checks: entry.checks, subtotal, tax, serviceCharge, tips, total: sumMoney([subtotal, tax, serviceCharge, tips]) };
+    })
+    .sort((a, b) => compareMoney(b.total, a.total) || a.name.localeCompare(b.name));
+}
+
 async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCostByMenuItem }) {
   // Profit is only computed when the caller supplies each menu item's unit
   // cost (the controller takes it from the stock margin report — this file
@@ -353,6 +398,7 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
       ...(withProfit ? { profit: profitSummary } : {}),
     },
     byTender: tenderRows,
+    byOutlet: await buildOutletRows({ db, settlements, outletId }),
     topItems,
     tabs: [...tabs.values()].map(({ amounts, groups, itemCount, knownRevenue, costs, unknownCostLines, ...tab }) => {
       const row = { ...tab, itemCount: itemCount ?? 0, total: sumMoney(amounts) };

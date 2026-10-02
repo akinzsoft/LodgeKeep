@@ -32,6 +32,10 @@ const REPORT = {
   outletId: null,
   currency: 'NGN',
   summary: { tabs: 2, checks: 2, subtotal: '60.00', tax: '4.50', serviceCharge: '4.50', tips: '0.00', total: '69.00' },
+  byOutlet: [
+    { outletId: '1', name: 'Main Bar', tabs: 2, checks: 2, subtotal: '60.00', tax: '4.50', serviceCharge: '4.50', tips: '0.00', total: '69.00' },
+    { outletId: '2', name: 'Pool Bar', tabs: 0, checks: 0, subtotal: '0.00', tax: '0.00', serviceCharge: '0.00', tips: '0.00', total: '0.00' },
+  ],
   byTender: [
     { tender: 'cash', checks: 1, total: '46.00' },
     { tender: 'card', checks: 0, total: '0.00' },
@@ -64,7 +68,7 @@ describe('<SalesTab>', () => {
     expect(await screen.findByLabelText('Outlet')).toBeInTheDocument();
     expect(screen.getByLabelText('From')).toHaveValue('2027-03-01');
     expect(screen.getByLabelText('To')).toHaveValue('2027-03-01');
-    expect(screen.getAllByText('Choose a date range and run the report.')).toHaveLength(3);
+    expect(screen.getAllByText('Choose a date range and run the report.')).toHaveLength(4);
     expect(mocks.getSalesReport).not.toHaveBeenCalled();
   });
 
@@ -88,12 +92,33 @@ describe('<SalesTab>', () => {
     expect(screen.getByText('#10').closest('tr')).toHaveTextContent('Guest order');
   });
 
-  it('says there were no sales rather than a blank table when the range is empty', async () => {
-    mocks.getSalesReport.mockResolvedValue({ ...REPORT, summary: { ...REPORT.summary, tabs: 0, total: '0.00' }, topItems: [], tabs: [] });
+  it('shows every outlet sales, including an outlet that sold nothing as zero', async () => {
     render(<SalesTab activeProperty={PROPERTY} />);
     await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
 
-    expect(await screen.findAllByText('No sales in this range.')).toHaveLength(2);
+    const bar = (await screen.findByText('Main Bar', { selector: 'td' })).closest('tr');
+    expect(bar).toHaveTextContent(/69\.00/);
+    const quiet = screen.getByText('Pool Bar', { selector: 'td' }).closest('tr');
+    expect(quiet).toHaveTextContent(/0\.00/);
+    expect(quiet).toHaveTextContent('0');
+  });
+
+  it('exports the per-outlet table', async () => {
+    const blob = new Blob(['x']);
+    mocks.getSalesReportCsv.mockResolvedValue(blob);
+    render(<SalesTab activeProperty={PROPERTY} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+    await screen.findByText('Sales by outlet');
+    await userEvent.click(screen.getAllByRole('button', { name: 'Export CSV' })[0]);
+    expect(mocks.getSalesReportCsv).toHaveBeenCalledWith({ dateFrom: '2027-03-01', dateTo: '2027-03-01', outletId: undefined }, 'outlets');
+  });
+
+  it('says there were no sales rather than a blank table when the range is empty', async () => {
+    mocks.getSalesReport.mockResolvedValue({ ...REPORT, summary: { ...REPORT.summary, tabs: 0, total: '0.00' }, topItems: [], tabs: [], byOutlet: [] });
+    render(<SalesTab activeProperty={PROPERTY} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+
+    expect(await screen.findAllByText('No sales in this range.')).toHaveLength(3);
   });
 
   it('shows the real error when the report is refused', async () => {
@@ -111,8 +136,8 @@ describe('<SalesTab>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
 
     await screen.findByText('Top-selling items');
-    // One Export button per table, in order: tenders, items, tabs.
-    await userEvent.click(screen.getAllByRole('button', { name: 'Export CSV' })[1]);
+    // One Export button per table, in order: outlets, tenders, items, tabs.
+    await userEvent.click(screen.getAllByRole('button', { name: 'Export CSV' })[2]);
 
     expect(mocks.getSalesReportCsv).toHaveBeenCalledWith({ dateFrom: '2027-03-01', dateTo: '2027-03-01', outletId: undefined }, 'items');
     expect(mocks.triggerDownload).toHaveBeenCalledWith(blob, 'pos-sales-items-2027-03-01-to-2027-03-01.csv');
@@ -127,7 +152,7 @@ describe('<SalesTab>', () => {
     await selectWhenLoaded('Outlet', 'Main Bar');
     await userEvent.clear(screen.getByLabelText('From'));
     await userEvent.type(screen.getByLabelText('From'), '2027-02-01');
-    await userEvent.click(screen.getAllByRole('button', { name: 'Export CSV' })[0]);
+    await userEvent.click(screen.getAllByRole('button', { name: 'Export CSV' })[1]);
 
     expect(mocks.getSalesReportCsv).toHaveBeenCalledWith({ dateFrom: '2027-03-01', dateTo: '2027-03-01', outletId: undefined }, 'tenders');
   });
@@ -139,8 +164,8 @@ describe('<SalesTab>', () => {
     await screen.findByText('Settled tabs');
 
     const buttons = screen.getAllByRole('button', { name: 'Export CSV' });
-    expect(buttons).toHaveLength(3);
-    await userEvent.click(buttons[2]);
+    expect(buttons).toHaveLength(4);
+    await userEvent.click(buttons[3]);
     expect(mocks.getSalesReportCsv).toHaveBeenCalledWith(expect.any(Object), 'tabs');
   });
 
