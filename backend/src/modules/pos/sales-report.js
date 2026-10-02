@@ -478,6 +478,47 @@ async function computeMenuItemSalesTotals({ db, dateFrom, dateTo, outletId }) {
 }
 
 /**
+ * Standing item lines WITH the settlement each one was settled under —
+ * `[{settlementId, menuItemId, name, quantity}]`, one entry per order line.
+ * The cost-price fallback in `stock/reporting.js` needs this because the
+ * question "did this sale deplete stock?" is answered per settlement
+ * (`stock_movements.pos_order_settlement_id`). Same exclusions as
+ * `computeMenuItemSalesTotals` (voided settlements, voided lines, voided
+ * split groups); kept as its own function rather than changing that one.
+ */
+async function listSettledItemLines({ db, dateFrom, dateTo, outletId }) {
+  const settlements = await listStandingSettlements({ db, dateFrom, dateTo, outletId });
+  const settlementByOrderGroup = new Map();
+  const orderIds = new Set();
+  for (const row of settlements) {
+    settlementByOrderGroup.set(`${row.pos_order_id}:${groupKey(row.split_group)}`, row.id);
+    orderIds.add(row.pos_order_id);
+  }
+  if (orderIds.size === 0) return [];
+
+  const items = await db
+    .table('pos_order_items')
+    .joinScoped('pos_menu_items', (join) => join.on('pos_menu_items.id', '=', 'pos_order_items.menu_item_id'), { type: 'left' })
+    .whereIn('pos_order_items.pos_order_id', [...orderIds])
+    .whereNull('pos_order_items.voided_at')
+    .select(
+      'pos_order_items.pos_order_id as pos_order_id',
+      'pos_order_items.menu_item_id as menu_item_id',
+      'pos_order_items.split_group as split_group',
+      'pos_order_items.quantity as quantity',
+      'pos_menu_items.name as name'
+    );
+
+  const lines = [];
+  for (const item of items) {
+    const settlementId = settlementByOrderGroup.get(`${item.pos_order_id}:${groupKey(item.split_group)}`);
+    if (settlementId === undefined) continue; // that check's own split group was voided
+    lines.push({ settlementId, menuItemId: item.menu_item_id, name: item.name ?? `#${item.menu_item_id}`, quantity: item.quantity });
+  }
+  return lines;
+}
+
+/**
  * Real per-day POS revenue over a date range — gap closure, for
  * `expenses/reporting.js`'s composed profit view (a cross-module caller:
  * `expenses` depends on `pos`, the same one-way direction `stock` already
@@ -507,6 +548,7 @@ async function computeDailyPosRevenueTotals({ db, dateFrom, dateTo, outletId }) 
 module.exports = {
   computeSalesReport,
   computeMenuItemSalesTotals,
+  listSettledItemLines,
   computeDailyPosRevenueTotals,
   TENDERS,
   // `listStandingSettlements`/`listUnsettledCardPayments` are exported for

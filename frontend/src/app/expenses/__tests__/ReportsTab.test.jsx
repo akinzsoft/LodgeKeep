@@ -31,7 +31,7 @@ const EMPTY_STATEMENT = {
   dateTo: '2027-01-01',
   revenue: { roomRevenue: '0.00', posRevenue: '0.00', totalRevenue: '0.00', roomRevenueFullyAudited: false },
   costOfSales: '0.00',
-  itemsSoldWithoutRecipeCost: 0,
+  itemsSoldWithoutCost: 0,
   grossProfit: '0.00',
   operatingExpenses: { byCategory: [], total: '0.00' },
   netProfit: '0.00',
@@ -105,6 +105,23 @@ describe('ReportsTab', () => {
     expect(screen.queryByText(/no Night Audit for/)).not.toBeInTheDocument();
   });
 
+  it('shows the cost-price estimate as its own sub-line only when there is one', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue({ ...EMPTY_STATEMENT, costOfSales: '600.00', costOfSalesFromCostPrice: '600.00' });
+    render(<ReportsTab activeProperty={activeProperty} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    expect(await screen.findByText(/of which from item cost price/i)).toBeInTheDocument();
+  });
+
+  it('omits the cost-price sub-line when none of cost of sales came from cost price', async () => {
+    mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+    mocks.getProfitAndLoss.mockResolvedValue({ ...EMPTY_STATEMENT, costOfSalesFromCostPrice: '0.00' });
+    render(<ReportsTab activeProperty={activeProperty} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+    await screen.findByText(/Gross profit/i);
+    expect(screen.queryByText(/of which from item cost price/i)).not.toBeInTheDocument();
+  });
+
   it('shows "None recorded" when no operating expenses exist in range, and an honest zero net profit', async () => {
     mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
     mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT);
@@ -114,25 +131,25 @@ describe('ReportsTab', () => {
     expect(await screen.findByText('None recorded in this range.')).toBeInTheDocument();
   });
 
-  it('warns when menu items sold in range have no recipe configured, so their cost never reached Cost of sales', async () => {
+  it('warns when menu items sold in range have no cost (no recipe deduction and no cost price), so their cost never reached Cost of sales', async () => {
     mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
-    mocks.getProfitAndLoss.mockResolvedValue({ ...EMPTY_STATEMENT, itemsSoldWithoutRecipeCost: 2 });
+    mocks.getProfitAndLoss.mockResolvedValue({ ...EMPTY_STATEMENT, itemsSoldWithoutCost: 2 });
     render(<ReportsTab activeProperty={activeProperty} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
     const warning = await screen.findByRole('alert');
-    expect(warning.textContent).toMatch(/2 menu item\(s\) sold in this range with no recipe configured/);
+    expect(warning.textContent).toMatch(/2 menu item\(s\) sold in this range with no cost \(no recipe deduction and no cost price\)/);
     expect(warning.textContent).toMatch(/Gross profit is overstated/);
   });
 
   it('shows no such warning when every item sold in range has a tracked cost', async () => {
     mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
-    mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT); // itemsSoldWithoutRecipeCost: 0
+    mocks.getProfitAndLoss.mockResolvedValue(EMPTY_STATEMENT); // itemsSoldWithoutCost: 0
     render(<ReportsTab activeProperty={activeProperty} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
     await screen.findByText('Room revenue');
-    expect(screen.queryByText(/no recipe configured/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no cost \(no recipe/i)).not.toBeInTheDocument();
   });
 
   it('exports both the P&L statement and the expense list as CSV via the shared download helper', async () => {

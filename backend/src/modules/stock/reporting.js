@@ -10,7 +10,7 @@
 const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, toCents, fromCents } = require('../../shared/money');
 const { sumQuantity, negateQuantity, compareQuantity, extendedCost } = require('../../shared/quantity');
-const { computeMenuItemSalesTotals } = require('../pos/sales-report');
+const { computeMenuItemSalesTotals, listSettledItemLines } = require('../pos/sales-report');
 const stockService = require('./service');
 
 /**
@@ -387,4 +387,91 @@ async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
   };
 }
 
-module.exports = { computeCostOfSales, computeStockVariance, computeCostOfSalesMargin, computeStockOverview };
+/**
+ * Cost of sales the stock ledger cannot see: menu items sold with NO stock
+ * movement behind them, costed at their `cost_price` (the same per-item
+ * fallback `computeCostOfSalesMargin` uses), for the P&L's gross profit.
+ *
+ * Never double-counts `computeCostOfSales`: that figure is the sum of real
+ * `sold` movements, and this one only costs a sale line the ledger did NOT
+ * cover. Whether the ledger covered a line is decided per SALE from the
+ * movements actually written for its settlement, never from the item's
+ * current recipe alone (a recipe can be added or removed after the sale):
+ *
+ *  - the item's current recipe stock items include one that has a `sold`
+ *    movement on this settlement -> the ledger covered it, add nothing;
+ *  - otherwise, if the item has no current recipe and the settlement holds
+ *    movements that no current recipe in it explains, those movements may
+ *    be this item's old recipe -> ambiguous, add nothing (an undercount is
+ *    safer than a double count) and flag the item;
+ *  - otherwise cost = quantity x cost_price when one is set, else the item
+ *    is flagged as having no cost anywhere.
+ *
+ * Current `cost_price`, not a historical one (that column keeps no history),
+ * the same simplification as the margin report. Voided settlements/lines are
+ * already excluded by `listSettledItemLines`.
+ */
+async function computeCostPriceFallback({ context, dateFrom, dateTo, outletId }) {
+  const db = scopedDb().for(context);
+  const lines = await listSettledItemLines({ db, dateFrom, dateTo, outletId });
+  if (lines.length === 0) return { totalCost: '0.00', byItem: [], itemsWithoutCost: 0 };
+
+  const settlementIds = [...new Set(lines.map((line) => line.settlementId))];
+  const menuItemIds = [...new Set(lines.map((line) => line.menuItemId))];
+
+  const movements = await db.table('stock_movements').whereIn('pos_order_settlement_id', settlementIds).where({ type: 'sold' }).select('pos_order_settlement_id', 'stock_item_id');
+  const movedBySettlement = new Map();
+  for (const row of movements) {
+    const key = String(row.pos_order_settlement_id);
+    if (!movedBySettlement.has(key)) movedBySettlement.set(key, new Set());
+    movedBySettlement.get(key).add(String(row.stock_item_id));
+  }
+
+  const components = await db.table('pos_menu_item_components').whereIn('menu_item_id', menuItemIds).select('menu_item_id', 'stock_item_id');
+  const recipeByMenuItem = new Map();
+  for (const component of components) {
+    const key = String(component.menu_item_id);
+    if (!recipeByMenuItem.has(key)) recipeByMenuItem.set(key, new Set());
+    recipeByMenuItem.get(key).add(String(component.stock_item_id));
+  }
+  const menuItems = await db.table('pos_menu_items').whereIn('id', menuItemIds).select('id', 'cost_price');
+  const costPriceByMenuItem = new Map(menuItems.map((row) => [String(row.id), row.cost_price]));
+
+  const linesBySettlement = new Map();
+  for (const line of lines) {
+    const key = String(line.settlementId);
+    if (!linesBySettlement.has(key)) linesBySettlement.set(key, []);
+    linesBySettlement.get(key).push(line);
+  }
+
+  const byItem = new Map();
+  const withoutCost = new Set();
+  for (const [settlementKey, settlementLines] of linesBySettlement) {
+    const moved = movedBySettlement.get(settlementKey) ?? new Set();
+    const explained = new Set();
+    for (const line of settlementLines) for (const id of recipeByMenuItem.get(String(line.menuItemId)) ?? []) explained.add(id);
+    const hasUnexplainedMovement = [...moved].some((id) => !explained.has(id));
+
+    for (const line of settlementLines) {
+      const itemKey = String(line.menuItemId);
+      const recipe = recipeByMenuItem.get(itemKey);
+      if (recipe && [...recipe].some((id) => moved.has(id))) continue; // the stock ledger already carries this sale's cost
+      if (!recipe && hasUnexplainedMovement) {
+        withoutCost.add(itemKey); // possibly a since-removed recipe: do not guess
+        continue;
+      }
+      const costPrice = costPriceByMenuItem.get(itemKey);
+      if (costPrice == null) {
+        withoutCost.add(itemKey);
+        continue;
+      }
+      if (!byItem.has(itemKey)) byItem.set(itemKey, { menuItemId: line.menuItemId, name: line.name, unitCost: costPrice, quantity: 0 });
+      byItem.get(itemKey).quantity += line.quantity;
+    }
+  }
+
+  const rows = [...byItem.values()].map((row) => ({ ...row, cost: multiplyMoneyByCount(row.unitCost, row.quantity) }));
+  return { totalCost: sumMoney(rows.map((row) => row.cost)), byItem: rows, itemsWithoutCost: withoutCost.size };
+}
+
+module.exports = { computeCostPriceFallback, computeCostOfSales, computeStockVariance, computeCostOfSalesMargin, computeStockOverview };

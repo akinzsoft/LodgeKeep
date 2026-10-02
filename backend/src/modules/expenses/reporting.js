@@ -28,23 +28,16 @@
  * codebase tracks no per-room cost) — Cost of Sales applies to POS revenue
  * only, the same real scope `stock/reporting.js`'s own report already has.
  *
- * Gap closure, user-reported: Cost of Sales here (`computeCostOfSales`)
- * only ever reflects a real `stock_movements` row, which only exists for a
- * menu item with a real recipe (`pos_menu_item_components`) linking it to
- * depleted stock. `cost_price` — the per-item fallback the separate,
- * more granular margin report (`computeCostOfSalesMargin`) already
- * accepts — never generates a stock movement and so never flows into
- * THIS ledger-based figure either. A menu item sold with no recipe,
- * priced or not, therefore contributes zero to Cost of Sales while its
- * revenue counts in full, silently overstating Gross Profit with no
- * signal anywhere that it happened. `itemsSoldWithoutRecipeCost` is that
- * honest count — every menu item sold in range whose `costSource` (per
- * `computeCostOfSalesMargin`) isn't `'recipe'` — surfaced on the
- * statement, the CSV export, and the frontend rather than hidden, so a
- * reader knows exactly when Gross Profit here is an overstatement, even
- * though this pass doesn't attempt to say by how much.
+ * Cost of Sales = real stock-ledger cost (`computeCostOfSales`, which only
+ * exists for menu items with a recipe) PLUS, for sale lines the ledger did
+ * not cover, quantity x the item's `cost_price` (`computeCostPriceFallback`,
+ * decided per sale from the movements actually written, so the two never
+ * count the same sale). `costOfSalesFromCostPrice` is that second part,
+ * shown on its own because it is an estimate at the item's CURRENT
+ * cost price, not ledger-backed. `itemsSoldWithoutCost` counts items sold
+ * with no cost anywhere (no ledger movement, no cost price, or an
+ * ambiguous case), whose cost is still missing from Cost of Sales.
  *
-
  * `unauditedDates` names the exact days in range with no Night Audit
  * snapshot, so the caveat can say which days instead of a bare "not fully
  * reconciled". Revenue computation is not affected by it.
@@ -70,7 +63,7 @@ const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
 const { computeRevenue } = require('../reporting/service');
 const { computeDailyPosRevenueTotals } = require('../pos/sales-report');
-const { computeCostOfSales, computeCostOfSalesMargin } = require('../stock/reporting');
+const { computeCostOfSales, computeCostPriceFallback } = require('../stock/reporting');
 
 /** Every non-voided expense in range, joined to its category name. */
 async function listExpenseRowsWithCategory({ db, dateFrom, dateTo, categoryId }) {
@@ -144,12 +137,12 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
   const db = scopedDb().for(context);
   const property = await db.table('properties').first('base_currency');
 
-  const [revenueDays, posRevenueByDate, costOfSales, expenseRows, costOfSalesMargin] = await Promise.all([
+  const [revenueDays, posRevenueByDate, ledgerCostOfSales, expenseRows, costPriceFallback] = await Promise.all([
     computeRevenue({ context, dateFrom, dateTo }),
     computeDailyPosRevenueTotals({ db, dateFrom, dateTo }),
     computeCostOfSales({ context, dateFrom, dateTo }),
     listExpenseRowsWithCategory({ db, dateFrom, dateTo }),
-    computeCostOfSalesMargin({ context, dateFrom, dateTo }),
+    computeCostPriceFallback({ context, dateFrom, dateTo }),
   ]);
 
   const roomRevenue = sumMoney(revenueDays.map((day) => day.roomRevenue));
@@ -158,11 +151,11 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
   const unauditedDates = revenueDays.filter((day) => !day.audited).map((day) => day.date);
   const roomRevenueFullyAudited = revenueDays.length > 0 && unauditedDates.length === 0;
 
-  const grossProfit = sumMoney([totalRevenue, negateMoney(costOfSales.totalCost)]);
-
-  // See file header — a menu item sold with no recipe never contributes
-  // to `costOfSales.totalCost` above, whether or not it has a `cost_price`.
-  const itemsSoldWithoutRecipeCost = costOfSalesMargin.byMenuItem.filter((row) => row.costSource !== 'recipe').length;
+  // Ledger cost (real stock movements) plus, for sale lines the ledger did
+  // not cover, quantity x cost_price — see `computeCostPriceFallback` for the
+  // per-sale guard that keeps the two from ever counting the same sale.
+  const costOfSalesTotal = sumMoney([ledgerCostOfSales.totalCost, costPriceFallback.totalCost]);
+  const grossProfit = sumMoney([totalRevenue, negateMoney(costOfSalesTotal)]);
 
   const expensesByCategoryMap = new Map();
   for (const row of expenseRows) {
@@ -182,8 +175,9 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
     dateTo,
     currency: property?.base_currency ?? null,
     revenue: { roomRevenue, posRevenue, totalRevenue, roomRevenueFullyAudited, unauditedDates },
-    costOfSales: costOfSales.totalCost,
-    itemsSoldWithoutRecipeCost,
+    costOfSales: costOfSalesTotal,
+    costOfSalesFromCostPrice: costPriceFallback.totalCost,
+    itemsSoldWithoutCost: costPriceFallback.itemsWithoutCost,
     grossProfit,
     operatingExpenses: { byCategory: operatingExpensesByCategory, total: totalOperatingExpenses },
     netProfit,

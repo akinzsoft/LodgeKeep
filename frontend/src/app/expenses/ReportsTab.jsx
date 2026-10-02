@@ -53,9 +53,9 @@ function describeDates(dates) {
  * computed regardless of whether Night Audit has closed every day in
  * range (see the backend's own `expenses/reporting.js` header).
  *
- * Gap closure, user-reported: a warning banner (`itemsSoldWithoutRecipeCost`)
- * shows above that caveat whenever a menu item sold in range has no recipe
- * configured — its cost never reaches the Cost of sales line above, so
+ * Gap closure, user-reported: a warning banner (`itemsSoldWithoutCost`)
+ * shows above that caveat whenever a menu item sold in range has no cost
+ * anywhere (no stock deduction, no cost price) — its cost never reaches the Cost of sales line above, so
  * Gross profit is a genuine overstatement in that case, not merely an
  * approximation. Deliberately visible on print (the exported statement),
  * not `.noPrint` — an owner reading the printed P&L needs the same warning
@@ -177,6 +177,14 @@ export function ReportsTab({ activeProperty }) {
                   <Money amount={statement.costOfSales} currencyCode={currency} />
                 </td>
               </tr>
+              {statement.costOfSalesFromCostPrice !== undefined && statement.costOfSalesFromCostPrice !== '0.00' && (
+                <tr className={formStyles.statementRow}>
+                  <td className={`${formStyles.statementLabel} ${formStyles.statementIndent}`}>of which from item cost price (estimate)</td>
+                  <td className={formStyles.statementAmount}>
+                    <Money amount={statement.costOfSalesFromCostPrice} currencyCode={currency} />
+                  </td>
+                </tr>
+              )}
               <tr className={formStyles.statementTotal}>
                 <td>Gross profit</td>
                 <td className={formStyles.statementAmount}>
@@ -219,10 +227,10 @@ export function ReportsTab({ activeProperty }) {
             </tbody>
           </table>
 
-          {statement.itemsSoldWithoutRecipeCost > 0 && (
+          {statement.itemsSoldWithoutCost > 0 && (
             <p className={formStyles.costWarningBanner} role="alert">
-              {statement.itemsSoldWithoutRecipeCost} menu item(s) sold in this range with no recipe configured — cost not tracked in Cost of sales above,
-              so Gross profit is overstated by an unknown amount. Add a recipe (or a cost price) for these items in POS Setup to fix this.
+              {statement.itemsSoldWithoutCost} menu item(s) sold in this range with no cost (no recipe deduction and no cost price) — their cost is not in
+              Cost of sales above, so Gross profit is overstated by an unknown amount. Add a recipe or a cost price for these items in POS Setup to fix this.
             </p>
           )}
 
