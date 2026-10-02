@@ -49,6 +49,10 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
   const [lifecycleSubmitting, setLifecycleSubmitting] = useState(false);
   const [lifecycleError, setLifecycleError] = useState(null);
 
+  const [extendDays, setExtendDays] = useState('7');
+  const [extendReason, setExtendReason] = useState('');
+  const [extendSubmitting, setExtendSubmitting] = useState(false);
+
   const [offboardReason, setOffboardReason] = useState('');
   const [offboardSubmitting, setOffboardSubmitting] = useState(false);
 
@@ -109,6 +113,21 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
       setLifecycleError(caught instanceof ApiError ? caught.message : 'Could not reactivate this tenant.');
     } finally {
       setLifecycleSubmitting(false);
+    }
+  }
+
+  async function handleExtendTrial(event) {
+    event.preventDefault();
+    setLifecycleError(null);
+    setExtendSubmitting(true);
+    try {
+      await platformApi.extendTrial(tenantId, extendDays, extendReason);
+      setExtendReason('');
+      await reload();
+    } catch (caught) {
+      setLifecycleError(caught instanceof ApiError ? caught.message : 'Could not extend this trial.');
+    } finally {
+      setExtendSubmitting(false);
     }
   }
 
@@ -232,6 +251,41 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
               </label>
               <Button type="submit" loading={lifecycleSubmitting}>
                 Reactivate tenant
+              </Button>
+            </form>
+          )}
+
+          {(tenant.status === 'trial' || tenant.status === 'suspended') && !tenant.subscription && (
+            <form className={styles.form} onSubmit={handleExtendTrial}>
+              <p className={styles.hint}>
+                Extend the trial by a set number of days. Counts from the current expiry, or from today if it has
+                lapsed. A suspended tenant comes back as a trial ending on the new date.
+              </p>
+              <label className={styles.field}>
+                <span className={styles.label}>Days to add (1–365)</span>
+                <input
+                  className={styles.input}
+                  type="number"
+                  min="1"
+                  max="365"
+                  step="1"
+                  value={extendDays}
+                  onChange={(event) => setExtendDays(event.target.value)}
+                  required
+                />
+              </label>
+              <label className={styles.field}>
+                <span className={styles.label}>Reason (required, recorded on the audit trail)</span>
+                <input
+                  className={styles.input}
+                  value={extendReason}
+                  onChange={(event) => setExtendReason(event.target.value)}
+                  required
+                  placeholder="e.g. Customer needs more time to evaluate"
+                />
+              </label>
+              <Button type="submit" loading={extendSubmitting}>
+                Extend trial
               </Button>
             </form>
           )}

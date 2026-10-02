@@ -280,6 +280,61 @@ describe('Tenant lifecycle + platform-staff tiering (PLAN.md Phase 5)', () => {
     });
   });
 
+  describe('extend-trial', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const extend = (tenantId, body, user = ctx.platformAdmin) =>
+      t.request.post(`/api/v1/platform/tenants/${tenantId}/extend-trial`).set('Authorization', `Bearer ${platformToken(user)}`).send(body);
+    const readTenant = (id) => t.trx('tenants').where({ id }).first();
+
+    it('a support-tier account is refused', async () => {
+      const res = await extend(ctx.b.id, { days: 7, reason: 'x' }, ctx.platformSupport);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN_PLATFORM_ROLE');
+    });
+
+    it('adds days to a trial that still has time left, and audits it', async () => {
+      const current = new Date(Date.now() + 3 * DAY);
+      await t.trx('tenants').where({ id: ctx.b.id }).update({ status: 'trial', trial_ends_at: current });
+      const res = await extend(ctx.b.id, { days: 7, reason: 'Needs longer to evaluate' });
+      expect(res.status).toBe(200);
+      const row = await readTenant(ctx.b.id);
+      expect(row.status).toBe('trial');
+      expect(Math.abs(new Date(row.trial_ends_at).getTime() - (current.getTime() + 7 * DAY))).toBeLessThan(2000);
+      const audit = await t.trx('audit_log').where({ tenant_id: ctx.b.id, action: 'extend_trial' }).first();
+      expect(audit.reason).toBe('Needs longer to evaluate');
+    });
+
+    it('counts from today for a lapsed trial and brings a suspended tenant back as trial', async () => {
+      await t.trx('tenants').where({ id: ctx.b.id }).update({ status: 'suspended', trial_ends_at: new Date(Date.now() - 30 * DAY) });
+      const res = await extend(ctx.b.id, { days: 14, reason: 'Lapsed, customer asked' });
+      expect(res.status).toBe(200);
+      const row = await readTenant(ctx.b.id);
+      expect(row.status).toBe('trial');
+      expect(Math.abs(new Date(row.trial_ends_at).getTime() - (Date.now() + 14 * DAY))).toBeLessThan(5000);
+    });
+
+    it('refuses bad days, a missing reason, and an active tenant', async () => {
+      await t.trx('tenants').where({ id: ctx.b.id }).update({ status: 'trial', trial_ends_at: new Date(Date.now() + DAY) });
+      for (const days of [0, -1, 1.5, 'abc', 366]) {
+        const res = await extend(ctx.b.id, { days, reason: 'x' });
+        expect(res.status).toBe(400);
+      }
+      expect((await extend(ctx.b.id, { days: 5 })).status).toBe(400);
+      await resetTenantStatus(ctx.b.id, 'active');
+      const res = await extend(ctx.b.id, { days: 5, reason: 'x' });
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('VALIDATION_INVALID_TENANT_TRANSITION');
+    });
+
+    it('refuses a tenant that has a subscription, changing nothing', async () => {
+      await t.trx('tenants').where({ id: ctx.a.id }).update({ status: 'suspended' });
+      const res = await extend(ctx.a.id, { days: 5, reason: 'x' });
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('BUSINESS_RULE_TENANT_HAS_SUBSCRIPTION');
+      expect((await readTenant(ctx.a.id)).status).toBe('suspended');
+    });
+  });
+
   describe('offboard (PLAN.md Phase 5 — tenant offboarding, platform-initiated)', () => {
     it('an active tenant can be platform-offboarded, sets the retention date, and creates an export attempt', async () => {
       const res = await t.request

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   suspendTenant: vi.fn(),
   reactivateTenant: vi.fn(),
   offboardTenant: vi.fn(),
+  extendTrial: vi.fn(),
   configureApiClient: vi.fn(),
 }));
 
@@ -213,5 +214,40 @@ describe('<TenantDetailScreen>', () => {
     for (const name of ['Suspend tenant', 'Reactivate tenant', 'Offboard tenant', 'Start impersonation']) {
       expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
     }
+  });
+
+  describe('extend trial', () => {
+    it('sends the days and reason, then reloads', async () => {
+      mocks.getTenant.mockResolvedValue({ ...TENANT, status: 'suspended' });
+      mocks.extendTrial.mockResolvedValue({ status: 'trial' });
+      renderScreen();
+      await screen.findByRole('heading', { name: 'Acme Hotels' });
+      const days = await screen.findByLabelText(/Days to add/);
+      await userEvent.clear(days);
+      await userEvent.type(days, '10');
+      const reasons = screen.getAllByLabelText(/Reason \(required, recorded on the audit trail\)/);
+      await userEvent.type(reasons[0], 'Asked for more time');
+      await userEvent.click(screen.getByRole('button', { name: 'Extend trial' }));
+      expect(mocks.extendTrial).toHaveBeenCalledWith('1', '10', 'Asked for more time');
+      expect(mocks.getTenant).toHaveBeenCalledTimes(2);
+    });
+
+    it('is not offered for an active tenant or one with a subscription', async () => {
+      renderScreen();
+      await screen.findByRole('heading', { name: 'Acme Hotels' });
+      expect(screen.queryByRole('button', { name: 'Extend trial' })).not.toBeInTheDocument();
+    });
+
+    it('shows a server refusal', async () => {
+      mocks.getTenant.mockResolvedValue({ ...TENANT, status: 'trial' });
+      mocks.extendTrial.mockRejectedValue(new ApiError({ code: 'BUSINESS_RULE_TENANT_HAS_SUBSCRIPTION', message: 'Billing controls this tenant.', status: 422 }));
+      renderScreen();
+      await screen.findByRole('button', { name: 'Extend trial' });
+      // A trial tenant also shows the Suspend form's identically-labelled field; extend's is the later one.
+      const reasons = screen.getAllByLabelText(/Reason \(required, recorded on the audit trail\)/);
+      await userEvent.type(reasons[reasons.length - 1], 'x');
+      await userEvent.click(screen.getByRole('button', { name: 'Extend trial' }));
+      expect(await screen.findByText('Billing controls this tenant.')).toBeInTheDocument();
+    });
   });
 });
