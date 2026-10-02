@@ -1816,6 +1816,51 @@ const ENTITIES = [
   },
 
   {
+    // The fixture bar holds one DEACTIVATED account (history), so a second
+    // ACTIVE one is accepted, but a duplicate Paystack code is not.
+    table: 'pos_outlet_payment_subaccounts',
+    uniqueKeys: [['subaccount_code']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      platform_payment_integration_id: ctx.platformPaymentIntegrations.ngn,
+      subaccount_code: `ACCT_outlet_new_${t.slug}`,
+      bank_code: '057',
+      bank_name: 'Zenith Bank',
+      account_number_last4: '6666',
+      account_name: 'New Outlet Ltd',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      platform_payment_integration_id: ctx.platformPaymentIntegrations.ngn,
+      subaccount_code: `ACCT_outlet_old_${t.slug}`,
+      bank_code: '057',
+      bank_name: 'Zenith Bank',
+      account_number_last4: '7777',
+      account_name: 'Duplicate Outlet Ltd',
+    }),
+    crossTenant: [
+      {
+        name: "creates a payout account against another tenant's outlet",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.posOutlets[0].id,
+          platform_payment_integration_id: ctx.platformPaymentIntegrations.ngn,
+          subaccount_code: `ACCT_outlet_cross_${own.slug}`,
+          bank_code: '057',
+          bank_name: 'Zenith Bank',
+          account_number_last4: '8888',
+          account_name: 'Cross Ltd',
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'pos_outlet_terminal_accounts',
     uniqueKeys: [['outlet_id', 'account_number']],
     // The fixture bar records account 0123456789 only, so 2020202020 is free for a new row.

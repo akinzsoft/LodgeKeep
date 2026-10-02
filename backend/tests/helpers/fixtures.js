@@ -152,6 +152,7 @@ async function seedTwoTenants(trx) {
     posMenuCategories: [],
     posOutletCategories: [],
     posOutletTerminalAccounts: [],
+    posOutletPaymentSubaccounts: [],
     posOutletMenuItems: [],
     stockLevels: [],
     posOrders: [],
@@ -875,6 +876,23 @@ async function seedTwoTenants(trx) {
         provider: 'gtbank',
         account_number: '0123456789',
         account_label: 'Fixture GTB',
+      }),
+      property_id: property.id,
+    });
+    // A DEACTIVATED outlet payout account (history): it must not route any
+    // payment, so existing Paystack tests keep settling to the property account.
+    t.posOutletPaymentSubaccounts.push({
+      id: await insertReturningId(trx, 'pos_outlet_payment_subaccounts', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: t.posOutlets[0].id,
+        platform_payment_integration_id: platformPaymentIntegrations.ngn,
+        subaccount_code: `ACCT_outlet_old_${t.slug}`,
+        bank_code: '057',
+        bank_name: 'Zenith Bank',
+        account_number_last4: '5555',
+        account_name: 'Fixture Outlet Old',
+        is_active: false,
       }),
       property_id: property.id,
     });

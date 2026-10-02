@@ -119,6 +119,27 @@ export function removeOutletTerminalAccount(outletId, accountId) {
   return request(`/pos/outlets/${outletId}/terminal-accounts/${accountId}`, { method: 'DELETE' });
 }
 
+/**
+ * Where an outlet's ONLINE card payments settle (admin, `setup.manage`; reading needs `setup.view`).
+ * `account` is the outlet's own Paystack payout account or null; `settles_to` says where payments
+ * actually go now: `{source: 'outlet' | 'property' | null, bank_name, account_number_last4, account_name}`.
+ */
+export function getOutletPayoutAccount(outletId) {
+  return request(`/pos/outlets/${outletId}/payout-account`);
+}
+
+export function resolveOutletPayoutBankAccount(outletId, { bankCode, accountNumber }) {
+  return request(`/pos/outlets/${outletId}/payout-account/resolve-bank-account`, { method: 'POST', body: { bank_code: bankCode, account_number: accountNumber } });
+}
+
+export function setOutletPayoutAccount(outletId, { bankCode, bankName, accountNumber }) {
+  return request(`/pos/outlets/${outletId}/payout-account`, { method: 'PUT', body: { bank_code: bankCode, bank_name: bankName, account_number: accountNumber } });
+}
+
+export function clearOutletPayoutAccount(outletId) {
+  return request(`/pos/outlets/${outletId}/payout-account`, { method: 'DELETE' });
+}
+
 /** What the Register offers an operator: `{id, name, provider, last4}` only — never the full number. */
 export function listOutletTerminalAccountOptions(outletId) {
   return request(`/pos/outlets/${outletId}/terminal-account-options`);

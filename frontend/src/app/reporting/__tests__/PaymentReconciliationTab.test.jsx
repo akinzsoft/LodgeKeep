@@ -176,6 +176,25 @@ describe('<PaymentReconciliationTab>', () => {
     consoleError.mockRestore();
   });
 
+  it('shows online payments by settlement account: an outlet account, the property account, and none recorded', async () => {
+    mocks.getPaymentReconciliation.mockResolvedValue({
+      ...REPORT,
+      bySettlementAccount: [
+        { currency: 'NGN', source: 'outlet', outlet: 'Pool Bar', bankName: 'Zenith Bank', accountLast4: '4321', subaccountCode: 'ACCT_a', count: 2, grossTotal: '46.00', feeTotal: '1.15', netTotal: '44.85' },
+        { currency: 'NGN', source: 'property', outlet: null, bankName: 'GTBank', accountLast4: '1784', subaccountCode: 'ACCT_b', count: 1, grossTotal: '10.00', feeTotal: '0.25', netTotal: '9.75' },
+        { currency: 'NGN', source: null, outlet: null, bankName: null, accountLast4: null, subaccountCode: null, count: 1, grossTotal: '5.00', feeTotal: '0.00', netTotal: '5.00' },
+      ],
+    });
+    render(<PaymentReconciliationTab />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+
+    expect(await screen.findByText('Online payments — by settlement account')).toBeInTheDocument();
+    expect(screen.getByText('Pool Bar account')).toBeInTheDocument();
+    expect(screen.getByText('Zenith Bank ····4321')).toBeInTheDocument();
+    expect(screen.getByText('Property account')).toBeInTheDocument();
+    expect(screen.getByText('No account recorded')).toBeInTheDocument();
+  });
+
   it('shows no provider table when no terminal sale was taken', async () => {
     render(<PaymentReconciliationTab />);
     await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
