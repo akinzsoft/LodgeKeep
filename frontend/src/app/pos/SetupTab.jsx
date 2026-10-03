@@ -38,7 +38,7 @@ import { STORE_OUTLET_TYPE, isStoreOutlet, canReceiveAt, receivingOutlets } from
  * own sibling `create*` form's fields — `status` stays reachable only
  * through Archive, matching `RoomTypesTab.jsx`'s own precedent.
  */
-const OUTLET_TYPE_LABELS = { bar: 'Bar', restaurant: 'Restaurant', room_service: 'Room service', spa: 'Spa', poolside: 'Poolside', [STORE_OUTLET_TYPE]: 'Store' };
+const OUTLET_TYPE_LABELS = { bar: 'Bar', restaurant: 'Restaurant', room_service: 'Room service', spa: 'Spa', poolside: 'Poolside', supermarket: 'Supermarket', [STORE_OUTLET_TYPE]: 'Store' };
 const STORE_HINT = 'A store holds and issues stock. It never appears in the Register and takes no orders, terminals or QR codes.';
 
 /**
@@ -256,6 +256,7 @@ export function SetupTab({ activeProperty, isOffline = false, canManageAccounts 
                 <option value="room_service">Room service</option>
                 <option value="spa">Spa</option>
                 <option value="poolside">Poolside</option>
+                <option value="supermarket">Supermarket</option>
                 <option value={STORE_OUTLET_TYPE}>Store (stock only)</option>
               </select>
               {outletForm.type === STORE_OUTLET_TYPE && <span className={formStyles.hint}>{STORE_HINT}</span>}
@@ -320,6 +321,7 @@ export function SetupTab({ activeProperty, isOffline = false, canManageAccounts 
                 <option value="room_service">Room service</option>
                 <option value="spa">Spa</option>
                 <option value="poolside">Poolside</option>
+                <option value="supermarket">Supermarket</option>
                 <option value={STORE_OUTLET_TYPE}>Store (stock only)</option>
               </select>
               {outletEditForm.type === STORE_OUTLET_TYPE && <span className={formStyles.hint}>{STORE_HINT}</span>}
