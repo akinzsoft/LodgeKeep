@@ -161,6 +161,45 @@ describe('<StockTakesTab>', () => {
     expect(screen.getByLabelText('Counted quantity for Vodka')).toBeInTheDocument();
   });
 
+  it('at a non-store outlet with a store room, says a count cannot raise stock, and shows the server refusal naming the lines', async () => {
+    mocks.listOutlets.mockResolvedValue([OUTLET, { id: '2', name: 'Main Store', type: 'store' }]);
+    mocks.listStockTakes.mockResolvedValue([openTakeRow()]);
+    mocks.getStockTake.mockResolvedValue({ stockTake: openTakeRow(), lines: [] });
+    const message = 'A stock take at "Main Bar" cannot raise stock: Vodka (counted 12 ml, system holds 10 ml).';
+    mocks.completeStockTake.mockRejectedValue(new ApiError({ code: 'BUSINESS_RULE_STOCK_TAKE_CANNOT_RAISE_STOCK', message }));
+    render(<StockTakesTab />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'View' }));
+    await screen.findByText('Vodka');
+    expect(screen.getByText(/can confirm or lower this outlet's stock, but not raise it/)).toBeInTheDocument();
+    expect(screen.getByText(/Main Store/, { selector: 'p' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Complete stock take' }));
+    await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Complete' }));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    // The take stays open for a recount.
+    expect(screen.getByLabelText('Counted quantity for Vodka')).toBeInTheDocument();
+  });
+
+  it('does not show the no-raise hint at the store itself, or when the property has no store room', async () => {
+    mocks.listStockTakes.mockResolvedValue([openTakeRow({ outlet_id: '2' })]);
+    mocks.listOutlets.mockResolvedValue([OUTLET, { id: '2', name: 'Main Store', type: 'store' }]);
+    mocks.getStockTake.mockResolvedValue({ stockTake: openTakeRow({ outlet_id: '2' }), lines: [] });
+    const first = render(<StockTakesTab />);
+    await userEvent.click(await screen.findByRole('button', { name: 'View' }));
+    await screen.findByText('Vodka');
+    expect(screen.queryByText(/but not raise it/)).not.toBeInTheDocument();
+    first.unmount();
+
+    mocks.listOutlets.mockResolvedValue([OUTLET]);
+    mocks.listStockTakes.mockResolvedValue([openTakeRow()]);
+    mocks.getStockTake.mockResolvedValue({ stockTake: openTakeRow(), lines: [] });
+    render(<StockTakesTab />);
+    await userEvent.click(await screen.findByRole('button', { name: 'View' }));
+    await screen.findByText('Vodka');
+    expect(screen.queryByText(/but not raise it/)).not.toBeInTheDocument();
+  });
+
   it('disables opening, counting, completing, and cancelling while offline', async () => {
     mocks.listStockTakes.mockResolvedValue([openTakeRow()]);
     mocks.getStockTake.mockResolvedValue({ stockTake: openTakeRow(), lines: [] });

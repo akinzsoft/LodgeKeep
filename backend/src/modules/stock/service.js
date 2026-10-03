@@ -117,6 +117,7 @@ const {
   InsufficientStockOverrideRequiredError,
   InsufficientStockForTransferError,
   ReceiveAtStoreOnlyError,
+  StockTakeCannotRaiseStockError,
   SameOutletTransferError,
   StockTransferRequestNotFoundError,
   StockTransferRequestNotPendingError,
@@ -1567,7 +1568,9 @@ async function recordStockTakeCount({ context, stockTakeId, stockItemId, counted
  * then every counted item (shared lock-ordering helper), reads the take
  * outlet's live quantity of each under that same lock as the
  * `theoretical_quantity`, and posts a `count_adjustment` movement at that
- * outlet for any nonzero variance.
+ * outlet for any nonzero variance. At a non-store outlet in a property that
+ * has a store room, a count that would RAISE stock is refused (all lines are
+ * checked first; nothing is written) — see `StockTakeCannotRaiseStockError`.
  */
 async function completeStockTake({ trx, stockTakeId, userId }) {
   const stockTake = await trx.table('stock_takes').where({ id: stockTakeId }).forUpdate().first();
@@ -1584,14 +1587,44 @@ async function completeStockTake({ trx, stockTakeId, userId }) {
   const property = await trx.table('properties').first('current_business_date');
   const businessDate = property?.current_business_date ?? null;
 
-  const changedStockItemIds = [];
+  // Pass 1, under the locks and before anything is written: the expected
+  // quantity of every line, so a refusal names every offending line and
+  // leaves the take open and the stock untouched.
+  const counted = [];
   for (const line of lines) {
     const stockItemId = Number(line.stock_item_id);
     const stockItem = lockedById.get(String(stockItemId));
     const level = await lockedLevel(trx, outletId, stockItemId);
     const theoreticalQuantity = level?.current_quantity ?? ZERO_QTY;
     const variance = sumQuantity([line.counted_quantity, negateQuantity(theoreticalQuantity)]);
+    counted.push({ line, stockItemId, stockItem, theoreticalQuantity, variance });
+  }
 
+  // Once a property has a store room, an outlet's stock only goes UP by a
+  // request or transfer from the store, never by a count. A count that
+  // matches or lowers stock is fine everywhere.
+  const outlet = await trx.table('pos_outlets').where({ id: outletId }).first();
+  if (outlet && outlet.type !== STORE_OUTLET_TYPE) {
+    const stores = await trx.table('pos_outlets').where({ type: STORE_OUTLET_TYPE, status: 'active' }).orderBy('name');
+    const raising = counted.filter((row) => compareQuantity(row.variance, ZERO_QTY) > 0);
+    if (stores.length > 0 && raising.length > 0) {
+      throw new StockTakeCannotRaiseStockError({
+        outletId: outlet.id,
+        outletName: outlet.name,
+        storeNames: stores.map((store) => store.name),
+        lines: raising.map((row) => ({
+          stockItemId: row.stockItemId,
+          name: row.stockItem.name,
+          unit: row.stockItem.unit,
+          counted: row.line.counted_quantity,
+          onHand: row.theoreticalQuantity,
+        })),
+      });
+    }
+  }
+
+  const changedStockItemIds = [];
+  for (const { line, stockItemId, stockItem, theoreticalQuantity, variance } of counted) {
     await trx.table('stock_take_lines').where({ id: line.id }).update({ theoretical_quantity: theoreticalQuantity, variance });
 
     if (compareQuantity(variance, ZERO_QTY) !== 0) {
