@@ -75,6 +75,25 @@ describe('<SetupTab>', () => {
     expect(mocks.createOutlet).toHaveBeenCalledWith(expect.objectContaining({ code: 'REST', name: 'Restaurant' }));
   });
 
+  it('offers Supermarket as an outlet type, on both the add and the edit form', async () => {
+    mocks.createOutlet.mockResolvedValue({ id: '2', code: 'MART', name: 'Mini Mart', type: 'supermarket' });
+    mocks.updateOutlet.mockResolvedValue({ ...OUTLET, type: 'supermarket' });
+    await renderOutlets();
+    expect(await screen.findByText('Main Bar')).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText('Code'), 'MART');
+    await userEvent.type(screen.getByLabelText('Name'), 'Mini Mart');
+    await userEvent.selectOptions(screen.getByLabelText('Type'), 'Supermarket');
+    await userEvent.click(screen.getByRole('button', { name: 'Add outlet' }));
+    expect(mocks.createOutlet).toHaveBeenCalledWith(expect.objectContaining({ code: 'MART', type: 'supermarket' }));
+
+    await userEvent.click(within((await screen.findByText('Main Bar')).closest('tr')).getByRole('button', { name: 'Edit' }));
+    const editCard = (await screen.findByRole('heading', { name: 'Edit outlet' })).closest('section');
+    await userEvent.selectOptions(within(editCard).getByLabelText('Type'), 'Supermarket');
+    await userEvent.click(within(editCard).getByRole('button', { name: 'Save changes' }));
+    expect(mocks.updateOutlet).toHaveBeenCalledWith('1', { code: 'BAR', name: 'Main Bar', type: 'supermarket' });
+  });
+
   it('selecting an outlet loads its terminals, and creating a terminal calls the API', async () => {
     mocks.createTerminal.mockResolvedValue({ id: '9' });
     await renderOutlets();
