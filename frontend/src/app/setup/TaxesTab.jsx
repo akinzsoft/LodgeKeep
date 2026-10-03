@@ -27,6 +27,7 @@ export function TaxesTab({ disabled, isOffline = false }) {
     effective_from: '',
     is_inclusive: false,
     calculation_method: 'percentage',
+    applies_to: 'all',
   });
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -67,9 +68,10 @@ export function TaxesTab({ disabled, isOffline = false }) {
         effective_from: form.effective_from,
         is_inclusive: form.is_inclusive,
         calculation_method: form.calculation_method,
+        applies_to: form.applies_to,
         reason,
       });
-      setForm({ tax_code: '', name: '', rate: '', effective_from: '', is_inclusive: false, calculation_method: 'percentage' });
+      setForm({ tax_code: '', name: '', rate: '', effective_from: '', is_inclusive: false, calculation_method: 'percentage', applies_to: 'all' });
       setConfirming(false);
       await reload();
     } catch (caught) {
@@ -90,6 +92,7 @@ export function TaxesTab({ disabled, isOffline = false }) {
           { key: 'tax_code', label: 'Code' },
           { key: 'name', label: 'Name' },
           { key: 'rate', label: 'Rate', align: 'right', render: (row) => `${row.rate}${row.calculation_method === 'percentage' ? '%' : ''}` },
+          { key: 'applies_to', label: 'Applies to', render: (row) => (row.applies_to === 'supermarket_sale' ? 'Supermarket sales' : row.applies_to === 'all' ? 'All hotel charges' : row.applies_to) },
           { key: 'effective_from', label: 'Effective from' },
           { key: 'effective_to', label: 'Effective to', render: (row) => row.effective_to ?? '—' },
           {
@@ -170,6 +173,16 @@ export function TaxesTab({ disabled, isOffline = false }) {
                 <option value="flat_amount">Flat amount</option>
               </select>
             </label>
+            <div className={formStyles.field}>
+              <label htmlFor="tax-applies-to" className={formStyles.label}>
+                Applies to
+              </label>
+              <select id="tax-applies-to" className={formStyles.select} value={form.applies_to} onChange={(event) => setForm({ ...form, applies_to: event.target.value })}>
+                <option value="all">All hotel charges</option>
+                <option value="supermarket_sale">Supermarket sales only</option>
+              </select>
+              <span className={formStyles.hint}>Supermarket sales are taxed only by rows set to &quot;Supermarket sales only&quot;; an &quot;All hotel charges&quot; row never applies to them.</span>
+            </div>
           </div>
 
           <div className={formStyles.row}>

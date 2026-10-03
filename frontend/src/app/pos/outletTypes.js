@@ -9,8 +9,15 @@
  */
 export const STORE_OUTLET_TYPE = 'store';
 
+export const SUPERMARKET_OUTLET_TYPE = 'supermarket';
+
 export function isStoreOutlet(outlet) {
   return outlet?.type === STORE_OUTLET_TYPE;
+}
+
+/** A supermarket takes its own opening stock: it is exempt from the receive-at-store and stock-take-no-raise rules. */
+export function isSupermarketOutlet(outlet) {
+  return outlet?.type === SUPERMARKET_OUTLET_TYPE;
 }
 
 /** Only the outlets that sell. */
@@ -27,7 +34,8 @@ export function pointOfSaleOutlets(outlets) {
  */
 export function receivingOutlets(outlets) {
   const stores = (outlets ?? []).filter(isStoreOutlet);
-  return stores.length > 0 ? stores : (outlets ?? []);
+  // A supermarket receives its own stock, so it stays on the list beside the store.
+  return stores.length > 0 ? [...stores, ...(outlets ?? []).filter(isSupermarketOutlet)] : (outlets ?? []);
 }
 
 export function canReceiveAt(outlets, outletId) {

@@ -13,8 +13,26 @@
 
 const STORE_OUTLET_TYPE = 'store';
 
+/**
+ * `supermarket` is the second type with behaviour: it is a retail outlet that
+ * takes its own opening stock (receive and stock-take are not routed through
+ * a store room) and taxes its sales under their own VAT row. Scoped to this
+ * one type: bars, restaurants and every other type are unchanged.
+ */
+const SUPERMARKET_OUTLET_TYPE = 'supermarket';
+const SUPERMARKET_TAX_CHARGE_TYPE = 'supermarket_sale';
+
+function isSupermarketOutlet(outlet) {
+  return Boolean(outlet) && outlet.type === SUPERMARKET_OUTLET_TYPE;
+}
+
+/** The charge type a sale at this outlet is taxed under (see cashiering/tax-engine.js). */
+function taxChargeTypeForOutlet(outlet) {
+  return isSupermarketOutlet(outlet) ? SUPERMARKET_TAX_CHARGE_TYPE : 'pos_charge';
+}
+
 function isPointOfSaleOutlet(outlet) {
   return Boolean(outlet) && outlet.type !== STORE_OUTLET_TYPE;
 }
 
-module.exports = { STORE_OUTLET_TYPE, isPointOfSaleOutlet };
+module.exports = { STORE_OUTLET_TYPE, SUPERMARKET_OUTLET_TYPE, SUPERMARKET_TAX_CHARGE_TYPE, isPointOfSaleOutlet, isSupermarketOutlet, taxChargeTypeForOutlet };

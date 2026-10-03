@@ -101,7 +101,7 @@ const { createCategoryCatalogue } = require('../../shared/category-catalogue');
 const { notifyStaff, roleReceivesEvent } = require('../notifications/staff-notifications');
 const { recordAuditEntry } = require('../../audit');
 const outletMenu = require('../../shared/outlet-menu');
-const { STORE_OUTLET_TYPE } = require('../../shared/outlet-types');
+const { STORE_OUTLET_TYPE, isSupermarketOutlet } = require('../../shared/outlet-types');
 const { outletScopeForUser, scopeCovers } = require('../../shared/outlet-assignments');
 const { sumQuantity, negateQuantity, multiplyQuantityByInteger, compareQuantity, extendedCost } = require('../../shared/quantity');
 const {
@@ -140,6 +140,7 @@ const ZERO_QTY = '0.000';
 // ---------------------------------------------------------------------
 const AUTOMATIC_OVERRIDE_REASON_GUEST_ACKNOWLEDGED = 'Guest acknowledged a low-stock warning before placing the order.';
 const AUTOMATIC_OVERRIDE_REASON_ROOM_CHARGE_OTP = 'Automatically approved — a verified room-charge confirmation cannot be blocked; flagged for review.';
+const AUTOMATIC_OVERRIDE_REASON_SUPERMARKET = 'Supermarket sale at zero or low recorded stock — allowed at the till; the low-stock alert is the control.';
 const AUTOMATIC_OVERRIDE_REASON_CARD_CAPTURE = 'Automatically approved — payment was already captured by the gateway before settlement could be blocked; flagged for review.';
 
 // ---------------------------------------------------------------------
@@ -836,7 +837,7 @@ async function upsertMenuItemComponents({ context, menuItemId, components }) {
  * directly at its outlets, exactly as before.
  */
 async function assertReceivableOutlet(db, outlet) {
-  if (outlet.type === STORE_OUTLET_TYPE) return;
+  if (outlet.type === STORE_OUTLET_TYPE || isSupermarketOutlet(outlet)) return;
   const stores = await db.table('pos_outlets').where({ type: STORE_OUTLET_TYPE, status: 'active' }).orderBy('name');
   if (stores.length === 0) return;
   throw new ReceiveAtStoreOnlyError({ outletId: outlet.id, outletName: outlet.name, storeNames: stores.map((store) => store.name) });
@@ -1604,7 +1605,7 @@ async function completeStockTake({ trx, stockTakeId, userId }) {
   // request or transfer from the store, never by a count. A count that
   // matches or lowers stock is fine everywhere.
   const outlet = await trx.table('pos_outlets').where({ id: outletId }).first();
-  if (outlet && outlet.type !== STORE_OUTLET_TYPE) {
+  if (outlet && outlet.type !== STORE_OUTLET_TYPE && !isSupermarketOutlet(outlet)) {
     const stores = await trx.table('pos_outlets').where({ type: STORE_OUTLET_TYPE, status: 'active' }).orderBy('name');
     const raising = counted.filter((row) => compareQuantity(row.variance, ZERO_QTY) > 0);
     if (stores.length > 0 && raising.length > 0) {
@@ -1718,6 +1719,7 @@ module.exports = {
   AUTOMATIC_OVERRIDE_REASON_GUEST_ACKNOWLEDGED,
   AUTOMATIC_OVERRIDE_REASON_ROOM_CHARGE_OTP,
   AUTOMATIC_OVERRIDE_REASON_CARD_CAPTURE,
+  AUTOMATIC_OVERRIDE_REASON_SUPERMARKET,
   deductStockForSettlement,
   reverseStockForSettlement,
   listStockItemCategories,

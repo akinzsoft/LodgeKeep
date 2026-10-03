@@ -34,6 +34,15 @@ const { percentOfMoney, sumMoney, negateMoney, inclusiveTaxPortion } = require('
 const { resolveEffectiveTax } = require('../setup/service');
 
 /**
+ * Charge types whose taxes must name them EXACTLY: a hotel `applies_to: 'all'`
+ * row never applies to these. Today only supermarket sales, which carry their
+ * own VAT row; letting a hotel 'all' row apply as well would tax a sale twice.
+ * Every other charge type keeps the original rule ('all' always matches), so
+ * no hotel charge is affected.
+ */
+const EXACT_MATCH_CHARGE_TYPES = new Set(['supermarket_sale']);
+
+/**
  * One resolved tax version per distinct `tax_code` at the property,
  * effective on `businessDate` and applicable to `chargeType`. `applies_to`
  * is free text (Phase 1's own deliberate choice, see the `taxes` migration's
@@ -56,7 +65,9 @@ function resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType }) 
   for (const versions of versionsByCode.values()) {
     const version = resolveEffectiveTax(versions, businessDate);
     if (!version) continue;
-    if (version.applies_to !== 'all' && version.applies_to !== chargeType) continue;
+    if (EXACT_MATCH_CHARGE_TYPES.has(chargeType)) {
+      if (version.applies_to !== chargeType) continue;
+    } else if (version.applies_to !== 'all' && version.applies_to !== chargeType) continue;
     resolved.push(version);
   }
   return resolved.sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
@@ -115,4 +126,4 @@ function computeChargeWithTax({ baseAmount, taxVersions }) {
   return { netAmount: netSoFar, grossAmount: grossSoFar, taxLines };
 }
 
-module.exports = { resolveApplicableTaxVersions, computeChargeWithTax };
+module.exports = { resolveApplicableTaxVersions, computeChargeWithTax, EXACT_MATCH_CHARGE_TYPES };

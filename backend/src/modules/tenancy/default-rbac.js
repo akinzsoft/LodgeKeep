@@ -69,6 +69,9 @@ const ALL_PERMISSION_KEYS = Object.freeze([
   'expenses.view',
   'expenses.manage',
   'reconciliation.view',
+  'supermarket.sales',
+  'supermarket.report',
+  'supermarket.manage',
 ]);
 
 /** Every catalogue key except `room_types.update`/`reports.view_chain` — `admin`'s own exact exclusions (SECURITY.md §5): the two places this matrix's Admin `✓` genuinely diverges from Super-admin's `✓` on a single action. */
@@ -96,6 +99,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'housekeeping.view', 'housekeeping.operate',
   ],
   pos_operator: [
+    'supermarket.sales',
     'pos.operate',
     'pos.stock_view',
     'pos.stock_request',
@@ -123,6 +127,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
     'door_access.view', 'door_access.manage',
     'expenses.view', 'expenses.manage',
     'reconciliation.view',
+    'supermarket.sales', 'supermarket.report', 'supermarket.manage',
   ],
   admin: ADMIN_PERMISSION_KEYS,
   super_admin: ALL_PERMISSION_KEYS,

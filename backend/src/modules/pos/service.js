@@ -105,7 +105,7 @@ const {
   StoreOutletNotAPointOfSaleError,
   StoreOutletConversionBlockedError,
 } = require('./errors');
-const { STORE_OUTLET_TYPE, isPointOfSaleOutlet } = require('../../shared/outlet-types');
+const { STORE_OUTLET_TYPE, isPointOfSaleOutlet, isSupermarketOutlet, taxChargeTypeForOutlet } = require('../../shared/outlet-types');
 
 // ---------------------------------------------------------------------
 // Outlets
@@ -1201,7 +1201,8 @@ async function previewSettlement({ context, orderId }) {
   const property = await db.table('properties').where({ id: order.property_id }).first('current_business_date', 'base_currency');
   const businessDate = property?.current_business_date;
   const allTaxRows = await db.table('taxes');
-  const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType: 'pos_charge' });
+  const saleOutlet = await db.table('pos_outlets').where({ id: order.outlet_id }).first('type');
+  const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType: taxChargeTypeForOutlet(saleOutlet) });
 
   const groupKeys = [...new Set(items.map((item) => groupKey(item.split_group)))];
   const groups = groupKeys.map((key) => {
@@ -1307,6 +1308,8 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
   const property = await trx.table('properties').where({ id: order.property_id }).first('current_business_date', 'base_currency');
   const businessDate = property?.current_business_date;
   const allTaxRows = await trx.table('taxes');
+  const saleOutlet = await trx.table('pos_outlets').where({ id: order.outlet_id }).first('type');
+  const saleTaxChargeType = taxChargeTypeForOutlet(saleOutlet);
 
   // Cash-up attribution: record which shift was open on this terminal when
   // the sale settled, so `closeShift` counts exactly these rows rather than
@@ -1415,7 +1418,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
         tender: 'room_charge',
       });
     } else {
-      const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType: 'pos_charge' });
+      const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType: saleTaxChargeType });
       const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
       const taxAmount = sumMoney(taxLines.map((t) => t.amount));
       Object.assign(fields, {
@@ -1485,7 +1488,8 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
   const settledOrder = await trx.table('pos_orders').where({ id: orderId }).first();
   // A guest QR order settling (room charge) raises its own, richer
   // `qr_ordering.guest_order_placed` alert instead — never both.
-  if (settledOrder.source !== 'guest') await notifyStaff({
+  // A supermarket rings a sale every few seconds; a bell alert per sale would drown the bell.
+  if (settledOrder.source !== 'guest' && !isSupermarketOutlet(saleOutlet)) await notifyStaff({
     trx,
     eventType: 'pos.order_settled',
     payload: {
@@ -1552,7 +1556,8 @@ async function prepareRegisterPayment({ trx, orderId, splitGroup, tender, idempo
   }
 
   const property = await trx.table('properties').where({ id: order.property_id }).first('current_business_date', 'base_currency');
-  const taxVersions = resolveApplicableTaxVersions({ allTaxRows: await trx.table('taxes'), businessDate: property?.current_business_date, chargeType: 'pos_charge' });
+  const saleOutlet = await trx.table('pos_outlets').where({ id: order.outlet_id }).first('type');
+  const taxVersions = resolveApplicableTaxVersions({ allTaxRows: await trx.table('taxes'), businessDate: property?.current_business_date, chargeType: taxChargeTypeForOutlet(saleOutlet) });
   const { netAmount, taxLines } = computeChargeWithTax({ baseAmount: sumMoney(groupItems.map(computeItemLineTotal)), taxVersions });
   const amount = sumMoney([netAmount, ...taxLines.map((t) => t.amount), percentOfMoney(netAmount, POS_SERVICE_CHARGE_PERCENT)]);
 

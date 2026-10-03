@@ -24,7 +24,8 @@
 const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, compareMoney, toCents, fromCents } = require('../../shared/money');
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
-const { isPointOfSaleOutlet } = require('../../shared/outlet-types');
+const { isPointOfSaleOutlet, SUPERMARKET_OUTLET_TYPE } = require('../../shared/outlet-types');
+const { allocateLineNetAndTax } = require('../../shared/line-allocation');
 
 const TENDERS = ['cash', 'card', 'nqr', 'terminal', 'room_charge'];
 const TOP_ITEMS_LIMIT = 20;
@@ -88,6 +89,7 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
       'pos_orders.source as source',
       'pos_orders.outlet_id as outlet_id',
       'pos_outlets.name as outlet_name',
+      'pos_outlets.type as outlet_type',
       'users.first_name as cashier_first_name',
       'users.last_name as cashier_last_name'
     )
@@ -319,6 +321,22 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
         'pos_menu_items.name as name'
       );
 
+  // Supermarket sales only: an item's own price is gross of an inclusive VAT row, while the
+  // settlement's subtotal is net of it. Scale each line to the settlement so the item rows add
+  // up to the summary (and profit is measured on the net). Hotel outlets keep their item
+  // amounts exactly as before.
+  const supermarketGroups = new Map();
+  for (const row of settlements) {
+    if (row.outlet_type === SUPERMARKET_OUTLET_TYPE) supermarketGroups.set(`${row.pos_order_id}|${groupKey(row.split_group)}`, { subtotal: row.subtotal, taxAmount: row.tax_amount, items: [] });
+  }
+  for (const item of items) supermarketGroups.get(`${item.pos_order_id}|${groupKey(item.split_group)}`)?.items.push(item);
+  for (const group of supermarketGroups.values()) {
+    const split = allocateLineNetAndTax({ lineTotals: group.items.map(computeItemLineTotal), subtotal: group.subtotal, taxAmount: group.taxAmount });
+    group.items.forEach((item, index) => {
+      item.netLineTotal = split[index].net;
+    });
+  }
+
   const itemTotals = new Map();
   for (const item of items) {
     const tab = tabs.get(String(item.pos_order_id));
@@ -328,7 +346,7 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
     if (!itemTotals.has(key)) itemTotals.set(key, { menuItemId: item.menu_item_id, name: item.name ?? `#${item.menu_item_id}`, quantity: 0, amounts: [], costs: [], costKnown: true });
     const entry = itemTotals.get(key);
     entry.quantity += item.quantity;
-    const lineTotal = computeItemLineTotal(item);
+    const lineTotal = item.netLineTotal ?? computeItemLineTotal(item);
     entry.amounts.push(lineTotal);
 
     if (withProfit) {

@@ -242,6 +242,11 @@ const TABLE_SCOPES = Object.freeze({
   pos_outlets: { scope: SCOPES.PROPERTY },
   pos_outlet_terminal_accounts: { scope: SCOPES.PROPERTY },
   pos_outlet_payment_subaccounts: { scope: SCOPES.PROPERTY },
+  // Supermarket quick-sale layer (20261119090000).
+  supermarket_barcodes: { scope: SCOPES.PROPERTY },
+  supermarket_receipt_sequences: { scope: SCOPES.PROPERTY },
+  supermarket_sales: { scope: SCOPES.PROPERTY },
+  supermarket_sale_lines: { scope: SCOPES.PROPERTY },
   pos_terminals: { scope: SCOPES.PROPERTY },
   pos_menu_items: { scope: SCOPES.PROPERTY },
   // Registered menu categories, one list per outlet (20261005090000, per outlet since 20261104090000).

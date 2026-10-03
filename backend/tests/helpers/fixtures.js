@@ -153,6 +153,10 @@ async function seedTwoTenants(trx) {
     posOutletCategories: [],
     posOutletTerminalAccounts: [],
     posOutletPaymentSubaccounts: [],
+    supermarketBarcodes: [],
+    supermarketReceiptSequences: [],
+    supermarketSales: [],
+    supermarketSaleLines: [],
     posOutletMenuItems: [],
     stockLevels: [],
     posOrders: [],
@@ -1234,6 +1238,76 @@ async function seedTwoTenants(trx) {
       pos_order_id: orderId,
     });
 
+    // Supermarket quick-sale layer: one barcode, the outlet's receipt counter,
+    // and one receipted sale (the fixture cash settlement) with a line.
+    t.supermarketBarcodes.push({
+      id: await insertReturningId(trx, 'supermarket_barcodes', {
+        tenant_id: t.id,
+        property_id: property.id,
+        menu_item_id: menuItem.id,
+        barcode: `FIXTURE-${t.slug}-1`,
+      }),
+      property_id: property.id,
+    });
+    t.supermarketReceiptSequences.push({
+      id: await insertReturningId(trx, 'supermarket_receipt_sequences', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: outlet.id,
+        next_number: 2,
+      }),
+      property_id: property.id,
+    });
+    const supermarketSaleId = await insertReturningId(trx, 'supermarket_sales', {
+      tenant_id: t.id,
+      property_id: property.id,
+      outlet_id: outlet.id,
+      pos_order_id: orderId,
+      settlement_id: t.posOrderSettlements[t.posOrderSettlements.length - 1].id,
+      receipt_number: 1,
+      sold_by_user_id: user.id,
+      method: 'cash',
+      subtotal: '20.00',
+      tax_amount: '0.00',
+      total: '20.00',
+      currency: 'NGN',
+    });
+    t.supermarketSales.push({ id: supermarketSaleId, property_id: property.id, outlet_id: outlet.id });
+    // An ARCHIVED spare outlet, tab and (long-past) settlement, never listed in posOutlets/posOrders, so
+    // the isolation suite can insert a valid NEW receipt counter and sale without touching a
+    // consumed one. Dated 2001 so no report window includes it.
+    const spareOutletId = await insertReturningId(trx, 'pos_outlets', { tenant_id: t.id, property_id: property.id, code: 'SPARE', name: 'Spare Supermarket', type: 'supermarket', status: 'archived' });
+    const spareOrderId = await insertReturningId(trx, 'pos_orders', { tenant_id: t.id, property_id: property.id, outlet_id: spareOutletId, opened_by_user_id: user.id, table_label: 'SPARE-SALE', status: 'settled' });
+    const spareSettlementId = await insertReturningId(trx, 'pos_order_settlements', {
+      tenant_id: t.id,
+      property_id: property.id,
+      pos_order_id: spareOrderId,
+      method: 'cash',
+      subtotal: '1.00',
+      currency: 'NGN',
+      settled_by_user_id: user.id,
+      settled_at: '2001-01-01 00:00:00',
+      business_date: '2001-01-01',
+    });
+    t.supermarketSpare = { outletId: spareOutletId, orderId: spareOrderId, settlementId: spareSettlementId };
+    t.supermarketSaleLines.push({
+      id: await insertReturningId(trx, 'supermarket_sale_lines', {
+        tenant_id: t.id,
+        property_id: property.id,
+        sale_id: supermarketSaleId,
+        line_no: 1,
+        menu_item_id: menuItem.id,
+        item_name: 'Fixture item',
+        quantity: 1,
+        unit_price: '20.00',
+        line_total: '20.00',
+        line_net: '20.00',
+        line_tax: '0.00',
+      }),
+      property_id: property.id,
+      sale_id: supermarketSaleId,
+    });
+
     t.posShifts.push({
       id: await insertReturningId(trx, 'pos_shifts', {
         tenant_id: t.id,
@@ -1968,6 +2042,9 @@ async function seedTwoTenants(trx) {
     ['door_access.manage', 'door_access'],
     ['expenses.view', 'expenses'],
     ['expenses.manage', 'expenses'],
+    ['supermarket.sales', 'supermarket'],
+    ['supermarket.report', 'supermarket'],
+    ['supermarket.manage', 'supermarket'],
     ['reconciliation.view', 'reconciliation'],
   ]) {
     const existing = await trx('permissions').where({ permission_key: key }).first('id');
@@ -2181,6 +2258,16 @@ async function seedTwoTenants(trx) {
     await trx('role_permissions').insert(
       ['pos_operator', 'manager', 'admin', 'super_admin'].map((role) => ({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions['pos.stock_request'] })),
     );
+  }
+
+  // Supermarket quick sale: `supermarket.sales` for pos_operator and the
+  // managing roles; `supermarket.report` and `.manage` for managing roles only.
+  for (const t of both) {
+    const grants = [
+      ['pos_operator', 'supermarket.sales'],
+      ...['manager', 'admin', 'super_admin'].flatMap((role) => ['supermarket.sales', 'supermarket.report', 'supermarket.manage'].map((key) => [role, key])),
+    ];
+    await trx('role_permissions').insert(grants.map(([role, key]) => ({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions[key] })));
   }
 
   // Door access monitoring (PLAN.md Phase 7) — both keys, manager/admin/

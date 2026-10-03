@@ -1,0 +1,120 @@
+.layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.scanRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-end;
+}
+
+.scanField {
+  flex: 1;
+  min-width: 14rem;
+}
+
+.results {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.resultButton {
+  width: 100%;
+  text-align: left;
+  min-height: var(--control-h-touch);
+}
+
+.cartTable,
+.receiptTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.cartTable th,
+.cartTable td,
+.receiptTable th,
+.receiptTable td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.qtyControls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.payRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  margin-top: var(--space-4);
+}
+
+.itemsTotal {
+  margin-left: auto;
+  font-size: var(--text-body-size);
+  font-weight: 600;
+}
+
+.receipt {
+  max-width: 24rem;
+  color: var(--text-primary);
+}
+
+.receiptTitle {
+  margin: 0;
+}
+
+.receiptMeta {
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+}
+
+.voidedNotice {
+  color: var(--state-danger);
+  font-weight: 700;
+}
+
+.totals {
+  margin: var(--space-3) 0 0;
+}
+
+.totals div {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--space-1) 0;
+}
+
+.totals dt,
+.totals dd {
+  margin: 0;
+}
+
+.grandTotal {
+  font-weight: 700;
+  border-top: 2px solid var(--text-primary);
+}
+
+.hint {
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+}
+
+.errorBanner {
+  color: var(--state-danger);
+}

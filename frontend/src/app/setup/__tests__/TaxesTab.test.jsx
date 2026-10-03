@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TaxesTab } from '../TaxesTab.jsx';
 
@@ -94,5 +94,26 @@ describe('<TaxesTab>', () => {
 
     expect(mocks.createTaxVersion).not.toHaveBeenCalled();
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('sends who a tax applies to: "all" by default, and supermarket sales only when chosen', async () => {
+    mocks.createTaxVersion.mockResolvedValue({});
+    const submit = async () => {
+      await userEvent.click(screen.getByRole('button', { name: 'Save tax version' }));
+      const dialog = await screen.findByRole('alertdialog');
+      await userEvent.type(within(dialog).getByLabelText(/reason/i), 'Set up');
+      await userEvent.click(within(dialog).getByRole('button', { name: /confirm/i }));
+    };
+    render(<TaxesTab disabled={false} />);
+    await screen.findByText(/no taxes configured yet/i);
+
+    await fillForm();
+    await submit();
+    expect(mocks.createTaxVersion).toHaveBeenLastCalledWith(expect.objectContaining({ applies_to: 'all' }));
+
+    await fillForm();
+    await userEvent.selectOptions(screen.getByLabelText('Applies to'), 'supermarket_sale');
+    await submit();
+    expect(mocks.createTaxVersion).toHaveBeenLastCalledWith(expect.objectContaining({ applies_to: 'supermarket_sale' }));
   });
 });

@@ -85,6 +85,8 @@ export const DEFAULT_NAV_GROUPS = [
       // Stock on its own, for a Storekeeper: they move stock but do not sell,
       // so they never see POS (`pos.operate`). Hidden from anyone who can
       // open POS, where the same screens already live under POS → Stock.
+      // Supermarket quick-sale till: selling, or reading its sales (report-only cannot sell).
+      { key: 'supermarket', label: 'Supermarket', requiredAnyPermission: ['supermarket.sales', 'supermarket.report'] },
       { key: 'stock', label: 'Stock', requiredPermission: 'pos.stock_transfer', hiddenWithPermission: 'pos.operate' },
       // Gap closure (user-reported): this item had no screen in `main.jsx`
       // and bounced to Home. It now opens `StaffScreen` (the existing
@@ -189,6 +191,7 @@ export function isNavItemAllowed(key, permissions, groups = DEFAULT_NAV_GROUPS) 
  */
 export function isNavItemVisible(item, permissions) {
   if (item.requiredPermission && !permissions.has(item.requiredPermission)) return false;
+  if (item.requiredAnyPermission && !item.requiredAnyPermission.some((key) => permissions.has(key))) return false;
   if (item.hiddenWithPermission && permissions.has(item.hiddenWithPermission)) return false;
   return true;
 }
