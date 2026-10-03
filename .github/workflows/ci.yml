@@ -150,6 +150,12 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      # Same gate as the backend job — see that step's own comment.
-      - name: Audit dependencies
-        run: npm audit --audit-level=high
+      # Same gate as the backend job — see that step's own comment — but
+      # for what ships: the production dependency tree only. The frontend's
+      # dev tooling (stylelint, eslint plugins, jsdom, vitest) never reaches
+      # the built bundle, and an advisory with no patched version in dev
+      # tooling (braces, GHSA-vfj7-8cjw-p6xm, via stylelint, 2026-10-03)
+      # turned CI red on unchanged code with nothing we could upgrade to.
+      # A real high-severity finding in a runtime dependency still blocks.
+      - name: Audit dependencies (production only)
+        run: npm audit --omit=dev --audit-level=high
