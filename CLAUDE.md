@@ -2,6 +2,20 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Fix: a stock take at a bar or restaurant cannot raise stock once a store room exists (branch `gap-stock-take-no-raise`, PR #191)
+
+**The same rule as "supplier deliveries are received at the store room only" (below), closing the one remaining way to add stock at an outlet from nothing.** Stock reaches a bar or restaurant by a stock request or transfer from the store; a stock take whose count was higher than the system quantity posted a positive `count_adjustment` there, adding goods with nothing leaving the store. **No schema change.**
+
+**What's real now**: `completeStockTake` (`stock/service.js`) works out every line's variance first, under the existing locks and before writing anything. If the take's outlet is not a store AND the property has an ACTIVE store outlet AND any line's variance is above zero, it throws `StockTakeCannotRaiseStockError` (`422 BUSINESS_RULE_STOCK_TAKE_CANNOT_RAISE_STOCK`, `details.lines` = item, counted, system quantity; the message names every raising line and the store). Nothing is written (not even the lines that only lower), levels are untouched and the take stays `open`, so the same take can be recounted lower and completed. Unchanged: a count that matches or lowers stock, any count at a store outlet, a property with no store room, and an archived store (it does not count as one). A never-stocked item counted above zero at a bar IS refused (variance above zero). Counting stays blind: the refusal names the system quantity only after the operator has already submitted. There is no manager override (same choice as receive-at-store-only).
+
+**Frontend**: `StockTakesTab` shows, on an open take at a non-store outlet in a property with a store, "A count here can confirm or lower this outlet's stock, but not raise it" with the store's name and what to do (re-count, or have the store transfer first). The hint carries no system quantity. The server refusal shows in the existing banner and the take stays open.
+
+**Tests**: backend `tests/pos/stock-take-no-raise.test.js` (7): refused with every raising line and the store named and nothing written (a lowering line in the same take is not applied); the same take completes after a lower recount; exact match and zero-count of a never-held item allowed; never-stocked item above zero refused; the store itself may count above; no store room and archived store behave as before. Mutation-checked: disabling the guard fails 3 (the other 4 are the "still allowed" cases). Frontend `StockTakesTab` +2 (hint and refusal; no hint at the store or with no store), mutation-checked. Backend 3867/3867, frontend 1407/1407, lint clean.
+
+**Not done**: no production-shaped rehearsal (no migration or schema change, and the rule only refuses; existing completed takes are not rewritten). A hotel that genuinely needs to correct an outlet upward must transfer from the store first. Past stock takes that already raised stock at an outlet are not detected or reversed.
+
+**CI note from this PR**: its first frontend run failed on `npm audit --audit-level=high`, not on any test: a new `braces` advisory (GHSA-vfj7-8cjw-p6xm, reached only through `stylelint`, no patched version existed). Fixed separately in #192 by auditing production dependencies only (`npm audit --omit=dev`) in the frontend job; the backend audit is unchanged.
+
 ## New capability: per-outlet Paystack subaccounts for online payments (branch `gap-outlet-payout-subaccounts`, PR 1 of 2)
 
 **User-requested** (Feature 1; Feature 2, terminal accounts, is live): each outlet can bank its ONLINE card payments (guest QR orders, Register card / NQR) into its own account instead of the property's one shared Paystack subaccount. **Design approved before building; the bank field stays free-text here (the Paystack-sourced bank dropdown is PR 2, kept separate so the one live property subaccount's flow is untouched in this PR).**
