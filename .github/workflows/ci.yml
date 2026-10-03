@@ -72,7 +72,7 @@ jobs:
       TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -129,7 +129,7 @@ jobs:
         working-directory: frontend
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # jsdom 30's own package.json requires Node ^22.22.2 || ^24.15.0 || >=26.0.0
       # (see node_modules/jsdom/package.json) — Node 20 fails at test time with
