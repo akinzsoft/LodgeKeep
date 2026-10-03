@@ -74,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: npm
@@ -135,7 +135,7 @@ jobs:
       # (see node_modules/jsdom/package.json) — Node 20 fails at test time with
       # "webidl.util.markAsUncloneable is not a function". Backend has no such
       # dependency and stays on 20.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
