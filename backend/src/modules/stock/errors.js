@@ -126,6 +126,25 @@ class ReceiveAtStoreOnlyError extends AppError {
   }
 }
 
+/**
+ * A stock take at a bar/restaurant counted MORE than the system holds there
+ * while the property has a store room. Stock only reaches an outlet by a
+ * request or transfer from the store, so a count may confirm or lower an
+ * outlet's stock but never raise it (raising it would add goods with nothing
+ * leaving the store). Names every offending line; nothing is written.
+ */
+class StockTakeCannotRaiseStockError extends AppError {
+  constructor({ outletId, outletName, storeNames, lines }) {
+    const named = lines.map((line) => `${line.name} (counted ${line.counted} ${line.unit}, system holds ${line.onHand} ${line.unit})`).join('; ');
+    super(
+      'BUSINESS_RULE_STOCK_TAKE_CANNOT_RAISE_STOCK',
+      `A stock take at "${outletName}" cannot raise stock: ${named}. Stock reaches this outlet by a stock request or transfer from the store room (${storeNames.join(', ')}). Re-count these items, or lower the counts to the system quantity.`,
+      422,
+      { outletId, storeNames, lines },
+    );
+  }
+}
+
 class SameOutletTransferError extends ValidationError {
   constructor() {
     super('SAME_OUTLET_TRANSFER', 'Choose two different outlets — a transfer cannot go from an outlet to itself.', [{ field: 'to_outlet_id', issue: 'same_as_from' }]);
@@ -208,6 +227,7 @@ class InsufficientStockForIssueError extends AppError {
 
 module.exports = {
   ReceiveAtStoreOnlyError,
+  StockTakeCannotRaiseStockError,
   InsufficientStockForIssueError,
   StockTransferRequestNotFoundError,
   StockTransferRequestNotPendingError,
