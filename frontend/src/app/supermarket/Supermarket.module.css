@@ -854,3 +854,28 @@
   margin: 0;
   color: var(--state-danger);
 }
+
+/* ---- Stock on hand (tiles, cart warning, oversell confirm) ---- */
+
+.tileStock {
+  font-size: var(--text-caption-size);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tileStockOut {
+  color: var(--state-warning);
+  font-weight: 600;
+}
+
+.lineStockWarning {
+  display: block;
+  font-size: var(--text-caption-size);
+  font-weight: 600;
+  color: var(--state-warning);
+}
+
+.oversellList {
+  margin: 0;
+  padding-left: var(--space-5);
+}

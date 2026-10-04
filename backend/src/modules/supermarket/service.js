@@ -126,6 +126,16 @@ async function removeBarcode({ context, id }) {
 
 // ---------------------------------------------------------------- lookup
 
+/**
+ * The item as the supermarket till sees it: a supermarket never switches an
+ * item off because of stock (an oversell is confirmed at the till instead), so
+ * an item switched off only by the old stock mechanism (`stock_auto_unavailable`)
+ * counts as available. A manual Sold out still blocks.
+ */
+function forTill(item) {
+  return item && item.stock_auto_unavailable ? { ...item, is_available: true, stock_auto_unavailable: false } : item;
+}
+
 /** One product at the outlet by barcode (exact) — what a scanner sends. */
 async function lookupByBarcode({ context, outletId, barcode }) {
   const db = scopedDb().for(context);
@@ -133,7 +143,7 @@ async function lookupByBarcode({ context, outletId, barcode }) {
   const code = cleanBarcode(barcode);
   const row = await db.table('supermarket_barcodes').where({ barcode: code }).first();
   if (!row) throw new errors.BarcodeNotFoundError(code);
-  const item = await outletMenu.menuItemAtOutlet(db, outletId, row.menu_item_id);
+  const item = forTill(await outletMenu.menuItemAtOutlet(db, outletId, row.menu_item_id));
   if (!item) throw new errors.BarcodeNotFoundError(code);
   return { ...item, barcode: code };
 }
@@ -145,7 +155,23 @@ async function searchItems({ context, outletId, q }) {
   const needle = String(q ?? '').trim().toLowerCase();
   if (!needle) return [];
   const items = await outletMenu.menuItemsForOutlet(db, outletId);
-  return items.filter((item) => String(item.name).toLowerCase().includes(needle)).slice(0, 30);
+  return items
+    .filter((item) => String(item.name).toLowerCase().includes(needle))
+    .slice(0, 30)
+    .map(forTill);
+}
+
+/**
+ * Whole units of each product the outlet can still sell from recorded stock
+ * (`{[menu_item_id]: units}`; null = not stock-tracked). For the till's "N in
+ * stock" chips and the over-stock warning; the sale itself re-checks.
+ */
+async function stockOnHand({ context, outletId }) {
+  const db = scopedDb().for(context);
+  await requireSupermarketOutlet({ db, context, outletId });
+  const items = await outletMenu.menuItemsForOutlet(db, outletId);
+  const units = await stockService.unitsOnHandForMenuItems({ trx: db, menuItemIds: items.map((item) => item.id), outletId });
+  return Object.fromEntries(units);
 }
 
 // ---------------------------------------------------------------- sale
@@ -174,7 +200,7 @@ function receiptCode(outlet, number) {
  * `trx`-based, called from `runIdempotentMutation`. `lines`: `[{barcode | menu_item_id, quantity}]`.
  * Opens the tab, adds the lines, settles it and records the receipt, all in the caller's transaction.
  */
-async function createSale({ trx, context, userId, outletId, lines, method, terminalId = null, terminal, terminalAccountId }) {
+async function createSale({ trx, context, userId, outletId, lines, method, terminalId = null, terminal, terminalAccountId, confirmOversell = false }) {
   if (!Array.isArray(lines) || lines.length === 0) throw new ValidationError('MISSING_FIELD', 'At least one item is required.', [{ field: 'items', issue: 'missing' }]);
   if (lines.length > MAX_LINES) throw new ValidationError('CART_TOO_LARGE', `A sale may have at most ${MAX_LINES} lines.`, [{ field: 'items', issue: 'too_many' }]);
   if (!SALE_METHODS.includes(method)) {
@@ -199,12 +225,23 @@ async function createSale({ trx, context, userId, outletId, lines, method, termi
       menuItemId = row.menu_item_id;
     }
     if (!menuItemId) throw new ValidationError('MISSING_FIELD', `Line ${index + 1} needs a barcode or a menu_item_id.`, [{ field: `items[${index}]`, issue: 'missing' }]);
-    const menuItem = await outletMenu.menuItemAtOutlet(trx, outlet.id, menuItemId);
+    const menuItem = forTill(await outletMenu.menuItemAtOutlet(trx, outlet.id, menuItemId));
     if (!menuItem) throw new ValidationError('MENU_ITEM_NOT_FOUND', `Line ${index + 1}: this outlet does not sell that product.`, [{ field: `items[${index}]`, issue: 'not_found' }]);
     if (!menuItem.is_available) throw new ValidationError('POS_ITEM_UNAVAILABLE', `"${menuItem.name}" is currently marked unavailable.`, [{ field: `items[${index}]`, issue: 'unavailable' }]);
     const priced = resolveOrderLine({ menuItem, unitPrice: menuItem.price, quantity: line.quantity, modifiers: undefined });
     resolved.push({ menuItem, barcode, quantity: priced.quantity });
   }
+
+  // An oversell (recorded stock taken BELOW zero) needs the cashier's explicit
+  // confirmation: refused before anything is written, and the confirmed sale
+  // carries its own audit reason. Reaching exactly zero needs no confirmation.
+  const shortfalls = await stockService.findStockShortfalls({
+    trx,
+    lines: resolved.map((line) => ({ menuItemId: line.menuItem.id, quantity: line.quantity })),
+    outletId: outlet.id,
+  });
+  if (shortfalls.length > 0 && confirmOversell !== true) throw new errors.OversellNotConfirmedError(shortfalls);
+  const stockOverrideReason = shortfalls.length > 0 ? stockService.CONFIRMED_OVERSELL_REASON_SUPERMARKET : stockService.AUTOMATIC_OVERRIDE_REASON_SUPERMARKET;
 
   const [orderId] = await trx.table('pos_orders').insert({
     outlet_id: outlet.id,
@@ -225,7 +262,7 @@ async function createSale({ trx, context, userId, outletId, lines, method, termi
     orderId,
     settledByUserId: userId,
     settlements: [{ splitGroup: null, method, terminal: terminal ?? {}, terminalAccountId, tipAmount: undefined, serviceCharge: undefined }],
-    stockOverrideReason: stockService.AUTOMATIC_OVERRIDE_REASON_SUPERMARKET,
+    stockOverrideReason,
   });
   const settlement = settlements[0];
 
@@ -408,4 +445,4 @@ async function voidSale({ trx, id, reason, userId }) {
   return getSaleWith(trx, id);
 }
 
-module.exports = { cleanBarcode, requireSupermarketOutlet, MAX_BARCODE_LENGTH, listMyOutlets, listBarcodes, addBarcode, removeBarcode, lookupByBarcode, searchItems, createSale, getSale, listSales, summarize, voidSale, receiptCode, listSetupFlags, listLowStock, listMySalesToday };
+module.exports = { cleanBarcode, requireSupermarketOutlet, MAX_BARCODE_LENGTH, stockOnHand, listMyOutlets, listBarcodes, addBarcode, removeBarcode, lookupByBarcode, searchItems, createSale, getSale, listSales, summarize, voidSale, receiptCode, listSetupFlags, listLowStock, listMySalesToday };

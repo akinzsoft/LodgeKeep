@@ -103,7 +103,7 @@ const { recordAuditEntry } = require('../../audit');
 const outletMenu = require('../../shared/outlet-menu');
 const { STORE_OUTLET_TYPE, isSupermarketOutlet } = require('../../shared/outlet-types');
 const { outletScopeForUser, scopeCovers } = require('../../shared/outlet-assignments');
-const { sumQuantity, negateQuantity, multiplyQuantityByInteger, compareQuantity, extendedCost } = require('../../shared/quantity');
+const { sumQuantity, negateQuantity, multiplyQuantityByInteger, compareQuantity, extendedCost, toQtyUnits } = require('../../shared/quantity');
 const {
   StockItemNotFoundError,
   OutletNotFoundError,
@@ -141,6 +141,11 @@ const ZERO_QTY = '0.000';
 const AUTOMATIC_OVERRIDE_REASON_GUEST_ACKNOWLEDGED = 'Guest acknowledged a low-stock warning before placing the order.';
 const AUTOMATIC_OVERRIDE_REASON_ROOM_CHARGE_OTP = 'Automatically approved — a verified room-charge confirmation cannot be blocked; flagged for review.';
 const AUTOMATIC_OVERRIDE_REASON_SUPERMARKET = 'Supermarket sale at zero or low recorded stock — allowed at the till; the low-stock alert is the control.';
+// A supermarket sale that takes stock BELOW zero is refused unless the cashier
+// confirmed the oversell at the till; this is the reason a confirmed one carries
+// (the audit row also names the cashier). Selling exactly the last units, or at
+// zero-or-low stock without going below zero, keeps the automatic reason above.
+const CONFIRMED_OVERSELL_REASON_SUPERMARKET = 'Supermarket oversell confirmed at the till by the cashier (the sale takes recorded stock below zero).';
 const AUTOMATIC_OVERRIDE_REASON_CARD_CAPTURE = 'Automatically approved — payment was already captured by the gateway before settlement could be blocked; flagged for review.';
 
 // ---------------------------------------------------------------------
@@ -319,6 +324,13 @@ async function applyStockAvailabilityEffects({ trx, stockItemIds, outletId }) {
   await lockStockItemsSorted({ trx, stockItemIds: allStockItemIds });
 
   const soldHere = new Set((await outletMenu.carriedCategoryNames(trx, outletId)).map((name) => name.trim().toLowerCase()));
+  // A supermarket never switches an item off because of stock: an oversell is
+  // warned and confirmed at the till instead (supermarket/service.js), so the
+  // queue never stalls on a wrong count. An item this mechanism switched off
+  // before (stock_auto_unavailable) is switched back on; a manual Sold out is
+  // never touched. Every other outlet type keeps the behaviour below unchanged.
+  const outletRow = await trx.table('pos_outlets').where({ id: outletId }).first('type');
+  const supermarket = isSupermarketOutlet(outletRow);
 
   for (const menuItemId of menuItemIds) {
     const menuItem = await trx.table('pos_menu_items').where({ id: menuItemId }).forUpdate().first();
@@ -338,6 +350,10 @@ async function applyStockAvailabilityEffects({ trx, stockItemIds, outletId }) {
     const available = setting ? Boolean(setting.is_available) : true;
     const autoOff = setting ? Boolean(setting.stock_auto_unavailable) : false;
 
+    if (supermarket) {
+      if (!available && autoOff) await outletMenu.upsertOutletMenuSetting(trx, outletId, menuItemId, { is_available: true, stock_auto_unavailable: false });
+      continue;
+    }
     if (anyDepleted && available) {
       await outletMenu.upsertOutletMenuSetting(trx, outletId, menuItemId, { is_available: false, stock_auto_unavailable: true });
     } else if (!anyDepleted && !available && autoOff) {
@@ -384,6 +400,60 @@ async function computeStockDeductionsForLines({ trx, lines }) {
     deductionByStockItem.set(key, sumQuantity([deductionByStockItem.get(key) ?? ZERO_QTY, deduction]));
   }
   return deductionByStockItem;
+}
+
+/**
+ * The stock items `lines` would take BELOW zero at `outletId` (read-only; the
+ * same recipe arithmetic as the override guard, so two products sharing a
+ * stock item are counted together). Taking stock to exactly zero is not a
+ * shortfall. Used by the supermarket till's oversell confirmation; a plain
+ * read with the same tolerated race as the guard (a concurrent sale may pass
+ * too; stock may then go further negative, never blocked).
+ *
+ * @returns {Promise<Array<{stockItemId: number, name: string, unit: string, onHand: string, needed: string, projectedQuantity: string}>>}
+ */
+async function findStockShortfalls({ trx, lines, outletId }) {
+  const deductionByStockItem = await computeStockDeductionsForLines({ trx, lines });
+  if (deductionByStockItem.size === 0) return [];
+  const stockItemIds = [...deductionByStockItem.keys()];
+  const items = await trx.table('stock_items').whereIn('id', stockItemIds).select('id', 'name', 'unit');
+  const levels = await trx.table('stock_levels').where({ outlet_id: outletId }).whereIn('stock_item_id', stockItemIds).select('stock_item_id', 'current_quantity');
+  const onHandByItem = new Map(levels.map((row) => [String(row.stock_item_id), row.current_quantity]));
+  const shortfalls = [];
+  for (const item of items) {
+    const onHand = onHandByItem.get(String(item.id)) ?? ZERO_QTY;
+    const needed = deductionByStockItem.get(Number(item.id));
+    const projectedQuantity = sumQuantity([onHand, negateQuantity(needed)]);
+    if (compareQuantity(projectedQuantity, ZERO_QTY) < 0) shortfalls.push({ stockItemId: Number(item.id), name: item.name, unit: item.unit, onHand, needed, projectedQuantity });
+  }
+  return shortfalls.sort((a, b) => a.stockItemId - b.stockItemId);
+}
+
+/**
+ * How many whole units of each menu item `outletId` can still sell from its
+ * recorded stock: the fewest any recipe component allows (floor of level ÷
+ * per-unit quantity, never below 0). A menu item with no recipe is not
+ * stock-tracked and maps to null. Read-only, for the supermarket till.
+ *
+ * @returns {Promise<Map<string, number|null>>} keyed by menu item id (string)
+ */
+async function unitsOnHandForMenuItems({ trx, menuItemIds, outletId }) {
+  const result = new Map(menuItemIds.map((id) => [String(id), null]));
+  if (menuItemIds.length === 0) return result;
+  const components = await trx.table('pos_menu_item_components').whereIn('menu_item_id', menuItemIds).select('menu_item_id', 'stock_item_id', 'quantity');
+  if (components.length === 0) return result;
+  const stockItemIds = [...new Set(components.map((row) => Number(row.stock_item_id)))];
+  const levels = await trx.table('stock_levels').where({ outlet_id: outletId }).whereIn('stock_item_id', stockItemIds).select('stock_item_id', 'current_quantity');
+  const onHandByItem = new Map(levels.map((row) => [String(row.stock_item_id), toQtyUnits(row.current_quantity)]));
+  for (const component of components) {
+    const perUnit = toQtyUnits(component.quantity);
+    const onHand = onHandByItem.get(String(component.stock_item_id)) ?? 0n;
+    const units = perUnit > 0n && onHand > 0n ? Number(onHand / perUnit) : 0;
+    const key = String(component.menu_item_id);
+    const current = result.get(key);
+    result.set(key, current === null ? units : Math.min(current, units));
+  }
+  return result;
 }
 
 /**
@@ -1723,6 +1793,9 @@ module.exports = {
   AUTOMATIC_OVERRIDE_REASON_ROOM_CHARGE_OTP,
   AUTOMATIC_OVERRIDE_REASON_CARD_CAPTURE,
   AUTOMATIC_OVERRIDE_REASON_SUPERMARKET,
+  CONFIRMED_OVERSELL_REASON_SUPERMARKET,
+  findStockShortfalls,
+  unitsOnHandForMenuItems,
   deductStockForSettlement,
   reverseStockForSettlement,
   listStockItemCategories,

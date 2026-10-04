@@ -43,10 +43,19 @@ async function createSale(req, res, next) {
           terminalId: req.body?.terminal_id ?? null,
           terminal: { provider: req.body?.terminal_provider, reference: req.body?.terminal_reference },
           terminalAccountId: req.body?.terminal_account_id,
+          confirmOversell: req.body?.confirm_oversell === true,
         });
         return { status: 201, body: ok(sale) };
       },
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function stockOnHand(req, res, next) {
+  try {
+    res.json(ok(await service.stockOnHand({ context: req.context, outletId: req.query.outlet_id })));
   } catch (error) {
     next(error);
   }
@@ -148,4 +157,4 @@ async function mySales(req, res, next) {
   }
 }
 
-module.exports = { setupFlags, lowStock, mySales, listMyOutlets, lookup, createSale, getSale, listSales, summary, voidSale, listBarcodes, addBarcode, removeBarcode };
+module.exports = { stockOnHand, setupFlags, lowStock, mySales, listMyOutlets, lookup, createSale, getSale, listSales, summary, voidSale, listBarcodes, addBarcode, removeBarcode };

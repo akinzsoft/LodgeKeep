@@ -39,7 +39,7 @@ function saveSoundOn(on) {
 function describeOutcome(outcome, code) {
   switch (outcome?.kind) {
     case 'added':
-      return { ok: true, text: `Added ${outcome.name}${outcome.quantity > 1 ? ` ×${outcome.quantity}` : ''}` };
+      return { ok: true, text: `Added ${outcome.name}${outcome.quantity > 1 ? ` ×${outcome.quantity}` : ''}${typeof outcome.onHand === 'number' ? ` — only ${outcome.onHand} in stock` : ''}` };
     case 'sold_out':
       return { ok: false, text: `${outcome.name} is sold out` };
     case 'not_found':

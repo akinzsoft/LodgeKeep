@@ -348,4 +348,11 @@ describe('<CameraScanDialog>', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Cancel' })));
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('says when a scan takes the sale past recorded stock', async () => {
+    scanner.readFrame.mockResolvedValueOnce('5449000000996');
+    await open({ onDetected: vi.fn().mockResolvedValue({ kind: 'added', name: 'Coke 50cl', quantity: 4, onHand: 3 }) });
+    await tick();
+    expect(screen.getByText('Added Coke 50cl ×4 — only 3 in stock')).toBeInTheDocument();
+  });
 });
