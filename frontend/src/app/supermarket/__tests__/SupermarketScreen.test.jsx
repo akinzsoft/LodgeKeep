@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   addBarcode: vi.fn(),
   listBarcodes: vi.fn(),
   removeBarcode: vi.fn(),
+  getStockOnHand: vi.fn(),
   listProductsImports: vi.fn(),
 }));
 
@@ -87,6 +88,7 @@ describe('<SupermarketScreen>', () => {
     mocks.getSetupFlags.mockResolvedValue({ items: [], counts: { missing_barcode: 0, not_stock_tracked: 0 } });
     mocks.listProductsImports.mockResolvedValue([]);
     mocks.listBarcodes.mockResolvedValue([]);
+    mocks.getStockOnHand.mockResolvedValue({});
     scanner.cameraSupported.mockReturnValue(false);
   });
 
@@ -227,6 +229,73 @@ describe('<SupermarketScreen>', () => {
     expect(second).toBe(first);
   });
 
+  describe('selling more than recorded stock', () => {
+    const scanRice = async (times) => {
+      const input = await screen.findByLabelText(/scan a barcode/i);
+      for (let i = 0; i < times; i += 1) await userEvent.type(input, '6001{Enter}');
+    };
+
+    it('flags a cart line above stock, asks before selling, and sells only after "Sell anyway"', async () => {
+      mocks.getStockOnHand.mockResolvedValue({ 11: 3 });
+      mocks.lookupBarcode.mockResolvedValue(RICE);
+      mocks.createSale.mockResolvedValue(SALE);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await vi.waitFor(() => expect(mocks.getStockOnHand).toHaveBeenCalledWith('5'));
+      await scanRice(3);
+      const cart = screen.getByRole('complementary', { name: 'Current sale' });
+      expect(within(cart).queryByText(/Only 3 in stock/)).not.toBeInTheDocument(); // 3 of 3 is fine
+      await scanRice(1);
+      expect(within(cart).getByText('Only 3 in stock')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
+      const dialog = await screen.findByRole('alertdialog', { name: 'Sell more than recorded stock?' });
+      expect(within(dialog).getByText(/4 in the sale, 3 in stock — 1 more than recorded/)).toBeInTheDocument();
+      expect(mocks.createSale).not.toHaveBeenCalled();
+
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      expect(mocks.createSale).not.toHaveBeenCalled();
+      expect(within(cart).getByText('Rice 5kg')).toBeInTheDocument(); // the cart is kept
+
+      await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
+      await userEvent.click(within(await screen.findByRole('alertdialog', { name: 'Sell more than recorded stock?' })).getByRole('button', { name: 'Sell anyway' }));
+      expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ items: [{ menu_item_id: '11', quantity: 4 }], confirmOversell: true }));
+      expect(await screen.findByTestId('supermarket-receipt')).toBeInTheDocument();
+      expect(mocks.getStockOnHand).toHaveBeenCalledTimes(2); // reloaded after the sale
+    });
+
+    it('sells up to exactly the stock on hand with no question, and never confirms on its own', async () => {
+      mocks.getStockOnHand.mockResolvedValue({ 11: 3 });
+      mocks.lookupBarcode.mockResolvedValue(RICE);
+      mocks.createSale.mockResolvedValue(SALE);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await vi.waitFor(() => expect(mocks.getStockOnHand).toHaveBeenCalled());
+      await scanRice(3); // exactly the last 3
+      await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ confirmOversell: false }));
+    });
+
+    it('asks with the server\'s numbers when stock changed since the screen loaded, and resends on the same key', async () => {
+      mocks.getStockOnHand.mockResolvedValue({}); // unknown on screen: nothing flagged
+      mocks.lookupBarcode.mockResolvedValue(RICE);
+      mocks.createSale
+        .mockRejectedValueOnce(new ApiError({ code: 'BUSINESS_RULE_OVERSELL_NOT_CONFIRMED', message: 'This sale takes recorded stock below zero', status: 422, details: { lines: [{ name: 'Rice stock', unit: 'bag', on_hand: '3.000', needed: '10.000', projected: '-7.000' }] } }))
+        .mockResolvedValue(SALE);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await scanRice(1);
+      await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
+      const dialog = await screen.findByRole('alertdialog', { name: 'Sell more than recorded stock?' });
+      expect(within(dialog).getByText(/10 bag needed, 3 on hand — stock goes to -7/)).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument(); // a question, not an error
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Sell anyway' }));
+      const [first, second] = mocks.createSale.mock.calls.map(([args]) => args);
+      expect(first.confirmOversell).toBe(false);
+      expect(second.confirmOversell).toBe(true);
+      expect(second.idempotencyKey).toBe(first.idempotencyKey);
+      expect(await screen.findByTestId('supermarket-receipt')).toBeInTheDocument();
+    });
+  });
+
   it('shows no selling controls to a report-only user, but lists sales and cannot void', async () => {
     mocks.listSales.mockResolvedValue([{ id: '90', receipt_number: 7, created_at: '2027-09-01T10:00:00', method: 'cash', total: '134.38', currency: 'NGN', voided_at: null }]);
     render(<SupermarketScreen activeProperty={PROPERTY} permissions={REPORT_ONLY} />);
@@ -327,7 +396,7 @@ describe('<SupermarketScreen>', () => {
       expect(scanner.readFrame).toHaveBeenCalledTimes(1);
       const field = screen.getByLabelText('Barcode for Bare item');
       expect(field).toHaveValue('6009001');
-      expect(field).toHaveFocus();
+      await vi.waitFor(() => expect(field).toHaveFocus()); // focus moves in an effect after the camera view unmounts
       expect(screen.getByLabelText('Barcode for Other item')).toHaveValue('');
       expect(mocks.addBarcode).not.toHaveBeenCalled(); // never added without the user's Add
 
@@ -422,6 +491,22 @@ describe('<SupermarketScreen>', () => {
       const row = within(screen.getByRole('complementary', { name: 'Current sale' })).getByText('Soap').closest('tr');
       expect(within(row).getByText('2')).toBeInTheDocument();
       expect(within(grid).getByRole('button', { name: 'Add Soap' })).toHaveTextContent('× 2');
+    });
+
+    it('shows units in stock on tracked tiles, and an item locked only by stock is not Sold out', async () => {
+      posMocks.listMenuItems.mockResolvedValue([
+        ...MENU,
+        { id: '14', name: 'Bread', price: '5.00', category: 'Groceries', is_available: false, stock_auto_unavailable: true },
+      ]);
+      mocks.getStockOnHand.mockResolvedValue({ 11: 3, 12: null, 14: 0 });
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      const grid = await screen.findByRole('group', { name: 'Products' });
+      expect(await within(grid).findByText('3 in stock')).toBeInTheDocument();
+      expect(within(grid).getByRole('button', { name: 'Add Soap' })).not.toHaveTextContent(/in stock/); // untracked
+      const bread = within(grid).getByRole('button', { name: 'Add Bread' });
+      expect(bread).toBeEnabled();
+      expect(bread).toHaveTextContent('0 in stock');
+      expect(within(grid).getByRole('button', { name: 'Add Peak Milk 400g' })).toHaveTextContent('Sold out'); // manual Sold out still blocks
     });
 
     it('filters the tiles by category', async () => {

@@ -30,6 +30,10 @@ const MAX_QUANTITY = 999;
  * the typed box (or a USB scanner typing into it) and from the phone camera
  * (`CameraScanDialog`, shown when the device has a camera and the page is
  * secure). A product switched off at this outlet is refused at scan time.
+ * Stock: tiles show units on hand (GET /supermarket/stock); a cart line above
+ * it is flagged, and a sale that takes recorded stock below zero needs the
+ * cashier's one-tap confirmation (the server refuses an unconfirmed one, and
+ * its refusal opens the same confirmation with the server's numbers).
  * On the Setup tab the same camera view runs in single-read mode: a product's
  * Scan button reads one barcode into that product's field, which is then
  * reviewed and saved with "Add barcode" (never added automatically, so a
@@ -77,6 +81,8 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const [flags, setFlags] = useState(null);
   const [flagsError, setFlagsError] = useState(null);
   const [barcodeDrafts, setBarcodeDrafts] = useState({});
+  const [stockOnHand, setStockOnHand] = useState({}); // {menu_item_id: units | null}; empty when unknown
+  const [oversell, setOversell] = useState(null); // {lines: [{name, detail}]} while the cashier is asked to confirm
   const [barcodeScanTarget, setBarcodeScanTarget] = useState(null);
   const [barcodesVersion, setBarcodesVersion] = useState(0); // reloads the Barcodes card after an add under "Products needing setup" // the Setup product whose field the camera fills
   // The Setup field to focus once the camera view has gone (its own cleanup returns focus to the Scan button first).
@@ -153,6 +159,27 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load on outlet change
     loadLowStock();
   }, [loadLowStock]);
+
+  // Units on hand per product, for the tiles' "N in stock" and the over-stock warning.
+  // Unknown on failure: nothing is flagged, and the sale itself still checks.
+  const stockRef = useRef(stockOnHand);
+  useEffect(() => {
+    stockRef.current = stockOnHand;
+  }, [stockOnHand]);
+  const loadStock = useCallback(async () => {
+    if (!canSell || !outletId) return;
+    try {
+      const data = await supermarketApi.getStockOnHand(outletId);
+      setStockOnHand(data && typeof data === 'object' ? data : {});
+    } catch {
+      setStockOnHand({});
+    }
+  }, [canSell, outletId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- load on outlet change
+    loadStock();
+  }, [loadStock]);
 
   // The outlet's whole menu for the tiles. Failure is not an error: the till sells by scan/search.
   const loadMenu = useCallback(async () => {
@@ -265,7 +292,9 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
         if (item.is_available === false) return { kind: 'sold_out', name: item.name };
         const inCart = cartRef.current.find((line) => String(line.menuItem.id) === String(item.id))?.quantity ?? 0;
         addToCart(item, code);
-        return { kind: 'added', name: item.name, quantity: Math.min(inCart + 1, MAX_QUANTITY) };
+        const quantity = Math.min(inCart + 1, MAX_QUANTITY);
+        const onHand = stockRef.current[String(item.id)];
+        return { kind: 'added', name: item.name, quantity, onHand: typeof onHand === 'number' && quantity > onHand ? onHand : null };
       } catch (caught) {
         if (caught instanceof ApiError && caught.status === 404) return { kind: 'not_found' };
         return { kind: 'error', message: caught instanceof ApiError ? caught.message : 'Could not look that up.' };
@@ -314,8 +343,32 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     scanInput.current?.focus();
   }
 
-  async function handleComplete() {
+  /** Cart lines asking for more than recorded stock (tracked products only). */
+  function overStockLines() {
+    return cart
+      .filter((line) => {
+        const onHand = stockOnHand[String(line.menuItem.id)];
+        return typeof onHand === 'number' && line.quantity > onHand;
+      })
+      .map((line) => {
+        const onHand = stockOnHand[String(line.menuItem.id)];
+        return { name: line.menuItem.name, detail: `${line.quantity} in the sale, ${onHand} in stock — ${line.quantity - onHand} more than recorded` };
+      });
+  }
+
+  function handleComplete() {
     if (cart.length === 0 || submitting) return;
+    const short = overStockLines();
+    if (short.length > 0) {
+      setOversell({ lines: short });
+      return;
+    }
+    completeSale(false);
+  }
+
+  async function completeSale(confirmOversell) {
+    if (cart.length === 0 || submitting) return;
+    setOversell(null);
     setSubmitting(true);
     setSaleError(null);
     attemptKey.current ??= crypto.randomUUID();
@@ -324,6 +377,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
         outletId,
         method,
         idempotencyKey: attemptKey.current,
+        confirmOversell,
         items: cart.map((line) => ({ menu_item_id: line.menuItem.id, quantity: line.quantity })),
       });
       setIsReprint(false);
@@ -336,8 +390,16 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       loadLowStock();
       loadMySales();
       loadMenu();
+      loadStock();
     } catch (caught) {
-      setSaleError(caught instanceof ApiError ? caught.message : 'The sale could not be completed.');
+      if (caught instanceof ApiError && caught.code === 'BUSINESS_RULE_OVERSELL_NOT_CONFIRMED' && !confirmOversell) {
+        // Stock changed since the screen loaded: ask with the server's own numbers.
+        const lines = (caught.details?.lines ?? []).map((line) => ({ name: line.name, detail: `${Number(line.needed)} ${line.unit} needed, ${Number(line.on_hand)} on hand — stock goes to ${Number(line.projected)}` }));
+        setOversell({ lines: lines.length ? lines : [{ name: 'Stock', detail: caught.message }] });
+        loadStock();
+      } else {
+        setSaleError(caught instanceof ApiError ? caught.message : 'The sale could not be completed.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -421,7 +483,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
         {outlets.length > 1 && (
           <label className={styles.outletPicker}>
             <span className={formStyles.label}>Outlet</span>
-            <select className={formStyles.select} value={outletId} onChange={(event) => { setOutletId(event.target.value); setCart([]); setResults([]); setReceipt(null); setLowStock(null); setFlags(null); setMenu(null); setCategory('All'); }}>
+            <select className={formStyles.select} value={outletId} onChange={(event) => { setOutletId(event.target.value); setCart([]); setResults([]); setReceipt(null); setLowStock(null); setFlags(null); setMenu(null); setStockOnHand({}); setCategory('All'); }}>
               <option value="">Select an outlet</option>
               {outlets.map((outlet) => (
                 <option key={outlet.id} value={outlet.id}>{outlet.name}</option>
@@ -485,7 +547,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
                 </div>
                 <div className={styles.tileGrid} aria-label="Matching products" role="group">
                   {results.map((item) => (
-                    <ProductTile key={item.id} item={item} currency={currency} quantityInCart={quantityById.get(String(item.id)) ?? 0} disabled={isOffline} onAdd={pickFromResults} />
+                    <ProductTile key={item.id} item={item} currency={currency} quantityInCart={quantityById.get(String(item.id)) ?? 0} onHand={stockOnHand[String(item.id)]} disabled={isOffline} onAdd={pickFromResults} />
                   ))}
                 </div>
               </>
@@ -514,7 +576,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
                 ) : (
                   <div className={styles.tileGrid} aria-label="Products" role="group">
                     {visibleItems.map((item) => (
-                      <ProductTile key={item.id} item={item} currency={currency} quantityInCart={quantityById.get(String(item.id)) ?? 0} disabled={isOffline} onAdd={addToCart} />
+                      <ProductTile key={item.id} item={item} currency={currency} quantityInCart={quantityById.get(String(item.id)) ?? 0} onHand={stockOnHand[String(item.id)]} disabled={isOffline} onAdd={addToCart} />
                     ))}
                   </div>
                 )}
@@ -543,6 +605,9 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
                         <td>
                           <span className={styles.lineName}>{line.menuItem.name}</span>
                           <span className={styles.lineUnit}><Money amount={line.menuItem.price} currencyCode={currency} /> each</span>
+                          {typeof stockOnHand[String(line.menuItem.id)] === 'number' && line.quantity > stockOnHand[String(line.menuItem.id)] && (
+                            <span className={styles.lineStockWarning}>Only {stockOnHand[String(line.menuItem.id)]} in stock</span>
+                          )}
                           <span className={styles.qtyControls}>
                             <button type="button" className={styles.stepper} aria-label={`Fewer ${line.menuItem.name}`} onClick={() => changeQuantity(index, -1)}>−</button>
                             <span className={styles.qty}>{line.quantity}</span>
@@ -703,6 +768,22 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
 
       {outletId && activeTab === 'import' && (
         <ProductsImportPanel outletId={outletId} outletName={outlets.find((outlet) => String(outlet.id) === String(outletId))?.name ?? 'this outlet'} isOffline={isOffline} />
+      )}
+
+      {oversell && (
+        <ConfirmDialog
+          title="Sell more than recorded stock?"
+          consequence="Recorded stock will go below zero. The sale is recorded as confirmed by you."
+          confirmLabel="Sell anyway"
+          onConfirm={() => completeSale(true)}
+          onCancel={() => setOversell(null)}
+        >
+          <ul className={styles.oversellList} aria-label="Products over stock">
+            {oversell.lines.map((line, index) => (
+              <li key={`${line.name}-${index}`}><strong>{line.name}</strong>: {line.detail}</li>
+            ))}
+          </ul>
+        </ConfirmDialog>
       )}
 
       {voidTarget && (

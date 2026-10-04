@@ -22,14 +22,21 @@ export function searchItems(outletId, q) {
 
 /**
  * Rings a sale. `items`: `[{menu_item_id | barcode, quantity}]`; `method`: 'cash' | 'terminal'.
+ * A sale that takes recorded stock below zero is refused (BUSINESS_RULE_OVERSELL_NOT_CONFIRMED)
+ * until it is resent with `confirmOversell` after the cashier confirms.
  * Pass the same `idempotencyKey` when retrying the same attempt.
  */
-export function createSale({ outletId, items, method, idempotencyKey }) {
+export function createSale({ outletId, items, method, idempotencyKey, confirmOversell = false }) {
   return request('/supermarket/sales', {
     method: 'POST',
-    body: { outlet_id: outletId, items, method },
+    body: { outlet_id: outletId, items, method, ...(confirmOversell ? { confirm_oversell: true } : {}) },
     headers: { 'Idempotency-Key': idempotencyKey ?? crypto.randomUUID() },
   });
+}
+
+/** Whole units of each product on hand at the outlet: `{[menu_item_id]: number | null}` (null = not stock-tracked). */
+export function getStockOnHand(outletId) {
+  return request(`/supermarket/stock?${new URLSearchParams({ outlet_id: outletId })}`);
 }
 
 export function getSale(id) {

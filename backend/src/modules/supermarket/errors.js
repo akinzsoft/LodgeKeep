@@ -8,6 +8,21 @@ class NotASupermarketOutletError extends AppError {
   }
 }
 
+/**
+ * The sale would take recorded stock below zero and the cashier has not
+ * confirmed it. Nothing is written; resend the same cart with
+ * `confirm_oversell: true` once the cashier confirms. `details.lines` lists
+ * every short stock item (name, unit, on hand, needed, projected).
+ */
+class OversellNotConfirmedError extends AppError {
+  constructor(shortfalls) {
+    const names = shortfalls.map((line) => `${line.name} (${line.onHand} on hand, ${line.needed} needed)`).join(', ');
+    super('BUSINESS_RULE_OVERSELL_NOT_CONFIRMED', `This sale takes recorded stock below zero: ${names}. Confirm to sell anyway.`, 422, {
+      lines: shortfalls.map((line) => ({ stock_item_id: String(line.stockItemId), name: line.name, unit: line.unit, on_hand: line.onHand, needed: line.needed, projected: line.projectedQuantity })),
+    });
+  }
+}
+
 class BarcodeNotFoundError extends AppError {
   constructor(barcode) {
     super('VALIDATION_BARCODE_NOT_FOUND', `No product has the barcode "${barcode}".`, 404);
@@ -76,6 +91,7 @@ class ProductImportReleasedError extends AppError {
 }
 
 module.exports = {
+  OversellNotConfirmedError,
   ProductImportReleasedError,
   ProductImportFileError,
   ProductImportHasErrorsError,

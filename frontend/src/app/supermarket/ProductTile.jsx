@@ -20,9 +20,13 @@ function tintFor(category) {
  * One product on the till: the whole card is one button (no nested control),
  * like the POS Register's menu tile. A photo when the product has one, else
  * its initials on a category tint; the name is cut to two lines.
+ * `onHand` (whole units in recorded stock, or null/undefined when untracked)
+ * shows as "N in stock". An item switched off only by the old stock mechanism
+ * (`stock_auto_unavailable`) is not Sold out at a supermarket; a manual one is.
  */
-export function ProductTile({ item, quantityInCart, currency, disabled, onAdd }) {
-  const soldOut = item.is_available === false;
+export function ProductTile({ item, quantityInCart, currency, disabled, onAdd, onHand = null }) {
+  const soldOut = item.is_available === false && !item.stock_auto_unavailable;
+  const tracked = typeof onHand === 'number';
   return (
     <button
       type="button"
@@ -44,6 +48,7 @@ export function ProductTile({ item, quantityInCart, currency, disabled, onAdd })
         {soldOut && <span className={styles.soldOut}>Sold out</span>}
         {!soldOut && quantityInCart > 0 && <span className={styles.inCartBadge}>× {quantityInCart}</span>}
       </span>
+      {!soldOut && tracked && <span className={`${styles.tileStock} ${onHand <= 0 ? styles.tileStockOut : ''}`}>{onHand} in stock</span>}
     </button>
   );
 }

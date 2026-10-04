@@ -20,6 +20,7 @@ function supermarketRouter() {
 
   router.get('/supermarket/my-outlets', requireAnyPermission(['supermarket.sales', 'supermarket.report', 'supermarket.manage']), controller.listMyOutlets);
   router.get('/supermarket/lookup', requirePermission('supermarket.sales'), controller.lookup);
+  router.get('/supermarket/stock', requirePermission('supermarket.sales'), controller.stockOnHand);
   router.post('/supermarket/sales', requirePermission('supermarket.sales'), controller.createSale);
   router.get('/supermarket/sales', requirePermission('supermarket.report'), controller.listSales);
   router.get('/supermarket/report', requirePermission('supermarket.report'), controller.summary);

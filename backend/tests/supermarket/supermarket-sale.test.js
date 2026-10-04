@@ -255,18 +255,126 @@ describe('supermarket quick sale', () => {
   });
 
   describe('stock', () => {
-    it('sells at zero recorded stock with an automatic reason, and the stock goes negative-or-zero without blocking', async () => {
-      const [milk] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: market.outletId, name: 'Milk', category: 'Groceries', price: '5.00' });
-      const [milkStock] = await insertStockItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: market.outletId, name: 'Milk stock', unit: 'pack', purchase_cost: '3.00', current_quantity: '0.000', reorder_level: '2.000' });
-      await t.trx('pos_menu_item_components').insert({ tenant_id: ctx.a.id, property_id: propertyId, menu_item_id: milk, stock_item_id: milkStock, quantity: '1.000' });
-      await barcode(milk, '6001000000042');
+    // Stock helpers: a product with a 1:1 (or `per`) recipe whose stock ARRIVES the way real stock does (a received movement).
+    async function stockedProduct({ name, onHand, per = '1.000', code }) {
+      const [menuId] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: market.outletId, name, category: 'Groceries', price: '5.00' });
+      const [stockId] = await insertStockItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: market.outletId, name: `${name} stock`, unit: 'pack', purchase_cost: '3.00', current_quantity: onHand, reorder_level: '1.000' });
+      if (onHand !== '0.000') {
+        await t.trx('stock_movements').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: market.outletId, stock_item_id: stockId, type: 'received', quantity: onHand, unit_cost: '3.00', total_cost: '0.00', business_date: '2027-08-01', reference: `T-${next()}`, occurred_at: new Date() });
+      }
+      await t.trx('pos_menu_item_components').insert({ tenant_id: ctx.a.id, property_id: propertyId, menu_item_id: menuId, stock_item_id: stockId, quantity: per });
+      if (code) await barcode(menuId, code);
+      return { menuId, stockId };
+    }
+    const levelOf = async (stockId) => (await t.trx('stock_levels').where({ stock_item_id: stockId, outlet_id: market.outletId }).first())?.current_quantity;
 
-      const res = await sell(users.operator, { items: [{ barcode: '6001000000042', quantity: 2 }] });
+    it('refuses an oversell the cashier has not confirmed, listing the shortfall and writing nothing', async () => {
+      const juice = await stockedProduct({ name: 'Juice', onHand: '3.000', code: '6001000000711' });
+      const salesBefore = Number((await t.trx('supermarket_sales').where({ tenant_id: ctx.a.id }).count({ n: '*' }).first()).n);
+      const ordersBefore = Number((await t.trx('pos_orders').where({ tenant_id: ctx.a.id }).count({ n: '*' }).first()).n);
+      const res = await sell(users.operator, { items: [{ barcode: '6001000000711', quantity: 10 }] });
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('BUSINESS_RULE_OVERSELL_NOT_CONFIRMED');
+      expect(res.body.error.details.lines).toEqual([expect.objectContaining({ name: 'Juice stock', unit: 'pack', on_hand: '3.000', needed: '10.000', projected: '-7.000' })]);
+      expect(Number((await t.trx('supermarket_sales').where({ tenant_id: ctx.a.id }).count({ n: '*' }).first()).n)).toBe(salesBefore);
+      expect(Number((await t.trx('pos_orders').where({ tenant_id: ctx.a.id }).count({ n: '*' }).first()).n)).toBe(ordersBefore);
+      expect(await levelOf(juice.stockId)).toBe('3.000');
+    });
+
+    it('a confirmed oversell takes stock to -7, recorded with the confirmed reason and the cashier, on the same idempotency key', async () => {
+      const juice = await stockedProduct({ name: 'Juice B', onHand: '3.000', code: '6001000000728' });
+      const key = `sm-${next()}`;
+      const post = (body) => t.request.post('/api/v1/supermarket/sales').set('Authorization', `Bearer ${tokenFor(users.operator)}`).set('Idempotency-Key', key).send({ outlet_id: market.outletId, method: 'cash', items: [{ barcode: '6001000000728', quantity: 10 }], ...body });
+      expect((await post({})).status).toBe(422);
+      const res = await post({ confirm_oversell: true }); // the refusal stored nothing, so the same key carries the confirmed retry
       expect(res.status).toBe(201);
-      const audit = await t.trx('audit_log').where({ entity_type: 'stock_items', entity_id: milkStock, action: 'stock_override_applied' }).first();
-      expect(audit.reason).toContain('Supermarket sale');
-      const level = await t.trx('stock_levels').where({ stock_item_id: milkStock, outlet_id: market.outletId }).first();
-      expect(level.current_quantity).toBe('-2.000');
+      expect(await levelOf(juice.stockId)).toBe('-7.000');
+      const move = await t.trx('stock_movements').where({ stock_item_id: juice.stockId, type: 'sold' }).first();
+      expect(move.quantity).toBe('-10.000');
+      expect(move.reason).toMatch(/oversell confirmed at the till/i);
+      const audit = await t.trx('audit_log').where({ entity_type: 'stock_items', entity_id: juice.stockId, action: 'stock_override_applied' }).first();
+      expect(audit.reason).toMatch(/oversell confirmed at the till/i);
+      expect(String(audit.user_id)).toBe(String(users.operator));
+    });
+
+    it('selling exactly the last units, or at zero stock with confirmation, follows the rule; untracked products are never refused', async () => {
+      const last = await stockedProduct({ name: 'Last three', onHand: '3.000', code: '6001000000735' });
+      const exact = await sell(users.operator, { items: [{ barcode: '6001000000735', quantity: 3 }] });
+      expect(exact.status).toBe(201); // to exactly zero: no confirmation needed
+      expect(await levelOf(last.stockId)).toBe('0.000');
+      const exactMove = await t.trx('stock_movements').where({ stock_item_id: last.stockId, type: 'sold' }).first();
+      expect(exactMove.reason).toContain('Supermarket sale at zero or low recorded stock');
+
+      const milk = await stockedProduct({ name: 'Milk', onHand: '0.000', code: '6001000000742' });
+      expect((await sell(users.operator, { items: [{ barcode: '6001000000742', quantity: 2 }] })).status).toBe(422);
+      expect((await sell(users.operator, { items: [{ barcode: '6001000000742', quantity: 2 }], confirm_oversell: true })).status).toBe(201);
+      expect(await levelOf(milk.stockId)).toBe('-2.000');
+
+      // Soap has no recipe: not stock-tracked, nothing to oversell.
+      expect((await sell(users.operator, { items: [{ barcode: '6001000000035', quantity: 50 }] })).status).toBe(201);
+    });
+
+    it('counts two products that share one stock item together', async () => {
+      const shared = await stockedProduct({ name: 'Cola can', onHand: '3.000', code: '6001000000759' });
+      const [pack] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: market.outletId, name: 'Cola single', category: 'Groceries', price: '5.00' });
+      await t.trx('pos_menu_item_components').insert({ tenant_id: ctx.a.id, property_id: propertyId, menu_item_id: pack, stock_item_id: shared.stockId, quantity: '1.000' });
+      const res = await sell(users.operator, { items: [{ barcode: '6001000000759', quantity: 2 }, { menu_item_id: pack, quantity: 2 }] });
+      expect(res.status).toBe(422); // 2 + 2 against 3
+      expect(res.body.error.details.lines[0]).toMatchObject({ needed: '4.000', projected: '-1.000' });
+    });
+
+    it('never switches a supermarket item to Sold out for stock, releases an old stock lock, and still honours a manual Sold out', async () => {
+      const bread = await stockedProduct({ name: 'Bread', onHand: '1.000', code: '6001000000766' });
+      expect((await sell(users.operator, { items: [{ barcode: '6001000000766', quantity: 4 }], confirm_oversell: true })).status).toBe(201);
+      const setting = await t.trx('pos_outlet_menu_items').where({ outlet_id: market.outletId, menu_item_id: bread.menuId }).first();
+      expect(setting ? Boolean(setting.is_available) : true).toBe(true);
+      const lookup = await as(users.operator).get(`/api/v1/supermarket/lookup?outlet_id=${market.outletId}&barcode=6001000000766`);
+      expect(lookup.body.data.is_available).toBe(true);
+      expect((await sell(users.operator, { items: [{ barcode: '6001000000766', quantity: 1 }], confirm_oversell: true })).status).toBe(201);
+
+      // A row locked by the old stock mechanism (before this change) sells again at once.
+      const eggs = await stockedProduct({ name: 'Eggs', onHand: '5.000', code: '6001000000773' });
+      await t.trx('pos_outlet_menu_items').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: market.outletId, menu_item_id: eggs.menuId, is_available: false, stock_auto_unavailable: true });
+      expect((await as(users.operator).get(`/api/v1/supermarket/lookup?outlet_id=${market.outletId}&barcode=6001000000773`)).body.data.is_available).toBe(true);
+      expect((await sell(users.operator, { items: [{ barcode: '6001000000773', quantity: 1 }] })).status).toBe(201);
+      const released = await t.trx('pos_outlet_menu_items').where({ outlet_id: market.outletId, menu_item_id: eggs.menuId }).first();
+      expect(Boolean(released.is_available)).toBe(true); // the sale's stock step released it
+      expect(Boolean(released.stock_auto_unavailable)).toBe(false);
+
+      // A manual Sold out (staff action) still blocks.
+      const tea = await stockedProduct({ name: 'Tea', onHand: '5.000', code: '6001000000780' });
+      await t.trx('pos_outlet_menu_items').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: market.outletId, menu_item_id: tea.menuId, is_available: false, stock_auto_unavailable: false });
+      const blocked = await sell(users.operator, { items: [{ barcode: '6001000000780', quantity: 1 }] });
+      expect(blocked.status).toBe(400);
+      expect(blocked.body.error.code).toBe('VALIDATION_POS_ITEM_UNAVAILABLE');
+    });
+
+    it('a bar still switches an item to Sold out when its stock runs out (unchanged)', async () => {
+      const bar = await outlet('bar', `Bar ${next()}`);
+      const [beer] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: bar, name: 'Beer', category: `Drinks ${next()}`, price: '5.00' });
+      const [beerStock] = await insertStockItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: bar, name: 'Beer stock', unit: 'bottle', purchase_cost: '3.00', current_quantity: '0.000', reorder_level: '1.000' });
+      await t.trx('pos_menu_item_components').insert({ tenant_id: ctx.a.id, property_id: propertyId, menu_item_id: beer, stock_item_id: beerStock, quantity: '1.000' });
+      const { scopedDb } = require('../../src/db');
+      const { workerContext } = require('../../src/modules/tenancy');
+      const stockService = require('../../src/modules/stock/service');
+      const db = scopedDb().for(workerContext({ tenantId: ctx.a.id, propertyId }));
+      await stockService.applyStockAvailabilityEffects({ trx: db, stockItemIds: [beerStock], outletId: bar });
+      const setting = await t.trx('pos_outlet_menu_items').where({ outlet_id: bar, menu_item_id: beer }).first();
+      expect(Boolean(setting.is_available)).toBe(false);
+      expect(Boolean(setting.stock_auto_unavailable)).toBe(true);
+    });
+
+    it('GET /supermarket/stock gives whole units on hand per product (null when not stock-tracked)', async () => {
+      const rice2 = await stockedProduct({ name: 'Rice pair', onHand: '5.000', per: '2.000' });
+      const flat = await stockedProduct({ name: 'Flat', onHand: '0.000' });
+      const res = await as(users.operator).get(`/api/v1/supermarket/stock?outlet_id=${market.outletId}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data[String(rice2.menuId)]).toBe(2); // 5 ÷ 2 per unit, whole units
+      expect(res.body.data[String(flat.menuId)]).toBe(0);
+      expect(res.body.data[String(soap)]).toBeNull(); // no recipe
+      expect((await as(users.viewer).get(`/api/v1/supermarket/stock?outlet_id=${market.outletId}`)).status).toBe(403);
+      const bar = await outlet('bar', `Bar ${next()}`);
+      expect((await as(users.operator).get(`/api/v1/supermarket/stock?outlet_id=${bar}`)).status).toBe(422);
     });
 
     it('does not ring a bell alert per sale (a hotel bar sale still does)', async () => {
