@@ -158,6 +158,12 @@
   margin: 0;
 }
 
+.errorDetail {
+  font-size: var(--text-caption-size);
+  color: var(--pos-register-text-secondary);
+  overflow-wrap: anywhere;
+}
+
 .panelFooter {
   display: flex;
   align-items: center;
