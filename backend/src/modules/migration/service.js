@@ -49,6 +49,7 @@ const { sumMoney, negateMoney } = require('../../shared/money');
 const { expandStayDates, releaseInventoryForDates } = require('../reservations/service');
 const { recomputeArAccountBalance } = require('../ar/service');
 const {
+  UseSupermarketImportError,
   UnknownEntityTypeError,
   MissingPropertyIdError,
   ImportRunNotFoundError,
@@ -58,8 +59,13 @@ const {
   InvalidDuplicateResolutionError,
 } = require('./errors');
 const { enqueueDataImportJob } = require('../../jobs/data-import');
+const productImport = require('../supermarket/product-import');
+const { ProductImportHasErrorsError, ProductImportInProgressError } = require('../supermarket/errors');
 
-const PROPERTY_REQUIRED_ENTITY_TYPES = new Set(['reservations', 'ar_balances']);
+const PROPERTY_REQUIRED_ENTITY_TYPES = new Set(['reservations', 'ar_balances', 'supermarket_products']);
+const SUPERMARKET_PRODUCTS = productImport.ENTITY_TYPE;
+/** A product import still `committing` this long after it started is taken to be dead (its job never finished) and released. */
+const STALE_COMMITTING_MS = 30 * 60 * 1000;
 const DRY_RUNNABLE_FROM_STATUSES = ['uploaded', 'dry_run_complete'];
 const ROLLBACKABLE_FROM_STATUSES = ['completed', 'partially_rolled_back'];
 /** Children before parents — see `rollbackImportRun`'s own comment. */
@@ -77,6 +83,20 @@ function codeMap(rows, codeField) {
   return map;
 }
 
+/**
+ * Supermarket product runs (Stage 3) are uploaded, dry-run, committed and
+ * undone only through /supermarket/imports (`viaSupermarket`), which enforces
+ * `supermarket.manage` and the caller's outlet assignments — the generic
+ * /migration routes may list and read them but act on none. The reverse also
+ * holds: the supermarket routes never reach another entity type's run.
+ * Returns false when the run is not reachable this way (the caller answers 404).
+ */
+function assertRunRoute(run, viaSupermarket) {
+  const isProducts = run.entity_type === SUPERMARKET_PRODUCTS;
+  if (isProducts && !viaSupermarket) throw new UseSupermarketImportError();
+  return isProducts || !viaSupermarket;
+}
+
 /** See file header. `run.property_id` is null for guests/companies runs, which is fine — TENANT_SCOPED tables don't need one. */
 function runScopedDb(context, run) {
   return scopedDb().for(workerContext({ tenantId: context.tenantId, propertyId: run.property_id ?? null }));
@@ -86,8 +106,12 @@ function runScopedDb(context, run) {
 // Create / get / list
 // ---------------------------------------------------------------------
 
-async function createImportRun({ context, entityType, propertyId, originalFilename, filePath }) {
+async function createImportRun({ context, entityType, propertyId, outletId = null, originalFilename, filePath, viaSupermarket = false }) {
   if (!ENTITY_TYPES.includes(entityType)) throw new UnknownEntityTypeError(entityType);
+  if ((entityType === SUPERMARKET_PRODUCTS) !== Boolean(viaSupermarket)) {
+    if (entityType === SUPERMARKET_PRODUCTS) throw new UseSupermarketImportError();
+    throw new UnknownEntityTypeError(entityType);
+  }
   const requiresProperty = PROPERTY_REQUIRED_ENTITY_TYPES.has(entityType);
   if (requiresProperty && !propertyId) throw new MissingPropertyIdError(entityType);
 
@@ -99,6 +123,7 @@ async function createImportRun({ context, entityType, propertyId, originalFilena
 
   const [id] = await db.table('import_runs').insert({
     property_id: requiresProperty ? propertyId : null,
+    outlet_id: entityType === SUPERMARKET_PRODUCTS ? outletId : null,
     entity_type: entityType,
     status: 'uploaded',
     original_filename: originalFilename,
@@ -116,11 +141,12 @@ async function getImportRun({ context, importRunId }) {
   return { run, errors };
 }
 
-async function listImportRuns({ context, entityType, status }) {
+async function listImportRuns({ context, entityType, status, outletId }) {
   const db = scopedDb().for(context);
   let query = db.table('import_runs');
   if (entityType) query = query.where({ entity_type: entityType });
   if (status) query = query.where({ status });
+  if (outletId) query = query.where({ outlet_id: outletId });
   return query.orderBy('id', 'desc');
 }
 
@@ -143,11 +169,16 @@ async function findOversoldNights({ db, roomTypeId, arrivalDate, departureDate }
   return conflicts;
 }
 
-async function runDryRun({ context, importRunId }) {
+async function runDryRun({ context, importRunId, viaSupermarket = false }) {
   const outerDb = scopedDb().for(context);
   const run = await outerDb.table('import_runs').where({ id: importRunId }).first();
-  if (!run) throw new ImportRunNotFoundError();
+  if (!run || !assertRunRoute(run, viaSupermarket)) throw new ImportRunNotFoundError();
   if (!DRY_RUNNABLE_FROM_STATUSES.includes(run.status)) throw new InvalidImportRunStateError(run.status, DRY_RUNNABLE_FROM_STATUSES);
+
+  if (run.entity_type === SUPERMARKET_PRODUCTS) {
+    const summary = await productImport.dryRunProducts({ context, run });
+    return { ...(await getImportRun({ context, importRunId })), summary };
+  }
 
   const db = runScopedDb(context, run);
   const rows = parseImportFile(run.file_path);
@@ -288,6 +319,7 @@ async function resolveDuplicateRow({ context, importRunId, rowNumber, resolution
   const db = scopedDb().for(context);
   const run = await db.table('import_runs').where({ id: importRunId }).first();
   if (!run) return null;
+  assertRunRoute(run, false);
   if (run.status !== 'dry_run_complete') throw new InvalidImportRunStateError(run.status, ['dry_run_complete']);
 
   const row = await db
@@ -330,10 +362,52 @@ async function resolveDuplicateRow({ context, importRunId, rowNumber, resolution
 // `src/jobs/data-import.js`'s `runImportCommitJob`.
 // ---------------------------------------------------------------------
 
-async function commitImportRun({ context, importRunId }) {
+/**
+ * Flips a product run to `committing`. The generated unique column allows one
+ * committing product import per property; a second gets
+ * ProductImportInProgressError — unless the one holding the slot has been
+ * committing for over 30 minutes (its job died), which is then failed and the
+ * flip retried once.
+ */
+async function claimProductCommit(db, run) {
+  const flip = () => db.table('import_runs').where({ id: run.id, status: 'dry_run_complete' }).update({ status: 'committing' });
+  try {
+    return await flip();
+  } catch (error) {
+    if (error?.code !== 'ER_DUP_ENTRY') throw error;
+  }
+  const holder = await db.table('import_runs').where({ entity_type: SUPERMARKET_PRODUCTS, status: 'committing', property_id: run.property_id }).first();
+  if (!holder || new Date(holder.updated_at).getTime() > Date.now() - STALE_COMMITTING_MS) throw new ProductImportInProgressError(holder?.id ?? '');
+  await db
+    .table('import_runs')
+    .where({ id: holder.id, status: 'committing' })
+    .update({ status: 'failed', failed_reason: 'Released automatically: it was still committing 30 minutes after it started (its job never finished).' });
+  try {
+    return await flip();
+  } catch (error) {
+    if (error?.code === 'ER_DUP_ENTRY') throw new ProductImportInProgressError('');
+    throw error;
+  }
+}
+
+async function commitImportRun({ context, importRunId, viaSupermarket = false }) {
   const db = scopedDb().for(context);
   const run = await db.table('import_runs').where({ id: importRunId }).first();
-  if (!run) throw new ImportRunNotFoundError();
+  if (!run || !assertRunRoute(run, viaSupermarket)) throw new ImportRunNotFoundError();
+
+  if (run.entity_type === SUPERMARKET_PRODUCTS) {
+    // All-or-nothing: nothing commits while the dry run has any blocking error.
+    if (run.status === 'dry_run_complete') {
+      const blocking = await db.table('import_row_errors').where({ import_run_id: importRunId, severity: 'error' }).count();
+      if (Number(blocking) > 0) throw new ProductImportHasErrorsError(Number(blocking));
+    }
+    const claimed = await claimProductCommit(db, run);
+    if (!claimed) throw new InvalidImportRunStateError(run.status, ['dry_run_complete']);
+    enqueueDataImportJob({ tenantId: context.tenantId, importRunId }).catch((error) => {
+      console.error('Failed to enqueue supermarket product import job (released automatically after 30 minutes):', error);
+    });
+    return db.table('import_runs').where({ id: importRunId }).first();
+  }
 
   const unresolved = await db
     .table('import_row_errors')
@@ -506,11 +580,16 @@ async function rollbackOneRow({ context, run, mapRow }) {
   });
 }
 
-async function rollbackImportRun({ context, importRunId, userId }) {
+async function rollbackImportRun({ context, importRunId, userId, viaSupermarket = false }) {
   const outerDb = scopedDb().for(context);
   const run = await outerDb.table('import_runs').where({ id: importRunId }).first();
-  if (!run) return null;
+  if (!run || !assertRunRoute(run, viaSupermarket)) return null;
   if (!ROLLBACKABLE_FROM_STATUSES.includes(run.status)) throw new InvalidImportRunStateError(run.status, ROLLBACKABLE_FROM_STATUSES);
+
+  if (run.entity_type === SUPERMARKET_PRODUCTS) {
+    const { rowsRolledBack, rowsRefused } = await productImport.rollbackProducts({ context, run });
+    return finishRollback({ outerDb, importRunId, userId, rowsRolledBack, rowsRefused });
+  }
 
   const mapRows = await outerDb.table('imported_record_map').where({ import_run_id: importRunId, created: true });
   mapRows.sort((a, b) => ROLLBACK_ENTITY_ORDER.indexOf(a.entity_type) - ROLLBACK_ENTITY_ORDER.indexOf(b.entity_type));
@@ -542,6 +621,10 @@ async function rollbackImportRun({ context, importRunId, userId }) {
     }
   }
 
+  return finishRollback({ outerDb, importRunId, userId, rowsRolledBack, rowsRefused });
+}
+
+async function finishRollback({ outerDb, importRunId, userId, rowsRolledBack, rowsRefused }) {
   const finalStatus = rowsRefused.length === 0 ? 'rolled_back' : 'partially_rolled_back';
   await outerDb.table('import_runs').where({ id: importRunId }).update({
     status: finalStatus,

@@ -480,9 +480,9 @@ async function assertActiveOutlets(db, outletIds) {
  * Every category of the property, each with `outlet_ids` (the outlets that
  * carry it). With `outletId`, only the categories that outlet carries.
  */
-async function listMenuCategories({ context, includeArchived, outletId }) {
-  const db = scopedDb().for(context);
-  const rows = await menuCategoryCatalogue.listCategories({ context, includeArchived });
+async function listMenuCategories({ context, db: providedDb, includeArchived, outletId }) {
+  const db = providedDb ?? scopedDb().for(context);
+  const rows = await menuCategoryCatalogue.listCategories({ context, db, includeArchived });
   const carries = await db.table('pos_outlet_categories').select('outlet_id', 'category_id');
   const outletsByCategory = new Map();
   for (const carry of carries) {
@@ -496,14 +496,17 @@ async function listMenuCategories({ context, includeArchived, outletId }) {
 }
 const getMenuCategory = menuCategoryCatalogue.getCategory;
 
-/** Registers a shared category; `outletIds` (optional) are the outlets that should carry it straight away. */
-async function createMenuCategory({ context, name, sortOrder, outletIds = [] }) {
-  const db = scopedDb().for(context);
+/**
+ * Registers a shared category; `outletIds` (optional) are the outlets that should carry it straight away.
+ * `db` (optional): a transaction-bound accessor to write through (the supermarket product import's one transaction).
+ */
+async function createMenuCategory({ context, db: providedDb, name, sortOrder, outletIds = [] }) {
+  const db = providedDb ?? scopedDb().for(context);
   const ids = [...new Set((outletIds ?? []).filter((id) => id !== undefined && id !== null && id !== '').map(String))];
   await assertActiveOutlets(db, ids);
-  const category = await menuCategoryCatalogue.createCategory({ context, name, sortOrder });
+  const category = await menuCategoryCatalogue.createCategory({ context, db, name, sortOrder });
   for (const outletId of ids) await outletMenu.carryCategory(db, outletId, category.id);
-  return (await listMenuCategories({ context, includeArchived: true })).find((row) => String(row.id) === String(category.id));
+  return (await listMenuCategories({ context, db, includeArchived: true })).find((row) => String(row.id) === String(category.id));
 }
 const updateMenuCategory = menuCategoryCatalogue.updateCategory;
 const archiveMenuCategory = menuCategoryCatalogue.archiveCategory;
@@ -554,8 +557,8 @@ async function listMenuItems({ context, outletId }) {
   return rows.map(menuImages.withImageUrl);
 }
 
-async function getMenuItem({ context, id, outletId }) {
-  const db = scopedDb().for(context);
+async function getMenuItem({ context, db: providedDb, id, outletId }) {
+  const db = providedDb ?? scopedDb().for(context);
   if (outletId) return menuImages.withImageUrl(await outletMenu.menuItemAtOutlet(db, outletId, id));
   return menuImages.withImageUrl(await db.table('pos_menu_items').where({ id }).first());
 }
@@ -565,8 +568,9 @@ async function getMenuItem({ context, id, outletId }) {
  * outlet then carries the item's category if it did not already, so the new
  * item shows up there straight away.
  */
-async function createMenuItem({ context, outletId, name, category, price, costPrice, modifiers }) {
-  const db = scopedDb().for(context);
+async function createMenuItem({ context, db: providedDb, outletId, name, category, price, costPrice, modifiers }) {
+  // `db` (optional): a transaction-bound accessor to write through (the supermarket product import's one transaction).
+  const db = providedDb ?? scopedDb().for(context);
   if (outletId) await assertActiveOutlets(db, [outletId]);
   const categoryName = await resolveMenuCategoryName({ db, name: category });
   const [id] = await db.table('pos_menu_items').insert({
@@ -583,7 +587,7 @@ async function createMenuItem({ context, outletId, name, category, price, costPr
     const categoryRow = await db.table('pos_menu_categories').where({ name: categoryName }).first('id');
     if (categoryRow) await outletMenu.carryCategory(db, outletId, categoryRow.id);
   }
-  return getMenuItem({ context, id });
+  return getMenuItem({ context, db, id });
 }
 
 async function updateMenuItem({ context, id, changes }) {

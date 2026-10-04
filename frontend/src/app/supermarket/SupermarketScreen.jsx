@@ -5,6 +5,7 @@ import { sumMoney, multiplyMoney } from '../../shared/money.js';
 import { supermarketApi, posApi, ApiError } from '../../shared/api/index.js';
 import { SupermarketReceipt } from './SupermarketReceipt.jsx';
 import { ProductTile } from './ProductTile.jsx';
+import { ProductsImportPanel } from './ProductsImportPanel.jsx';
 import formStyles from '../pos/POSForm.module.css';
 import styles from './Supermarket.module.css';
 
@@ -22,7 +23,8 @@ const MAX_QUANTITY = 999;
  * the sales list and report (and cannot sell), `supermarket.manage` voids.
  * The server is the real check; this only stops offering what would 403.
  *
- * Layout (visual redesign): tabs Sell / Today's sales / All sales / Setup.
+ * Layout (visual redesign): tabs Sell / Today's sales / All sales / Setup /
+ * Products import (Stage 3, `supermarket.manage`: ProductsImportPanel).
  * Sell is a tile grid of the outlet's whole menu (category pills, scan bar on
  * top) beside a "Current sale" panel; below 900px the panel stacks under the
  * grid and a fixed bar carries the total and "Review & pay". The full menu
@@ -306,6 +308,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     canSell && { key: 'today', label: "Today's sales" },
     canReport && { key: 'sales', label: 'All sales' },
     canVoid && { key: 'setup', label: 'Setup' },
+    canVoid && { key: 'import', label: 'Products import' },
   ].filter(Boolean);
   const activeTab = tabs.some((entry) => entry.key === tab) ? tab : tabs[0]?.key;
 
@@ -592,6 +595,10 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
             )}
           </Card>
         </section>
+      )}
+
+      {outletId && activeTab === 'import' && (
+        <ProductsImportPanel outletId={outletId} outletName={outlets.find((outlet) => String(outlet.id) === String(outletId))?.name ?? 'this outlet'} isOffline={isOffline} />
       )}
 
       {voidTarget && (

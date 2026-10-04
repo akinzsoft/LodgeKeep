@@ -378,4 +378,4 @@ async function voidSale({ trx, id, reason, userId }) {
   return getSaleWith(trx, id);
 }
 
-module.exports = { listMyOutlets, listBarcodes, addBarcode, removeBarcode, lookupByBarcode, searchItems, createSale, getSale, listSales, summarize, voidSale, receiptCode, listSetupFlags, listLowStock, listMySalesToday };
+module.exports = { cleanBarcode, requireSupermarketOutlet, MAX_BARCODE_LENGTH, listMyOutlets, listBarcodes, addBarcode, removeBarcode, lookupByBarcode, searchItems, createSale, getSale, listSales, summarize, voidSale, receiptCode, listSetupFlags, listLowStock, listMySalesToday };

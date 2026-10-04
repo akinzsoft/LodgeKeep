@@ -10,7 +10,9 @@
  * the same "re-parse from disk, don't cache" discipline `parse.js` uses).
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
+const multer = require('multer');
 const path = require('path');
 
 function storageDir() {
@@ -19,4 +21,17 @@ function storageDir() {
   return dir;
 }
 
-module.exports = { storageDir };
+/**
+ * The CSV upload middleware both import routers use (Data Migration and the
+ * supermarket product import): disk storage under `storageDir()`, a random
+ * file name (never the client's), a 20 MB cap.
+ */
+const csvUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, storageDir()),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${crypto.randomUUID()}.csv`),
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
+
+module.exports = { storageDir, csvUpload };

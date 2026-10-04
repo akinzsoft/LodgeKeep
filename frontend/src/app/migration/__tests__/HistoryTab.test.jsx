@@ -27,6 +27,16 @@ describe('<HistoryTab>', () => {
     expect(await screen.findByText('Partially rolled back')).toBeInTheDocument();
   });
 
+  it('lists a supermarket product run but offers neither Resume nor Roll back for it (managed from the Supermarket screen)', async () => {
+    mocks.listImportRuns.mockResolvedValue([{ ...COMPLETED_RUN, id: '7', entity_type: 'supermarket_products' }, COMPLETED_RUN]);
+    render(<HistoryTab />);
+    const rows = await screen.findAllByRole('row');
+    expect(within(rows[1]).getByText('Supermarket products')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('Manage from Supermarket → Products import')).toBeInTheDocument();
+    expect(within(rows[1]).queryByRole('button')).not.toBeInTheDocument();
+    expect(within(rows[2]).getByRole('button', { name: /roll back/i })).toBeInTheDocument();
+  });
+
   it('rollback is only offered for a completed or partially_rolled_back run', async () => {
     mocks.listImportRuns.mockResolvedValue([COMPLETED_RUN, COMMITTING_RUN]);
     render(<HistoryTab />);

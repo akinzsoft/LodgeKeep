@@ -103,8 +103,9 @@ function createCategoryCatalogue(config) {
   const duplicateSuffix = config.duplicateSuffix ?? '';
   const hasScopeValue = (value) => value !== undefined && value !== null && value !== '';
 
-  async function listCategories({ context, includeArchived = false, scopeValue }) {
-    const db = scopedDb().for(context);
+  /** `db` (optional): a transaction-bound accessor to read through (e.g. a bulk import's own transaction); defaults to the context's own. */
+  async function listCategories({ context, db: providedDb, includeArchived = false, scopeValue }) {
+    const db = providedDb ?? scopedDb().for(context);
     let query = db.table(table);
     if (scopeColumn && hasScopeValue(scopeValue)) query = query.where({ [scopeColumn]: scopeValue });
     const rows = await (includeArchived ? query : query.where({ status: 'active' })).orderBy('sort_order').orderBy('name');
@@ -136,11 +137,12 @@ function createCategoryCatalogue(config) {
     return db.table(table).where({ id }).first();
   }
 
-  async function createCategory({ context, name, sortOrder, scopeValue }) {
+  /** `db` (optional): an accessor already inside a transaction joins it (its `.transaction()` passes straight through) — the supermarket product import creates categories inside its one all-or-nothing transaction. */
+  async function createCategory({ context, db: providedDb, name, sortOrder, scopeValue }) {
     if (scopeColumn && !hasScopeValue(scopeValue)) {
       throw new ValidationError('MISSING_FIELD', `"${scopeColumn}" is required.`, [{ field: scopeColumn, issue: 'missing' }]);
     }
-    const db = scopedDb().for(context);
+    const db = providedDb ?? scopedDb().for(context);
     const clean = cleanName(name, nameMaxLength);
     return withDuplicateMapping(table, `A category named "${clean}" already exists${duplicateSuffix}.`, () =>
       db.transaction(async (trx) => {

@@ -27,6 +27,8 @@ const TEMPLATE_COLUMNS = Object.freeze({
   ]),
   companies: Object.freeze(['name', 'type', 'billing_email', 'billing_phone', 'billing_address', 'payment_terms_days']),
   ar_balances: Object.freeze(['company_email', 'amount', 'currency', 'credit_limit', 'enforcement_mode']),
+  // Supermarket Stage 3 — uploaded and committed only through /supermarket/imports (supermarket/product-import.js owns the rules).
+  supermarket_products: Object.freeze(['name', 'category', 'price', 'barcodes', 'unit', 'cost_price', 'opening_stock', 'reorder_level', 'supplier']),
 });
 
 const ENTITY_TYPES = Object.freeze(Object.keys(TEMPLATE_COLUMNS));

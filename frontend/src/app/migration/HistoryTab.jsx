@@ -26,6 +26,9 @@ const RUN_STATUS = {
  * because real activity has since landed against them — is shown inline,
  * never silently dropped.
  */
+/** Supermarket Stage 3 runs: listed here, managed only from the Supermarket screen. */
+const SUPERMARKET_PRODUCTS = 'supermarket_products';
+
 export function HistoryTab({ isOffline = false, onResume }) {
   const [runs, setRuns] = useState(null);
   const [error, setError] = useState(null);
@@ -100,7 +103,7 @@ export function HistoryTab({ isOffline = false, onResume }) {
         errorMessage={error}
         columns={[
           { key: 'id', label: 'Run' },
-          { key: 'entity_type', label: 'Entity' },
+          { key: 'entity_type', label: 'Entity', render: (row) => (row.entity_type === SUPERMARKET_PRODUCTS ? 'Supermarket products' : row.entity_type) },
           { key: 'status', label: 'Status', render: (row) => <StatusPill tone={(RUN_STATUS[row.status] ?? {}).tone ?? 'neutral'} label={(RUN_STATUS[row.status] ?? {}).label ?? row.status} /> },
           { key: 'rows_total', label: 'Total', render: (row) => row.rows_total ?? '—' },
           { key: 'rows_created', label: 'Created', render: (row) => row.rows_created ?? '—' },
@@ -109,18 +112,23 @@ export function HistoryTab({ isOffline = false, onResume }) {
         ]}
         rows={runs ?? []}
         rowKey={(row) => row.id}
-        actions={(row) => (
-          <div className={formStyles.actionsRow}>
-            <Button size="compact" variant="secondary" onClick={() => onResume?.(row.id)}>
-              Resume
-            </Button>
-            {ROLLBACKABLE_STATUSES.has(row.status) && (
-              <Button size="compact" variant="danger" disabled={isOffline} loading={rollingBackId === row.id} onClick={() => setRollbackTarget(row)}>
-                Roll back
+        actions={(row) =>
+          row.entity_type === SUPERMARKET_PRODUCTS ? (
+            // Uploaded, imported and undone only from the Supermarket screen (the server refuses it here).
+            <span className={formStyles.hint}>Manage from Supermarket → Products import</span>
+          ) : (
+            <div className={formStyles.actionsRow}>
+              <Button size="compact" variant="secondary" onClick={() => onResume?.(row.id)}>
+                Resume
               </Button>
-            )}
-          </div>
-        )}
+              {ROLLBACKABLE_STATUSES.has(row.status) && (
+                <Button size="compact" variant="danger" disabled={isOffline} loading={rollingBackId === row.id} onClick={() => setRollbackTarget(row)}>
+                  Roll back
+                </Button>
+              )}
+            </div>
+          )
+        }
       />
 
       {rollbackTarget && (

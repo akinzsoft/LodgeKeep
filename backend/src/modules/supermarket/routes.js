@@ -3,12 +3,16 @@
 /**
  * Supermarket quick-sale routes. Three keys: `supermarket.sales` sells (and
  * may read the receipt it rang), `supermarket.report` reads sales and reports
- * without being able to sell, `supermarket.manage` handles barcodes and voids.
+ * without being able to sell, `supermarket.manage` handles barcodes, voids and
+ * the product import.
  */
 
 const { Router } = require('express');
 const controller = require('./controller');
+const imports = require('./import-controller');
 const { requirePermission, requireAnyPermission } = require('../../auth');
+// Stage 3 product import: the same CSV upload (disk storage, 20 MB cap) as Data Migration.
+const { csvUpload: upload } = require('../migration/storage');
 
 function supermarketRouter() {
   const router = Router();
@@ -28,6 +32,16 @@ function supermarketRouter() {
   router.get('/supermarket/barcodes', requirePermission('supermarket.manage'), controller.listBarcodes);
   router.post('/supermarket/barcodes', requirePermission('supermarket.manage'), controller.addBarcode);
   router.delete('/supermarket/barcodes/:id', requirePermission('supermarket.manage'), controller.removeBarcode);
+
+  // Stage 3: bulk CSV product import (all-or-nothing; undo removes untouched products).
+  const manage = requirePermission('supermarket.manage');
+  router.get('/supermarket/imports/template', manage, imports.downloadTemplate);
+  router.get('/supermarket/imports', manage, imports.listImports);
+  router.post('/supermarket/imports', manage, upload.single('file'), imports.uploadImport);
+  router.get('/supermarket/imports/:id', manage, imports.getImport);
+  router.post('/supermarket/imports/:id/dry-run', manage, imports.dryRun);
+  router.post('/supermarket/imports/:id/commit', manage, imports.commit);
+  router.post('/supermarket/imports/:id/rollback', manage, imports.rollback);
 
   return router;
 }

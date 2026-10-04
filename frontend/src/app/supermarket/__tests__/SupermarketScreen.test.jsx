@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   listMySales: vi.fn(),
   getSetupFlags: vi.fn(),
   addBarcode: vi.fn(),
+  listProductsImports: vi.fn(),
 }));
 
 const posMocks = vi.hoisted(() => ({
@@ -64,6 +65,7 @@ describe('<SupermarketScreen>', () => {
     mocks.getLowStock.mockResolvedValue({ total: 0, items: [] });
     mocks.listMySales.mockResolvedValue([]);
     mocks.getSetupFlags.mockResolvedValue({ items: [], counts: { missing_barcode: 0, not_stock_tracked: 0 } });
+    mocks.listProductsImports.mockResolvedValue([]);
   });
 
   it('adds a scanned barcode to the cart and counts a second scan of the same product', async () => {
@@ -288,7 +290,20 @@ describe('<SupermarketScreen>', () => {
       expect(await screen.findByRole('tab', { name: 'All sales' })).toHaveAttribute('aria-selected', 'true');
       expect(screen.queryByRole('tab', { name: 'Sell' })).not.toBeInTheDocument();
       expect(screen.queryByRole('tab', { name: 'Setup' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('tab', { name: 'Products import' })).not.toBeInTheDocument();
       expect(posMocks.listMenuItems).not.toHaveBeenCalled();
+    });
+
+    it('offers Products import to the manage key only, and opens it on that outlet', async () => {
+      const { unmount } = render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await screen.findByRole('tab', { name: 'Sell' });
+      expect(screen.queryByRole('tab', { name: 'Products import' })).not.toBeInTheDocument();
+      unmount();
+
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Products import' }));
+      expect(await screen.findByText('Import products from a spreadsheet')).toBeInTheDocument();
+      expect(mocks.listProductsImports).toHaveBeenCalledWith('5');
     });
   });
 });
