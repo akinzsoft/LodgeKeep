@@ -52,6 +52,8 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const [cart, setCart] = useState([]);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [canUseCamera] = useState(cameraSupported);
+  // `?scandebug=1` shows the camera scanner's on-screen diagnostics (no effect on scanning).
+  const [scanDebug] = useState(() => new URLSearchParams(window.location.search).has('scandebug'));
   const [lookupError, setLookupError] = useState(null);
   const [method, setMethod] = useState('cash');
   const [submitting, setSubmitting] = useState(false);
@@ -653,7 +655,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       )}
 
       {cameraOpen && outletId && activeTab === 'sell' && !isOffline && (
-        <CameraScanDialog onDetected={addByBarcode} onClose={closeCamera} cartCount={itemCount} />
+        <CameraScanDialog onDetected={addByBarcode} onClose={closeCamera} cartCount={itemCount} debug={scanDebug} />
       )}
 
       {outletId && activeTab === 'import' && (
