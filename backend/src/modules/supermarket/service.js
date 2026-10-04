@@ -66,10 +66,40 @@ async function listMyOutlets({ context }) {
 
 // ---------------------------------------------------------------- barcodes
 
-async function listBarcodes({ context, menuItemId }) {
+/**
+ * Every barcode registered at the property (barcodes are unique property-wide,
+ * so a code on a restaurant item shows here too), each with its product's name
+ * and status. With `outletId` (a supermarket outlet the caller covers) each row
+ * also says whether that product is on that outlet's till (`on_till`), by the
+ * same carried-category rule the till uses; without it `on_till` is null.
+ */
+async function listBarcodes({ context, menuItemId, outletId }) {
   const db = scopedDb().for(context);
-  const query = db.table('supermarket_barcodes').orderBy('id');
-  return menuItemId ? query.where({ menu_item_id: menuItemId }) : query;
+  let carried = null;
+  if (outletId) {
+    await requireSupermarketOutlet({ db, context, outletId });
+    carried = new Set((await outletMenu.carriedCategoryNames(db, outletId)).map((name) => String(name).trim().toLowerCase()));
+  }
+  let query = db
+    .table('supermarket_barcodes')
+    .joinScoped('pos_menu_items', (join) => join.on('pos_menu_items.id', '=', 'supermarket_barcodes.menu_item_id'))
+    .select(
+      'supermarket_barcodes.id',
+      'supermarket_barcodes.menu_item_id',
+      'supermarket_barcodes.barcode',
+      'supermarket_barcodes.created_at',
+      'pos_menu_items.name as item_name',
+      'pos_menu_items.category as item_category',
+      'pos_menu_items.status as item_status'
+    )
+    .orderBy('pos_menu_items.name')
+    .orderBy('supermarket_barcodes.id');
+  if (menuItemId) query = query.where({ 'supermarket_barcodes.menu_item_id': menuItemId });
+  const rows = await query;
+  return rows.map((row) => ({
+    ...row,
+    on_till: carried === null ? null : row.item_status === 'active' && carried.has(String(row.item_category ?? '').trim().toLowerCase()),
+  }));
 }
 
 async function addBarcode({ context, menuItemId, barcode }) {

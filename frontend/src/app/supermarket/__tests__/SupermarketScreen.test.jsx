@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   listMySales: vi.fn(),
   getSetupFlags: vi.fn(),
   addBarcode: vi.fn(),
+  listBarcodes: vi.fn(),
+  removeBarcode: vi.fn(),
   listProductsImports: vi.fn(),
 }));
 
@@ -84,6 +86,7 @@ describe('<SupermarketScreen>', () => {
     mocks.listMySales.mockResolvedValue([]);
     mocks.getSetupFlags.mockResolvedValue({ items: [], counts: { missing_barcode: 0, not_stock_tracked: 0 } });
     mocks.listProductsImports.mockResolvedValue([]);
+    mocks.listBarcodes.mockResolvedValue([]);
     scanner.cameraSupported.mockReturnValue(false);
   });
 
@@ -362,6 +365,24 @@ describe('<SupermarketScreen>', () => {
       render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} isOffline />);
       await userEvent.click(await screen.findByRole('tab', { name: 'Setup' }));
       expect(await screen.findByRole('button', { name: 'Scan the barcode for Bare item' })).toBeDisabled();
+    });
+
+    it('shows the Barcodes card on Setup, and keeps it and "Products needing setup" in step', async () => {
+      mocks.getSetupFlags
+        .mockResolvedValueOnce({ items: [{ id: '31', name: 'Bare item', missing_barcode: true, not_stock_tracked: false }], counts: { missing_barcode: 1, not_stock_tracked: 0 } })
+        .mockResolvedValue({ items: [], counts: { missing_barcode: 0, not_stock_tracked: 0 } });
+      mocks.listBarcodes
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([{ id: '9', menu_item_id: '31', barcode: '600999', item_name: 'Bare item', item_status: 'active', on_till: true }]);
+      mocks.addBarcode.mockResolvedValue({ id: '9' });
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Setup' }));
+      expect(await screen.findByText('No barcodes yet. Add them under “Products needing setup”, or with Products import.')).toBeInTheDocument();
+      expect(mocks.listBarcodes).toHaveBeenCalledWith('5');
+      await userEvent.type(screen.getByLabelText('Barcode for Bare item'), '600999');
+      await userEvent.click(screen.getByRole('button', { name: 'Add barcode' }));
+      const list = await screen.findByRole('list', { name: 'Barcodes for Bare item' });
+      expect(within(list).getByText('600999')).toBeInTheDocument();
     });
 
     it('hides the setup panel and does not load flags without the manage key', async () => {

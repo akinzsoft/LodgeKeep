@@ -92,7 +92,7 @@ async function voidSale(req, res, next) {
 
 async function listBarcodes(req, res, next) {
   try {
-    res.json(ok(await service.listBarcodes({ context: req.context, menuItemId: req.query.menu_item_id })));
+    res.json(ok(await service.listBarcodes({ context: req.context, menuItemId: req.query.menu_item_id, outletId: req.query.outlet_id })));
   } catch (error) {
     next(error);
   }

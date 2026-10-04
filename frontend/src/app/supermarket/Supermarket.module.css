@@ -692,7 +692,8 @@
 }
 
 .badgeWarning,
-.badgeNeutral {
+.badgeNeutral,
+.badgeSuccess {
   padding: 0 var(--space-2);
   border-radius: var(--radius-full);
   font-size: var(--text-caption-size);
@@ -709,12 +710,77 @@
   color: var(--state-neutral);
 }
 
+.badgeSuccess {
+  background: var(--state-success-bg);
+  color: var(--state-success);
+}
+
+/* ---- Barcodes card (Setup) ---- */
+
+.barcodeSearch {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: 24rem;
+  margin-bottom: var(--space-3);
+}
+
+.barcodeChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.barcodeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 0 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-card);
+}
+
+.barcodeCode {
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* A 44px-tall tap target on a phone, visually a plain link inside the chip. */
+.chipRemove {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--state-danger);
+  font: inherit;
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chipRemove:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .barcodeForm {
   display: flex;
   flex-wrap: wrap; /* field, Scan and Add barcode wrap on a phone instead of overflowing */
   align-items: center;
   gap: var(--space-2);
   margin-left: auto;
+}
+
+/* The field shares the line with Scan and Add on a wide screen, and wraps above them on a phone. */
+.barcodeForm input {
+  flex: 1 1 12rem;
+  width: auto;
+  min-width: 0;
 }
 
 /* ---- Receipt (shared with SupermarketReceipt) ---- */

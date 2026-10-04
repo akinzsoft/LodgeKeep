@@ -112,6 +112,59 @@ describe('supermarket quick sale', () => {
     });
   });
 
+  describe('the barcode list (Setup)', () => {
+    it('lists every barcode at the property with its product, and says which products are on this till', async () => {
+      const bar = await outlet('bar', `Bar ${next()}`);
+      const [soup] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: bar, name: 'Egusi Soup', category: `Kitchen ${next()}`, price: '50.00' });
+      const junk = await barcode(soup, 'e');
+
+      const res = await as(users.manager).get(`/api/v1/supermarket/barcodes?outlet_id=${market.outletId}`);
+      expect(res.status).toBe(200);
+      const byCode = Object.fromEntries(res.body.data.map((row) => [row.barcode, row]));
+      expect(byCode['6001000000011']).toMatchObject({ item_name: 'Rice 5kg', on_till: true });
+      expect(byCode['6001000000028']).toMatchObject({ item_name: 'Rice 5kg', on_till: true });
+      expect(byCode.e).toMatchObject({ item_name: 'Egusi Soup', on_till: false }); // a restaurant item still shows, so it can be removed
+      // Sorted by product name.
+      const names = res.body.data.map((row) => row.item_name);
+      expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+
+      // Without an outlet nothing is judged.
+      const plain = await as(users.manager).get('/api/v1/supermarket/barcodes');
+      expect(plain.body.data.find((row) => row.barcode === 'e').on_till).toBeNull();
+
+      // Removed: gone from the list and from the till's lookup.
+      const del = await as(users.manager).del(`/api/v1/supermarket/barcodes/${junk.id}`);
+      expect(del.status).toBe(200);
+      const after = await as(users.manager).get(`/api/v1/supermarket/barcodes?outlet_id=${market.outletId}`);
+      expect(after.body.data.some((row) => row.barcode === 'e')).toBe(false);
+    });
+
+    it('needs the manager key, a supermarket outlet, and never shows another tenant\'s barcodes', async () => {
+      expect((await as(users.operator).get('/api/v1/supermarket/barcodes')).status).toBe(403);
+      const bar = await outlet('bar', `Bar ${next()}`);
+      const notMart = await as(users.manager).get(`/api/v1/supermarket/barcodes?outlet_id=${bar}`);
+      expect(notMart.status).toBeGreaterThanOrEqual(400);
+      expect(notMart.status).toBeLessThan(500);
+
+      const propertyB = ctx.b.properties[0].id;
+      const [otherItem] = await insertMenuItem(t.trx, { tenant_id: ctx.b.id, property_id: propertyB, name: 'Other tenant item', category: `B ${next()}`, price: '1.00' });
+      await t.trx('supermarket_barcodes').insert({ tenant_id: ctx.b.id, property_id: propertyB, menu_item_id: otherItem, barcode: '7770000000001' });
+      const mine = await as(users.manager).get(`/api/v1/supermarket/barcodes?outlet_id=${market.outletId}`);
+      expect(mine.body.data.some((row) => row.barcode === '7770000000001')).toBe(false);
+      // Removing another tenant's barcode is not found.
+      const theirs = await t.trx('supermarket_barcodes').where({ tenant_id: ctx.b.id, barcode: '7770000000001' }).first('id');
+      expect((await as(users.manager).del(`/api/v1/supermarket/barcodes/${theirs.id}`)).status).toBe(404);
+    });
+
+    it('adds another barcode to a product that already has one', async () => {
+      await barcode(soap, '6001000000099');
+      const res = await as(users.manager).get(`/api/v1/supermarket/barcodes?menu_item_id=${soap}`);
+      expect(res.body.data.map((row) => row.barcode).sort()).toEqual(['6001000000035', '6001000000099']);
+      const lookup = await as(users.operator).get(`/api/v1/supermarket/lookup?outlet_id=${market.outletId}&barcode=6001000000099`);
+      expect(lookup.body.data).toMatchObject({ name: 'Soap' });
+    });
+  });
+
   describe('tax: its own row, hotel rows never apply', () => {
     it('with only the hotel "all" VAT row a supermarket sale is NOT taxed', async () => {
       await t.trx('taxes').where({ tenant_id: ctx.a.id, tax_code: 'SM_VAT' }).del();

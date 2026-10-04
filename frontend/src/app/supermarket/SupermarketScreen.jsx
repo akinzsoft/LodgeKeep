@@ -7,6 +7,7 @@ import { SupermarketReceipt } from './SupermarketReceipt.jsx';
 import { ProductTile } from './ProductTile.jsx';
 import { ProductsImportPanel } from './ProductsImportPanel.jsx';
 import { CameraScanDialog } from './CameraScanDialog.jsx';
+import { BarcodesCard } from './BarcodesCard.jsx';
 import { cameraSupported } from '../../shared/scanner/cameraScanner.js';
 import formStyles from '../pos/POSForm.module.css';
 import styles from './Supermarket.module.css';
@@ -76,7 +77,8 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const [flags, setFlags] = useState(null);
   const [flagsError, setFlagsError] = useState(null);
   const [barcodeDrafts, setBarcodeDrafts] = useState({});
-  const [barcodeScanTarget, setBarcodeScanTarget] = useState(null); // the Setup product whose field the camera fills
+  const [barcodeScanTarget, setBarcodeScanTarget] = useState(null);
+  const [barcodesVersion, setBarcodesVersion] = useState(0); // reloads the Barcodes card after an add under "Products needing setup" // the Setup product whose field the camera fills
   // The Setup field to focus once the camera view has gone (its own cleanup returns focus to the Scan button first).
   const focusBarcodeFor = useRef(null);
 
@@ -211,6 +213,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       await supermarketApi.addBarcode(item.id, code);
       setBarcodeDrafts((current) => ({ ...current, [item.id]: '' }));
       setFlagsError(null);
+      setBarcodesVersion((current) => current + 1);
       await loadFlags();
     } catch (caught) {
       setFlagsError(caught instanceof ApiError ? caught.message : 'Could not add that barcode.');
@@ -679,6 +682,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
               </>
             )}
           </Card>
+          <BarcodesCard outletId={outletId} isOffline={isOffline} canUseCamera={canUseCamera} scanDebug={scanDebug} refreshKey={barcodesVersion} onChanged={loadFlags} />
         </section>
       )}
 

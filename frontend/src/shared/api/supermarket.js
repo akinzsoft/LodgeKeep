@@ -71,6 +71,16 @@ export function listMySales(outletId) {
   return request(`/supermarket/my-sales?${new URLSearchParams({ outlet_id: outletId })}`);
 }
 
+/** Every barcode at the property with its product; with an outlet, `on_till` says whether that outlet sells it. */
+export function listBarcodes(outletId) {
+  return request(`/supermarket/barcodes?${new URLSearchParams(outletId ? { outlet_id: outletId } : {})}`);
+}
+
+/** Removes one barcode (the product, its sales and stock are untouched). */
+export function removeBarcode(id) {
+  return request(`/supermarket/barcodes/${id}`, { method: 'DELETE' });
+}
+
 export function addBarcode(menuItemId, barcode) {
   return request('/supermarket/barcodes', { method: 'POST', body: { menu_item_id: menuItemId, barcode } });
 }
