@@ -37,31 +37,45 @@ export function unlockAlertSound() {
   }
 }
 
-/** Plays the chime once. Returns true when a sound was scheduled. */
-export function playAlertBeep() {
+/** One enveloped tone on `ctx` (attack to `peak`, decay over `duration`). */
+function scheduleTone(ctx, { frequency, type = 'sine', at, duration, peak }) {
+  const oscillator = ctx.createOscillator();
+  const gain = ctx.createGain();
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, at);
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(peak, at + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+  oscillator.connect(gain);
+  gain.connect(ctx.destination);
+  oscillator.start(at);
+  oscillator.stop(at + duration + 0.01);
+}
+
+/** Runs `play(ctx, startTime)` on the shared context; false (never an error) when there is no audio. */
+function withAudio(play) {
   try {
     const ctx = audioContext();
     if (!ctx) return false;
     if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-    const start = ctx.currentTime + 0.01;
-    [
-      [880, 0],
-      [1320, 0.18],
-    ].forEach(([frequency, offset]) => {
-      const oscillator = ctx.createOscillator();
-      const gain = ctx.createGain();
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(frequency, start + offset);
-      gain.gain.setValueAtTime(0.0001, start + offset);
-      gain.gain.exponentialRampToValueAtTime(0.3, start + offset + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.16);
-      oscillator.connect(gain);
-      gain.connect(ctx.destination);
-      oscillator.start(start + offset);
-      oscillator.stop(start + offset + 0.17);
-    });
+    play(ctx, ctx.currentTime + 0.01);
     return true;
   } catch {
     return false;
   }
+}
+
+/** Plays the chime once. Returns true when a sound was scheduled. */
+export function playAlertBeep() {
+  return withAudio((ctx, at) => {
+    scheduleTone(ctx, { frequency: 880, at, duration: 0.16, peak: 0.3 });
+    scheduleTone(ctx, { frequency: 1320, at: at + 0.18, duration: 0.16, peak: 0.3 });
+  });
+}
+
+/** Supermarket camera scanning: a short high blip when the product was added, a low buzz when it was not. */
+const SCAN_TONES = { ok: { frequency: 1760, duration: 0.09, type: 'sine' }, error: { frequency: 220, duration: 0.28, type: 'square' } };
+
+export function playScanTone(kind = 'ok') {
+  return withAudio((ctx, at) => scheduleTone(ctx, { ...(SCAN_TONES[kind] ?? SCAN_TONES.ok), at, peak: 0.25 }));
 }

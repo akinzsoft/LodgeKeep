@@ -57,6 +57,8 @@
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
+		# Camera off here for every response; the SPA `handle` below turns it
+		# on (camera=(self)) for the staff app's page only — see there.
 		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(self)"
 		# Defaults-off, not a full CSP — the SPA's own `handle` block below
 		# sets the real one, scoped to the actual HTML page it protects.
@@ -125,7 +127,31 @@
 		# mode, which this app doesn't use; the widget's own iframe (its
 		# own separate origin, subject to Cloudflare's own CSP, not this
 		# page's) makes whatever connections it needs internally.
-		header Content-Security-Policy "default-src 'self'; script-src 'self' https://js.paystack.co https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		#
+		# Supermarket camera barcode scanning (user-approved security change)
+		# needs two loosenings, applied to the STAFF APP'S PAGE ONLY:
+		#   - Permissions-Policy camera=(self): our own page may ask for the
+		#     camera (the browser still prompts the user); embedded frames
+		#     (Paystack, Turnstile) still may not.
+		#   - CSP 'wasm-unsafe-eval': WebAssembly compilation only — NOT
+		#     'unsafe-eval', so JavaScript eval()/new Function stay blocked.
+		#     The decoder (ZXing compiled to WebAssembly) is served from this
+		#     origin under /assets, never a CDN. Without it Chrome refuses the
+		#     decoder ("Compiling or instantiating WebAssembly module violates
+		#     the following Content Security policy directive"), verified
+		#     against the built app in real Chrome.
+		# Headers apply per page, and the SPA serves one index.html whose app
+		# is chosen by path (frontend/src/main.jsx): /portal (guest portal),
+		# /platform (platform console), /qr-order (guest QR ordering) and
+		# /signup keep the strict policy; every other path is the staff app,
+		# where the till lives as a screen with no URL of its own — so this is
+		# as narrow as the current single-page app allows. The matchers mirror
+		# main.jsx's own startsWith() checks exactly (so /portalx is the portal too).
+		@strictApps path /portal* /platform* /qr-order* /signup*
+		@staffApp not path /portal* /platform* /qr-order* /signup*
+		header @staffApp Permissions-Policy "camera=(self), microphone=(), geolocation=(), payment=(self)"
+		header @staffApp Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://js.paystack.co https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		header @strictApps Content-Security-Policy "default-src 'self'; script-src 'self' https://js.paystack.co https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 		# Caching, so a deploy actually reaches a reload (user-reported: a
 		# storekeeper's open browser kept the pre-deploy app): index.html —
