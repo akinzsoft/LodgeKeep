@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { openCamera, closeCamera, loadDetector, readFrame, torchSupported, setTorch } from '../../shared/scanner/cameraScanner.js';
+import { openCamera, closeCamera, loadDetector, readFrame, torchSupported, setTorch, newScanStats } from '../../shared/scanner/cameraScanner.js';
+import { ScanDebugPanel } from './ScanDebugPanel.jsx';
 import { playScanTone } from '../../shared/sound/alertBeep.js';
 import styles from './CameraScan.module.css';
 
@@ -59,7 +60,7 @@ function describeOutcome(outcome, code) {
  * began releases what it opened. It is modal: focus stays inside, and goes
  * back to where it came from when the view goes away for any reason.
  */
-export function CameraScanDialog({ onDetected, onClose, cartCount = 0 }) {
+export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = false }) {
   const overlay = useRef(null);
   const video = useRef(null);
   const stream = useRef(null);
@@ -67,6 +68,7 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0 }) {
   const run = useRef(0); // the current start's token; anything older is stale
   const last = useRef({ code: null, at: 0 });
   const doneButton = useRef(null);
+  const stats = useRef(newScanStats()); // read counters, shown only by the ?scandebug=1 panel
 
   const [status, setStatus] = useState('starting'); // starting | scanning | paused | error
   const [errorReason, setErrorReason] = useState(null);
@@ -186,7 +188,7 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0 }) {
     let timer = null;
     async function loop() {
       if (cancelled) return;
-      const code = await readFrame(detector.current, video.current);
+      const code = await readFrame(detector.current, video.current, stats.current);
       const now = Date.now();
       if (code && !cancelled && !(code === last.current.code && now - last.current.at < SAME_CODE_COOLDOWN_MS)) {
         last.current = { code, at: now };
@@ -230,6 +232,7 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0 }) {
         {status === 'scanning' && (
           <div key={result?.id ?? 'aim'} className={`${styles.aim} ${result ? (result.ok ? styles.aimOk : styles.aimError) : ''}`} aria-hidden="true" />
         )}
+        {debug && <ScanDebugPanel stream={stream} video={video} stats={stats} />}
         <div className={styles.topBar}>
           <h2 id="camera-scan-title" className={styles.title}>Scan products</h2>
           <div className={styles.topActions}>

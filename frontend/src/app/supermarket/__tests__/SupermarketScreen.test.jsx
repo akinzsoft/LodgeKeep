@@ -26,6 +26,10 @@ const posMocks = vi.hoisted(() => ({
 
 // No camera in jsdom: the scanner plumbing is stubbed (cameraSupported false unless a test says otherwise).
 const scanner = vi.hoisted(() => ({
+  describeCamera: vi.fn(() => null),
+  decoderInfo: vi.fn(() => ({ state: 'ready', loadMs: 1, wasmUrl: '/assets/x.wasm', error: null })),
+  listCameras: vi.fn(async () => []),
+  lastFrame: vi.fn(() => null),
   cameraSupported: vi.fn(() => false),
   openCamera: vi.fn(),
   closeCamera: vi.fn(),
@@ -33,6 +37,7 @@ const scanner = vi.hoisted(() => ({
   readFrame: vi.fn(),
   torchSupported: vi.fn(() => false),
   setTorch: vi.fn(),
+  newScanStats: () => ({ notReady: 0, attempts: 0, completed: 0, empty: 0, errors: 0, lastError: null, lastMs: null, lastCode: null, frameSize: null, inFlightSince: null }),
 }));
 vi.mock('../../../shared/scanner/cameraScanner.js', () => scanner);
 vi.mock('../../../shared/sound/alertBeep.js', () => ({ playScanTone: vi.fn(), playAlertBeep: vi.fn(), unlockAlertSound: vi.fn() }));
@@ -130,6 +135,21 @@ describe('<SupermarketScreen>', () => {
       expect(screen.queryByRole('dialog', { name: 'Scan products' })).not.toBeInTheDocument();
       expect(scanner.closeCamera).toHaveBeenCalledWith({ id: 'stream' });
       expect(scanButton).toBeDisabled(); // offline: nothing on the till takes focus, so none is forced back
+    });
+
+    it('shows the scanner diagnostics only when the page is opened with ?scandebug=1', async () => {
+      scanner.cameraSupported.mockReturnValue(true);
+      scanner.openCamera.mockResolvedValue({ id: 'stream' });
+      scanner.loadDetector.mockResolvedValue({ detect: vi.fn() });
+      scanner.readFrame.mockResolvedValue(null);
+      window.history.pushState({}, '', '/?scandebug=1');
+      try {
+        render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+        await userEvent.click(await screen.findByRole('button', { name: 'Scan' }));
+        expect(await screen.findByLabelText('Scanner diagnostics', {}, { timeout: 3000 })).toBeInTheDocument();
+      } finally {
+        window.history.pushState({}, '', '/');
+      }
     });
 
     it('disables Scan while offline', async () => {

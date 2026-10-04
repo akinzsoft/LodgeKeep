@@ -13,6 +13,9 @@
 import { BarcodeDetector, prepareZXingModule } from 'barcode-detector/ponyfill';
 import wasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url';
 
+/** Where the decoder's .wasm is served from (our own /assets) — shown by the scan debug panel. */
+export const WASM_URL = wasmUrl;
+
 /** Retail and common shelf-label symbologies; QR is left out (not a product barcode). */
 export const SCAN_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf'];
 

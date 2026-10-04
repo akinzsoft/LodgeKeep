@@ -3,12 +3,17 @@ import { render, screen, act, fireEvent } from '@testing-library/react';
 import { CameraScanDialog } from '../CameraScanDialog.jsx';
 
 const scanner = vi.hoisted(() => ({
+  describeCamera: vi.fn(),
+  decoderInfo: vi.fn(),
+  listCameras: vi.fn(),
+  lastFrame: vi.fn(),
   openCamera: vi.fn(),
   closeCamera: vi.fn(),
   loadDetector: vi.fn(),
   readFrame: vi.fn(),
   torchSupported: vi.fn(),
   setTorch: vi.fn(),
+  newScanStats: () => ({ notReady: 0, attempts: 0, completed: 0, empty: 0, errors: 0, lastError: null, lastMs: null, lastCode: null, frameSize: null, inFlightSince: null }),
 }));
 vi.mock('../../../shared/scanner/cameraScanner.js', () => scanner);
 const sound = vi.hoisted(() => ({ playScanTone: vi.fn() }));
@@ -37,12 +42,16 @@ async function open(props = {}) {
 describe('<CameraScanDialog>', () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
-    Object.values(scanner).forEach((fn) => fn.mockReset());
+    Object.values(scanner).forEach((fn) => fn.mockReset?.());
     sound.playScanTone.mockReset();
     scanner.openCamera.mockResolvedValue(STREAM);
     scanner.loadDetector.mockResolvedValue({ detect: vi.fn() });
     scanner.readFrame.mockResolvedValue(null);
     scanner.torchSupported.mockReturnValue(false);
+    scanner.listCameras.mockResolvedValue(['camera2 0, facing back', 'camera2 1, facing front']);
+    scanner.decoderInfo.mockReturnValue({ state: 'ready', loadMs: 420, wasmUrl: '/assets/zxing_reader-x.wasm', error: null });
+    scanner.describeCamera.mockReturnValue({ label: 'camera2 0, facing back', state: 'live', muted: false, settings: { facingMode: 'environment', width: 1280, height: 720, frameRate: 30, focusMode: 'continuous' }, capabilities: { focusMode: ['continuous'], zoom: null, torch: true } });
+    scanner.lastFrame.mockReturnValue(null);
     navigator.vibrate = vi.fn();
     window.localStorage.removeItem('lodgekeep.scanSound');
   });
@@ -256,6 +265,52 @@ describe('<CameraScanDialog>', () => {
       unmount(); // e.g. the device went offline
       expect(opener).toHaveFocus();
       opener.remove();
+    });
+  });
+
+  describe('?scandebug=1 diagnostics', () => {
+    it('shows nothing unless asked for', async () => {
+      await open();
+      await tick(3);
+      expect(screen.queryByLabelText('Scanner diagnostics')).not.toBeInTheDocument();
+    });
+
+    it('shows the camera, the decoder and the read counts', async () => {
+      scanner.readFrame.mockImplementation(async (detector, video, stats) => {
+        stats.attempts += 1;
+        stats.completed += 1;
+        stats.empty += 1;
+        return null;
+      });
+      const onDetected = vi.fn();
+      render(<CameraScanDialog onDetected={onDetected} onClose={vi.fn()} debug />);
+      await act(async () => {});
+      await tick(4);
+      const panel = screen.getByLabelText('Scanner diagnostics');
+      expect(panel).toHaveTextContent('camera: camera2 0, facing back');
+      expect(panel).toHaveTextContent('facing=environment');
+      expect(panel).toHaveTextContent('1280×720 @ 30fps');
+      expect(panel).toHaveTextContent('focus=continuous');
+      expect(panel).toHaveTextContent('cameras (2): camera2 0, facing back | camera2 1, facing front');
+      expect(panel).toHaveTextContent('decoder: ready in 420ms');
+      expect(panel).toHaveTextContent(/reads: started=[1-9]\d* finished=[1-9]\d* empty=[1-9]/);
+      expect(scanner.readFrame).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ attempts: expect.any(Number) }));
+    });
+
+    it('flags a read stuck for over 2 s and the last error', async () => {
+      scanner.readFrame.mockImplementation((detector, video, stats) => {
+        stats.attempts += 1;
+        stats.errors = 1;
+        stats.lastError = 'RuntimeError: unreachable';
+        stats.inFlightSince = Date.now();
+        return new Promise(() => {}); // never settles
+      });
+      render(<CameraScanDialog onDetected={vi.fn()} onClose={vi.fn()} debug />);
+      await act(async () => {});
+      await tick(25);
+      const panel = screen.getByLabelText('Scanner diagnostics');
+      expect(panel).toHaveTextContent('STUCK');
+      expect(panel).toHaveTextContent('last error: RuntimeError: unreachable');
     });
   });
 });
