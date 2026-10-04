@@ -14,8 +14,10 @@ const MESSAGES = {
   busy: 'The camera is being used by another app. Close that app, then try again.',
   decoder: 'The barcode reader could not load. Check the connection, then try again.',
   failed: 'The camera could not start. Try again, or type the barcode.',
+  decode_failing: 'The barcode reader keeps failing on this phone. Try again, or type the barcode.',
 };
-const RETRYABLE = new Set(['busy', 'decoder', 'failed']);
+const RETRYABLE = new Set(['busy', 'decoder', 'failed', 'decode_failing']);
+const MAX_CONSECUTIVE_ERRORS = 8; // then say so on screen instead of scanning in silence
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function readSoundOn() {
@@ -68,10 +70,11 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = f
   const run = useRef(0); // the current start's token; anything older is stale
   const last = useRef({ code: null, at: 0 });
   const doneButton = useRef(null);
-  const stats = useRef(newScanStats()); // read counters, shown only by the ?scandebug=1 panel
+  const stats = useRef(newScanStats()); // read counters: repeated errors end in a visible message; all shown by ?scandebug=1
 
   const [status, setStatus] = useState('starting'); // starting | scanning | paused | error
   const [errorReason, setErrorReason] = useState(null);
+  const [errorDetail, setErrorDetail] = useState(null);
   const [result, setResult] = useState(null); // {ok, text, id}
   const [soundOn, setSoundOn] = useState(readSoundOn);
   const [torch, setTorchState] = useState({ supported: false, on: false });
@@ -97,6 +100,8 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = f
     const token = run.current;
     setStatus('starting');
     setErrorReason(null);
+    setErrorDetail(null);
+    stats.current.consecutiveErrors = 0;
     const decoder = loadDetector(); // downloads while the camera (and its permission prompt) opens
     decoder.catch(() => {}); // handled below; never an unhandled rejection
     let opened = null;
@@ -189,6 +194,14 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = f
     async function loop() {
       if (cancelled) return;
       const code = await readFrame(detector.current, video.current, stats.current);
+      if (cancelled) return;
+      if (stats.current.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        stop();
+        setErrorReason('decode_failing');
+        setErrorDetail(stats.current.lastError);
+        setStatus('error');
+        return;
+      }
       const now = Date.now();
       if (code && !cancelled && !(code === last.current.code && now - last.current.at < SAME_CODE_COOLDOWN_MS)) {
         last.current = { code, at: now };
@@ -203,7 +216,7 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = f
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [status, onDetected, feedback]);
+  }, [status, onDetected, feedback, stop]);
 
   function toggleSound() {
     const next = !soundOn;
@@ -256,6 +269,7 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = f
         {status === 'error' && (
           <div className={styles.error} role="alert">
             <p>{MESSAGES[errorReason] ?? MESSAGES.failed}</p>
+            {errorDetail && <p className={styles.errorDetail}>{errorDetail}</p>}
             {RETRYABLE.has(errorReason) && (
               <button type="button" className={styles.toggle} onClick={start}>Try again</button>
             )}

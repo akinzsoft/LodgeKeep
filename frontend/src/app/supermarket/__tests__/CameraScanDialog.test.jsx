@@ -313,4 +313,22 @@ describe('<CameraScanDialog>', () => {
       expect(panel).toHaveTextContent('last error: RuntimeError: unreachable');
     });
   });
+
+  it('says so on screen, with the error and a retry, when the reader keeps failing instead of scanning in silence', async () => {
+    scanner.readFrame.mockImplementation(async (detector, video, stats) => {
+      stats.errors += 1;
+      stats.consecutiveErrors = (stats.consecutiveErrors ?? 0) + 1;
+      stats.lastError = 'RuntimeError: memory access out of bounds';
+      return null;
+    });
+    await open();
+    await tick(9);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('The barcode reader keeps failing on this phone');
+    expect(alert).toHaveTextContent('RuntimeError: memory access out of bounds');
+    expect(scanner.closeCamera).toHaveBeenCalledWith(STREAM);
+    scanner.readFrame.mockResolvedValue(null);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Try again' })));
+    expect(screen.getByText('Point the camera at a barcode.')).toBeInTheDocument();
+  });
 });

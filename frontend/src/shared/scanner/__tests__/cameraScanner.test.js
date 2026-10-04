@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const detectorModule = vi.hoisted(() => ({ createDetector: vi.fn(), WASM_URL: '/assets/zxing_reader-test.wasm' }));
 vi.mock('../detector.js', () => detectorModule);
 
-const fakeTrack = () => ({ stop: vi.fn(), getCapabilities: vi.fn(() => ({})), applyConstraints: vi.fn().mockResolvedValue() });
+const fakeTrack = (settings = {}) => ({ stop: vi.fn(), getCapabilities: vi.fn(() => ({})), getSettings: vi.fn(() => settings), applyConstraints: vi.fn().mockResolvedValue() });
 const fakeStream = (track = fakeTrack()) => ({ getTracks: () => [track], getVideoTracks: () => [track], track });
 const domError = (name) => Object.assign(new Error(name), { name });
 
@@ -16,6 +16,7 @@ describe('cameraScanner', () => {
   const originalMediaDevices = navigator.mediaDevices;
   beforeEach(() => {
     detectorModule.createDetector.mockReset();
+    window.localStorage.removeItem('lodgekeep.scanCamera');
   });
   afterEach(() => {
     Object.defineProperty(navigator, 'mediaDevices', { value: originalMediaDevices, configurable: true });
@@ -38,11 +39,11 @@ describe('cameraScanner', () => {
     const { openCamera } = await load();
     const stream = fakeStream();
     const getUserMedia = vi.fn().mockResolvedValue(stream);
-    Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia }, configurable: true });
+    Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia, enumerateDevices: vi.fn().mockResolvedValue([]) }, configurable: true });
     const video = { play: vi.fn().mockResolvedValue() };
     expect(await openCamera(video)).toBe(stream);
     expect(video.srcObject).toBe(stream);
-    expect(getUserMedia.mock.calls[0][0]).toMatchObject({ audio: false, video: { facingMode: { ideal: 'environment' } } });
+    expect(getUserMedia.mock.calls[0][0]).toMatchObject({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
   });
 
   it.each([
@@ -61,7 +62,7 @@ describe('cameraScanner', () => {
   it('releases the camera when the video cannot play', async () => {
     const { openCamera } = await load();
     const stream = fakeStream();
-    Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: vi.fn().mockResolvedValue(stream) }, configurable: true });
+    Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: vi.fn().mockResolvedValue(stream), enumerateDevices: vi.fn().mockResolvedValue([]) }, configurable: true });
     await expect(openCamera({ play: vi.fn().mockRejectedValue(new Error('no')) })).rejects.toMatchObject({ reason: 'failed' });
     expect(stream.track.stop).toHaveBeenCalled();
   });
@@ -105,15 +106,37 @@ describe('cameraScanner', () => {
       expect(detector.detect).not.toHaveBeenCalled();
     });
 
-    it('decodes the frame from a canvas at most 1280 px wide', async () => {
+    it('decodes the centre band at full detail, and every third read the whole frame, never wider than 1600 px', async () => {
       const { readFrame } = await load();
       const drawImage = vi.fn();
       vi.spyOn(window.HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage });
       const detector = { detect: vi.fn().mockResolvedValue([{ rawValue: '' }, { rawValue: '5449000000996', format: 'ean_13' }]) };
       expect(await readFrame(detector, video)).toBe('5449000000996');
-      expect(drawImage).toHaveBeenCalledWith(video, 0, 0, 1280, 720);
-      const canvas = detector.detect.mock.calls[0][0];
-      expect(canvas).toBeInstanceOf(window.HTMLCanvasElement);
+      // 1920×1080: the centre 90% wide band, 1728×1037 from (96, 22), scaled to 1600×960.
+      expect(drawImage).toHaveBeenLastCalledWith(video, 96, 22, 1728, 1037, 0, 0, 1600, 960);
+      await readFrame(detector, video);
+      await readFrame(detector, video);
+      expect(drawImage).toHaveBeenLastCalledWith(video, 0, 0, 1920, 1080, 0, 0, 1600, 900);
+      expect(detector.detect.mock.calls[0][0]).toBeInstanceOf(window.HTMLCanvasElement);
+    });
+
+    it('abandons a read that never answers after 3 s, counting it as an error, and keeps counting until a read succeeds', async () => {
+      vi.useFakeTimers();
+      try {
+        const { readFrame, newScanStats } = await load();
+        vi.spyOn(window.HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() });
+        const stats = newScanStats();
+        const hung = readFrame({ detect: () => new Promise(() => {}) }, video, stats);
+        await vi.advanceTimersByTimeAsync(3000);
+        expect(await hung).toBeNull();
+        expect(stats).toMatchObject({ errors: 1, consecutiveErrors: 1, lastError: 'Decoding took longer than 3 s' });
+        await readFrame({ detect: vi.fn().mockRejectedValue(new Error('trap')) }, video, stats);
+        expect(stats.consecutiveErrors).toBe(2);
+        await readFrame({ detect: vi.fn().mockResolvedValue([]) }, video, stats);
+        expect(stats.consecutiveErrors).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('treats a failed or empty read as no barcode', async () => {
@@ -177,6 +200,112 @@ describe('cameraScanner', () => {
       expect(decoderInfo()).toMatchObject({ state: 'failed', error: 'CompileError: CSP', wasmUrl: '/assets/zxing_reader-test.wasm' });
       await loadDetector();
       expect(decoderInfo()).toMatchObject({ state: 'ready', error: null });
+    });
+  });
+
+  describe('choosing the camera', () => {
+    const device = (label, deviceId) => ({ kind: 'videoinput', label, deviceId });
+
+    it('picks the main rear lens, never the ultra-wide or telephoto, and none when no camera is recognisably rear', async () => {
+      const { chooseMainRearCamera } = await load();
+      // Android Chrome labels; the ultra-wide is camera2 2 and says nothing about being wide.
+      expect(chooseMainRearCamera([device('camera2 1, facing front', 'f'), device('camera2 2, facing back', 'uw'), device('camera2 0, facing back', 'main')]).deviceId).toBe('main');
+      // iPhone labels.
+      expect(chooseMainRearCamera([device('Back Ultra Wide Camera', 'uw'), device('Back Dual Wide Camera', 'dw'), device('Back Telephoto Camera', 't')]).deviceId).toBe('dw');
+      expect(chooseMainRearCamera([device('Back Ultra Wide Camera', 'uw'), device('Back Camera', 'main')]).deviceId).toBe('main');
+      // Other Android builds name the lenses: the ultra-wide is listed first and must still lose.
+      expect(chooseMainRearCamera([device('Rear ultra wide camera', 'uw'), device('Rear camera', 'main')]).deviceId).toBe('main');
+      expect(chooseMainRearCamera([device('Front Camera', 'f'), { kind: 'audioinput', label: 'Back mic', deviceId: 'm' }])).toBeNull();
+    });
+
+    function phone({ current, devices, failExact = false, failExactWith = 'OverconstrainedError', failFallbackAfterSwitch = false }) {
+      const streams = [];
+      let opens = 0;
+      const getUserMedia = vi.fn(async (constraints) => {
+        opens += 1;
+        const exact = constraints.video.deviceId?.exact;
+        if (exact && failExact) throw domError(failExactWith);
+        if (!exact && failFallbackAfterSwitch && opens > 2) throw domError('NotReadableError');
+        const stream = fakeStream(fakeTrack({ deviceId: exact ?? current }));
+        streams.push(stream);
+        return stream;
+      });
+      Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia, enumerateDevices: vi.fn().mockResolvedValue(devices) }, configurable: true });
+      return { getUserMedia, streams };
+    }
+    const lenses = [device('camera2 2, facing back', 'uw'), device('camera2 0, facing back', 'main')];
+    const video = () => ({ play: vi.fn().mockResolvedValue() });
+
+    it('switches from the ultra-wide to the main lens, releasing the first, and remembers it', async () => {
+      const { openCamera } = await load();
+      const { getUserMedia, streams } = phone({ current: 'uw', devices: lenses });
+      const stream = await openCamera(video());
+      expect(getUserMedia).toHaveBeenCalledTimes(2);
+      expect(getUserMedia.mock.calls[1][0].video).toMatchObject({ deviceId: { exact: 'main' } });
+      expect(streams[0].track.stop).toHaveBeenCalled();
+      expect(stream).toBe(streams[1]);
+      expect(window.localStorage.getItem('lodgekeep.scanCamera')).toBe('main');
+    });
+
+    it('stays on the camera it got when that is already the main lens', async () => {
+      const { openCamera } = await load();
+      const { getUserMedia } = phone({ current: 'main', devices: lenses });
+      await openCamera(video());
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+      expect(window.localStorage.getItem('lodgekeep.scanCamera')).toBe('main');
+    });
+
+    it('opens the remembered camera directly next time, and chooses again if it is gone', async () => {
+      const { openCamera } = await load();
+      window.localStorage.setItem('lodgekeep.scanCamera', 'main');
+      const first = phone({ current: 'main', devices: lenses });
+      await openCamera(video());
+      expect(first.getUserMedia).toHaveBeenCalledTimes(1);
+      expect(first.getUserMedia.mock.calls[0][0].video).toMatchObject({ deviceId: { exact: 'main' } });
+
+      window.localStorage.setItem('lodgekeep.scanCamera', 'gone');
+      const second = phone({ current: 'main', devices: lenses, failExact: true });
+      await openCamera(video());
+      expect(second.getUserMedia.mock.calls[1][0].video).toMatchObject({ facingMode: { ideal: 'environment' } });
+    });
+
+    it('falls back to the browser\u2019s camera if the main lens will not open, without remembering that fallback', async () => {
+      const { openCamera } = await load();
+      const { getUserMedia } = phone({ current: 'uw', devices: lenses, failExact: true });
+      const stream = await openCamera(video());
+      expect(getUserMedia).toHaveBeenCalledTimes(3); // facingMode, the main lens (refused), facingMode again
+      expect(stream.track.getSettings().deviceId).toBe('uw');
+      expect(stream.track.stop).not.toHaveBeenCalled(); // a live stream, never a stopped one
+      expect(window.localStorage.getItem('lodgekeep.scanCamera')).toBeNull();
+    });
+
+    it('reports an error, never a stopped stream, when neither the main lens nor the fallback opens', async () => {
+      const { openCamera } = await load();
+      phone({ current: 'uw', devices: lenses, failExact: true, failExactWith: 'NotReadableError', failFallbackAfterSwitch: true });
+      await expect(openCamera(video())).rejects.toMatchObject({ name: 'CameraError', reason: 'busy' });
+    });
+
+    it('keeps the remembered lens when the camera is only busy', async () => {
+      const { openCamera } = await load();
+      window.localStorage.setItem('lodgekeep.scanCamera', 'main');
+      phone({ current: 'main', devices: lenses, failExact: true, failExactWith: 'NotReadableError' });
+      await expect(openCamera(video())).rejects.toMatchObject({ reason: 'busy' });
+      expect(window.localStorage.getItem('lodgekeep.scanCamera')).toBe('main');
+    });
+
+    it('turns on continuous autofocus where the camera offers it, and leaves it alone otherwise', async () => {
+      const { openCamera } = await load();
+      const withFocus = fakeTrack({ deviceId: 'main' });
+      withFocus.getCapabilities.mockReturnValue({ focusMode: ['manual', 'continuous'] });
+      Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: vi.fn().mockResolvedValue(fakeStream(withFocus)), enumerateDevices: vi.fn().mockResolvedValue([]) }, configurable: true });
+      await openCamera(video());
+      expect(withFocus.applyConstraints).toHaveBeenCalledWith({ advanced: [{ focusMode: 'continuous' }] });
+
+      const fixed = fakeTrack({ deviceId: 'main' });
+      fixed.getCapabilities.mockReturnValue({ focusMode: ['manual'] });
+      Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: vi.fn().mockResolvedValue(fakeStream(fixed)), enumerateDevices: vi.fn().mockResolvedValue([]) }, configurable: true });
+      await openCamera(video());
+      expect(fixed.applyConstraints).not.toHaveBeenCalled();
     });
   });
 });
