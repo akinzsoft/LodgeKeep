@@ -130,7 +130,15 @@ class MalformedCsvError extends AppError {
   }
 }
 
+/** A supermarket product import is uploaded, committed and undone only from the Supermarket screen (supermarket.manage, outlet assignments). */
+class UseSupermarketImportError extends AppError {
+  constructor() {
+    super('FORBIDDEN_USE_SUPERMARKET_IMPORT', 'Supermarket product imports are run from the Supermarket screen.', 403);
+  }
+}
+
 module.exports = {
+  UseSupermarketImportError,
   UnknownEntityTypeError,
   MissingUploadedFileError,
   MissingPropertyIdError,

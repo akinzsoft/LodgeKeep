@@ -1,0 +1,76 @@
+/* Supermarket → Products import (Stage 3). Tokens only. */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.uploadForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.fileField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.runHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.stat {
+  flex: 1;
+  min-width: 8rem;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.statLabel,
+.statDetail {
+  display: block;
+  font-size: var(--text-label-size);
+  color: var(--text-secondary);
+}
+
+.statValue {
+  display: block;
+  font-size: var(--text-h2-size);
+  font-weight: var(--text-h1-weight);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.refusedList {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+}
+
+.rowActions {
+  display: inline-flex;
+  gap: var(--space-2);
+}

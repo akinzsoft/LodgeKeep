@@ -18,20 +18,10 @@
  * enough that an accidental multi-gigabyte upload can't exhaust disk.
  */
 
-const crypto = require('crypto');
 const { Router } = require('express');
-const multer = require('multer');
 const controller = require('./controller');
 const { requirePermission } = require('../../auth');
-const { storageDir } = require('./storage');
-
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, storageDir()),
-    filename: (req, file, cb) => cb(null, `${Date.now()}-${crypto.randomUUID()}.csv`),
-  }),
-  limits: { fileSize: 20 * 1024 * 1024 },
-});
+const { csvUpload: upload } = require('./storage');
 
 function migrationRouter() {
   const router = Router();

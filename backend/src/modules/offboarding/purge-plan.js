@@ -139,6 +139,10 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'ar_invoices',
   'ar_invoice_sequences',
   'ar_accounts',
+  // data migration (after ar_accounts, which references import_runs; before pos_outlets, which a supermarket product import references)
+  'import_row_errors',
+  'imported_record_map',
+  'import_runs',
   // stock
   'user_outlet_assignments',
   'stock_transfer_request_lines',
@@ -198,10 +202,6 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'email_templates',
   'email_settings',
   'notification_role_rules',
-  // data migration
-  'import_row_errors',
-  'imported_record_map',
-  'import_runs',
   // audit and identity: these hold RESTRICT foreign keys to users, properties and
   // guest_accounts, so they go before all three
   'auth_events',

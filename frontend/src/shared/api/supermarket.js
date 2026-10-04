@@ -1,4 +1,4 @@
-import { request } from './client.js';
+import { request, requestBlob, requestMultipart } from './client.js';
 
 /**
  * Supermarket quick-sale endpoints (`backend/src/modules/supermarket`).
@@ -73,4 +73,36 @@ export function listMySales(outletId) {
 
 export function addBarcode(menuItemId, barcode) {
   return request('/supermarket/barcodes', { method: 'POST', body: { menu_item_id: menuItemId, barcode } });
+}
+
+// ---------------------------------------------------------------- Stage 3: bulk CSV product import (supermarket.manage)
+
+export function downloadProductsTemplate() {
+  return requestBlob('/supermarket/imports/template');
+}
+
+/** Uploads the CSV for an outlet and runs the dry run straight away. Resolves `{run, errors, summary}`. */
+export function uploadProductsImport({ outletId, file }) {
+  const formData = new FormData();
+  formData.append('outlet_id', outletId);
+  formData.append('file', file);
+  return requestMultipart('/supermarket/imports', formData);
+}
+
+/** `{run, errors, summary}` — `summary.kind` is 'predicted' before commit, 'imported' after. */
+export function getProductsImport(id) {
+  return request(`/supermarket/imports/${id}`);
+}
+
+export function listProductsImports(outletId) {
+  return request(`/supermarket/imports?${new URLSearchParams({ outlet_id: outletId })}`);
+}
+
+export function commitProductsImport(id) {
+  return request(`/supermarket/imports/${id}/commit`, { method: 'POST', body: {} });
+}
+
+/** Undo: removes the products nobody has touched since. Resolves `{status, rowsRolledBack, rowsRefused}`. */
+export function rollbackProductsImport(id, reason) {
+  return request(`/supermarket/imports/${id}/rollback`, { method: 'POST', body: { reason } });
 }

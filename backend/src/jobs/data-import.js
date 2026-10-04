@@ -64,6 +64,10 @@ const { resolveRate } = require('../modules/setup/service');
 const { recomputeArAccountBalance } = require('../modules/ar/service');
 const { generateUlid } = require('../shared/ulid');
 const { sumMoney } = require('../shared/money');
+const { AppError } = require('../shared/errors');
+const { recordAuditEntry } = require('../audit');
+const productImport = require('../modules/supermarket/product-import');
+const { ProductImportChangedError } = require('../modules/supermarket/errors');
 
 /**
  * Code-review finding: only `tentative`/`confirmed`/`checked_in`/
@@ -404,11 +408,57 @@ async function commitArBalanceRow({ trx, importRunId, run, row, companies }) {
  * through a real BullMQ `Job` object — behave exactly like a single-
  * attempt job's only try, unchanged from before this fix.
  */
+/**
+ * Supermarket Stage 3: the whole product file in ONE transaction (all or
+ * nothing — `supermarket/product-import.js`), unlike the per-row loop below.
+ * A failure the data explains (the catalogue changed since the dry run, a
+ * barcode or category taken meanwhile, any other business-rule refusal) is
+ * final: the run is marked failed with the reason and NOT retried, since a
+ * retry would fail the same way. Anything else (deadlock, lost connection)
+ * is retried under the same final-attempt rule as the per-row path; a retry
+ * is safe because the failed attempt rolled back entirely. The run is marked
+ * completed inside the import's own transaction.
+ */
+async function commitSupermarketProductsJob({ tenantId, run, attemptsMade, maxAttempts }) {
+  const context = workerContext({ tenantId, propertyId: run.property_id });
+  const db = scopedDb().for(context);
+  try {
+    await db.transaction((trx) => productImport.commitProducts({ trx, context, run }));
+  } catch (error) {
+    const changed = error instanceof ProductImportChangedError;
+    const explained = changed || error?.code === 'ER_DUP_ENTRY' || (error instanceof AppError && error.httpStatus < 500);
+    if (explained || attemptsMade + 1 >= maxAttempts) {
+      let reason = String(error?.message || error);
+      if (error?.code === 'ER_DUP_ENTRY') reason = 'A barcode or category in the file was created by someone else while the import was running. Nothing was imported — run the dry run again.';
+      await db.transaction(async (trx) => {
+        if (changed) await productImport.replaceFindings(trx, run.id, error.findings);
+        const failed = await trx.table('import_runs').where({ id: run.id, status: 'committing' }).update({ status: 'failed', failed_reason: reason.slice(0, 2000) });
+        if (failed) {
+          await recordAuditEntry(trx, {
+            propertyId: run.property_id,
+            entityType: 'import_runs',
+            entityId: run.id,
+            action: 'supermarket_products_import_failed',
+            userId: run.run_by_user_id,
+            source: 'job',
+            afterState: { reason: reason.slice(0, 500) },
+          });
+        }
+      });
+    }
+    if (!explained) throw error;
+  }
+}
+
 async function runImportCommitJob({ tenantId, importRunId, attemptsMade = 0, maxAttempts = 1 }) {
   const bootstrapDb = scopedDb().for(workerContext({ tenantId }));
   const run = await bootstrapDb.table('import_runs').where({ id: importRunId }).first();
   if (!run) return;
   if (run.status !== 'committing') return; // already finished (or never actually committed) by a prior attempt
+  if (run.entity_type === productImport.ENTITY_TYPE) {
+    await commitSupermarketProductsJob({ tenantId, run, attemptsMade, maxAttempts });
+    return;
+  }
 
   const db = scopedDb().for(workerContext({ tenantId, propertyId: run.property_id ?? null }));
 

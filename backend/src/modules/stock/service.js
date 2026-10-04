@@ -610,10 +610,11 @@ async function listStockItemCategories({ context, includeArchived, outletId }) {
 const getStockItemCategory = stockCategoryCatalogue.getCategory;
 
 /** Registers a shared stock category (and its matching menu category); `outletId` (optional) makes that outlet carry it. */
-async function createStockItemCategory({ context, outletId, name, sortOrder }) {
-  const db = scopedDb().for(context);
+async function createStockItemCategory({ context, db: providedDb, outletId, name, sortOrder }) {
+  // `db` (optional): an accessor already inside a transaction joins it, as in createStockItem.
+  const db = providedDb ?? scopedDb().for(context);
   if (outletId) await assertOutlet(db, outletId);
-  const category = await stockCategoryCatalogue.createCategory({ context, name, sortOrder });
+  const category = await stockCategoryCatalogue.createCategory({ context, db, name, sortOrder });
   if (outletId) await carryCategoryByName(db, outletId, category.name);
   return category;
 }
@@ -696,8 +697,9 @@ async function getStockItem({ context, id, outletId }) {
  * its category, so it shows there straight away. `reorderLevel` is also
  * the item's default for outlets that have none of their own yet.
  */
-async function createStockItem({ context, outletId, name, unit, category, purchaseCost, supplier, reorderLevel }) {
-  const db = scopedDb().for(context);
+async function createStockItem({ context, db: providedDb, outletId, name, unit, category, purchaseCost, supplier, reorderLevel }) {
+  // `db` (optional): an accessor already inside a transaction joins it (the supermarket product import's one transaction).
+  const db = providedDb ?? scopedDb().for(context);
   if (outletId) await assertOutlet(db, outletId);
   const categoryName = await resolveStockCategoryName({ db, name: category });
   return db.transaction(async (trx) => {
@@ -798,8 +800,9 @@ async function listMenuItemLinks({ context, outletId }) {
 }
 
 /** Full replace-all upsert for one menu item's recipe — plain config, no history to preserve (see `pos_menu_item_components`' own migration header). Both are shared, so any stock item may be a component. */
-async function upsertMenuItemComponents({ context, menuItemId, components }) {
-  const db = scopedDb().for(context);
+async function upsertMenuItemComponents({ context, db: providedDb, menuItemId, components }) {
+  // `db` (optional): an accessor already inside a transaction joins it, as in createStockItem.
+  const db = providedDb ?? scopedDb().for(context);
   return db.transaction(async (trx) => {
     const menuItem = await trx.table('pos_menu_items').where({ id: menuItemId }).first();
     if (!menuItem) throw new MenuItemNotFoundError();
