@@ -24,6 +24,19 @@ const posMocks = vi.hoisted(() => ({
   listMenuCategories: vi.fn(),
 }));
 
+// No camera in jsdom: the scanner plumbing is stubbed (cameraSupported false unless a test says otherwise).
+const scanner = vi.hoisted(() => ({
+  cameraSupported: vi.fn(() => false),
+  openCamera: vi.fn(),
+  closeCamera: vi.fn(),
+  loadDetector: vi.fn(),
+  readFrame: vi.fn(),
+  torchSupported: vi.fn(() => false),
+  setTorch: vi.fn(),
+}));
+vi.mock('../../../shared/scanner/cameraScanner.js', () => scanner);
+vi.mock('../../../shared/sound/alertBeep.js', () => ({ playScanTone: vi.fn(), playAlertBeep: vi.fn(), unlockAlertSound: vi.fn() }));
+
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return { ...actual, supermarketApi: mocks, posApi: posMocks };
@@ -66,6 +79,64 @@ describe('<SupermarketScreen>', () => {
     mocks.listMySales.mockResolvedValue([]);
     mocks.getSetupFlags.mockResolvedValue({ items: [], counts: { missing_barcode: 0, not_stock_tracked: 0 } });
     mocks.listProductsImports.mockResolvedValue([]);
+    scanner.cameraSupported.mockReturnValue(false);
+  });
+
+  describe('scanning', () => {
+    it('offers no Scan button where the device cannot use a camera, and keeps the typed box', async () => {
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      expect(await screen.findByLabelText(/scan a barcode/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Scan' })).not.toBeInTheDocument();
+    });
+
+    it('refuses a scanned product that is sold out at this outlet, typed or by camera', async () => {
+      mocks.lookupBarcode.mockResolvedValue({ ...RICE, is_available: false });
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await userEvent.type(await screen.findByLabelText(/scan a barcode/i), '6001{Enter}');
+      expect(await screen.findByText('Rice 5kg is sold out at this outlet.')).toBeInTheDocument();
+      expect(within(screen.getByRole('complementary', { name: 'Current sale' })).queryByText('Rice 5kg')).not.toBeInTheDocument();
+      expect(mocks.searchItems).not.toHaveBeenCalled();
+    });
+
+    it('adds a camera read through the same lookup as the typed box, and returns to the box on Done', async () => {
+      scanner.cameraSupported.mockReturnValue(true);
+      scanner.openCamera.mockResolvedValue({ id: 'stream' });
+      scanner.loadDetector.mockResolvedValue({ detect: vi.fn() });
+      scanner.readFrame.mockResolvedValueOnce('6001').mockResolvedValue(null);
+      mocks.lookupBarcode.mockResolvedValue(RICE);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Scan' }));
+      expect(await screen.findByText('Added Rice 5kg', {}, { timeout: 3000 })).toBeInTheDocument();
+      expect(mocks.lookupBarcode).toHaveBeenCalledWith('5', '6001');
+      expect(screen.getByText('1 item in the sale')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Done' }));
+      expect(screen.queryByRole('dialog', { name: 'Scan products' })).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/scan a barcode/i)).toHaveFocus();
+      expect(within(screen.getByRole('complementary', { name: 'Current sale' })).getByText('Rice 5kg')).toBeInTheDocument();
+    });
+
+    it('closes the camera if the device goes offline mid-scan, and releases it', async () => {
+      scanner.cameraSupported.mockReturnValue(true);
+      scanner.openCamera.mockResolvedValue({ id: 'stream' });
+      scanner.loadDetector.mockResolvedValue({ detect: vi.fn() });
+      scanner.readFrame.mockResolvedValue(null);
+      const { rerender } = render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      const scanButton = await screen.findByRole('button', { name: 'Scan' });
+      await userEvent.click(scanButton);
+      expect(await screen.findByRole('dialog', { name: 'Scan products' })).toBeInTheDocument();
+      rerender(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} isOffline />);
+      expect(screen.queryByRole('dialog', { name: 'Scan products' })).not.toBeInTheDocument();
+      expect(scanner.closeCamera).toHaveBeenCalledWith({ id: 'stream' });
+      expect(scanButton).toBeDisabled(); // offline: nothing on the till takes focus, so none is forced back
+    });
+
+    it('disables Scan while offline', async () => {
+      scanner.cameraSupported.mockReturnValue(true);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} isOffline />);
+      expect(await screen.findByRole('button', { name: 'Scan' })).toBeDisabled();
+    });
   });
 
   it('adds a scanned barcode to the cart and counts a second scan of the same product', async () => {

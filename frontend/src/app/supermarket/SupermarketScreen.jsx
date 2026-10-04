@@ -6,6 +6,8 @@ import { supermarketApi, posApi, ApiError } from '../../shared/api/index.js';
 import { SupermarketReceipt } from './SupermarketReceipt.jsx';
 import { ProductTile } from './ProductTile.jsx';
 import { ProductsImportPanel } from './ProductsImportPanel.jsx';
+import { CameraScanDialog } from './CameraScanDialog.jsx';
+import { cameraSupported } from '../../shared/scanner/cameraScanner.js';
 import formStyles from '../pos/POSForm.module.css';
 import styles from './Supermarket.module.css';
 
@@ -22,6 +24,11 @@ const MAX_QUANTITY = 999;
  * Permissions are three: `supermarket.sales` sells, `supermarket.report` reads
  * the sales list and report (and cannot sell), `supermarket.manage` voids.
  * The server is the real check; this only stops offering what would 403.
+ *
+ * Scanning: a barcode reaches the cart through ONE path, `addByBarcode`, from
+ * the typed box (or a USB scanner typing into it) and from the phone camera
+ * (`CameraScanDialog`, shown when the device has a camera and the page is
+ * secure). A product switched off at this outlet is refused at scan time.
  *
  * Layout (visual redesign): tabs Sell / Today's sales / All sales / Setup /
  * Products import (Stage 3, `supermarket.manage`: ProductsImportPanel).
@@ -43,6 +50,8 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const [scan, setScan] = useState('');
   const [results, setResults] = useState([]);
   const [cart, setCart] = useState([]);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [canUseCamera] = useState(cameraSupported);
   const [lookupError, setLookupError] = useState(null);
   const [method, setMethod] = useState('cash');
   const [submitting, setSubmitting] = useState(false);
@@ -69,6 +78,11 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
 
   // One Idempotency-Key per sale attempt: a retry of the same cart reuses it, a changed cart gets a new one.
   const attemptKey = useRef(null);
+  // The cart as last rendered, so a camera read can report "×2" (reads arrive outside render).
+  const cartRef = useRef(cart);
+  useEffect(() => {
+    cartRef.current = cart;
+  }, [cart]);
   const scanInput = useRef(null);
   const cartPanel = useRef(null);
 
@@ -212,6 +226,29 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     }));
   }
 
+  /**
+   * The one barcode path, for the typed box and the camera alike: looks the code
+   * up at this outlet and adds the product, unless it is switched off here.
+   * Answers `{kind: 'added', name, quantity} | {kind: 'sold_out', name} |
+   * {kind: 'not_found'} | {kind: 'error', message}`; touches no other screen state.
+   */
+  const addByBarcode = useCallback(
+    async (code) => {
+      try {
+        const item = await supermarketApi.lookupBarcode(outletId, code);
+        if (item.is_available === false) return { kind: 'sold_out', name: item.name };
+        const inCart = cartRef.current.find((line) => String(line.menuItem.id) === String(item.id))?.quantity ?? 0;
+        addToCart(item, code);
+        return { kind: 'added', name: item.name, quantity: Math.min(inCart + 1, MAX_QUANTITY) };
+      } catch (caught) {
+        if (caught instanceof ApiError && caught.status === 404) return { kind: 'not_found' };
+        return { kind: 'error', message: caught instanceof ApiError ? caught.message : 'Could not look that up.' };
+      }
+    },
+    // addToCart only calls setters and refs, so it is safe to leave out.
+    [outletId]
+  );
+
   async function handleScan(event) {
     event.preventDefault();
     const value = scan.trim();
@@ -221,14 +258,21 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     try {
       // A scanner types digits/letters with no spaces and presses Enter: try it as a barcode first.
       if (!/\s/.test(value)) {
-        try {
-          addToCart(await supermarketApi.lookupBarcode(outletId, value), value);
+        const outcome = await addByBarcode(value);
+        if (outcome.kind === 'added') {
           setScan('');
           return;
-        } catch (caught) {
-          if (!(caught instanceof ApiError) || caught.status !== 404) throw caught;
+        }
+        if (outcome.kind === 'sold_out') {
+          setLookupError(`${outcome.name} is sold out at this outlet.`);
+          return;
+        }
+        if (outcome.kind === 'error') {
+          setLookupError(outcome.message);
+          return;
         }
       }
+      // Not a known barcode (or it had spaces): search by name.
       const found = await supermarketApi.searchItems(outletId, value);
       if (found.length === 0) setLookupError(`No product matches "${value}".`);
       setResults(found);
@@ -237,6 +281,11 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     } finally {
       scanInput.current?.focus();
     }
+  }
+
+  function closeCamera() {
+    setCameraOpen(false);
+    scanInput.current?.focus();
   }
 
   async function handleComplete() {
@@ -392,6 +441,12 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
                 <svg className={styles.scanIcon} viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5v14M7 5v14M11 5v14M14 5v14M18 5v14M21 5v14" /></svg>
                 <input ref={scanInput} className={styles.scanInput} placeholder="Scan a barcode or type a product name" value={scan} onChange={(event) => setScan(event.target.value)} autoFocus disabled={isOffline} />
               </label>
+              {canUseCamera && (
+                <button type="button" className={styles.cameraButton} onClick={() => setCameraOpen(true)} disabled={isOffline}>
+                  <svg className={styles.cameraIcon} viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg>
+                  Scan
+                </button>
+              )}
               <button type="submit" className={styles.scanButton} disabled={isOffline || !scan.trim()}>Add</button>
             </form>
             {lookupError && <p className={styles.errorBanner} role="alert">{lookupError}</p>}
@@ -595,6 +650,10 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
             )}
           </Card>
         </section>
+      )}
+
+      {cameraOpen && outletId && activeTab === 'sell' && !isOffline && (
+        <CameraScanDialog onDetected={addByBarcode} onClose={closeCamera} cartCount={itemCount} />
       )}
 
       {outletId && activeTab === 'import' && (

@@ -149,6 +149,10 @@ Sidebar: full → icon-only at 1024px → off-canvas drawer below 640px. KPI row
 
 **Tenant theming**: each tenant can override `--domain-*` accents and supply a logo (3.19). The guest-facing portal (PRODUCT_REQUIREMENTS.md §3.14) is themed entirely from tenant config; the admin shell keeps the product's own identity so support staff see a consistent UI across customers. Because theming works through token overrides, this only holds if components never hardcode colour.
 
+**Stacking order (z-index)**: page content 0; the phone order bar on the supermarket till 50; dialogs (`ConfirmDialog`) 100; the full-screen camera scanner 150; notification pop-ups and the mobile menu drawer 200 (a new QR order or stock request is never hidden behind another overlay). Use these levels; do not invent a new one without adding it here.
+
+**Full-screen camera view** (supermarket barcode scanner): always the fixed dark `--pos-register-*` palette, whatever the theme (a camera feed reads best on dark chrome). It is a real modal: focus moves to its main action on open, Tab stays inside, Escape closes, and focus returns to where it came from however it closes. Each scan answer is written into ONE persistent `role="status"` region (changed in place, so every answer is announced) and is carried by its words; the green/red flash and edge are extra, never the only signal. Toggles keep a fixed label with `aria-pressed` ("Mute", "Light"). Respect `prefers-reduced-motion` and the safe-area insets on every side.
+
 ## 2. Feedback & state (specify these once, use everywhere)
 
 Every screen needs all six states designed, not just the happy path. Missing states are the most common gap between a demo and a system staff trust.

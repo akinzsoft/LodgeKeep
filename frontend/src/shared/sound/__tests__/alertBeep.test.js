@@ -57,4 +57,22 @@ describe('alertBeep', () => {
     const { playAlertBeep } = await freshModule();
     expect(playAlertBeep()).toBe(false);
   });
+
+  it('plays one short high tone for a scan that was added and one low tone for one that was not', async () => {
+    const { FakeContext, oscillators } = fakeAudioContext();
+    window.AudioContext = FakeContext;
+    const { playScanTone } = await freshModule();
+    expect(playScanTone('ok')).toBe(true);
+    expect(playScanTone('error')).toBe(true);
+    expect(oscillators.map((osc) => [osc.type, osc.frequency.setValueAtTime.mock.calls[0][0]])).toEqual([
+      ['sine', 1760],
+      ['square', 220],
+    ]);
+  });
+
+  it('scan tones are silent, never an error, without audio', async () => {
+    delete window.AudioContext;
+    const { playScanTone } = await freshModule();
+    expect(playScanTone('ok')).toBe(false);
+  });
 });

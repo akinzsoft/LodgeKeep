@@ -1,0 +1,186 @@
+/*
+ * Supermarket camera scanner: a full-screen dark view (it reuses the POS
+ * Register's fixed dark palette — a camera feed reads best on dark chrome in
+ * any theme). Stacking: above the till (phone order bar 50, dialogs 100) but
+ * under the notification pop-ups (200), so a new QR order or stock request is
+ * never hidden behind the camera. Tokens only.
+ */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  background: var(--pos-register-rail-bg);
+  color: var(--pos-register-text-primary);
+}
+
+.viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The aiming box: a wide rectangle for 1D barcodes; it flashes green/red on each answer. */
+.aim {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(80%, 26rem);
+  aspect-ratio: 5 / 2;
+  transform: translate(-50%, -50%);
+  border: var(--space-1) solid var(--pos-register-text-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 0 100vmax var(--pos-register-overlay-scrim);
+}
+
+.aimOk {
+  border-color: var(--state-success);
+  animation: flash 0.4s ease-out;
+}
+
+.aimError {
+  border-color: var(--state-danger);
+  animation: flash 0.4s ease-out;
+}
+
+@keyframes flash {
+  from {
+    transform: translate(-50%, -50%) scale(1.04);
+  }
+
+  to {
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aimOk,
+  .aimError {
+    animation: none;
+  }
+}
+
+.topBar {
+  position: absolute;
+  inset: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  padding-top: max(var(--space-3), env(safe-area-inset-top));
+  padding-right: max(var(--space-4), env(safe-area-inset-right));
+  padding-left: max(var(--space-4), env(safe-area-inset-left));
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-h3-size);
+  font-weight: var(--text-h3-weight);
+}
+
+.topActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.toggle {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--pos-register-card-border);
+  border-radius: var(--radius-full);
+  background: var(--pos-register-card-bg);
+  color: var(--pos-register-text-primary);
+  font: inherit;
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toggle[aria-pressed='true'] {
+  background: var(--pos-register-brass);
+  border-color: var(--pos-register-brass);
+  color: var(--pos-register-brass-text);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  padding-right: max(var(--space-4), env(safe-area-inset-right));
+  padding-bottom: max(var(--space-4), env(safe-area-inset-bottom));
+  padding-left: max(var(--space-4), env(safe-area-inset-left));
+  background: var(--pos-register-panel-bg);
+}
+
+.status {
+  margin: 0;
+  min-height: calc(var(--text-body-size) * 1.5);
+  font-size: var(--text-body-size);
+  color: var(--pos-register-text-secondary);
+}
+
+/* An answer: bold text with a coloured edge (the words carry the meaning, never the colour alone). */
+.resultOk,
+.resultError {
+  padding-left: var(--space-3);
+  border-left: var(--space-1) solid;
+  font-weight: 700;
+  color: var(--pos-register-text-primary);
+}
+
+.resultOk {
+  border-left-color: var(--state-success);
+}
+
+.resultError {
+  border-left-color: var(--state-danger);
+}
+
+.error {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.error p {
+  margin: 0;
+}
+
+.panelFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.cartCount {
+  color: var(--pos-register-text-secondary);
+  font-size: var(--text-label-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.doneButton {
+  min-height: var(--control-h-pos);
+  min-width: 8rem;
+  padding: 0 var(--space-6);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--pos-register-brass);
+  color: var(--pos-register-brass-text);
+  font: inherit;
+  font-size: var(--text-h3-size);
+  font-weight: 700;
+  cursor: pointer;
+}
