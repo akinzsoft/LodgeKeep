@@ -34,7 +34,7 @@ async function tick(n = 1) {
 async function open(props = {}) {
   const onDetected = props.onDetected ?? vi.fn().mockResolvedValue({ kind: 'added', name: 'Coke 50cl', quantity: 1 });
   const onClose = props.onClose ?? vi.fn();
-  const view = render(<CameraScanDialog onDetected={onDetected} onClose={onClose} cartCount={props.cartCount ?? 0} />);
+  const view = render(<CameraScanDialog onDetected={onDetected} onClose={onClose} cartCount={props.cartCount ?? 0} single={props.single} title={props.title} hint={props.hint} />);
   await act(async () => {}); // camera + decoder start
   return { ...view, onDetected, onClose };
 }
@@ -330,5 +330,22 @@ describe('<CameraScanDialog>', () => {
     scanner.readFrame.mockResolvedValue(null);
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Try again' })));
     expect(screen.getByText('Point the camera at a barcode.')).toBeInTheDocument();
+  });
+
+  it('single-read mode hands over the first barcode with a tone, releases the camera and reads no more', async () => {
+    scanner.readFrame.mockResolvedValue('6009001');
+    const { onDetected, onClose } = await open({ single: true, title: 'Scan the barcode for Bare item', hint: 'The barcode fills the field.', onDetected: vi.fn() });
+    expect(screen.getByRole('dialog', { name: 'Scan the barcode for Bare item' })).toBeInTheDocument();
+    expect(screen.getByText('The barcode fills the field.')).toBeInTheDocument();
+    expect(screen.queryByText(/in the sale/)).not.toBeInTheDocument();
+    await tick(4);
+    expect(onDetected).toHaveBeenCalledTimes(1);
+    expect(onDetected).toHaveBeenCalledWith('6009001');
+    expect(scanner.readFrame).toHaveBeenCalledTimes(1);
+    expect(scanner.closeCamera).toHaveBeenCalledWith(STREAM);
+    expect(sound.playScanTone).toHaveBeenCalledWith('ok');
+    expect(onClose).not.toHaveBeenCalled(); // the caller closes the view once it has filled its field
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Cancel' })));
+    expect(onClose).toHaveBeenCalled();
   });
 });
