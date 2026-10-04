@@ -29,6 +29,10 @@ const MAX_QUANTITY = 999;
  * the typed box (or a USB scanner typing into it) and from the phone camera
  * (`CameraScanDialog`, shown when the device has a camera and the page is
  * secure). A product switched off at this outlet is refused at scan time.
+ * On the Setup tab the same camera view runs in single-read mode: a product's
+ * Scan button reads one barcode into that product's field, which is then
+ * reviewed and saved with "Add barcode" (never added automatically, so a
+ * wrong product's barcode is caught before it is attached).
  *
  * Layout (visual redesign): tabs Sell / Today's sales / All sales / Setup /
  * Products import (Stage 3, `supermarket.manage`: ProductsImportPanel).
@@ -72,6 +76,9 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const [flags, setFlags] = useState(null);
   const [flagsError, setFlagsError] = useState(null);
   const [barcodeDrafts, setBarcodeDrafts] = useState({});
+  const [barcodeScanTarget, setBarcodeScanTarget] = useState(null); // the Setup product whose field the camera fills
+  // The Setup field to focus once the camera view has gone (its own cleanup returns focus to the Scan button first).
+  const focusBarcodeFor = useRef(null);
 
   const [tab, setTab] = useState(null);
   const [menu, setMenu] = useState(null); // null loading, [] items, or 'unavailable'
@@ -209,6 +216,20 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       setFlagsError(caught instanceof ApiError ? caught.message : 'Could not add that barcode.');
     }
   }
+
+  function fillBarcodeFromCamera(code) {
+    const item = barcodeScanTarget;
+    if (!item) return;
+    setBarcodeDrafts((current) => ({ ...current, [item.id]: code }));
+    focusBarcodeFor.current = item.id;
+    setBarcodeScanTarget(null);
+  }
+
+  useEffect(() => {
+    if (barcodeScanTarget || focusBarcodeFor.current === null) return;
+    document.getElementById(`setup-barcode-${focusBarcodeFor.current}`)?.focus();
+    focusBarcodeFor.current = null;
+  }, [barcodeScanTarget]);
 
   function addToCart(item, barcode = null) {
     attemptKey.current = null;
@@ -636,12 +657,19 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
                       {item.missing_barcode && (
                         <form className={styles.barcodeForm} onSubmit={(event) => handleAddBarcode(event, item)}>
                           <input
+                            id={`setup-barcode-${item.id}`}
                             className={formStyles.input}
                             aria-label={`Barcode for ${item.name}`}
                             value={barcodeDrafts[item.id] ?? ''}
                             onChange={(event) => setBarcodeDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
                             disabled={isOffline}
                           />
+                          {canUseCamera && (
+                            <Button type="button" size="compact" variant="secondary" aria-label={`Scan the barcode for ${item.name}`} disabled={isOffline} onClick={() => setBarcodeScanTarget(item)}>
+                              <svg className={styles.cameraIcon} viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg>
+                              Scan
+                            </Button>
+                          )}
                           <Button type="submit" size="compact" variant="secondary" disabled={isOffline || !(barcodeDrafts[item.id] ?? '').trim()}>Add barcode</Button>
                         </form>
                       )}
@@ -656,6 +684,17 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
 
       {cameraOpen && outletId && activeTab === 'sell' && !isOffline && (
         <CameraScanDialog onDetected={addByBarcode} onClose={closeCamera} cartCount={itemCount} debug={scanDebug} />
+      )}
+
+      {barcodeScanTarget && outletId && activeTab === 'setup' && !isOffline && (
+        <CameraScanDialog
+          single
+          title={`Scan the barcode for ${barcodeScanTarget.name}`}
+          hint="The barcode fills the field. Check it, then tap Add barcode."
+          onDetected={fillBarcodeFromCamera}
+          onClose={() => setBarcodeScanTarget(null)}
+          debug={scanDebug}
+        />
       )}
 
       {outletId && activeTab === 'import' && (

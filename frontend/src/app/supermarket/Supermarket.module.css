@@ -711,6 +711,8 @@
 
 .barcodeForm {
   display: flex;
+  flex-wrap: wrap; /* field, Scan and Add barcode wrap on a phone instead of overflowing */
+  align-items: center;
   gap: var(--space-2);
   margin-left: auto;
 }

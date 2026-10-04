@@ -299,6 +299,71 @@ describe('<SupermarketScreen>', () => {
       await vi.waitFor(() => expect(within(screen.getByRole('list', { name: 'Products needing setup' })).queryByText(/No barcode/)).not.toBeInTheDocument());
     });
 
+    it('scans a barcode into a product\'s field with the camera, focuses it, and saves only on Add barcode', async () => {
+      scanner.cameraSupported.mockReturnValue(true);
+      scanner.openCamera.mockResolvedValue({ id: 'stream' });
+      scanner.loadDetector.mockResolvedValue({ detect: vi.fn() });
+      scanner.readFrame.mockResolvedValueOnce('6009001').mockResolvedValue('6009999');
+      mocks.getSetupFlags.mockResolvedValue({
+        items: [
+          { id: '31', name: 'Bare item', missing_barcode: true, not_stock_tracked: false },
+          { id: '32', name: 'Other item', missing_barcode: true, not_stock_tracked: false },
+        ],
+        counts: { missing_barcode: 2, not_stock_tracked: 0 },
+      });
+      mocks.addBarcode.mockResolvedValue({ id: '1' });
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Setup' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Scan the barcode for Bare item' }));
+      expect(await screen.findByRole('dialog', { name: 'Scan the barcode for Bare item' })).toBeInTheDocument();
+      expect(screen.getByText('The barcode fills the field. Check it, then tap Add barcode.')).toBeInTheDocument();
+
+      // One read: the view closes, the camera is released, that product's field holds the code and has focus.
+      await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument(), { timeout: 3000 });
+      expect(scanner.closeCamera).toHaveBeenCalledWith({ id: 'stream' });
+      expect(scanner.readFrame).toHaveBeenCalledTimes(1);
+      const field = screen.getByLabelText('Barcode for Bare item');
+      expect(field).toHaveValue('6009001');
+      expect(field).toHaveFocus();
+      expect(screen.getByLabelText('Barcode for Other item')).toHaveValue('');
+      expect(mocks.addBarcode).not.toHaveBeenCalled(); // never added without the user's Add
+
+      const row = field.closest('li');
+      await userEvent.click(within(row).getByRole('button', { name: 'Add barcode' }));
+      expect(mocks.addBarcode).toHaveBeenCalledWith('31', '6009001');
+    });
+
+    it('cancelling the Setup camera leaves the field as it was and adds nothing', async () => {
+      scanner.cameraSupported.mockReturnValue(true);
+      scanner.openCamera.mockResolvedValue({ id: 'stream' });
+      scanner.loadDetector.mockResolvedValue({ detect: vi.fn() });
+      scanner.readFrame.mockResolvedValue(null);
+      mocks.getSetupFlags.mockResolvedValue({ items: [{ id: '31', name: 'Bare item', missing_barcode: true, not_stock_tracked: false }], counts: { missing_barcode: 1, not_stock_tracked: 0 } });
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Setup' }));
+      await userEvent.type(await screen.findByLabelText('Barcode for Bare item'), '12');
+      await userEvent.click(screen.getByRole('button', { name: 'Scan the barcode for Bare item' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(scanner.closeCamera).toHaveBeenCalledWith({ id: 'stream' });
+      expect(screen.getByLabelText('Barcode for Bare item')).toHaveValue('12');
+      expect(mocks.addBarcode).not.toHaveBeenCalled();
+    });
+
+    it('offers no Setup scan button without a usable camera, and disables it offline', async () => {
+      mocks.getSetupFlags.mockResolvedValue({ items: [{ id: '31', name: 'Bare item', missing_barcode: true, not_stock_tracked: false }], counts: { missing_barcode: 1, not_stock_tracked: 0 } });
+      const { unmount } = render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Setup' }));
+      await screen.findByLabelText('Barcode for Bare item');
+      expect(screen.queryByRole('button', { name: 'Scan the barcode for Bare item' })).not.toBeInTheDocument();
+      unmount();
+
+      scanner.cameraSupported.mockReturnValue(true);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} isOffline />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Setup' }));
+      expect(await screen.findByRole('button', { name: 'Scan the barcode for Bare item' })).toBeDisabled();
+    });
+
     it('hides the setup panel and does not load flags without the manage key', async () => {
       render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
       await screen.findByLabelText(/scan a barcode/i);

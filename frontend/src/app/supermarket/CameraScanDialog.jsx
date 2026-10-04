@@ -57,12 +57,17 @@ function describeOutcome(outcome, code) {
  * device) and vibrated where the phone allows it. The same code is ignored for
  * 1.5 s; reads never overlap.
  *
+ * `single`: the Setup screen's mode — the FIRST barcode read is handed to
+ * `onDetected(code)` with a tone, the camera is released and the view stops;
+ * the caller fills its field and closes the view (no cart, no cooldown).
+ * `title` and `hint` replace the heading and the cart line in that mode.
+ *
  * The camera must never be left on: every start carries a token, and a start
  * that finishes after the view closed, the page was hidden or another start
  * began releases what it opened. It is modal: focus stays inside, and goes
  * back to where it came from when the view goes away for any reason.
  */
-export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = false }) {
+export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = false, single = false, title = 'Scan products', hint = null }) {
   const overlay = useRef(null);
   const video = useRef(null);
   const stream = useRef(null);
@@ -176,15 +181,19 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = f
     }
   }
 
-  const feedback = useCallback(({ ok, text }) => {
+  const cue = useCallback((ok) => {
     if (soundOnRef.current) playScanTone(ok ? 'ok' : 'error');
     try {
       navigator.vibrate?.(ok ? 40 : [80, 60, 80]);
     } catch {
       // Not every browser allows vibration (iOS never does).
     }
-    setResult({ ok, text, id: Date.now() });
   }, []);
+
+  const feedback = useCallback(({ ok, text }) => {
+    cue(ok);
+    setResult({ ok, text, id: Date.now() });
+  }, [cue]);
 
   // The read loop: one read at a time, then a short pause.
   useEffect(() => {
@@ -202,6 +211,14 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = f
         setStatus('error');
         return;
       }
+      if (code && single) {
+        // One read is all the Setup field needs: release the camera and hand the code over.
+        cue(true);
+        stop();
+        setStatus('paused');
+        onDetected(code);
+        return;
+      }
       const now = Date.now();
       if (code && !cancelled && !(code === last.current.code && now - last.current.at < SAME_CODE_COOLDOWN_MS)) {
         last.current = { code, at: now };
@@ -216,7 +233,7 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = f
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [status, onDetected, feedback, stop]);
+  }, [status, onDetected, feedback, cue, stop, single]);
 
   function toggleSound() {
     const next = !soundOn;
@@ -247,7 +264,7 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = f
         )}
         {debug && <ScanDebugPanel stream={stream} video={video} stats={stats} />}
         <div className={styles.topBar}>
-          <h2 id="camera-scan-title" className={styles.title}>Scan products</h2>
+          <h2 id="camera-scan-title" className={styles.title}>{title}</h2>
           <div className={styles.topActions}>
             {torch.supported && (
               <button type="button" className={styles.toggle} aria-pressed={torch.on} onClick={toggleTorch}>Light</button>
@@ -276,8 +293,8 @@ export function CameraScanDialog({ onDetected, onClose, cartCount = 0, debug = f
           </div>
         )}
         <div className={styles.panelFooter}>
-          <span className={styles.cartCount}>{cartCount === 1 ? '1 item in the sale' : `${cartCount} items in the sale`}</span>
-          <button ref={doneButton} type="button" className={styles.doneButton} onClick={onClose}>Done</button>
+          <span className={styles.cartCount}>{single ? hint : cartCount === 1 ? '1 item in the sale' : `${cartCount} items in the sale`}</span>
+          <button ref={doneButton} type="button" className={styles.doneButton} onClick={onClose}>{single ? 'Cancel' : 'Done'}</button>
         </div>
       </div>
     </div>
