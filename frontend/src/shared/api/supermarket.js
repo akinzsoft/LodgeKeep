@@ -55,3 +55,22 @@ export function getReport({ outletId, from, to } = {}) {
 export function voidSale(id, reason) {
   return request(`/supermarket/sales/${id}/void`, { method: 'POST', body: { reason }, headers: { 'Idempotency-Key': crypto.randomUUID() } });
 }
+
+/** Products at an outlet needing setup: no barcode and/or no stock recipe. */
+export function getSetupFlags(outletId) {
+  return request(`/supermarket/setup-flags?${new URLSearchParams({ outlet_id: outletId })}`);
+}
+
+/** Stock at or below its reorder level at an outlet, lowest first, for the till banner. */
+export function getLowStock(outletId) {
+  return request(`/supermarket/low-stock?${new URLSearchParams({ outlet_id: outletId })}`);
+}
+
+/** The caller's own sales on the current business date, for reprinting a receipt. */
+export function listMySales(outletId) {
+  return request(`/supermarket/my-sales?${new URLSearchParams({ outlet_id: outletId })}`);
+}
+
+export function addBarcode(menuItemId, barcode) {
+  return request('/supermarket/barcodes', { method: 'POST', body: { menu_item_id: menuItemId, barcode } });
+}
