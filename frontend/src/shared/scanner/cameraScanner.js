@@ -42,30 +42,57 @@ function reasonFor(error) {
 }
 
 // Camera choice. Phones with several rear lenses often hand a web page the
-// ultra-wide (or telephoto) lens for `facingMode: environment`; those cannot
+// ultra-wide, macro or depth lens for `facingMode: environment`; those cannot
 // focus close enough to read a barcode. After the first open (when labels are
-// readable) we switch to the main rear lens and remember it on this device.
-const CAMERA_KEY = 'lodgekeep.scanCamera';
+// readable) the rear lenses are ranked by label, and a lens that reports no
+// autofocus is skipped for the next one that has it (labels vary by phone:
+// "camera2 0, facing back" on some Android builds, "camera 0, facing back" on
+// others — found on a real phone, where the label match alone picked the
+// fixed-focus "camera 2"). The choice is remembered on this device.
+// The key carries a version: phones that remembered a wrong lens under the
+// first key choose again.
+const CAMERA_KEY = 'lodgekeep.scanCamera.v2';
+const OLD_CAMERA_KEYS = ['lodgekeep.scanCamera'];
 const RESOLUTION = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+const MAX_LENS_TRIES = 3; // rear lenses opened at most while looking for one with autofocus
 
 function lensScore(label) {
   const text = String(label ?? '').toLowerCase();
   let score = 0;
   if (/ultra|tele|macro|depth|infrared/.test(text)) score -= 10;
-  if (/camera2 0\b/.test(text)) score += 5; // Android: the main rear camera is camera2 0
+  if (/\bcamera2? 0\b/.test(text)) score += 5; // Android: camera id 0 is the main rear camera
   if (/dual wide|triple|^back camera$/.test(text)) score += 3; // iPhone: the auto-switching or main lens
   return score;
 }
 
-/** Of the cameras the device lists, the main rear one (or null when none is recognisably rear). Pure. */
+/** Android's camera id from a label like "camera 2, facing back" (lower is usually the main lens), else Infinity. */
+function androidCameraId(label) {
+  const match = /\bcamera2? (\d+)\b/i.exec(String(label ?? ''));
+  return match ? Number(match[1]) : Infinity;
+}
+
+/** The device's rear cameras, best first: by label score, then lowest Android id, then list order. Pure. */
+export function rankRearCameras(devices) {
+  return devices
+    .map((device, index) => ({ device, index }))
+    .filter(({ device }) => device.kind === 'videoinput' && /back|rear|environment/i.test(device.label))
+    .sort(
+      (a, b) =>
+        lensScore(b.device.label) - lensScore(a.device.label) ||
+        androidCameraId(a.device.label) - androidCameraId(b.device.label) ||
+        a.index - b.index,
+    )
+    .map(({ device }) => device);
+}
+
+/** Of the cameras the device lists, the main rear one by label (or null when none is recognisably rear). Pure. */
 export function chooseMainRearCamera(devices) {
-  const rear = devices.filter((device) => device.kind === 'videoinput' && /back|rear|environment/i.test(device.label));
-  if (rear.length === 0) return null;
-  return rear.reduce((best, device) => (lensScore(device.label) > lensScore(best.label) ? device : best));
+  return rankRearCameras(devices)[0] ?? null;
 }
 
 function rememberedCamera() {
   try {
+    for (const key of OLD_CAMERA_KEYS) window.localStorage.removeItem(key);
     return window.localStorage.getItem(CAMERA_KEY);
   } catch {
     return null;
@@ -76,7 +103,7 @@ function rememberCamera(deviceId) {
     if (deviceId) window.localStorage.setItem(CAMERA_KEY, deviceId);
     else window.localStorage.removeItem(CAMERA_KEY);
   } catch {
-    // Blocked storage: the switch simply happens again next time.
+    // Blocked storage: the choice simply happens again next time.
   }
 }
 
@@ -100,6 +127,27 @@ const RELEASE_DELAY_MS = 250; // Android may refuse a camera for a moment after 
 const release = () => new Promise((resolve) => setTimeout(resolve, RELEASE_DELAY_MS));
 const deviceIdOf = (stream) => stream?.getVideoTracks?.()[0]?.getSettings?.().deviceId;
 
+/**
+ * Whether the stream's camera can autofocus: true, false, or null when the
+ * browser does not say (then the label choice is trusted, never probed).
+ */
+function autofocusOf(stream) {
+  try {
+    const modes = stream?.getVideoTracks?.()[0]?.getCapabilities?.().focusMode;
+    return Array.isArray(modes) ? modes.includes('continuous') : null;
+  } catch {
+    return null;
+  }
+}
+
+async function openExact(deviceId) {
+  try {
+    return await requestCamera({ deviceId: { exact: deviceId } });
+  } catch {
+    return null;
+  }
+}
+
 async function openMainRearCamera() {
   const remembered = rememberedCamera();
   if (remembered) {
@@ -112,27 +160,46 @@ async function openMainRearCamera() {
     }
   }
   let stream = await requestCamera({ facingMode: { ideal: 'environment' } });
-  let best;
+  let candidates;
   try {
-    best = chooseMainRearCamera(await navigator.mediaDevices.enumerateDevices());
+    candidates = rankRearCameras(await navigator.mediaDevices.enumerateDevices()).filter((device) => device.deviceId);
   } catch {
     return stream; // cannot list cameras: keep the one the browser chose
   }
-  if (!best?.deviceId) return stream;
-  if (best.deviceId !== deviceIdOf(stream)) {
-    closeCamera(stream); // many phones cannot open two cameras at once
-    await release();
-    try {
-      stream = await requestCamera({ deviceId: { exact: best.deviceId } });
-    } catch {
-      // The main lens would not open: use the browser's choice again, but do not remember it (it may be
-      // the ultra-wide). If even that fails, the error reaches the screen — never a stopped stream.
+  if (candidates.length === 0) return stream;
+
+  // Many phones cannot open two cameras at once, so each switch closes the
+  // current one first and gives Android a moment to release it.
+  async function switchTo(deviceId) {
+    if (stream && deviceIdOf(stream) === deviceId) return stream;
+    if (stream) {
+      closeCamera(stream);
+      stream = null;
       await release();
-      return requestCamera({ facingMode: { ideal: 'environment' } });
     }
+    stream = await openExact(deviceId);
+    return stream;
   }
-  rememberCamera(best.deviceId); // only a confirmed main lens is remembered
-  return stream;
+
+  let fallback = null; // the best-ranked lens that opened, used if none reports autofocus
+  for (const candidate of candidates.slice(0, MAX_LENS_TRIES)) {
+    if (!(await switchTo(candidate.deviceId))) continue;
+    const autofocus = autofocusOf(stream);
+    if (autofocus !== false) {
+      rememberCamera(candidate.deviceId); // autofocus confirmed, or the browser cannot tell: trust the ranking
+      return stream;
+    }
+    fallback ??= candidate.deviceId;
+  }
+  if (fallback && (await switchTo(fallback))) {
+    rememberCamera(fallback);
+    return stream;
+  }
+  if (stream) return stream;
+  // No ranked lens would open: the browser's own choice, without remembering it. If even that
+  // fails, the error reaches the screen — never a stopped stream.
+  await release();
+  return requestCamera({ facingMode: { ideal: 'environment' } });
 }
 
 export async function openCamera(video) {
