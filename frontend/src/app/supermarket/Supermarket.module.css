@@ -1,34 +1,445 @@
+/*
+ * Supermarket till. A light retail POS on the LodgeKeep tokens: product tiles
+ * on the left, the current sale on the right, the pay button in the money
+ * accent (--domain-money, the cashiering convention). Touch targets use the
+ * POS sizes (--control-h-touch 44px, --control-h-pos 64px for paying).
+ *
+ * Below 900px the sale panel stacks under the tiles and a fixed order bar
+ * carries the total. It is `position: fixed`, never sticky: the shell's
+ * <main> never scrolls itself, so sticky would not pin (see RegisterTab).
+ */
+
 .layout {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
 }
 
-.scanRow {
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- Header: title, view tabs, outlet ---- */
+
+.header {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-3);
-  align-items: flex-end;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
 }
 
-.scanField {
-  flex: 1;
-  min-width: 14rem;
+.title {
+  margin: 0;
+  margin-right: auto;
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line);
+  font-weight: var(--text-h1-weight);
 }
 
-.results {
-  list-style: none;
-  margin: var(--space-3) 0 0;
-  padding: 0;
+.viewTabs {
   display: flex;
-  flex-direction: column;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-full);
+}
+
+.viewTab {
+  flex-shrink: 0;
+  white-space: nowrap;
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.viewTabActive {
+  background: var(--surface-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-card);
+}
+
+.outletPicker {
+  display: flex;
+  align-items: center;
   gap: var(--space-2);
 }
 
-.resultButton {
-  width: 100%;
-  text-align: left;
+.lowStockBanner {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--state-warning-bg);
+  color: var(--state-warning);
+  font-size: var(--text-body-size);
+}
+
+/* ---- Sell: catalogue + current sale ---- */
+
+.sellPanel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+.catalogue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  container-type: inline-size;
+}
+
+/* In the fixed-height catalogue column only the tile grid may shrink or scroll. */
+.catalogue > * {
+  flex-shrink: 0;
+}
+
+.scanRow {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.scanField {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: calc(var(--control-h-touch) + var(--space-3));
+  padding: 0 var(--space-4);
+  border: 2px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+}
+
+.scanField:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-ring);
+}
+
+.scanIcon {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.scanInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-h3-size);
+}
+
+/* The halo is drawn on the whole field (:focus-within), so the global input focus ring is switched off here. */
+.scanInput:focus,
+.scanInput:focus-visible,
+.scanInput:hover {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.scanButton {
+  min-height: calc(var(--control-h-touch) + var(--space-3));
+  padding: 0 var(--space-5);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--text-primary);
+  color: var(--text-inverse);
+  font: inherit;
+  font-size: var(--text-h3-size);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.scanButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.categoryTabs {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: var(--space-1);
+}
+
+.categoryTab {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
   min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.categoryTabActive {
+  border-color: var(--text-primary);
+  background: var(--text-primary);
+  color: var(--text-inverse);
+}
+
+.categoryCount {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.categoryTabActive .categoryCount {
+  background: var(--sidebar-active-bg);
+  color: var(--text-inverse);
+}
+
+.resultsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.linkButton {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* 2 tiles on a phone, 3 on a narrow tablet column, 4 when there is room. */
+.tileGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-content: start;
+}
+
+@container (width >= 30rem) {
+  .tileGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container (width >= 40rem) {
+  .tileGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: calc(var(--control-h-pos) * 2.5);
+  padding: var(--space-3);
+  border: 2px solid transparent;
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 80ms ease, border-color 120ms ease;
+}
+
+.tile:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-ring);
+}
+
+.tile:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tile:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.tileInCart {
+  border-color: var(--domain-money);
+}
+
+.tileImage,
+.tileThumb {
+  width: 100%;
+  height: var(--control-h-pos);
+  border-radius: var(--radius-md);
+}
+
+.tileImage {
+  object-fit: cover;
+}
+
+.tileThumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-h2-size);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.tint0 {
+  background: var(--domain-booking-tint);
+  color: var(--accent-hover);
+}
+
+.tint1 {
+  background: var(--domain-rooms-tint);
+  color: var(--domain-rooms);
+}
+
+.tint2 {
+  background: var(--domain-money-tint);
+  color: var(--domain-money);
+}
+
+.tint3 {
+  background: var(--domain-guest-tint);
+  color: var(--domain-guest);
+}
+
+.tint4 {
+  background: var(--state-neutral-bg);
+  color: var(--state-neutral);
+}
+
+.tileName {
+  display: -webkit-box;
+  min-height: calc(var(--text-h3-size) * 2.5);
+  overflow: hidden;
+  font-size: var(--text-h3-size);
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.tileFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: auto;
+}
+
+.tilePrice {
+  font-size: var(--text-h3-size);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.soldOut,
+.inCartBadge {
+  flex-shrink: 0;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--text-caption-size);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.soldOut {
+  background: var(--state-danger-bg);
+  color: var(--state-danger);
+}
+
+.inCartBadge {
+  background: var(--domain-money);
+  color: var(--text-inverse);
+}
+
+/* ---- Current sale panel ---- */
+
+.cartPanel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
+  scroll-margin-top: calc(var(--topbar-h) + var(--space-4));
+}
+
+.cartHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+
+.cartTitle {
+  margin: 0;
+  font-size: var(--text-h2-size);
+  line-height: var(--text-h2-line);
+  font-weight: 700;
+}
+
+.cartCount {
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.cartBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--space-5);
+}
+
+.cartEmpty {
+  margin: 0;
+  padding: var(--space-6) 0;
+  color: var(--text-muted);
+  text-align: center;
 }
 
 .cartTable,
@@ -37,8 +448,255 @@
   border-collapse: collapse;
 }
 
-.cartTable th,
-.cartTable td,
+.cartTable td {
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.lineName {
+  display: block;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.lineUnit {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.lineTotal {
+  padding-left: var(--space-3) !important;
+  font-weight: 700;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.qtyControls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.stepper {
+  width: var(--control-h-touch);
+  height: var(--control-h-touch);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-h2-size);
+  cursor: pointer;
+}
+
+.qty {
+  min-width: var(--space-6);
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.cartFooter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.totalRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  color: var(--text-secondary);
+}
+
+.totalAmount {
+  color: var(--text-primary);
+  font-size: var(--text-kpi-size);
+  font-weight: var(--text-kpi-weight);
+  font-variant-numeric: tabular-nums;
+}
+
+.taxNote {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+}
+
+.methods {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.method {
+  min-height: calc(var(--control-h-touch) + var(--space-3));
+  border: 2px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.methodActive {
+  border-color: var(--domain-money);
+  background: var(--domain-money-tint);
+}
+
+.payButton {
+  min-height: var(--control-h-pos);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--domain-money);
+  color: var(--text-inverse);
+  font: inherit;
+  font-size: var(--text-h2-size);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.payButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- Phone / narrow: fixed order bar ---- */
+
+.orderBar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 50; /* above the page, below the menu drawer and modals */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-raised);
+}
+
+.orderBarSpacer {
+  height: calc(var(--control-h-pos) + var(--space-6));
+}
+
+.orderBarSummary {
+  display: flex;
+  flex-direction: column;
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.orderBarSummary > :last-child {
+  color: var(--text-primary);
+  font-size: var(--text-h2-size);
+  font-weight: 700;
+}
+
+.orderBarButton {
+  flex: 1;
+  max-width: 20rem;
+  min-height: var(--control-h-pos);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--domain-money);
+  color: var(--text-inverse);
+  font: inherit;
+  font-size: var(--text-h3-size);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@media (width >= 900px) {
+  .sellPanel {
+    grid-template-columns: minmax(0, 1fr) 22rem;
+    height: min(78vh, 100dvh - 12rem);
+    min-height: 32rem;
+  }
+
+  .catalogue {
+    overflow-y: auto;
+    padding: var(--space-1);
+  }
+
+  .orderBar,
+  .orderBarSpacer {
+    display: none;
+  }
+}
+
+@media print {
+  .orderBar,
+  .orderBarSpacer {
+    display: none;
+  }
+}
+
+/* ---- Other tabs ---- */
+
+.setupList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setupRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.setupName {
+  font-weight: 600;
+}
+
+.setupBadges {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+
+.badgeWarning,
+.badgeNeutral {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--text-caption-size);
+  font-weight: 600;
+}
+
+.badgeWarning {
+  background: var(--state-warning-bg);
+  color: var(--state-warning);
+}
+
+.badgeNeutral {
+  background: var(--state-neutral-bg);
+  color: var(--state-neutral);
+}
+
+.barcodeForm {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+/* ---- Receipt (shared with SupermarketReceipt) ---- */
+
 .receiptTable th,
 .receiptTable td {
   padding: var(--space-2) var(--space-3);
@@ -51,24 +709,12 @@
   font-variant-numeric: tabular-nums;
 }
 
-.qtyControls {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
 .payRow {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
   align-items: center;
   margin-top: var(--space-4);
-}
-
-.itemsTotal {
-  margin-left: auto;
-  font-size: var(--text-body-size);
-  font-weight: 600;
 }
 
 .receipt {
@@ -111,10 +757,12 @@
 }
 
 .hint {
+  margin: 0;
   color: var(--text-secondary);
   font-size: var(--text-label-size);
 }
 
 .errorBanner {
+  margin: 0;
   color: var(--state-danger);
 }
