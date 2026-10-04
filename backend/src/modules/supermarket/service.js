@@ -31,6 +31,8 @@ const errors = require('./errors');
 const SALE_METHODS = ['cash', 'terminal'];
 const MAX_LINES = 100;
 const MAX_BARCODE_LENGTH = 64;
+const MAX_LOW_STOCK = 50;
+const MAX_MY_SALES = 50;
 
 function cleanBarcode(raw) {
   const barcode = typeof raw === 'string' ? raw.trim() : '';
@@ -305,6 +307,66 @@ async function summarize({ context, outletId, from, to }) {
   };
 }
 
+// ---------------------------------------------------------------- Stage 2: setup flags, low stock, reprint
+
+/**
+ * Products the outlet sells that need setup: no barcode (cannot be scanned) and/or no stock
+ * recipe (a sale never deducts stock). Informational only; selling is never blocked by it.
+ */
+async function listSetupFlags({ context, outletId }) {
+  const db = scopedDb().for(context);
+  await requireSupermarketOutlet({ db, context, outletId });
+  const items = await outletMenu.menuItemsForOutlet(db, outletId);
+  if (items.length === 0) return { items: [], counts: { missing_barcode: 0, not_stock_tracked: 0 } };
+  const ids = items.map((item) => item.id);
+  const barcoded = new Set((await db.table('supermarket_barcodes').whereIn('menu_item_id', ids).select('menu_item_id')).map((row) => String(row.menu_item_id)));
+  const tracked = new Set((await db.table('pos_menu_item_components').whereIn('menu_item_id', ids).select('menu_item_id')).map((row) => String(row.menu_item_id)));
+  const flagged = items
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      price: item.price,
+      missing_barcode: !barcoded.has(String(item.id)),
+      not_stock_tracked: !tracked.has(String(item.id)),
+    }))
+    .filter((item) => item.missing_barcode || item.not_stock_tracked);
+  return {
+    items: flagged,
+    counts: { missing_barcode: flagged.filter((i) => i.missing_barcode).length, not_stock_tracked: flagged.filter((i) => i.not_stock_tracked).length },
+  };
+}
+
+/** Stock at or below its reorder level at the outlet, lowest first, for the till's banner. Carries no cost. */
+async function listLowStock({ context, outletId }) {
+  const db = scopedDb().for(context);
+  await requireSupermarketOutlet({ db, context, outletId });
+  const rows = await stockService.listStockItems({ context, outletId, lowStockOnly: true });
+  const items = rows
+    .map((row) => ({ id: row.id, name: row.name, unit: row.unit, current_quantity: row.current_quantity, reorder_level: row.reorder_level }))
+    .sort((a, b) => Number(a.current_quantity) - Number(b.current_quantity));
+  return { total: items.length, items: items.slice(0, MAX_LOW_STOCK) };
+}
+
+/** The caller's own sales on the property's current business date, newest first (for a cashier's reprint). */
+async function listMySalesToday({ context, outletId }) {
+  const db = scopedDb().for(context);
+  await requireSupermarketOutlet({ db, context, outletId });
+  const property = await db.table('properties').where({ id: context.propertyId }).first('current_business_date');
+  if (!property?.current_business_date) return [];
+  const rows = await db
+    .table('supermarket_sales')
+    .joinScoped('pos_order_settlements', (join) => join.on('pos_order_settlements.id', '=', 'supermarket_sales.settlement_id'))
+    .where('supermarket_sales.outlet_id', outletId)
+    .where('supermarket_sales.sold_by_user_id', context.userId)
+    .where('pos_order_settlements.business_date', property.current_business_date)
+    .orderBy('supermarket_sales.id', 'desc')
+    .limit(MAX_MY_SALES)
+    .select('supermarket_sales.*');
+  const outlet = await db.table('pos_outlets').where({ id: outletId }).first('id', 'code');
+  return rows.map((row) => ({ ...row, receipt_code: receiptCode(outlet, row.receipt_number) }));
+}
+
 /** Voids the sale (and its settlement and stock), keeping the receipt number. `trx`-based, manager-level. */
 async function voidSale({ trx, id, reason, userId }) {
   if (!reason || !String(reason).trim()) throw new ValidationError('MISSING_FIELD', '"reason" is required to void a sale.', [{ field: 'reason', issue: 'missing' }]);
@@ -316,4 +378,4 @@ async function voidSale({ trx, id, reason, userId }) {
   return getSaleWith(trx, id);
 }
 
-module.exports = { listMyOutlets, listBarcodes, addBarcode, removeBarcode, lookupByBarcode, searchItems, createSale, getSale, listSales, summarize, voidSale, receiptCode };
+module.exports = { listMyOutlets, listBarcodes, addBarcode, removeBarcode, lookupByBarcode, searchItems, createSale, getSale, listSales, summarize, voidSale, receiptCode, listSetupFlags, listLowStock, listMySalesToday };

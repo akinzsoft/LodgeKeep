@@ -44,6 +44,14 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const [salesError, setSalesError] = useState(null);
   const [voidTarget, setVoidTarget] = useState(null);
 
+  const [lowStock, setLowStock] = useState(null);
+  const [mySales, setMySales] = useState([]);
+  const [mySalesError, setMySalesError] = useState(null);
+  const [isReprint, setIsReprint] = useState(false);
+  const [flags, setFlags] = useState(null);
+  const [flagsError, setFlagsError] = useState(null);
+  const [barcodeDrafts, setBarcodeDrafts] = useState({});
+
   // One Idempotency-Key per sale attempt: a retry of the same cart reuses it, a changed cart gets a new one.
   const attemptKey = useRef(null);
   const scanInput = useRef(null);
@@ -89,6 +97,69 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load on outlet change
     loadSales();
   }, [loadSales]);
+
+  // Stage 2: the till's low-stock banner. A failed load shows nothing and never blocks selling.
+  const loadLowStock = useCallback(async () => {
+    if (!outletId || !(canSell || canReport || canVoid)) return;
+    try {
+      setLowStock(await supermarketApi.getLowStock(outletId));
+    } catch {
+      setLowStock(null);
+    }
+  }, [outletId, canSell, canReport, canVoid]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- load on outlet change
+    loadLowStock();
+  }, [loadLowStock]);
+
+  // A cashier's own sales today, for reprinting.
+  const loadMySales = useCallback(async () => {
+    if (!canSell || !outletId) return;
+    try {
+      setMySales(await supermarketApi.listMySales(outletId));
+      setMySalesError(null);
+    } catch (caught) {
+      setMySales([]);
+      setMySalesError(caught instanceof ApiError ? caught.message : 'Could not load your sales.');
+    }
+  }, [canSell, outletId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- load on outlet change
+    loadMySales();
+  }, [loadMySales]);
+
+  // Products needing setup (managers only).
+  const loadFlags = useCallback(async () => {
+    if (!canVoid || !outletId) return;
+    try {
+      setFlags(await supermarketApi.getSetupFlags(outletId));
+      setFlagsError(null);
+    } catch (caught) {
+      setFlags(null);
+      setFlagsError(caught instanceof ApiError ? caught.message : 'Could not load product setup.');
+    }
+  }, [canVoid, outletId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- load on outlet change
+    loadFlags();
+  }, [loadFlags]);
+
+  async function handleAddBarcode(event, item) {
+    event.preventDefault();
+    const code = (barcodeDrafts[item.id] ?? '').trim();
+    if (!code) return;
+    try {
+      await supermarketApi.addBarcode(item.id, code);
+      setBarcodeDrafts((current) => ({ ...current, [item.id]: '' }));
+      setFlagsError(null);
+      await loadFlags();
+    } catch (caught) {
+      setFlagsError(caught instanceof ApiError ? caught.message : 'Could not add that barcode.');
+    }
+  }
 
   function addToCart(item, barcode = null) {
     attemptKey.current = null;
@@ -147,12 +218,15 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
         idempotencyKey: attemptKey.current,
         items: cart.map((line) => ({ menu_item_id: line.menuItem.id, quantity: line.quantity })),
       });
+      setIsReprint(false);
       setReceipt(sale);
       setCart([]);
       setScan('');
       setResults([]);
       attemptKey.current = null;
       loadSales();
+      loadLowStock();
+      loadMySales();
     } catch (caught) {
       setSaleError(caught instanceof ApiError ? caught.message : 'The sale could not be completed.');
     } finally {
@@ -167,6 +241,8 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       const voided = await supermarketApi.voidSale(target.id, reason);
       if (receipt && String(receipt.id) === String(voided.id)) setReceipt(voided);
       await loadSales();
+      loadLowStock();
+      loadMySales();
     } catch (caught) {
       setSalesError(caught instanceof ApiError ? caught.message : 'Could not void that sale.');
     }
@@ -174,6 +250,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
 
   async function showReceipt(row) {
     try {
+      setIsReprint(true);
       setReceipt(await supermarketApi.getSale(row.id));
     } catch (caught) {
       setSalesError(caught instanceof ApiError ? caught.message : 'Could not open that receipt.');
@@ -194,13 +271,20 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       {outlets.length > 0 && (
         <label className={formStyles.field}>
           <span className={formStyles.label}>Outlet</span>
-          <select className={formStyles.select} value={outletId} onChange={(event) => { setOutletId(event.target.value); setCart([]); setResults([]); setReceipt(null); }}>
+          <select className={formStyles.select} value={outletId} onChange={(event) => { setOutletId(event.target.value); setCart([]); setResults([]); setReceipt(null); setLowStock(null); setFlags(null); }}>
             <option value="">Select an outlet</option>
             {outlets.map((outlet) => (
               <option key={outlet.id} value={outlet.id}>{outlet.name}</option>
             ))}
           </select>
         </label>
+      )}
+
+      {outletId && lowStock && lowStock.total > 0 && (
+        <p className={styles.errorBanner} role="status">
+          Low stock: {lowStock.items.slice(0, 5).map((item) => `${item.name} ${item.current_quantity} (reorder at ${item.reorder_level})`).join('; ')}
+          {lowStock.total > 5 ? ` and ${lowStock.total - 5} more` : ''}.
+        </p>
       )}
 
       {outletId && canSell && (
@@ -271,7 +355,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       {outletId && !canSell && canReport && <p className={styles.hint}>You can view sales here but not sell.</p>}
 
       {receipt && (
-        <Card title={`Receipt ${receipt.receipt_code}`}>
+        <Card title={`Receipt ${receipt.receipt_code}${isReprint ? ' (reprint)' : ''}`}>
           <SupermarketReceipt sale={receipt} property={activeProperty} />
           <div className={styles.payRow}>
             <Button variant="secondary" onClick={() => setPrinting(true)}>Print receipt</Button>
@@ -281,9 +365,60 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       )}
       {printing && receipt && (
         <PrintDocument>
-          <PrintLetterhead logoUrl={activeProperty?.logo_url} organisation={activeProperty?.name} title={`Receipt ${receipt.receipt_code}`} details={[receipt.outlet_name]} />
+          <PrintLetterhead logoUrl={activeProperty?.logo_url} organisation={activeProperty?.name} title={`Receipt ${receipt.receipt_code}`} details={isReprint ? [receipt.outlet_name, 'REPRINT — copy of an earlier receipt'] : [receipt.outlet_name]} />
           <SupermarketReceipt sale={receipt} property={activeProperty} />
         </PrintDocument>
+      )}
+
+      {outletId && canSell && (
+        <Card title="Today's sales (reprint)">
+          {mySalesError && <p className={styles.errorBanner} role="alert">{mySalesError}</p>}
+          <DataTable
+            state={mySales.length === 0 ? 'empty' : 'success'}
+            emptyMessage="You have not made any sales today."
+            columns={[
+              { key: 'receipt', label: 'Receipt', render: (row) => `${row.receipt_code}${row.voided_at ? ' (void)' : ''}` },
+              { key: 'time', label: 'Time', render: (row) => new Date(row.created_at).toLocaleTimeString() },
+              { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={row.currency} /> },
+              { key: 'actions', label: '', render: (row) => <Button size="compact" variant="secondary" onClick={() => showReceipt(row)}>Reprint</Button> },
+            ]}
+            rows={mySales}
+            rowKey={(row) => row.id}
+          />
+        </Card>
+      )}
+
+      {outletId && canVoid && (
+        <Card title="Products needing setup">
+          {flagsError && <p className={styles.errorBanner} role="alert">{flagsError}</p>}
+          {flags && flags.items.length === 0 && <p className={styles.hint}>Every product has a barcode and is stock-tracked.</p>}
+          {flags && flags.items.length > 0 && (
+            <>
+              <p className={styles.hint}>{flags.counts.missing_barcode} without a barcode, {flags.counts.not_stock_tracked} not stock-tracked (sales do not reduce stock). These can still be sold.</p>
+              <ul className={styles.results} aria-label="Products needing setup">
+                {flags.items.map((item) => (
+                  <li key={item.id}>
+                    <strong>{item.name}</strong>
+                    {item.missing_barcode && <span> · No barcode</span>}
+                    {item.not_stock_tracked && <span> · Not stock-tracked</span>}
+                    {item.missing_barcode && (
+                      <form className={styles.scanRow} onSubmit={(event) => handleAddBarcode(event, item)}>
+                        <input
+                          className={formStyles.input}
+                          aria-label={`Barcode for ${item.name}`}
+                          value={barcodeDrafts[item.id] ?? ''}
+                          onChange={(event) => setBarcodeDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                          disabled={isOffline}
+                        />
+                        <Button type="submit" size="compact" variant="secondary" disabled={isOffline || !(barcodeDrafts[item.id] ?? '').trim()}>Add barcode</Button>
+                      </form>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </Card>
       )}
 
       {outletId && canReport && (

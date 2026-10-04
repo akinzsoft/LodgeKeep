@@ -119,4 +119,33 @@ async function removeBarcode(req, res, next) {
   }
 }
 
-module.exports = { listMyOutlets, lookup, createSale, getSale, listSales, summary, voidSale, listBarcodes, addBarcode, removeBarcode };
+function outletRequired(req) {
+  if (!req.query.outlet_id) throw new ValidationError('MISSING_FIELD', '"outlet_id" is required.', [{ field: 'outlet_id', issue: 'missing' }]);
+  return req.query.outlet_id;
+}
+
+async function setupFlags(req, res, next) {
+  try {
+    res.json(ok(await service.listSetupFlags({ context: req.context, outletId: outletRequired(req) })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function lowStock(req, res, next) {
+  try {
+    res.json(ok(await service.listLowStock({ context: req.context, outletId: outletRequired(req) })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function mySales(req, res, next) {
+  try {
+    res.json(ok(await service.listMySalesToday({ context: req.context, outletId: outletRequired(req) })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+module.exports = { setupFlags, lowStock, mySales, listMyOutlets, lookup, createSale, getSale, listSales, summary, voidSale, listBarcodes, addBarcode, removeBarcode };

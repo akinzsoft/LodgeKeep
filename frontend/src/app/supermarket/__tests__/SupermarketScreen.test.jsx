@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
   getSale: vi.fn(),
   listSales: vi.fn(),
   voidSale: vi.fn(),
+  getLowStock: vi.fn(),
+  listMySales: vi.fn(),
+  getSetupFlags: vi.fn(),
+  addBarcode: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -48,6 +52,9 @@ describe('<SupermarketScreen>', () => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listMyOutlets.mockResolvedValue([{ id: '5', name: 'Mini Mart' }]);
     mocks.listSales.mockResolvedValue([]);
+    mocks.getLowStock.mockResolvedValue({ total: 0, items: [] });
+    mocks.listMySales.mockResolvedValue([]);
+    mocks.getSetupFlags.mockResolvedValue({ items: [], counts: { missing_barcode: 0, not_stock_tracked: 0 } });
   });
 
   it('adds a scanned barcode to the cart and counts a second scan of the same product', async () => {
@@ -143,5 +150,54 @@ describe('<SupermarketScreen>', () => {
     mocks.listMyOutlets.mockResolvedValue([]);
     render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
     expect(await screen.findByText(/not assigned to a supermarket outlet/i)).toBeInTheDocument();
+  });
+
+  describe('Stage 2', () => {
+    it('shows a low-stock banner with at most five items and a count of the rest, and nothing when the load fails', async () => {
+      const items = Array.from({ length: 7 }, (_, n) => ({ id: String(n), name: `Item ${n}`, unit: 'pack', current_quantity: String(n), reorder_level: '5.000' }));
+      mocks.getLowStock.mockResolvedValue({ total: 7, items });
+      const { unmount } = render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      const banner = await screen.findByRole('status');
+      expect(banner).toHaveTextContent('Item 4 4 (reorder at 5.000)');
+      expect(banner).not.toHaveTextContent('Item 5');
+      expect(banner).toHaveTextContent('and 2 more');
+      unmount();
+
+      mocks.getLowStock.mockRejectedValue(new Error('boom'));
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      expect(await screen.findByLabelText(/scan a barcode/i)).toBeInTheDocument();
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    it("lets a cashier reprint one of today's sales, marked as a reprint", async () => {
+      mocks.listMySales.mockResolvedValue([{ id: '90', receipt_code: 'MART-000007', total: '134.38', currency: 'NGN', created_at: '2027-09-01T10:00:00', voided_at: null }]);
+      mocks.getSale.mockResolvedValue(SALE);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Reprint' }));
+      expect(mocks.getSale).toHaveBeenCalledWith('90');
+      expect(await screen.findByText('Receipt MART-000007 (reprint)')).toBeInTheDocument();
+    });
+
+    it('lists products needing setup for a manager and adds a barcode, then refreshes', async () => {
+      mocks.getSetupFlags
+        .mockResolvedValueOnce({ items: [{ id: '31', name: 'Bare item', missing_barcode: true, not_stock_tracked: true }], counts: { missing_barcode: 1, not_stock_tracked: 1 } })
+        .mockResolvedValue({ items: [{ id: '31', name: 'Bare item', missing_barcode: false, not_stock_tracked: true }], counts: { missing_barcode: 0, not_stock_tracked: 1 } });
+      mocks.addBarcode.mockResolvedValue({ id: '1' });
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
+      const list = await screen.findByRole('list', { name: 'Products needing setup' });
+      expect(within(list).getByText(/No barcode/)).toBeInTheDocument();
+      expect(within(list).getByText(/Not stock-tracked/)).toBeInTheDocument();
+      await userEvent.type(screen.getByLabelText('Barcode for Bare item'), '600999');
+      await userEvent.click(screen.getByRole('button', { name: 'Add barcode' }));
+      expect(mocks.addBarcode).toHaveBeenCalledWith('31', '600999');
+      await vi.waitFor(() => expect(within(screen.getByRole('list', { name: 'Products needing setup' })).queryByText(/No barcode/)).not.toBeInTheDocument());
+    });
+
+    it('hides the setup panel and does not load flags without the manage key', async () => {
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await screen.findByLabelText(/scan a barcode/i);
+      expect(screen.queryByText('Products needing setup')).not.toBeInTheDocument();
+      expect(mocks.getSetupFlags).not.toHaveBeenCalled();
+    });
   });
 });
