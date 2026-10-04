@@ -37,6 +37,7 @@ const { ValidationError } = require('../../shared/errors');
 const { generateUlid } = require('../../shared/ulid');
 const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('./tax-engine');
+const { taxChargeTypeForOutlet } = require('../../shared/outlet-types');
 const paystack = require('./paystack-adapter');
 const { assertAllowedCallbackUrl } = require('../../shared/callback-url');
 const { recordAuditEntry } = require('../../audit');
@@ -812,7 +813,8 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
 
   const property = await trx.table('properties').where({ id: order.property_id }).first('current_business_date');
   const allTaxRows = await trx.table('taxes');
-  const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate: property?.current_business_date, chargeType: 'pos_charge' });
+  const saleOutlet = await trx.table('pos_outlets').where({ id: order.outlet_id }).first('type');
+  const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate: property?.current_business_date, chargeType: taxChargeTypeForOutlet(saleOutlet) });
   const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
   const taxAmount = sumMoney(taxLines.map((t) => t.amount));
 

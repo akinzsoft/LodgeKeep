@@ -1861,6 +1861,129 @@ const ENTITIES = [
   },
 
   {
+    table: 'supermarket_barcodes',
+    uniqueKeys: [['tenant_id', 'property_id', 'barcode']],
+    newRow: (ctx, t) => ({ tenant_id: t.id, property_id: t.properties[0].id, menu_item_id: t.posMenuItems[0].id, barcode: `NEW-${t.slug}` }),
+    duplicateRow: (ctx, t) => ({ tenant_id: t.id, property_id: t.properties[0].id, menu_item_id: t.posMenuItems[0].id, barcode: `FIXTURE-${t.slug}-1` }),
+    crossTenant: [
+      {
+        name: "barcodes another tenant's menu item",
+        row: (ctx, own, other) => ({ tenant_id: own.id, property_id: own.properties[0].id, menu_item_id: other.posMenuItems[0].id, barcode: `CROSS-${own.slug}` }),
+      },
+    ],
+  },
+
+  {
+    table: 'supermarket_receipt_sequences',
+    uniqueKeys: [['outlet_id']],
+    // The fixture bar already has its counter, so a second outlet's counter is the new row.
+    newRow: (ctx, t) => ({ tenant_id: t.id, property_id: t.properties[0].id, outlet_id: t.supermarketSpare.outletId, next_number: 1 }),
+    duplicateRow: (ctx, t) => ({ tenant_id: t.id, property_id: t.properties[0].id, outlet_id: t.posOutlets[0].id, next_number: 1 }),
+    crossTenant: [
+      {
+        name: "a counter for another tenant's outlet",
+        row: (ctx, own, other) => ({ tenant_id: own.id, property_id: own.properties[0].id, outlet_id: other.supermarketSpare.outletId, next_number: 1 }),
+      },
+    ],
+  },
+
+  {
+    table: 'supermarket_sales',
+    uniqueKeys: [['outlet_id', 'receipt_number']],
+    // The fixture's spare outlet/tab/settlement (long-past, never listed) back the accepted new row.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.supermarketSpare.outletId,
+      pos_order_id: t.supermarketSpare.orderId,
+      settlement_id: t.supermarketSpare.settlementId,
+      receipt_number: 1,
+      method: 'cash',
+      subtotal: '1.00',
+      tax_amount: '0.00',
+      total: '1.00',
+      currency: 'NGN',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      outlet_id: t.posOutlets[0].id,
+      pos_order_id: t.posOrders[1].id,
+      settlement_id: t.posOrderSettlements[0].id,
+      receipt_number: 1,
+      method: 'cash',
+      subtotal: '1.00',
+      tax_amount: '0.00',
+      total: '1.00',
+      currency: 'NGN',
+    }),
+    crossTenant: [
+      {
+        name: "a sale against another tenant's outlet, order and settlement",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          outlet_id: other.supermarketSpare.outletId,
+          pos_order_id: other.supermarketSpare.orderId,
+          settlement_id: other.supermarketSpare.settlementId,
+          receipt_number: 77,
+          method: 'cash',
+          subtotal: '1.00',
+          tax_amount: '0.00',
+          total: '1.00',
+          currency: 'NGN',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'supermarket_sale_lines',
+    uniqueKeys: [['sale_id', 'line_no']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      sale_id: t.supermarketSales[0].id,
+      line_no: 2,
+      item_name: 'Second line',
+      quantity: 1,
+      unit_price: '5.00',
+      line_total: '5.00',
+      line_net: '5.00',
+      line_tax: '0.00',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      sale_id: t.supermarketSales[0].id,
+      line_no: 1,
+      item_name: 'Dup',
+      quantity: 1,
+      unit_price: '5.00',
+      line_total: '5.00',
+      line_net: '5.00',
+      line_tax: '0.00',
+    }),
+    crossTenant: [
+      {
+        name: "a line on another tenant's sale",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          sale_id: other.supermarketSales[0].id,
+          line_no: 9,
+          item_name: 'Cross',
+          quantity: 1,
+          unit_price: '5.00',
+          line_total: '5.00',
+          line_net: '5.00',
+          line_tax: '0.00',
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'pos_outlet_terminal_accounts',
     uniqueKeys: [['outlet_id', 'account_number']],
     // The fixture bar records account 0123456789 only, so 2020202020 is free for a new row.

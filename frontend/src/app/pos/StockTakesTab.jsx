@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Card, DataTable, Button, StatusPill, ConfirmDialog } from '../../shared/components/index.js';
 import { formatQuantity } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
-import { isStoreOutlet } from './outletTypes.js';
+import { isStoreOutlet, isSupermarketOutlet } from './outletTypes.js';
 import { sortStockItemsByCategory, UNCATEGORIZED_LABEL } from './stockItemOptions.jsx';
 import formStyles from './POSForm.module.css';
 
@@ -232,7 +232,7 @@ export function StockTakesTab({ isOffline = false }) {
           {detail.stockTake.status === 'open' && (
             <>
               <p className={formStyles.hint}>Enter what you counted for each item. Nothing here shows what the system expects until this take is completed.</p>
-              {storeRooms.length > 0 && !isStoreOutlet(outletsById.get(String(detail.stockTake.outlet_id))) && (
+              {storeRooms.length > 0 && !isStoreOutlet(outletsById.get(String(detail.stockTake.outlet_id))) && !isSupermarketOutlet(outletsById.get(String(detail.stockTake.outlet_id))) && (
                 <p className={formStyles.hint}>
                   A count here can confirm or lower this outlet&apos;s stock, but not raise it. Stock arrives from the store room ({storeRooms.map((store) => store.name).join(', ')}) by a stock request or transfer. If you
                   counted more than the system holds, re-count it or ask the store to transfer the difference first.

@@ -7,6 +7,7 @@ import { StockCategoriesCard } from './StockCategoriesCard.jsx';
 import { computeCategorySections } from './categorySections.js';
 import { SellInRegisterFields } from './SellInRegisterFields.jsx';
 import { canReceiveAt, receivingOutlets } from './outletTypes.js';
+import { isStoreOutlet } from './outletTypes.js';
 import { choiceFromSelection, classifyStockItem, defaultCategorySelection, sellStockItemInRegister, validateSellFields } from './sellInRegister.js';
 import formStyles from './POSForm.module.css';
 
@@ -555,7 +556,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
       {/* Deliveries are received at the store room only; an outlet gets stock by a stock request. */}
       {outlets && outletFilter && !canReceiveAt(outlets, outletFilter) && (
         <p className={formStyles.hint}>
-          Deliveries are received at the store room ({receivingOutlets(outlets).map((outlet) => outlet.name).join(', ')}), so there is no Receive action here. To get stock into{' '}
+          Deliveries are received at the store room ({receivingOutlets(outlets).filter(isStoreOutlet).map((outlet) => outlet.name).join(', ')}), so there is no Receive action here. To get stock into{' '}
           {selectedOutletName ?? 'this outlet'}, send a request from the Requests tab.
         </p>
       )}

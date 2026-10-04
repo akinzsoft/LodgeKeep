@@ -304,6 +304,12 @@ exports.seed = async function seed(knex) {
     await grantManagerKeys(tenantId, ['pos.stock_request'], 'pos_operator');
   }
 
+  /** Supermarket quick sale: pos_operator sells; manager, admin and super_admin also report and manage. */
+  async function ensureSupermarketAccess(tenantId) {
+    await grantManagerKeys(tenantId, ['supermarket.sales', 'supermarket.report', 'supermarket.manage']);
+    await grantManagerKeys(tenantId, ['supermarket.sales'], 'pos_operator');
+  }
+
   async function grantManagerKeys(tenantId, keys, roleCode = 'manager') {
     const permissions = await knex('permissions').whereIn('permission_key', keys).select('id', 'permission_key');
     if (permissions.length !== keys.length) return; // migrations not yet run — nothing to grant
@@ -545,6 +551,7 @@ exports.seed = async function seed(knex) {
       await ensureManagerReconciliationAccess(existingTenant.id);
       await ensurePosOperatorRoleAccess(existingTenant.id);
       await ensureStockTransferAccess(existingTenant.id);
+      await ensureSupermarketAccess(existingTenant.id);
       // src/auth/mfa.js's dev-only bypass: backfill the admin account and
       // its full-access grant onto a pre-existing dev tenant too, same
       // reasoning as the manager grants above.
@@ -629,6 +636,7 @@ exports.seed = async function seed(knex) {
     await ensureManagerPosAccess(tenantId);
     await ensurePosOperatorRoleAccess(tenantId);
     await ensureStockTransferAccess(tenantId);
+    await ensureSupermarketAccess(tenantId);
     await ensurePosOperatorAccount(tenantId, propertyId, spec);
     await ensurePosReferenceData(tenantId, propertyId);
 

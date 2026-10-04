@@ -32,6 +32,7 @@ import { CashieringScreen } from './app/cashiering/CashieringScreen.jsx';
 import { NightAuditScreen } from './app/night-audit/NightAuditScreen.jsx';
 import { ProfilesScreen } from './app/profiles/ProfilesScreen.jsx';
 import { POSScreen } from './app/pos/POSScreen.jsx';
+import { SupermarketScreen } from './app/supermarket/SupermarketScreen.jsx';
 import { StockScreen } from './app/pos/StockScreen.jsx';
 import { ARScreen } from './app/ar/ARScreen.jsx';
 import { GroupBlocksScreen } from './app/group-blocks/GroupBlocksScreen.jsx';
@@ -406,6 +407,8 @@ function Demo() {
         <ProfilesScreen isOffline={!isOnline} activeProperty={activePropertyRecord} />
       ) : screenKey === 'pos' ? (
         <POSScreen activeProperty={activePropertyRecord} isOffline={!isOnline} currentUserLabel={displayName} currentUserId={user.userId} permissions={grantedPermissions} intent={screenIntent} />
+      ) : screenKey === 'supermarket' ? (
+        <SupermarketScreen activeProperty={activePropertyRecord} isOffline={!isOnline} permissions={grantedPermissions} />
       ) : screenKey === 'stock' ? (
         <StockScreen activeProperty={activePropertyRecord} isOffline={!isOnline} permissions={grantedPermissions} intent={screenIntent} />
       ) : screenKey === 'ar' ? (

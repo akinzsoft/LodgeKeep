@@ -51,6 +51,7 @@ const { nightAuditRouter } = require('./modules/night-audit');
 const { profilesRouter } = require('./modules/profiles');
 const { portalPublicRouter, portalAccountRouter } = require('./modules/portal');
 const { posRouter } = require('./modules/pos');
+const { supermarketRouter } = require('./modules/supermarket');
 const { stockRouter } = require('./modules/stock');
 const { arRouter } = require('./modules/ar');
 const { groupBlocksRouter } = require('./modules/group-blocks');
@@ -116,6 +117,7 @@ function buildStaffRouter() {
   router.use(cashieringRouter());
   router.use(nightAuditRouter());
   router.use(posRouter());
+  router.use(supermarketRouter());
   router.use(arRouter());
   router.use(groupBlocksRouter());
   router.use(billingRouter());

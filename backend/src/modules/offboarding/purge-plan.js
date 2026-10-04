@@ -150,6 +150,11 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'stock_levels',
   'stock_items',
   'stock_item_categories',
+  // Supermarket quick-sale layer (references pos_orders / settlements / menu items / outlets)
+  'supermarket_sale_lines',
+  'supermarket_sales',
+  'supermarket_receipt_sequences',
+  'supermarket_barcodes',
   // POS orders and the money behind them
   'pos_order_items',
   'pos_order_settlements',

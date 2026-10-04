@@ -30,6 +30,13 @@ describe('isNavItemAllowed', () => {
     expect(isNavItemAllowed('stock', new Set(['pos.operate', 'pos.stock_view']))).toBe(false);
   });
 
+  it('shows Supermarket to a seller or a report reader, and to no one with neither key', () => {
+    expect(isNavItemAllowed('supermarket', new Set(['supermarket.sales']))).toBe(true);
+    expect(isNavItemAllowed('supermarket', new Set(['supermarket.report']))).toBe(true);
+    expect(isNavItemAllowed('supermarket', new Set(['supermarket.manage']))).toBe(false);
+    expect(isNavItemAllowed('supermarket', new Set(['pos.operate']))).toBe(false);
+  });
+
   it('never allows an unknown key', () => {
     expect(isNavItemAllowed('not-a-screen', new Set(['setup.view']))).toBe(false);
   });

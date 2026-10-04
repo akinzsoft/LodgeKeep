@@ -181,6 +181,16 @@ describe('<StockTakesTab>', () => {
     expect(screen.getByLabelText('Counted quantity for Vodka')).toBeInTheDocument();
   });
 
+  it('does not show the no-raise hint at a supermarket outlet, which takes its own stock, even with a store room', async () => {
+    mocks.listOutlets.mockResolvedValue([{ ...OUTLET, type: 'supermarket' }, { id: '2', name: 'Main Store', type: 'store' }]);
+    mocks.listStockTakes.mockResolvedValue([openTakeRow()]);
+    mocks.getStockTake.mockResolvedValue({ stockTake: openTakeRow(), lines: [] });
+    render(<StockTakesTab />);
+    await userEvent.click(await screen.findByRole('button', { name: 'View' }));
+    await screen.findByText('Vodka');
+    expect(screen.queryByText(/but not raise it/)).not.toBeInTheDocument();
+  });
+
   it('does not show the no-raise hint at the store itself, or when the property has no store room', async () => {
     mocks.listStockTakes.mockResolvedValue([openTakeRow({ outlet_id: '2' })]);
     mocks.listOutlets.mockResolvedValue([OUTLET, { id: '2', name: 'Main Store', type: 'store' }]);
