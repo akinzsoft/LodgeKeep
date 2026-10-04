@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Card, Button, DataTable, ConfirmDialog, PrintDocument, PrintLetterhead } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney } from '../../shared/money.js';
-import { supermarketApi, ApiError } from '../../shared/api/index.js';
+import { supermarketApi, posApi, ApiError } from '../../shared/api/index.js';
 import { SupermarketReceipt } from './SupermarketReceipt.jsx';
+import { ProductTile } from './ProductTile.jsx';
 import formStyles from '../pos/POSForm.module.css';
 import styles from './Supermarket.module.css';
 
@@ -20,6 +21,13 @@ const MAX_QUANTITY = 999;
  * Permissions are three: `supermarket.sales` sells, `supermarket.report` reads
  * the sales list and report (and cannot sell), `supermarket.manage` voids.
  * The server is the real check; this only stops offering what would 403.
+ *
+ * Layout (visual redesign): tabs Sell / Today's sales / All sales / Setup.
+ * Sell is a tile grid of the outlet's whole menu (category pills, scan bar on
+ * top) beside a "Current sale" panel; below 900px the panel stacks under the
+ * grid and a fixed bar carries the total and "Review & pay". The full menu
+ * comes from the POS menu endpoints (`pos.operate`); if that call fails the
+ * till still sells by scan and name search, exactly as before.
  */
 export function SupermarketScreen({ activeProperty, isOffline = false, permissions = new Set() }) {
   const canSell = permissions.has('supermarket.sales');
@@ -52,9 +60,15 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const [flagsError, setFlagsError] = useState(null);
   const [barcodeDrafts, setBarcodeDrafts] = useState({});
 
+  const [tab, setTab] = useState(null);
+  const [menu, setMenu] = useState(null); // null loading, [] items, or 'unavailable'
+  const [menuCategoryNames, setMenuCategoryNames] = useState([]);
+  const [category, setCategory] = useState('All');
+
   // One Idempotency-Key per sale attempt: a retry of the same cart reuses it, a changed cart gets a new one.
   const attemptKey = useRef(null);
   const scanInput = useRef(null);
+  const cartPanel = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,6 +126,23 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load on outlet change
     loadLowStock();
   }, [loadLowStock]);
+
+  // The outlet's whole menu for the tiles. Failure is not an error: the till sells by scan/search.
+  const loadMenu = useCallback(async () => {
+    if (!canSell || !outletId) return;
+    try {
+      const [items, categories] = await Promise.all([posApi.listMenuItems(outletId), posApi.listMenuCategories({ outletId }).catch(() => [])]);
+      setMenu(Array.isArray(items) ? items : 'unavailable');
+      setMenuCategoryNames((Array.isArray(categories) ? categories : []).map((row) => row.name));
+    } catch {
+      setMenu('unavailable');
+    }
+  }, [canSell, outletId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- load on outlet change
+    loadMenu();
+  }, [loadMenu]);
 
   // A cashier's own sales today, for reprinting.
   const loadMySales = useCallback(async () => {
@@ -227,6 +258,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       loadSales();
       loadLowStock();
       loadMySales();
+      loadMenu();
     } catch (caught) {
       setSaleError(caught instanceof ApiError ? caught.message : 'The sale could not be completed.');
     } finally {
@@ -257,102 +289,80 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     }
   }
 
+
   const currency = activeProperty?.base_currency;
   const itemsTotal = sumMoney(cart.map((line) => multiplyMoney(line.menuItem.price, line.quantity)));
+  const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
+  const quantityById = new Map(cart.map((line) => [String(line.menuItem.id), line.quantity]));
+
+  const menuItems = Array.isArray(menu) ? menu : [];
+  // Registered categories plus any an item names, like the Register's rail; an empty one still shows (count 0).
+  const categoryNames = [...new Set([...menuCategoryNames, ...menuItems.map((item) => item.category).filter(Boolean)])].sort((a, b) => a.localeCompare(b));
+  const categoryTabs = [{ name: 'All', count: menuItems.length }, ...categoryNames.map((name) => ({ name, count: menuItems.filter((item) => item.category === name).length }))];
+  const visibleItems = category === 'All' ? menuItems : menuItems.filter((item) => item.category === category);
+
+  const tabs = [
+    canSell && { key: 'sell', label: 'Sell' },
+    canSell && { key: 'today', label: "Today's sales" },
+    canReport && { key: 'sales', label: 'All sales' },
+    canVoid && { key: 'setup', label: 'Setup' },
+  ].filter(Boolean);
+  const activeTab = tabs.some((entry) => entry.key === tab) ? tab : tabs[0]?.key;
+
+  function pickFromResults(item) {
+    addToCart(item);
+    setResults([]);
+    setScan('');
+    scanInput.current?.focus();
+  }
 
   if (outlets === null) return <p>Loading…</p>;
 
   return (
     <div className={styles.layout}>
-      <h1>Supermarket</h1>
+      <div className={styles.header}>
+        <h1 className={styles.title}>Supermarket</h1>
+        {outlets.length > 0 && tabs.length > 0 && outletId && (
+          <div className={styles.viewTabs} role="tablist" aria-label="Till views">
+            {tabs.map((entry) => (
+              <button
+                key={entry.key}
+                type="button"
+                role="tab"
+                id={`supermarket-tab-${entry.key}`}
+                aria-selected={activeTab === entry.key}
+                aria-controls={`supermarket-panel-${entry.key}`}
+                className={`${styles.viewTab} ${activeTab === entry.key ? styles.viewTabActive : ''}`}
+                onClick={() => setTab(entry.key)}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {outlets.length > 1 && (
+          <label className={styles.outletPicker}>
+            <span className={formStyles.label}>Outlet</span>
+            <select className={formStyles.select} value={outletId} onChange={(event) => { setOutletId(event.target.value); setCart([]); setResults([]); setReceipt(null); setLowStock(null); setFlags(null); setMenu(null); setCategory('All'); }}>
+              <option value="">Select an outlet</option>
+              {outlets.map((outlet) => (
+                <option key={outlet.id} value={outlet.id}>{outlet.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+
       {outletsError && <p className={styles.errorBanner} role="alert">{outletsError}</p>}
       {outlets.length === 0 && !outletsError && <p>You are not assigned to a supermarket outlet. Ask a manager to assign you in Setup → Staff.</p>}
 
-      {outlets.length > 0 && (
-        <label className={formStyles.field}>
-          <span className={formStyles.label}>Outlet</span>
-          <select className={formStyles.select} value={outletId} onChange={(event) => { setOutletId(event.target.value); setCart([]); setResults([]); setReceipt(null); setLowStock(null); setFlags(null); }}>
-            <option value="">Select an outlet</option>
-            {outlets.map((outlet) => (
-              <option key={outlet.id} value={outlet.id}>{outlet.name}</option>
-            ))}
-          </select>
-        </label>
-      )}
-
       {outletId && lowStock && lowStock.total > 0 && (
-        <p className={styles.errorBanner} role="status">
-          Low stock: {lowStock.items.slice(0, 5).map((item) => `${item.name} ${item.current_quantity} (reorder at ${item.reorder_level})`).join('; ')}
+        <p className={styles.lowStockBanner} role="status">
+          <strong>Low stock:</strong>{' '}
+          {lowStock.items.slice(0, 5).map((item) => `${item.name} ${item.current_quantity} (reorder at ${item.reorder_level})`).join('; ')}
           {lowStock.total > 5 ? ` and ${lowStock.total - 5} more` : ''}.
         </p>
       )}
-
-      {outletId && canSell && (
-        <Card title="Sell">
-          <form className={styles.scanRow} onSubmit={handleScan}>
-            <label className={`${formStyles.field} ${styles.scanField}`}>
-              <span className={formStyles.label}>Scan a barcode or type a product name</span>
-              <input ref={scanInput} className={formStyles.input} value={scan} onChange={(event) => setScan(event.target.value)} autoFocus disabled={isOffline} />
-            </label>
-            <Button type="submit" disabled={isOffline || !scan.trim()}>Add</Button>
-          </form>
-          {lookupError && <p className={styles.errorBanner} role="alert">{lookupError}</p>}
-          {results.length > 0 && (
-            <ul className={styles.results} aria-label="Matching products">
-              {results.map((item) => (
-                <li key={item.id}>
-                  <Button variant="secondary" className={styles.resultButton} onClick={() => { addToCart(item); setResults([]); setScan(''); scanInput.current?.focus(); }}>
-                    {item.name} — <Money amount={item.price} currencyCode={currency} />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {cart.length === 0 ? (
-            <p className={styles.hint}>Scan or search to start a sale.</p>
-          ) : (
-            <>
-              <table className={styles.cartTable}>
-                <thead>
-                  <tr>
-                    <th scope="col">Item</th>
-                    <th scope="col" className={styles.num}>Price</th>
-                    <th scope="col" className={styles.num}>Qty</th>
-                    <th scope="col" className={styles.num}>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cart.map((line, index) => (
-                    <tr key={line.menuItem.id}>
-                      <td>{line.menuItem.name}</td>
-                      <td className={styles.num}><Money amount={line.menuItem.price} currencyCode={currency} /></td>
-                      <td className={styles.num}>
-                        <span className={styles.qtyControls}>
-                          <Button size="compact" variant="secondary" aria-label={`Fewer ${line.menuItem.name}`} onClick={() => changeQuantity(index, -1)}>−</Button>
-                          {line.quantity}
-                          <Button size="compact" variant="secondary" aria-label={`More ${line.menuItem.name}`} onClick={() => changeQuantity(index, 1)}>+</Button>
-                        </span>
-                      </td>
-                      <td className={styles.num}><Money amount={multiplyMoney(line.menuItem.price, line.quantity)} currencyCode={currency} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className={styles.payRow}>
-                <Button variant={method === 'cash' ? 'primary' : 'secondary'} aria-pressed={method === 'cash'} onClick={() => setMethod('cash')}>Cash</Button>
-                <Button variant={method === 'terminal' ? 'primary' : 'secondary'} aria-pressed={method === 'terminal'} onClick={() => setMethod('terminal')}>Card (terminal)</Button>
-                <span className={styles.itemsTotal}>Items total: <Money amount={itemsTotal} currencyCode={currency} /></span>
-                <Button onClick={handleComplete} disabled={isOffline || submitting}>{submitting ? 'Completing…' : 'Complete sale'}</Button>
-              </div>
-              <p className={styles.hint}>Tax is added on the receipt according to the supermarket VAT setting.</p>
-            </>
-          )}
-          {saleError && <p className={styles.errorBanner} role="alert">{saleError}</p>}
-        </Card>
-      )}
-
-      {outletId && !canSell && canReport && <p className={styles.hint}>You can view sales here but not sell.</p>}
 
       {receipt && (
         <Card title={`Receipt ${receipt.receipt_code}${isReprint ? ' (reprint)' : ''}`}>
@@ -370,85 +380,218 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
         </PrintDocument>
       )}
 
-      {outletId && canSell && (
-        <Card title="Today's sales (reprint)">
-          {mySalesError && <p className={styles.errorBanner} role="alert">{mySalesError}</p>}
-          <DataTable
-            state={mySales.length === 0 ? 'empty' : 'success'}
-            emptyMessage="You have not made any sales today."
-            columns={[
-              { key: 'receipt', label: 'Receipt', render: (row) => `${row.receipt_code}${row.voided_at ? ' (void)' : ''}` },
-              { key: 'time', label: 'Time', render: (row) => new Date(row.created_at).toLocaleTimeString() },
-              { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={row.currency} /> },
-              { key: 'actions', label: '', render: (row) => <Button size="compact" variant="secondary" onClick={() => showReceipt(row)}>Reprint</Button> },
-            ]}
-            rows={mySales}
-            rowKey={(row) => row.id}
-          />
-        </Card>
-      )}
+      {outletId && activeTab === 'sell' && (
+        <section id="supermarket-panel-sell" role="tabpanel" aria-labelledby="supermarket-tab-sell" className={styles.sellPanel}>
+          <div className={styles.catalogue}>
+            <form className={styles.scanRow} onSubmit={handleScan}>
+              <label className={styles.scanField}>
+                <span className={styles.visuallyHidden}>Scan a barcode or type a product name</span>
+                <svg className={styles.scanIcon} viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5v14M7 5v14M11 5v14M14 5v14M18 5v14M21 5v14" /></svg>
+                <input ref={scanInput} className={styles.scanInput} placeholder="Scan a barcode or type a product name" value={scan} onChange={(event) => setScan(event.target.value)} autoFocus disabled={isOffline} />
+              </label>
+              <button type="submit" className={styles.scanButton} disabled={isOffline || !scan.trim()}>Add</button>
+            </form>
+            {lookupError && <p className={styles.errorBanner} role="alert">{lookupError}</p>}
 
-      {outletId && canVoid && (
-        <Card title="Products needing setup">
-          {flagsError && <p className={styles.errorBanner} role="alert">{flagsError}</p>}
-          {flags && flags.items.length === 0 && <p className={styles.hint}>Every product has a barcode and is stock-tracked.</p>}
-          {flags && flags.items.length > 0 && (
+            {results.length > 0 ? (
+              <>
+                <div className={styles.resultsHeader}>
+                  <span>Matching products</span>
+                  <button type="button" className={styles.linkButton} onClick={() => setResults([])}>Clear search</button>
+                </div>
+                <div className={styles.tileGrid} aria-label="Matching products" role="group">
+                  {results.map((item) => (
+                    <ProductTile key={item.id} item={item} currency={currency} quantityInCart={quantityById.get(String(item.id)) ?? 0} disabled={isOffline} onAdd={pickFromResults} />
+                  ))}
+                </div>
+              </>
+            ) : menu === 'unavailable' ? (
+              <p className={styles.hint}>Product tiles could not be loaded. Scan a barcode or type a product name to add it.</p>
+            ) : menu === null ? (
+              <p className={styles.hint}>Loading products…</p>
+            ) : (
+              <>
+                <div className={styles.categoryTabs} role="tablist" aria-label="Categories">
+                  {categoryTabs.map((entry) => (
+                    <button
+                      key={entry.name}
+                      type="button"
+                      role="tab"
+                      aria-selected={category === entry.name}
+                      className={`${styles.categoryTab} ${category === entry.name ? styles.categoryTabActive : ''}`}
+                      onClick={() => setCategory(entry.name)}
+                    >
+                      {entry.name} <span className={styles.categoryCount}>{entry.count}</span>
+                    </button>
+                  ))}
+                </div>
+                {visibleItems.length === 0 ? (
+                  <p className={styles.hint}>{menuItems.length === 0 ? 'This outlet has no products yet. Add them in POS → Setup.' : 'No products in this category yet.'}</p>
+                ) : (
+                  <div className={styles.tileGrid} aria-label="Products" role="group">
+                    {visibleItems.map((item) => (
+                      <ProductTile key={item.id} item={item} currency={currency} quantityInCart={quantityById.get(String(item.id)) ?? 0} disabled={isOffline} onAdd={addToCart} />
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <aside ref={cartPanel} className={styles.cartPanel} aria-label="Current sale">
+            <div className={styles.cartHeader}>
+              <div>
+                <h2 className={styles.cartTitle}>Current sale</h2>
+                <span className={styles.cartCount}>{itemCount === 1 ? '1 item' : `${itemCount} items`}</span>
+              </div>
+              {cart.length > 0 && (
+                <button type="button" className={styles.linkButton} onClick={() => { attemptKey.current = null; setCart([]); }}>Clear</button>
+              )}
+            </div>
+            <div className={styles.cartBody}>
+              {cart.length === 0 ? (
+                <p className={styles.cartEmpty}>Scan or search to start a sale.</p>
+              ) : (
+                <table className={styles.cartTable}>
+                  <tbody>
+                    {cart.map((line, index) => (
+                      <tr key={line.menuItem.id}>
+                        <td>
+                          <span className={styles.lineName}>{line.menuItem.name}</span>
+                          <span className={styles.lineUnit}><Money amount={line.menuItem.price} currencyCode={currency} /> each</span>
+                          <span className={styles.qtyControls}>
+                            <button type="button" className={styles.stepper} aria-label={`Fewer ${line.menuItem.name}`} onClick={() => changeQuantity(index, -1)}>−</button>
+                            <span className={styles.qty}>{line.quantity}</span>
+                            <button type="button" className={styles.stepper} aria-label={`More ${line.menuItem.name}`} onClick={() => changeQuantity(index, 1)}>+</button>
+                          </span>
+                        </td>
+                        <td className={styles.lineTotal}><Money amount={multiplyMoney(line.menuItem.price, line.quantity)} currencyCode={currency} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            {cart.length > 0 && (
+              <div className={styles.cartFooter}>
+                <div className={styles.totalRow}>
+                  <span>Items total</span>
+                  <span className={styles.totalAmount}><Money amount={itemsTotal} currencyCode={currency} /></span>
+                </div>
+                <p className={styles.taxNote}>Tax is added on the receipt according to the supermarket VAT setting.</p>
+                <div className={styles.methods} role="group" aria-label="Payment method">
+                  <button type="button" className={`${styles.method} ${method === 'cash' ? styles.methodActive : ''}`} aria-pressed={method === 'cash'} onClick={() => setMethod('cash')}>Cash</button>
+                  <button type="button" className={`${styles.method} ${method === 'terminal' ? styles.methodActive : ''}`} aria-pressed={method === 'terminal'} onClick={() => setMethod('terminal')}>Card (terminal)</button>
+                </div>
+                <button type="button" className={styles.payButton} onClick={handleComplete} disabled={isOffline || submitting}>{submitting ? 'Completing…' : 'Complete sale'}</button>
+                {saleError && <p className={styles.errorBanner} role="alert">{saleError}</p>}
+              </div>
+            )}
+          </aside>
+
+          {cart.length > 0 && (
             <>
-              <p className={styles.hint}>{flags.counts.missing_barcode} without a barcode, {flags.counts.not_stock_tracked} not stock-tracked (sales do not reduce stock). These can still be sold.</p>
-              <ul className={styles.results} aria-label="Products needing setup">
-                {flags.items.map((item) => (
-                  <li key={item.id}>
-                    <strong>{item.name}</strong>
-                    {item.missing_barcode && <span> · No barcode</span>}
-                    {item.not_stock_tracked && <span> · Not stock-tracked</span>}
-                    {item.missing_barcode && (
-                      <form className={styles.scanRow} onSubmit={(event) => handleAddBarcode(event, item)}>
-                        <input
-                          className={formStyles.input}
-                          aria-label={`Barcode for ${item.name}`}
-                          value={barcodeDrafts[item.id] ?? ''}
-                          onChange={(event) => setBarcodeDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
-                          disabled={isOffline}
-                        />
-                        <Button type="submit" size="compact" variant="secondary" disabled={isOffline || !(barcodeDrafts[item.id] ?? '').trim()}>Add barcode</Button>
-                      </form>
-                    )}
-                  </li>
-                ))}
-              </ul>
+              <div className={styles.orderBarSpacer} aria-hidden="true" />
+              <div className={styles.orderBar}>
+                <span className={styles.orderBarSummary}>
+                  <span>{itemCount === 1 ? '1 item' : `${itemCount} items`}</span>
+                  <Money amount={itemsTotal} currencyCode={currency} />
+                </span>
+                <button type="button" className={styles.orderBarButton} onClick={() => cartPanel.current?.scrollIntoView({ block: 'start' })}>Review &amp; pay</button>
+              </div>
             </>
           )}
-        </Card>
+        </section>
       )}
 
-      {outletId && canReport && (
-        <Card title="Recent sales">
-          {salesError && <p className={styles.errorBanner} role="alert">{salesError}</p>}
-          <DataTable
-            state={sales === null ? 'loading' : sales.length === 0 ? 'empty' : 'success'}
-            emptyMessage="No sales yet."
-            columns={[
-              { key: 'receipt', label: 'Receipt', render: (row) => `#${row.receipt_number}${row.voided_at ? ' (void)' : ''}` },
-              { key: 'time', label: 'Time', render: (row) => new Date(row.created_at).toLocaleString() },
-              { key: 'method', label: 'Paid by', render: (row) => (row.method === 'terminal' ? 'Card (terminal)' : 'Cash') },
-              { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={row.currency} /> },
-              {
-                key: 'actions',
-                label: '',
-                render: (row) => (
-                  <>
-                    <Button size="compact" variant="secondary" onClick={() => showReceipt(row)}>Receipt</Button>
-                    {canVoid && !row.voided_at && (
-                      <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => setVoidTarget(row)}>Void</Button>
-                    )}
-                  </>
-                ),
-              },
-            ]}
-            rows={sales ?? []}
-            rowKey={(row) => row.id}
-          />
-        </Card>
+      {outletId && activeTab === 'today' && (
+        <section id="supermarket-panel-today" role="tabpanel" aria-labelledby="supermarket-tab-today">
+          <Card title="Today's sales (reprint)">
+            {mySalesError && <p className={styles.errorBanner} role="alert">{mySalesError}</p>}
+            <DataTable
+              state={mySales.length === 0 ? 'empty' : 'success'}
+              emptyMessage="You have not made any sales today."
+              columns={[
+                { key: 'receipt', label: 'Receipt', render: (row) => `${row.receipt_code}${row.voided_at ? ' (void)' : ''}` },
+                { key: 'time', label: 'Time', render: (row) => new Date(row.created_at).toLocaleTimeString() },
+                { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={row.currency} /> },
+                { key: 'actions', label: '', render: (row) => <Button size="compact" variant="secondary" onClick={() => showReceipt(row)}>Reprint</Button> },
+              ]}
+              rows={mySales}
+              rowKey={(row) => row.id}
+            />
+          </Card>
+        </section>
+      )}
+
+      {outletId && activeTab === 'sales' && (
+        <section id="supermarket-panel-sales" role="tabpanel" aria-labelledby="supermarket-tab-sales">
+          {!canSell && <p className={styles.hint}>You can view sales here but not sell.</p>}
+          <Card title="Recent sales">
+            {salesError && <p className={styles.errorBanner} role="alert">{salesError}</p>}
+            <DataTable
+              state={sales === null ? 'loading' : sales.length === 0 ? 'empty' : 'success'}
+              emptyMessage="No sales yet."
+              columns={[
+                { key: 'receipt', label: 'Receipt', render: (row) => `#${row.receipt_number}${row.voided_at ? ' (void)' : ''}` },
+                { key: 'time', label: 'Time', render: (row) => new Date(row.created_at).toLocaleString() },
+                { key: 'method', label: 'Paid by', render: (row) => (row.method === 'terminal' ? 'Card (terminal)' : 'Cash') },
+                { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={row.currency} /> },
+                {
+                  key: 'actions',
+                  label: '',
+                  render: (row) => (
+                    <>
+                      <Button size="compact" variant="secondary" onClick={() => showReceipt(row)}>Receipt</Button>
+                      {canVoid && !row.voided_at && (
+                        <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => setVoidTarget(row)}>Void</Button>
+                      )}
+                    </>
+                  ),
+                },
+              ]}
+              rows={sales ?? []}
+              rowKey={(row) => row.id}
+            />
+          </Card>
+        </section>
+      )}
+
+      {outletId && activeTab === 'setup' && (
+        <section id="supermarket-panel-setup" role="tabpanel" aria-labelledby="supermarket-tab-setup">
+          <Card title="Products needing setup">
+            {flagsError && <p className={styles.errorBanner} role="alert">{flagsError}</p>}
+            {flags && flags.items.length === 0 && <p className={styles.hint}>Every product has a barcode and is stock-tracked.</p>}
+            {flags && flags.items.length > 0 && (
+              <>
+                <p className={styles.hint}>{flags.counts.missing_barcode} without a barcode, {flags.counts.not_stock_tracked} not stock-tracked (sales do not reduce stock). These can still be sold.</p>
+                <ul className={styles.setupList} aria-label="Products needing setup">
+                  {flags.items.map((item) => (
+                    <li key={item.id} className={styles.setupRow}>
+                      <span className={styles.setupName}>{item.name}</span>
+                      <span className={styles.setupBadges}>
+                        {item.missing_barcode && <span className={styles.badgeWarning}>No barcode</span>}
+                        {item.not_stock_tracked && <span className={styles.badgeNeutral}>Not stock-tracked</span>}
+                      </span>
+                      {item.missing_barcode && (
+                        <form className={styles.barcodeForm} onSubmit={(event) => handleAddBarcode(event, item)}>
+                          <input
+                            className={formStyles.input}
+                            aria-label={`Barcode for ${item.name}`}
+                            value={barcodeDrafts[item.id] ?? ''}
+                            onChange={(event) => setBarcodeDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                            disabled={isOffline}
+                          />
+                          <Button type="submit" size="compact" variant="secondary" disabled={isOffline || !(barcodeDrafts[item.id] ?? '').trim()}>Add barcode</Button>
+                        </form>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </Card>
+        </section>
       )}
 
       {voidTarget && (

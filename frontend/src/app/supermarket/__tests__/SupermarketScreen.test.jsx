@@ -18,9 +18,14 @@ const mocks = vi.hoisted(() => ({
   addBarcode: vi.fn(),
 }));
 
+const posMocks = vi.hoisted(() => ({
+  listMenuItems: vi.fn(),
+  listMenuCategories: vi.fn(),
+}));
+
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
-  return { ...actual, supermarketApi: mocks };
+  return { ...actual, supermarketApi: mocks, posApi: posMocks };
 });
 
 const PROPERTY = { name: 'Alpha Hotels', base_currency: 'NGN' };
@@ -50,6 +55,10 @@ const SALE = {
 describe('<SupermarketScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
+    Object.values(posMocks).forEach((fn) => fn.mockReset());
+    // By default the full-menu call fails, so these tests exercise the scan/search fallback.
+    posMocks.listMenuItems.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'no', status: 403 }));
+    posMocks.listMenuCategories.mockResolvedValue([]);
     mocks.listMyOutlets.mockResolvedValue([{ id: '5', name: 'Mini Mart' }]);
     mocks.listSales.mockResolvedValue([]);
     mocks.getLowStock.mockResolvedValue({ total: 0, items: [] });
@@ -79,7 +88,8 @@ describe('<SupermarketScreen>', () => {
     await userEvent.click(await screen.findByRole('button', { name: /Soap/ }));
 
     expect(mocks.searchItems).toHaveBeenCalledWith('5', 'soap');
-    expect(await screen.findByRole('cell', { name: 'Soap' })).toBeInTheDocument();
+    const cart = await screen.findByRole('complementary', { name: 'Current sale' });
+    expect(within(cart).getByText('Soap')).toBeInTheDocument();
   });
 
   it('says so when nothing matches', async () => {
@@ -137,6 +147,7 @@ describe('<SupermarketScreen>', () => {
     mocks.voidSale.mockResolvedValue({ ...SALE, voided_at: '2027-09-01T11:00:00' });
     render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
 
+    await userEvent.click(await screen.findByRole('tab', { name: 'All sales' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Void' }));
     const confirm = screen.getByRole('button', { name: 'Void sale' });
     expect(confirm).toBeDisabled();
@@ -173,6 +184,7 @@ describe('<SupermarketScreen>', () => {
       mocks.listMySales.mockResolvedValue([{ id: '90', receipt_code: 'MART-000007', total: '134.38', currency: 'NGN', created_at: '2027-09-01T10:00:00', voided_at: null }]);
       mocks.getSale.mockResolvedValue(SALE);
       render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: "Today's sales" }));
       await userEvent.click(await screen.findByRole('button', { name: 'Reprint' }));
       expect(mocks.getSale).toHaveBeenCalledWith('90');
       expect(await screen.findByText('Receipt MART-000007 (reprint)')).toBeInTheDocument();
@@ -184,6 +196,7 @@ describe('<SupermarketScreen>', () => {
         .mockResolvedValue({ items: [{ id: '31', name: 'Bare item', missing_barcode: false, not_stock_tracked: true }], counts: { missing_barcode: 0, not_stock_tracked: 1 } });
       mocks.addBarcode.mockResolvedValue({ id: '1' });
       render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Setup' }));
       const list = await screen.findByRole('list', { name: 'Products needing setup' });
       expect(within(list).getByText(/No barcode/)).toBeInTheDocument();
       expect(within(list).getByText(/Not stock-tracked/)).toBeInTheDocument();
@@ -198,6 +211,84 @@ describe('<SupermarketScreen>', () => {
       await screen.findByLabelText(/scan a barcode/i);
       expect(screen.queryByText('Products needing setup')).not.toBeInTheDocument();
       expect(mocks.getSetupFlags).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('tile layout', () => {
+    const MENU = [
+      { id: '11', name: 'Rice 5kg', price: '107.50', category: 'Groceries', is_available: true, image_url: '/api/v1/media/menu-images/rice.png' },
+      { id: '12', name: 'Soap', price: '10.00', category: 'Toiletries', is_available: true },
+      { id: '13', name: 'Peak Milk 400g', price: '31.00', category: 'Groceries', is_available: false },
+    ];
+
+    beforeEach(() => {
+      posMocks.listMenuItems.mockResolvedValue(MENU);
+      posMocks.listMenuCategories.mockResolvedValue([{ name: 'Groceries' }, { name: 'Toiletries' }, { name: 'Snacks' }]);
+    });
+
+    it('shows the outlet menu as tiles with category tabs, and tapping a tile adds it to the sale', async () => {
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      const grid = await screen.findByRole('group', { name: 'Products' });
+      expect(posMocks.listMenuItems).toHaveBeenCalledWith('5');
+      // A photo when there is one, else the product's initials.
+      expect(within(grid).getByRole('button', { name: 'Add Rice 5kg' }).querySelector('img')).not.toBeNull();
+      expect(within(grid).getByRole('button', { name: 'Add Soap' })).toHaveTextContent('S');
+      expect(within(grid).getByRole('button', { name: 'Add Peak Milk 400g' })).toBeDisabled();
+      expect(within(grid).getByRole('button', { name: 'Add Peak Milk 400g' })).toHaveTextContent('Sold out');
+      // A registered category with nothing in it still shows, with its count.
+      expect(screen.getByRole('tab', { name: 'Snacks 0' })).toBeInTheDocument();
+
+      await userEvent.click(within(grid).getByRole('button', { name: 'Add Soap' }));
+      await userEvent.click(within(grid).getByRole('button', { name: 'Add Soap' }));
+      const row = within(screen.getByRole('complementary', { name: 'Current sale' })).getByText('Soap').closest('tr');
+      expect(within(row).getByText('2')).toBeInTheDocument();
+      expect(within(grid).getByRole('button', { name: 'Add Soap' })).toHaveTextContent('× 2');
+    });
+
+    it('filters the tiles by category', async () => {
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Toiletries 1' }));
+      const grid = screen.getByRole('group', { name: 'Products' });
+      expect(within(grid).getAllByRole('button')).toHaveLength(1);
+      expect(within(grid).getByRole('button', { name: 'Add Soap' })).toBeInTheDocument();
+    });
+
+    it('sells a tapped product through the same sale call as before', async () => {
+      mocks.createSale.mockResolvedValue(SALE);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Add Rice 5kg' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
+      expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ outletId: '5', method: 'cash', items: [{ menu_item_id: '11', quantity: 1 }] }));
+    });
+
+    it('falls back to scan and search when the menu cannot be loaded', async () => {
+      posMocks.listMenuItems.mockRejectedValue(new Error('down'));
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      expect(await screen.findByText(/Product tiles could not be loaded/)).toBeInTheDocument();
+      expect(screen.getByLabelText(/scan a barcode/i)).toBeEnabled();
+    });
+
+    it('disables the tiles while offline', async () => {
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} isOffline />);
+      expect(await screen.findByRole('button', { name: 'Add Soap' })).toBeDisabled();
+    });
+
+    it('jumps to the current sale from the phone order bar', async () => {
+      const scrollIntoView = vi.fn();
+      window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      expect(screen.queryByRole('button', { name: 'Review & pay' })).not.toBeInTheDocument();
+      await userEvent.click(await screen.findByRole('button', { name: 'Add Soap' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Review & pay' }));
+      expect(scrollIntoView).toHaveBeenCalled();
+    });
+
+    it('offers only the tabs the role can use and opens a report-only user on All sales', async () => {
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={REPORT_ONLY} />);
+      expect(await screen.findByRole('tab', { name: 'All sales' })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.queryByRole('tab', { name: 'Sell' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('tab', { name: 'Setup' })).not.toBeInTheDocument();
+      expect(posMocks.listMenuItems).not.toHaveBeenCalled();
     });
   });
 });
