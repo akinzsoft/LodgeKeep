@@ -5,6 +5,7 @@ const { runIdempotentMutation, requireIdempotencyKey } = require('../../shared/m
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const service = require('./service');
+const productEdit = require('./product-edit');
 const online = require('./paystack-sale');
 
 /** Whether a sale was paid online (its settlement carries a supermarket Paystack payment). */
@@ -180,4 +181,57 @@ async function mySales(req, res, next) {
   }
 }
 
-module.exports = { stockOnHand, setupFlags, lowStock, mySales, listMyOutlets, lookup, createSale, getSale, listSales, summary, voidSale, listBarcodes, addBarcode, removeBarcode };
+// ---------------------------------------------------------------- product editing (supermarket.manage)
+
+async function listProducts(req, res, next) {
+  try {
+    const includeArchived = req.query.include_archived === 'true';
+    res.json(ok(await productEdit.listProducts({ context: req.context, outletId: outletRequired(req), includeArchived })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** Sends a product-edit result, auditing the change; a product this outlet does not carry is a 404. */
+async function respondProductChange(req, res, next, { action, run }) {
+  try {
+    const result = await run();
+    if (result.changed !== false) {
+      await req.audit({
+        entityType: 'pos_menu_items',
+        entityId: req.params.id,
+        action,
+        beforeState: result.before,
+        afterState: result.after,
+        reason: typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : undefined,
+      });
+    }
+    res.json(ok(result.after));
+  } catch (error) {
+    if (error?.code === 'VALIDATION_PRODUCT_NOT_FOUND') return notFound(res);
+    next(error);
+  }
+}
+
+function editProduct(req, res, next) {
+  return respondProductChange(req, res, next, {
+    action: 'supermarket_product_edit',
+    run: () => productEdit.editProduct({ context: req.context, outletId: req.body?.outlet_id, id: req.params.id, body: req.body }),
+  });
+}
+
+function archiveProduct(req, res, next) {
+  return respondProductChange(req, res, next, {
+    action: 'supermarket_product_archive',
+    run: () => productEdit.setProductArchived({ context: req.context, outletId: req.body?.outlet_id, id: req.params.id, archived: true }),
+  });
+}
+
+function restoreProduct(req, res, next) {
+  return respondProductChange(req, res, next, {
+    action: 'supermarket_product_restore',
+    run: () => productEdit.setProductArchived({ context: req.context, outletId: req.body?.outlet_id, id: req.params.id, archived: false }),
+  });
+}
+
+module.exports = { stockOnHand, setupFlags, lowStock, mySales, listMyOutlets, lookup, createSale, getSale, listSales, summary, voidSale, listBarcodes, addBarcode, removeBarcode, listProducts, editProduct, archiveProduct, restoreProduct };

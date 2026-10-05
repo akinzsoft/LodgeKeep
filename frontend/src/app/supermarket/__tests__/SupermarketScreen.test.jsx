@@ -17,6 +17,10 @@ const mocks = vi.hoisted(() => ({
   getSetupFlags: vi.fn(),
   addBarcode: vi.fn(),
   listBarcodes: vi.fn(),
+  listProducts: vi.fn(),
+  updateProduct: vi.fn(),
+  archiveProduct: vi.fn(),
+  restoreProduct: vi.fn(),
   removeBarcode: vi.fn(),
   getStockOnHand: vi.fn(),
   listProductsImports: vi.fn(),
@@ -95,6 +99,7 @@ describe('<SupermarketScreen>', () => {
     mocks.getSetupFlags.mockResolvedValue({ items: [], counts: { missing_barcode: 0, not_stock_tracked: 0 } });
     mocks.listProductsImports.mockResolvedValue([]);
     mocks.listBarcodes.mockResolvedValue([]);
+    mocks.listProducts.mockResolvedValue([]);
     mocks.getStockOnHand.mockResolvedValue({});
     mocks.getPendingOnlineSale.mockResolvedValue(null);
     mocks.listOnlineSalesNeedingReview.mockResolvedValue([]);
@@ -443,6 +448,25 @@ describe('<SupermarketScreen>', () => {
       render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} isOffline />);
       await userEvent.click(await screen.findByRole('tab', { name: 'Setup' }));
       expect(await screen.findByRole('button', { name: 'Scan the barcode for Bare item' })).toBeDisabled();
+    });
+
+    it('shows the Products card on Setup, and a price change reloads the till menu and the setup flags', async () => {
+      const product = { id: '31', name: 'Rice', category: 'Mart Groceries', price: '10.00', cost_price: null, stock_cost: null, status: 'active', barcodes: [], units_on_hand: null, shared_with: [] };
+      mocks.listProducts.mockResolvedValue([product]);
+      mocks.updateProduct.mockResolvedValue({ ...product, price: '12.00' });
+      posMocks.listMenuItems.mockResolvedValue([]);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Setup' }));
+      const input = await screen.findByLabelText('Price for Rice');
+      const menuCalls = posMocks.listMenuItems.mock.calls.length;
+      const flagCalls = mocks.getSetupFlags.mock.calls.length;
+      await userEvent.clear(input);
+      await userEvent.type(input, '12.00');
+      await userEvent.click(screen.getByRole('button', { name: 'Save price for Rice' }));
+      expect(mocks.updateProduct).toHaveBeenCalledWith('31', '5', { price: '12.00' });
+      await screen.findByRole('status');
+      expect(posMocks.listMenuItems.mock.calls.length).toBeGreaterThan(menuCalls);
+      expect(mocks.getSetupFlags.mock.calls.length).toBeGreaterThan(flagCalls);
     });
 
     it('shows the Barcodes card on Setup, and keeps it and "Products needing setup" in step', async () => {

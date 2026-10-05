@@ -879,3 +879,53 @@
   margin: 0;
   padding-left: var(--space-5);
 }
+
+/* ---- Products card (Setup) ---- */
+
+.productFilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.productRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.productMeta {
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+}
+
+.productPrice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.productPriceInput {
+  width: 8rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.editFields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+}
+
+.editField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
