@@ -105,7 +105,7 @@ export function OnlineCardDialog({ session, currency, isOffline = false, onCompl
 
         {pending && (
           <>
-            <p className={styles.hint}>The customer can pay in this window, or scan the code with their phone. Paystack offers whichever payment options are enabled (bank transfer, card). The sale completes by itself once the payment arrives.</p>
+            <p className={styles.hint}>{checkout.qrDataUrl ? 'The customer can pay in this window, or scan the code with their phone camera. ' : 'The customer pays in this window. '}Paystack offers the payment options enabled for the account (bank transfer, card). The sale completes by itself once the payment arrives.</p>
             {checkout.qrDataUrl && <img className={styles.qr} src={checkout.qrDataUrl} alt="Scan to pay online" />}
             <div className={styles.actions}>
               {checkout.accessCode && <Button onClick={handlePay} disabled={isOffline || busy}>Pay in this window</Button>}
