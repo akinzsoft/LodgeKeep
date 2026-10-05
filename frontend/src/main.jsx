@@ -45,6 +45,7 @@ import { Toast, Skeleton } from './shared/components/index.js';
 import { useOnlineStatus } from './shared/hooks/useOnlineStatus.js';
 import { useStaffNotifications } from './shared/hooks/useStaffNotifications.js';
 import { usePendingRequestReminders, forgetRequestReminders } from './shared/hooks/usePendingRequestReminders.js';
+import { useRegisterAccess, navPermissionsFor } from './app/pos/useRegisterAccess.js';
 import { useNotificationSound } from './shared/hooks/useNotificationSound.js';
 import { useNewVersionAvailable } from './shared/hooks/useNewVersionAvailable.js';
 import { playAlertBeep, unlockAlertSound } from './shared/sound/alertBeep.js';
@@ -200,6 +201,13 @@ function Demo() {
       if (soundOn) playAlertBeep();
     }, [soundOn]),
   });
+  // POS is hidden from someone who can operate no Register outlet (a mart-only cashier sells from the
+  // Supermarket screen). Anyone with pos.manage keeps it (POS Setup: outlet categories, menu, Sales).
+  const ownPermissions = grants && grants.userId === user?.userId ? grants.permissions : null;
+  const registerAccess = useRegisterAccess({
+    enabled: status === 'authenticated' && Boolean(ownPermissions?.includes('pos.operate')) && !ownPermissions?.includes('pos.manage'),
+    sessionKey: status === 'authenticated' ? `${user?.userId}:${user?.activePropertyId}` : null,
+  });
   // Signed out (or the session expired): the next sign-in reminds them again.
   useEffect(() => {
     if (status === 'idle' || status === 'session_expired') forgetRequestReminders();
@@ -263,7 +271,9 @@ function Demo() {
   // Home: the user keeps the item they picked highlighted and sees why
   // nothing opened (DESIGN_SYSTEM.md §2 — a failure is never a silent
   // redirect). Home itself has no permission and is always allowed.
-  const accessDenied = !isNavItemAllowed(activeItemKey, grantedPermissions);
+  // What the NAV may show: the same grants, minus POS when the user can operate no Register outlet.
+  const navPermissions = navPermissionsFor(grantedPermissions, registerAccess);
+  const accessDenied = !isNavItemAllowed(activeItemKey, navPermissions);
   const screenKey = accessDenied ? null : activeItemKey;
 
   // Gap closure: a session restored via the bootstrap refresh (AuthContext.jsx's
@@ -289,8 +299,11 @@ function Demo() {
     let target = notificationTarget(notification.type);
     // A stock alert opens POS for anyone who can sell; a Storekeeper has the
     // Stock screen instead.
-    if (target === 'pos' && notification.type.startsWith('stock.') && !isNavItemAllowed('pos', grantedPermissions)) target = 'stock';
-    return target && isNavItemAllowed(target, grantedPermissions) ? target : null;
+    if (target === 'pos' && notification.type.startsWith('stock.') && !isNavItemAllowed('pos', navPermissions)) {
+      // No POS: a Storekeeper has the Stock screen; a mart-only cashier asked from the Supermarket's Request stock tab.
+      target = isNavItemAllowed('stock', navPermissions) ? 'stock' : 'supermarket';
+    }
+    return target && isNavItemAllowed(target, navPermissions) ? target : null;
   }
 
   // Fresh alerts on top, then the sign-in reminders — minus any request a fresh card already shows.
@@ -332,7 +345,7 @@ function Demo() {
     <AppShell
       // Role codes are snake_case (`pos_operator`); the shell capitalizes each word.
       user={{ name: displayName, role: user.role?.replace(/_/g, ' ') }}
-      permissions={grantedPermissions}
+      permissions={navPermissions}
       activeItemKey={activeItemKey}
       onNavigate={navigateTo}
       // Real name when `GET /properties` has resolved it; the same

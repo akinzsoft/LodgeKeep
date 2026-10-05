@@ -25,6 +25,21 @@ export function pointOfSaleOutlets(outlets) {
   return (outlets ?? []).filter((outlet) => !isStoreOutlet(outlet));
 }
 
+/** Where the Register may sell: not a store room, not a supermarket (it sells only from the Supermarket screen). */
+export function registerOutlets(outlets) {
+  return (outlets ?? []).filter((outlet) => !isStoreOutlet(outlet) && !isSupermarketOutlet(outlet));
+}
+
+/**
+ * Whether a user can operate at least one Register outlet: among the outlets they cover (`mine` is
+ * `getMyOutlets()`'s `{restricted, outletIds}`; unrestricted = every outlet), is there one that is neither a
+ * store nor a supermarket? A mart-only cashier has none, so the POS section serves no purpose for them.
+ */
+export function userCanOperateRegister(outlets, mine) {
+  const covered = mine?.restricted ? (outlets ?? []).filter((outlet) => (mine.outletIds ?? []).map(String).includes(String(outlet.id))) : (outlets ?? []);
+  return registerOutlets(covered).some((outlet) => outlet.status !== 'archived');
+}
+
 /**
  * Where a supplier delivery may be received. Once a property has a store room
  * the store is the ONLY place (stock then reaches a bar or restaurant by a

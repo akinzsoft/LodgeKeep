@@ -18,9 +18,13 @@ import formStyles from './POSForm.module.css';
  * plain, required-reason form, not a `ConfirmDialog`, for a reasoned write
  * that isn't itself a void/checkout-shaped irreversible action.
  */
-export function StockWastageTab({ isOffline = false }) {
+/**
+ * `lockedOutlet` (`{id, name}`, the Supermarket's Wastage tab): wastage is recorded at that outlet only,
+ * so the outlet is fixed and its stock items load straight away.
+ */
+export function StockWastageTab({ isOffline = false, lockedOutlet = null }) {
   const [outlets, setOutlets] = useState(null);
-  const [selectedOutletId, setSelectedOutletId] = useState('');
+  const [selectedOutletId, setSelectedOutletId] = useState(lockedOutlet ? String(lockedOutlet.id) : '');
   const [stockItems, setStockItems] = useState(null);
   const [selectedStockItemId, setSelectedStockItemId] = useState('');
 
@@ -32,11 +36,17 @@ export function StockWastageTab({ isOffline = false }) {
   const [result, setResult] = useState(null);
 
   useEffect(() => {
+    if (lockedOutlet) return;
     posApi
       .listOutlets()
       .then(setOutlets)
       .catch(() => setOutlets([]));
-  }, []);
+  }, [lockedOutlet]);
+
+  const lockedOutletId = lockedOutlet ? String(lockedOutlet.id) : null;
+  useEffect(() => {
+    if (lockedOutletId) handleSelectOutlet(lockedOutletId);
+  }, [lockedOutletId]);
 
   async function handleSelectOutlet(outletId) {
     setSelectedOutletId(outletId);
@@ -90,19 +100,23 @@ export function StockWastageTab({ isOffline = false }) {
       <Card title="Record wastage">
         <form className={formStyles.form} onSubmit={handleSubmit}>
           <div className={formStyles.row}>
-            <label className={formStyles.field}>
-              <span className={formStyles.label}>Outlet</span>
-              <select className={formStyles.select} value={selectedOutletId} onChange={(event) => handleSelectOutlet(event.target.value)} required disabled={isOffline}>
-                <option value="" disabled>
-                  Select an outlet
-                </option>
-                {(outlets ?? []).map((outlet) => (
-                  <option key={outlet.id} value={outlet.id}>
-                    {outlet.name}
+            {lockedOutlet ? (
+              <p className={formStyles.hint}>Recording wastage at {lockedOutlet.name}.</p>
+            ) : (
+              <label className={formStyles.field}>
+                <span className={formStyles.label}>Outlet</span>
+                <select className={formStyles.select} value={selectedOutletId} onChange={(event) => handleSelectOutlet(event.target.value)} required disabled={isOffline}>
+                  <option value="" disabled>
+                    Select an outlet
                   </option>
-                ))}
-              </select>
-            </label>
+                  {(outlets ?? []).map((outlet) => (
+                    <option key={outlet.id} value={outlet.id}>
+                      {outlet.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className={formStyles.field}>
               <span className={formStyles.label}>Stock item</span>
               <select

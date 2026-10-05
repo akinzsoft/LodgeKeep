@@ -106,6 +106,7 @@ const {
   StoreOutletConversionBlockedError,
 } = require('./errors');
 const { STORE_OUTLET_TYPE, isPointOfSaleOutlet, isSupermarketOutlet, taxChargeTypeForOutlet } = require('../../shared/outlet-types');
+const { assertRegisterOutlet } = require('./outlet-guards');
 
 // ---------------------------------------------------------------------
 // Outlets
@@ -877,7 +878,7 @@ async function openOrder({ context, outletId, terminalId = null, openedByUserId 
   const db = scopedDb().for(context);
   const outlet = await getOutlet({ context, id: outletId });
   if (!outlet) throw new OutletNotFoundError();
-  if (!isPointOfSaleOutlet(outlet)) throw new StoreOutletNotAPointOfSaleError(outlet.name);
+  assertRegisterOutlet(outlet);
 
   if (terminalId) {
     // Matched in the WHERE clause, not fetched-then-compared in JS — a

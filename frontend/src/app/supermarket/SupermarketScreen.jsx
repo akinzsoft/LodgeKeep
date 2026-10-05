@@ -11,6 +11,7 @@ import { CameraScanDialog } from './CameraScanDialog.jsx';
 import { BarcodesCard } from './BarcodesCard.jsx';
 import { ProductsCard } from './ProductsCard.jsx';
 import { StockRequestsTab } from '../pos/StockRequestsTab.jsx';
+import { StockWastageTab } from '../pos/StockWastageTab.jsx';
 import { OnlineCardDialog } from './OnlineCardDialog.jsx';
 import { OnlineReviewCard } from './OnlineReviewCard.jsx';
 import { cameraSupported } from '../../shared/scanner/cameraScanner.js';
@@ -58,6 +59,8 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const canVoid = permissions.has('supermarket.manage');
   // Stock reaches the mart only by a store-approved request: a cashier raises one here, the store issues it under Stock → Requests.
   const canRequestStock = canSell && permissions.has('pos.stock_request');
+  // A mart-only cashier has no POS, so wastage (damaged/expired stock) is recorded here.
+  const canRecordWastage = canSell && permissions.has('pos.stock_view');
 
   const [outlets, setOutlets] = useState(null);
   const [outletId, setOutletId] = useState('');
@@ -499,6 +502,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     canSell && { key: 'sell', label: 'Sell' },
     canSell && { key: 'today', label: "Today's sales" },
     canRequestStock && { key: 'requests', label: 'Request stock' },
+    canRecordWastage && { key: 'wastage', label: 'Wastage' },
     canReport && { key: 'sales', label: 'All sales' },
     canVoid && { key: 'setup', label: 'Setup' },
     canVoid && { key: 'import', label: 'Products import' },
@@ -763,6 +767,12 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
               rowKey={(row) => row.id}
             />
           </Card>
+        </section>
+      )}
+
+      {outletId && activeTab === 'wastage' && (
+        <section id="supermarket-panel-wastage" role="tabpanel" aria-labelledby="supermarket-tab-wastage">
+          <StockWastageTab key={outletId} isOffline={isOffline} lockedOutlet={{ id: outletId, name: (outlets ?? []).find((outlet) => String(outlet.id) === String(outletId))?.name ?? 'this outlet' }} />
         </section>
       )}
 

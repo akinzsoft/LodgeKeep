@@ -36,6 +36,15 @@ function isPointOfSaleOutlet(outlet) {
 }
 
 /**
+ * Where the POS Register, its tabs and guest QR ordering may sell: a point of sale that is NOT a
+ * supermarket. A supermarket sells only from the Supermarket screen (gapless receipts, its own VAT row
+ * and report); a sale rung at it through the Register would bypass all of that.
+ */
+function isRegisterOutlet(outlet) {
+  return isPointOfSaleOutlet(outlet) && !isSupermarketOutlet(outlet);
+}
+
+/**
  * An active outlet that sells to hotel guests: a point of sale that is not a supermarket. A category such a
  * outlet carries is on the hotel's menu, so the supermarket never changes a product in it (the product
  * import refuses to file into one, and product editing refuses to edit one).
@@ -44,4 +53,4 @@ function isHotelSellingOutlet(outlet) {
   return Boolean(outlet) && outlet.status === 'active' && isPointOfSaleOutlet(outlet) && !isSupermarketOutlet(outlet);
 }
 
-module.exports = { isHotelSellingOutlet, STORE_OUTLET_TYPE, SUPERMARKET_OUTLET_TYPE, SUPERMARKET_TAX_CHARGE_TYPE, isPointOfSaleOutlet, isSupermarketOutlet, taxChargeTypeForOutlet };
+module.exports = { isRegisterOutlet, isHotelSellingOutlet, STORE_OUTLET_TYPE, SUPERMARKET_OUTLET_TYPE, SUPERMARKET_TAX_CHARGE_TYPE, isPointOfSaleOutlet, isSupermarketOutlet, taxChargeTypeForOutlet };
