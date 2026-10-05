@@ -24,10 +24,12 @@ function supermarketRouter() {
   router.get('/supermarket/stock', requirePermission('supermarket.sales'), controller.stockOnHand);
   router.post('/supermarket/sales', requirePermission('supermarket.sales'), controller.createSale);
   router.get('/supermarket/sales', requirePermission('supermarket.report'), controller.listSales);
+  router.get('/supermarket/sales/totals', requirePermission('supermarket.report'), controller.salesTotals); // before /:id
   router.get('/supermarket/report', requirePermission('supermarket.report'), controller.summary);
   router.get('/supermarket/setup-flags', requirePermission('supermarket.manage'), controller.setupFlags);
   router.get('/supermarket/low-stock', requireAnyPermission(['supermarket.sales', 'supermarket.report', 'supermarket.manage']), controller.lowStock);
   router.get('/supermarket/my-sales', requirePermission('supermarket.sales'), controller.mySales);
+  router.get('/supermarket/my-sales/totals', requirePermission('supermarket.sales'), controller.mySalesTotals);
   router.get('/supermarket/sales/:id', readSales, controller.getSale);
   router.post('/supermarket/sales/:id/void', requirePermission('supermarket.manage'), controller.voidSale);
 

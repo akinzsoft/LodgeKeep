@@ -361,12 +361,122 @@ async function getSale({ context, id }) {
 async function listSales({ context, outletId, from, to, limit = 100 }) {
   const db = scopedDb().for(context);
   const scope = context.isImpersonation ? null : await outletScopeForUser(db, context.userId);
-  const query = db.table('supermarket_sales').orderBy('id', 'desc').limit(Math.min(Number(limit) || 100, 200));
-  if (outletId) query.where({ outlet_id: outletId });
-  if (from) query.where('created_at', '>=', `${from} 00:00:00`);
-  if (to) query.where('created_at', '<=', `${to} 23:59:59`);
+  // Both ends: a validated inclusive range. One end alone keeps its old meaning (open-ended: `/supermarket/report`
+  // and any caller that sends only `from` or only `to`); the totals endpoint reads a lone end as a single day.
+  const range = from && to ? resolveDateRange({ from, to }) : from || to ? { from: from ? validDate(from, 'from') : null, to: to ? validDate(to, 'to') : null } : null;
+  const query = salesQuery(db, { range, outletId }).orderBy('supermarket_sales.id', 'desc').limit(Math.min(Number(limit) || 100, 200)).select('supermarket_sales.*');
   const rows = await query;
   return rows.filter((row) => scopeCovers(scope, [row.outlet_id]));
+}
+
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_RANGE_DAYS = 366;
+
+function validDate(value, field) {
+  const text = String(value ?? '').trim();
+  const parsed = DATE_PATTERN.test(text) ? new Date(`${text}T00:00:00Z`) : null;
+  if (!parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== text) {
+    throw new ValidationError('INVALID_DATE', `"${field}" must be a real date as YYYY-MM-DD.`, [{ field, issue: 'invalid' }]);
+  }
+  return text;
+}
+
+/** A business-date range `{from, to}` (inclusive): one end alone means that single day; from must not be after to; at most a year. */
+function resolveDateRange({ from, to }) {
+  const start = validDate(from ?? to, from ? 'from' : 'to');
+  const end = validDate(to ?? from, to ? 'to' : 'from');
+  if (start > end) throw new ValidationError('INVALID_DATE_RANGE', '"from" must not be after "to".', [{ field: 'from', issue: 'after_to' }]);
+  const days = (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000 + 1;
+  if (days > MAX_RANGE_DAYS) throw new ValidationError('DATE_RANGE_TOO_LONG', `Choose at most ${MAX_RANGE_DAYS} days at a time.`, [{ field: 'to', issue: 'too_long' }]);
+  return { from: start, to: end };
+}
+
+/**
+ * The supermarket sales query. With a `range` it keeps the sales settled on those BUSINESS dates (the property's
+ * accounting date, the same as "Today's sales" and the hotel reports: `created_at` is UTC and would move a
+ * sale just after midnight local time onto the wrong day).
+ */
+function salesQuery(db, { range, outletId, userId }) {
+  let query = db.table('supermarket_sales');
+  if (range) {
+    query = query.joinScoped('pos_order_settlements', (join) => join.on('pos_order_settlements.id', '=', 'supermarket_sales.settlement_id'));
+    if (range.from) query = query.where('pos_order_settlements.business_date', '>=', range.from);
+    if (range.to) query = query.where('pos_order_settlements.business_date', '<=', range.to);
+  }
+  if (outletId) query = query.where('supermarket_sales.outlet_id', outletId);
+  if (userId) query = query.where('supermarket_sales.sold_by_user_id', userId);
+  return query;
+}
+
+/**
+ * How a sale was paid, as the cash-up reads it: cash; the card machine (`terminal`); or an online (Paystack) sale by
+ * the channel the customer used: card, bank transfer, anything else (USSD, QR, ...).
+ */
+const METHOD_ORDER = ['cash', 'terminal', 'online_card', 'online_transfer', 'online_other'];
+function methodKey(row) {
+  if (row.method === 'cash') return 'cash';
+  if (row.method === 'terminal') return 'terminal';
+  const channel = String(row.provider_channel ?? '').toLowerCase();
+  if (channel === 'card') return 'online_card';
+  if (channel === 'bank_transfer') return 'online_transfer';
+  return 'online_other';
+}
+
+/** The sums over ALL the sales in view (not a capped list): non-voided total, tax and subtotal, with the voided sales counted apart. */
+function totalsOf(rows, range) {
+  const kept = rows.filter((row) => !row.voided_at);
+  const voided = rows.filter((row) => row.voided_at);
+  return {
+    from: range.from,
+    to: range.to,
+    saleCount: kept.length,
+    voidedCount: voided.length,
+    subtotal: sumMoney(kept.map((row) => row.subtotal)),
+    tax: sumMoney(kept.map((row) => row.tax_amount)),
+    total: sumMoney(kept.map((row) => row.total)),
+    voidedTotal: sumMoney(voided.map((row) => row.total)),
+    // The same non-voided total split by how it was paid. Cash is always listed (the drawer), the rest only when used.
+    byMethod: METHOD_ORDER.map((method) => {
+      const group = kept.filter((row) => methodKey(row) === method);
+      return { method, saleCount: group.length, total: sumMoney(group.map((row) => row.total)) };
+    }).filter((entry) => entry.method === 'cash' || entry.saleCount > 0),
+  };
+}
+
+/**
+ * Totals for the manager's "All sales" view: the outlet's sales over a business-date range (default the property's
+ * current business date). `supermarket.report`; the outlet must be one the caller covers.
+ */
+async function salesTotals({ context, outletId, from, to }) {
+  const db = scopedDb().for(context);
+  await requireSupermarketOutlet({ db, context, outletId });
+  const range = await rangeOrToday(db, context, { from, to });
+  const rows = await withPaymentChannel(salesQuery(db, { range, outletId }));
+  return totalsOf(rows, range);
+}
+
+/** Totals for the cashier's own "Today's sales": their sales at the outlet on the current business date. `supermarket.sales`. */
+async function mySalesTotals({ context, outletId }) {
+  const db = scopedDb().for(context);
+  await requireSupermarketOutlet({ db, context, outletId });
+  const range = await rangeOrToday(db, context, {});
+  const rows = await withPaymentChannel(salesQuery(db, { range, outletId, userId: context.userId }));
+  return totalsOf(rows, range);
+}
+
+/** What the totals read: the amounts, voided flag and method of each sale, with the payment's channel (bank transfer, card...) for online sales. */
+function withPaymentChannel(query) {
+  return query
+    .joinScoped('payments', (join) => join.on('payments.id', '=', 'pos_order_settlements.payment_id'), { type: 'left' })
+    .select('supermarket_sales.subtotal', 'supermarket_sales.tax_amount', 'supermarket_sales.total', 'supermarket_sales.voided_at', 'supermarket_sales.method', 'payments.provider_channel');
+}
+
+async function rangeOrToday(db, context, { from, to }) {
+  if (from || to) return resolveDateRange({ from, to });
+  const property = await db.table('properties').where({ id: context.propertyId }).first('current_business_date');
+  const today = property?.current_business_date ? String(property.current_business_date).slice(0, 10) : null;
+  if (!today) throw new ValidationError('NO_BUSINESS_DATE', 'This property has no business date yet: choose a date range.', [{ field: 'from', issue: 'missing' }]);
+  return { from: today, to: today };
 }
 
 /** Totals over a date range: by outlet, and top products from the receipt snapshots (voided sales excluded). */
@@ -477,4 +587,4 @@ async function voidSale({ trx, id, reason, userId }) {
   return getSaleWith(trx, id);
 }
 
-module.exports = { cleanBarcode, requireSupermarketOutlet, MAX_BARCODE_LENGTH, MAX_LINES, forTill, resolveSaleLines, openQuickSaleOrder, recordReceiptedSale, getSaleWith, takeReceiptNumber, stockOnHand, listMyOutlets, listBarcodes, addBarcode, removeBarcode, lookupByBarcode, searchItems, createSale, getSale, listSales, summarize, voidSale, receiptCode, listSetupFlags, listLowStock, listMySalesToday };
+module.exports = { cleanBarcode, requireSupermarketOutlet, MAX_BARCODE_LENGTH, MAX_LINES, forTill, resolveSaleLines, openQuickSaleOrder, recordReceiptedSale, getSaleWith, takeReceiptNumber, stockOnHand, listMyOutlets, listBarcodes, addBarcode, removeBarcode, lookupByBarcode, searchItems, createSale, getSale, listSales, salesTotals, mySalesTotals, summarize, voidSale, receiptCode, listSetupFlags, listLowStock, listMySalesToday };

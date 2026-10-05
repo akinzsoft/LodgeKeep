@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SupermarketScreen } from '../SupermarketScreen.jsx';
 import { ApiError } from '../../../shared/api/index.js';
@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   voidSale: vi.fn(),
   getLowStock: vi.fn(),
   listMySales: vi.fn(),
+  getSalesTotals: vi.fn(),
+  getMySalesTotals: vi.fn(),
   getSetupFlags: vi.fn(),
   addBarcode: vi.fn(),
   listBarcodes: vi.fn(),
@@ -102,6 +104,8 @@ describe('<SupermarketScreen>', () => {
     mocks.listSales.mockResolvedValue([]);
     mocks.getLowStock.mockResolvedValue({ total: 0, items: [] });
     mocks.listMySales.mockResolvedValue([]);
+    mocks.getSalesTotals.mockResolvedValue({ from: '2027-12-10', to: '2027-12-10', saleCount: 0, voidedCount: 0, total: '0.00', voidedTotal: '0.00', subtotal: '0.00', tax: '0.00' });
+    mocks.getMySalesTotals.mockResolvedValue({ from: '2027-12-10', to: '2027-12-10', saleCount: 0, voidedCount: 0, total: '0.00', voidedTotal: '0.00', subtotal: '0.00', tax: '0.00' });
     mocks.getSetupFlags.mockResolvedValue({ items: [], counts: { missing_barcode: 0, not_stock_tracked: 0 } });
     mocks.listProductsImports.mockResolvedValue([]);
     mocks.listBarcodes.mockResolvedValue([]);
@@ -122,6 +126,149 @@ describe('<SupermarketScreen>', () => {
       render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
       await screen.findByRole('tab', { name: 'Sell' });
       expect(screen.queryByRole('tab', { name: 'Wastage' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('sales reports: date range and totals', () => {
+    const BD = { ...PROPERTY, current_business_date: '2027-12-10' };
+    const BY_METHOD = [
+      { method: 'cash', saleCount: 2, total: '800.00' },
+      { method: 'terminal', saleCount: 1, total: '234.50' },
+      { method: 'online_transfer', saleCount: 1, total: '200.00' },
+    ];
+    const TOTALS = { from: '2027-12-10', to: '2027-12-10', saleCount: 3, voidedCount: 1, total: '1234.50', voidedTotal: '20.00', subtotal: '1234.50', tax: '0.00', byMethod: BY_METHOD };
+    const openSales = async (perms = MANAGER, props = BD) => {
+      render(<SupermarketScreen activeProperty={props} permissions={perms} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'All sales' }));
+    };
+
+    it('All sales defaults to the business date, shows the total, the count and the voided count from the server', async () => {
+      mocks.getSalesTotals.mockResolvedValue(TOTALS);
+      await openSales();
+      const strip = await screen.findByRole('group', { name: 'Sales totals' });
+      expect(within(strip).getByText(/1,234\.50/)).toBeInTheDocument();
+      expect(within(strip).getByText('3')).toBeInTheDocument();
+      expect(within(strip).getByText('1')).toBeInTheDocument(); // voided
+      expect(within(strip).getByText(/not counted/)).toBeInTheDocument();
+      expect(screen.getByLabelText('From')).toHaveValue('2027-12-10');
+      expect(screen.getByLabelText('To')).toHaveValue('2027-12-10');
+      expect(mocks.listSales).toHaveBeenCalledWith({ outletId: '5', from: '2027-12-10', to: '2027-12-10' });
+      expect(mocks.getSalesTotals).toHaveBeenCalledWith({ outletId: '5', from: '2027-12-10', to: '2027-12-10' });
+    });
+
+    it('splits the total by how it was paid (cash, card machine, online transfer), as the server summed it', async () => {
+      mocks.getSalesTotals.mockResolvedValue(TOTALS);
+      await openSales();
+      const list = await screen.findByRole('list', { name: 'Sales by payment method' });
+      const rows = within(list).getAllByRole('listitem').map((row) => row.textContent);
+      expect(rows[0]).toMatch(/Cash.*800\.00.*2 sales/);
+      expect(rows[1]).toMatch(/Card \(terminal\).*234\.50.*1 sale/);
+      expect(rows[2]).toMatch(/Online: bank transfer.*200\.00.*1 sale/);
+    });
+
+    it("shows no split when the server sent none (the total is still shown)", async () => {
+      mocks.getSalesTotals.mockResolvedValue({ ...TOTALS, byMethod: undefined });
+      await openSales();
+      await screen.findByRole('group', { name: 'Sales totals' });
+      expect(screen.queryByRole('list', { name: 'Sales by payment method' })).not.toBeInTheDocument();
+    });
+
+    it('changing the dates, or a shortcut, reloads the list and the total for that range', async () => {
+      await openSales();
+      await screen.findByRole('group', { name: 'Sales totals' });
+      fireEvent.change(screen.getByLabelText('From'), { target: { value: '2027-12-01' } });
+      await waitFor(() => expect(mocks.getSalesTotals).toHaveBeenLastCalledWith({ outletId: '5', from: '2027-12-01', to: '2027-12-10' }));
+      expect(mocks.listSales).toHaveBeenLastCalledWith({ outletId: '5', from: '2027-12-01', to: '2027-12-10' });
+      await userEvent.click(screen.getByRole('button', { name: 'Last 7 days' }));
+      await waitFor(() => expect(mocks.getSalesTotals).toHaveBeenLastCalledWith({ outletId: '5', from: '2027-12-04', to: '2027-12-10' }));
+      await userEvent.click(screen.getByRole('button', { name: 'This month' }));
+      await waitFor(() => expect(mocks.getSalesTotals).toHaveBeenLastCalledWith({ outletId: '5', from: '2027-12-01', to: '2027-12-10' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Today' }));
+      await waitFor(() => expect(mocks.getSalesTotals).toHaveBeenLastCalledWith({ outletId: '5', from: '2027-12-10', to: '2027-12-10' }));
+    });
+
+    it('does not ask the server for a range that starts after it ends, and says so', async () => {
+      await openSales();
+      await screen.findByRole('group', { name: 'Sales totals' });
+      const calls = mocks.getSalesTotals.mock.calls.length;
+      fireEvent.change(screen.getByLabelText('From'), { target: { value: '2027-12-20' } });
+      expect(await screen.findByText('The start date must not be after the end date.')).toBeInTheDocument();
+      expect(mocks.getSalesTotals.mock.calls.length).toBe(calls);
+    });
+
+    it('says the list shows only the latest sales when the total counts more', async () => {
+      mocks.listSales.mockResolvedValue(Array.from({ length: 100 }, (_, i) => ({ id: String(i + 1), receipt_number: i + 1, created_at: '2027-12-10T10:00:00', method: 'cash', total: '10.00', currency: 'NGN', voided_at: null })));
+      mocks.getSalesTotals.mockResolvedValue({ ...TOTALS, saleCount: 205, voidedCount: 0, total: '2050.00' });
+      await openSales();
+      expect(await screen.findByText(/Showing the latest 100 of 205 sales; the total above counts all of them/)).toBeInTheDocument();
+    });
+
+    it('shows the list even if the total cannot load, with the reason', async () => {
+      mocks.listSales.mockResolvedValue([{ id: '90', receipt_number: 7, created_at: '2027-12-10T10:00:00', method: 'cash', total: '134.38', currency: 'NGN', voided_at: null }]);
+      mocks.getSalesTotals.mockRejectedValue(new ApiError({ code: 'INTERNAL_ERROR', message: 'totals broke', status: 500 }));
+      await openSales();
+      expect(await screen.findByText('totals broke')).toBeInTheDocument();
+      expect(await screen.findByText('#7')).toBeInTheDocument();
+    });
+
+    it('drops an older answer that arrives after a newer range was chosen', async () => {
+      let releaseFirst;
+      mocks.getSalesTotals.mockImplementationOnce(() => new Promise((resolve) => (releaseFirst = () => resolve({ ...TOTALS, total: '1111.00' }))));
+      mocks.getSalesTotals.mockResolvedValue({ ...TOTALS, total: '2222.00' });
+      await openSales();
+      fireEvent.change(screen.getByLabelText('From'), { target: { value: '2027-12-01' } });
+      expect(await screen.findByText(/2,222\.00/)).toBeInTheDocument();
+      releaseFirst();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(screen.queryByText(/1,111\.00/)).not.toBeInTheDocument();
+    });
+
+    it('an invalid range also supersedes an answer still in flight (no stale list under the warning)', async () => {
+      let releaseSlow;
+      mocks.listSales.mockImplementation(({ from }) => (from === '2027-12-01' ? new Promise((resolve) => (releaseSlow = () => resolve([{ id: '1', receipt_number: 1, created_at: '2027-12-01T10:00:00', method: 'cash', total: '9.99', currency: 'NGN', voided_at: null }]))) : Promise.resolve([])));
+      await openSales();
+      await screen.findByRole('group', { name: 'Sales totals' });
+      fireEvent.change(screen.getByLabelText('From'), { target: { value: '2027-12-01' } }); // slow, valid
+      fireEvent.change(screen.getByLabelText('From'), { target: { value: '2027-12-20' } }); // invalid: supersedes it
+      expect(await screen.findByText('The start date must not be after the end date.')).toBeInTheDocument();
+      releaseSlow();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(screen.queryByText('#1')).not.toBeInTheDocument();
+    });
+
+    it("switching outlet clears the previous outlet's total at once and never lets its slow answer land", async () => {
+      mocks.listMyOutlets.mockResolvedValue([{ id: '5', name: 'Mini Mart' }, { id: '6', name: 'Second Mart' }]);
+      mocks.getSalesTotals.mockImplementation(({ outletId }) => (outletId === '5' ? Promise.resolve({ ...TOTALS, total: '1111.00' }) : new Promise((resolve) => setTimeout(() => resolve({ ...TOTALS, total: '2222.00' }), 30))));
+      render(<SupermarketScreen activeProperty={BD} permissions={MANAGER} />);
+      await userEvent.selectOptions(await screen.findByLabelText('Outlet'), '5');
+      await userEvent.click(await screen.findByRole('tab', { name: 'All sales' }));
+      expect(await screen.findByText(/1,111\.00/)).toBeInTheDocument();
+      await userEvent.selectOptions(screen.getByLabelText('Outlet'), '6');
+      expect(screen.queryByText(/1,111\.00/)).not.toBeInTheDocument(); // not shown for the new outlet
+      expect(await screen.findByText(/2,222\.00/)).toBeInTheDocument();
+    });
+
+    it("disables the date controls offline", async () => {
+      render(<SupermarketScreen activeProperty={BD} permissions={MANAGER} isOffline />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'All sales' }));
+      expect(await screen.findByLabelText('From')).toBeDisabled();
+      expect(screen.getByLabelText('To')).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Last 7 days' })).toBeDisabled();
+    });
+
+    it("Today's sales shows the cashier's own total, count and voided count", async () => {
+      mocks.getMySalesTotals.mockResolvedValue({ ...TOTALS, total: '480.00', saleCount: 4, voidedCount: 0, byMethod: [{ method: 'cash', saleCount: 3, total: '300.00' }, { method: 'online_card', saleCount: 1, total: '180.00' }] });
+      render(<SupermarketScreen activeProperty={BD} permissions={SELLER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: "Today's sales" }));
+      const strip = await screen.findByRole('group', { name: "Today's sales totals" });
+      expect(within(strip).getByText(/480\.00/)).toBeInTheDocument();
+      expect(within(strip).getByText('4')).toBeInTheDocument();
+      expect(within(strip).queryByText('Voided')).not.toBeInTheDocument();
+      const split = within(screen.getByRole('list', { name: "Today's sales by payment method" })).getAllByRole('listitem').map((row) => row.textContent);
+      expect(split[0]).toMatch(/Cash.*300\.00/);
+      expect(split[1]).toMatch(/Online: card.*180\.00/);
+      expect(mocks.getMySalesTotals).toHaveBeenCalledWith('5');
+      expect(mocks.getSalesTotals).not.toHaveBeenCalled(); // a cashier has no All sales report
     });
   });
 

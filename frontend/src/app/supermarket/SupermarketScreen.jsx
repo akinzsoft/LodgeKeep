@@ -10,6 +10,8 @@ import { ProductsImportPanel } from './ProductsImportPanel.jsx';
 import { CameraScanDialog } from './CameraScanDialog.jsx';
 import { BarcodesCard } from './BarcodesCard.jsx';
 import { ProductsCard } from './ProductsCard.jsx';
+import { SalesTotals } from './SalesTotals.jsx';
+import { presetRange } from './salesRange.js';
 import { StockRequestsTab } from '../pos/StockRequestsTab.jsx';
 import { StockWastageTab } from '../pos/StockWastageTab.jsx';
 import { OnlineCardDialog } from './OnlineCardDialog.jsx';
@@ -86,6 +88,16 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
 
   const [lowStock, setLowStock] = useState(null);
   const [mySales, setMySales] = useState([]);
+  // The reports' totals come from the server (summed over EVERY sale in view, not the capped list).
+  const businessDate = String(activeProperty?.current_business_date ?? new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const [salesRange, setSalesRange] = useState({ from: businessDate, to: businessDate });
+  const [salesTotals, setSalesTotals] = useState(null);
+  const [salesTotalsError, setSalesTotalsError] = useState(null);
+  const [myTotals, setMyTotals] = useState(null);
+  const [myTotalsError, setMyTotalsError] = useState(null);
+  const salesToken = useRef(0);
+  const mySalesToken = useRef(0);
+  const rangeInvalid = salesRange.from && salesRange.to && salesRange.from > salesRange.to;
   const [mySalesError, setMySalesError] = useState(null);
   const [isReprint, setIsReprint] = useState(false);
   const [flags, setFlags] = useState(null);
@@ -141,15 +153,43 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   }, [printing]);
 
   const loadSales = useCallback(async () => {
-    if (!canReport || !outletId) return;
+    // Only the newest answer may write (a quick range or outlet change must not show an older one): an invalid
+    // range also supersedes whatever is still in flight.
+    const token = (salesToken.current += 1);
+    if (!canReport || !outletId || rangeInvalid) return;
+    const range = { from: salesRange.from, to: salesRange.to };
     try {
-      setSales(await supermarketApi.listSales({ outletId }));
+      const rows = await supermarketApi.listSales({ outletId, ...range });
+      if (token !== salesToken.current) return;
+      setSales(rows);
       setSalesError(null);
     } catch (caught) {
+      if (token !== salesToken.current) return;
       setSales([]);
       setSalesError(caught instanceof ApiError ? caught.message : 'Could not load sales.');
     }
-  }, [canReport, outletId]);
+    try {
+      const totals = await supermarketApi.getSalesTotals({ outletId, ...range });
+      if (token !== salesToken.current) return;
+      setSalesTotals(totals);
+      setSalesTotalsError(null);
+    } catch (caught) {
+      if (token !== salesToken.current) return;
+      setSalesTotals(null);
+      setSalesTotalsError(caught instanceof ApiError ? caught.message : 'Could not load the total.');
+    }
+  }, [canReport, outletId, salesRange, rangeInvalid]);
+
+  // Another outlet: the previous outlet's list and total must not stay on screen while the new ones load.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset when the outlet changes
+    setSales(null);
+    setSalesTotals(null);
+    setSalesTotalsError(null);
+    setMySales([]);
+    setMyTotals(null);
+    setMyTotalsError(null);
+  }, [outletId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load on outlet change
@@ -211,13 +251,27 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
 
   // A cashier's own sales today, for reprinting.
   const loadMySales = useCallback(async () => {
+    const token = (mySalesToken.current += 1); // a slow answer for the outlet just left must not land
     if (!canSell || !outletId) return;
     try {
-      setMySales(await supermarketApi.listMySales(outletId));
+      const rows = await supermarketApi.listMySales(outletId);
+      if (token !== mySalesToken.current) return;
+      setMySales(rows);
       setMySalesError(null);
     } catch (caught) {
+      if (token !== mySalesToken.current) return;
       setMySales([]);
       setMySalesError(caught instanceof ApiError ? caught.message : 'Could not load your sales.');
+    }
+    try {
+      const totals = await supermarketApi.getMySalesTotals(outletId);
+      if (token !== mySalesToken.current) return;
+      setMyTotals(totals);
+      setMyTotalsError(null);
+    } catch (caught) {
+      if (token !== mySalesToken.current) return;
+      setMyTotals(null);
+      setMyTotalsError(caught instanceof ApiError ? caught.message : 'Could not load your total.');
     }
   }, [canSell, outletId]);
 
@@ -721,6 +775,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
         <section id="supermarket-panel-today" role="tabpanel" aria-labelledby="supermarket-tab-today">
           <Card title="Today's sales (reprint)">
             {mySalesError && <p className={styles.errorBanner} role="alert">{mySalesError}</p>}
+            <SalesTotals totals={myTotals} error={myTotalsError} label="Today's sales" currencyCode={activeProperty?.base_currency} />
             <DataTable
               state={mySales.length === 0 ? 'empty' : 'success'}
               emptyMessage="You have not made any sales today."
@@ -740,11 +795,35 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       {outletId && activeTab === 'sales' && (
         <section id="supermarket-panel-sales" role="tabpanel" aria-labelledby="supermarket-tab-sales">
           {!canSell && <p className={styles.hint}>You can view sales here but not sell.</p>}
-          <Card title="Recent sales">
+          <Card title={salesRange.from === salesRange.to ? 'Sales' : 'Sales over a period'}>
+            <div className={styles.salesRange}>
+              <label className={styles.salesRangeField}>
+                <span className={formStyles.label}>From</span>
+                <input className={formStyles.input} type="date" value={salesRange.from} onChange={(event) => setSalesRange((current) => ({ ...current, from: event.target.value }))} disabled={isOffline} />
+              </label>
+              <label className={styles.salesRangeField}>
+                <span className={formStyles.label}>To</span>
+                <input className={formStyles.input} type="date" value={salesRange.to} onChange={(event) => setSalesRange((current) => ({ ...current, to: event.target.value }))} disabled={isOffline} />
+              </label>
+              {[
+                ['today', 'Today'],
+                ['last7', 'Last 7 days'],
+                ['month', 'This month'],
+              ].map(([key, label]) => (
+                <Button key={key} size="compact" variant="secondary" disabled={isOffline} onClick={() => setSalesRange(presetRange(key, businessDate))}>
+                  {label}
+                </Button>
+              ))}
+            </div>
+            {rangeInvalid && <p className={styles.errorBanner} role="alert">The start date must not be after the end date.</p>}
+            {!rangeInvalid && <SalesTotals totals={salesTotals} error={salesTotalsError} label="Sales" currencyCode={activeProperty?.base_currency} />}
+            {salesTotals && sales && salesTotals.saleCount + salesTotals.voidedCount > sales.length && (
+              <p className={styles.hint}>Showing the latest {sales.length} of {salesTotals.saleCount + salesTotals.voidedCount} sales; the total above counts all of them.</p>
+            )}
             {salesError && <p className={styles.errorBanner} role="alert">{salesError}</p>}
             <DataTable
               state={sales === null ? 'loading' : sales.length === 0 ? 'empty' : 'success'}
-              emptyMessage="No sales yet."
+              emptyMessage="No sales in this period."
               columns={[
                 { key: 'receipt', label: 'Receipt', render: (row) => `#${row.receipt_number}${row.voided_at ? ' (void)' : ''}` },
                 { key: 'time', label: 'Time', render: (row) => new Date(row.created_at).toLocaleString() },
