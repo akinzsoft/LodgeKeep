@@ -54,6 +54,9 @@ const scanner = vi.hoisted(() => ({
   newScanStats: () => ({ notReady: 0, attempts: 0, completed: 0, empty: 0, errors: 0, lastError: null, lastMs: null, lastCode: null, frameSize: null, inFlightSince: null }),
 }));
 vi.mock('../../../shared/scanner/cameraScanner.js', () => scanner);
+vi.mock('../../pos/StockRequestsTab.jsx', () => ({
+  StockRequestsTab: ({ deliverToOutletId }) => <div data-testid="stock-requests">requests for {deliverToOutletId}</div>,
+}));
 vi.mock('../../../shared/sound/alertBeep.js', () => ({ playScanTone: vi.fn(), playAlertBeep: vi.fn(), unlockAlertSound: vi.fn() }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -104,6 +107,36 @@ describe('<SupermarketScreen>', () => {
     mocks.getPendingOnlineSale.mockResolvedValue(null);
     mocks.listOnlineSalesNeedingReview.mockResolvedValue([]);
     scanner.cameraSupported.mockReturnValue(false);
+  });
+
+  describe('requesting stock', () => {
+    const CASHIER = new Set(['supermarket.sales', 'pos.stock_request']);
+
+    it('shows a Request stock tab to a cashier who can request, fixed to this outlet, and not to one who cannot', async () => {
+      const { unmount } = render(<SupermarketScreen activeProperty={PROPERTY} permissions={CASHIER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Request stock' }));
+      expect(screen.getByTestId('stock-requests')).toHaveTextContent('requests for 5');
+      expect(screen.getByText(/you cannot add stock yourself/i)).toBeInTheDocument();
+      unmount();
+
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await screen.findByRole('tab', { name: 'Sell' });
+      expect(screen.queryByRole('tab', { name: 'Request stock' })).not.toBeInTheDocument();
+    });
+
+    it('offers Request stock on the low-stock banner and opens the tab', async () => {
+      mocks.getLowStock.mockResolvedValue({ total: 1, items: [{ id: '1', name: 'Coke', unit: 'bottle', current_quantity: '2.000', reorder_level: '10.000' }] });
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={CASHIER} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Request stock' }));
+      expect(await screen.findByTestId('stock-requests')).toBeInTheDocument();
+    });
+
+    it('does not offer the banner button without the request permission', async () => {
+      mocks.getLowStock.mockResolvedValue({ total: 1, items: [{ id: '1', name: 'Coke', unit: 'bottle', current_quantity: '2.000', reorder_level: '10.000' }] });
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      expect(await screen.findByText(/low stock/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Request stock' })).not.toBeInTheDocument();
+    });
   });
 
   describe('scanning', () => {

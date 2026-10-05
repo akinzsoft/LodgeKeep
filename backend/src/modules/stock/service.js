@@ -908,9 +908,13 @@ async function upsertMenuItemComponents({ context, db: providedDb, menuItemId, c
  * outlet as well would add stock with nothing leaving the store, counting the
  * same goods twice. A property with no store room at all keeps receiving
  * directly at its outlets, exactly as before.
+ *
+ * A supermarket is exempt ONLY for its opening stock (`openingStock`, passed
+ * by the product import and by nothing else): after that its stock rises by
+ * a store-approved request or transfer, like any other outlet's.
  */
-async function assertReceivableOutlet(db, outlet) {
-  if (outlet.type === STORE_OUTLET_TYPE || isSupermarketOutlet(outlet)) return;
+async function assertReceivableOutlet(db, outlet, { openingStock = false } = {}) {
+  if (outlet.type === STORE_OUTLET_TYPE || (openingStock && isSupermarketOutlet(outlet))) return;
   const stores = await db.table('pos_outlets').where({ type: STORE_OUTLET_TYPE, status: 'active' }).orderBy('name');
   if (stores.length === 0) return;
   throw new ReceiveAtStoreOnlyError({ outletId: outlet.id, outletName: outlet.name, storeNames: stores.map((store) => store.name) });
@@ -922,12 +926,12 @@ async function assertReceivableOutlet(db, outlet) {
  * `lines`: `[{stockItemId, quantity, unitCost}]`, received INTO `outletId`
  * (stock items are shared; the delivery adds to that outlet's quantity).
  */
-async function recordGoodsReceived({ trx, outletId, lines, reference, userId, businessDate }) {
+async function recordGoodsReceived({ trx, outletId, lines, reference, userId, businessDate, openingStock = false }) {
   if (!Array.isArray(lines) || lines.length === 0) {
     throw new ValidationError('MISSING_FIELD', 'At least one line is required.', [{ field: 'lines', issue: 'missing' }]);
   }
   const outlet = await assertOutlet(trx, outletId);
-  await assertReceivableOutlet(trx, outlet);
+  await assertReceivableOutlet(trx, outlet, { openingStock });
 
   const stockItemIds = [...new Set(lines.map((line) => Number(line.stockItemId)))];
   const lockClosure = await resolveLockClosure({ trx, stockItemIds });
@@ -1678,7 +1682,7 @@ async function completeStockTake({ trx, stockTakeId, userId }) {
   // request or transfer from the store, never by a count. A count that
   // matches or lowers stock is fine everywhere.
   const outlet = await trx.table('pos_outlets').where({ id: outletId }).first();
-  if (outlet && outlet.type !== STORE_OUTLET_TYPE && !isSupermarketOutlet(outlet)) {
+  if (outlet && outlet.type !== STORE_OUTLET_TYPE) {
     const stores = await trx.table('pos_outlets').where({ type: STORE_OUTLET_TYPE, status: 'active' }).orderBy('name');
     const raising = counted.filter((row) => compareQuantity(row.variance, ZERO_QTY) > 0);
     if (stores.length > 0 && raising.length > 0) {

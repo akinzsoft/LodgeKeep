@@ -537,6 +537,7 @@ async function commitProducts({ trx, context, run }) {
       reference: importReference(run.id),
       userId: run.run_by_user_id,
       businessDate: world.businessDate,
+      openingStock: true, // the one direct receive a supermarket still has
     });
   }
 

@@ -10,6 +10,7 @@ import { ProductsImportPanel } from './ProductsImportPanel.jsx';
 import { CameraScanDialog } from './CameraScanDialog.jsx';
 import { BarcodesCard } from './BarcodesCard.jsx';
 import { ProductsCard } from './ProductsCard.jsx';
+import { StockRequestsTab } from '../pos/StockRequestsTab.jsx';
 import { OnlineCardDialog } from './OnlineCardDialog.jsx';
 import { OnlineReviewCard } from './OnlineReviewCard.jsx';
 import { cameraSupported } from '../../shared/scanner/cameraScanner.js';
@@ -55,6 +56,8 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const canSell = permissions.has('supermarket.sales');
   const canReport = permissions.has('supermarket.report');
   const canVoid = permissions.has('supermarket.manage');
+  // Stock reaches the mart only by a store-approved request: a cashier raises one here, the store issues it under Stock → Requests.
+  const canRequestStock = canSell && permissions.has('pos.stock_request');
 
   const [outlets, setOutlets] = useState(null);
   const [outletId, setOutletId] = useState('');
@@ -495,6 +498,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const tabs = [
     canSell && { key: 'sell', label: 'Sell' },
     canSell && { key: 'today', label: "Today's sales" },
+    canRequestStock && { key: 'requests', label: 'Request stock' },
     canReport && { key: 'sales', label: 'All sales' },
     canVoid && { key: 'setup', label: 'Setup' },
     canVoid && { key: 'import', label: 'Products import' },
@@ -552,7 +556,10 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
         <p className={styles.lowStockBanner} role="status">
           <strong>Low stock:</strong>{' '}
           {lowStock.items.slice(0, 5).map((item) => `${item.name} ${item.current_quantity} (reorder at ${item.reorder_level})`).join('; ')}
-          {lowStock.total > 5 ? ` and ${lowStock.total - 5} more` : ''}.
+          {lowStock.total > 5 ? ` and ${lowStock.total - 5} more` : ''}.{' '}
+          {canRequestStock && (
+            <Button size="compact" variant="secondary" onClick={() => setTab('requests')}>Request stock</Button>
+          )}
         </p>
       )}
 
@@ -756,6 +763,13 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
               rowKey={(row) => row.id}
             />
           </Card>
+        </section>
+      )}
+
+      {outletId && activeTab === 'requests' && (
+        <section id="supermarket-panel-requests" role="tabpanel" aria-labelledby="supermarket-tab-requests">
+          <p className={styles.hint}>Ask the store for more stock. The store approves and issues it; you cannot add stock yourself. Your request shows as pending until the store acts.</p>
+          <StockRequestsTab key={outletId} isOffline={isOffline} permissions={permissions} deliverToOutletId={outletId} />
         </section>
       )}
 

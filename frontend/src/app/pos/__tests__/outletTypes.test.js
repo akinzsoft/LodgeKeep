@@ -6,9 +6,9 @@ const store = { id: '2', name: 'Main Store', type: 'store' };
 const mart = { id: '3', name: 'Mini Mart', type: 'supermarket' };
 
 describe('receivingOutlets', () => {
-  it('with a store room, offers the store and any supermarket, never a bar', () => {
-    expect(receivingOutlets([bar, store, mart]).map((o) => o.id)).toEqual(['2', '3']);
-    expect(canReceiveAt([bar, store, mart], '3')).toBe(true);
+  it('with a store room, offers only the store (a supermarket restocks by request, like a bar)', () => {
+    expect(receivingOutlets([bar, store, mart]).map((o) => o.id)).toEqual(['2']);
+    expect(canReceiveAt([bar, store, mart], '3')).toBe(false);
     expect(canReceiveAt([bar, store, mart], '1')).toBe(false);
   });
 

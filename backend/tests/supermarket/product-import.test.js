@@ -116,6 +116,21 @@ describe('supermarket product import', () => {
   });
 
   describe('commit', () => {
+    it('still receives the opening stock at the mart when the property has a store room (the one direct receive a supermarket keeps)', async () => {
+      const storeId = await newOutlet('store', `Opening Store ${next()}`);
+      try {
+        const cat = `Mart Opening ${next()}`;
+        const name = `Opening item ${next()}`;
+        await importFile(csv([`${name},${cat},100.00,,bottle,60.00,24,6,`]));
+        const item = await productByName(name);
+        const [component] = await t.trx('pos_menu_item_components').where({ menu_item_id: item.id });
+        const level = await t.trx('stock_levels').where({ outlet_id: outletId, stock_item_id: component.stock_item_id }).first();
+        expect(level.current_quantity).toBe('24.000');
+      } finally {
+        await t.trx('pos_outlets').where({ id: storeId }).delete();
+      }
+    });
+
     it('creates the category, products, barcodes, stock items, recipes and opening stock at the outlet', async () => {
       const cat = `Mart Drinks ${next()}`;
       const coke = `Coke 50cl ${next()}`;
