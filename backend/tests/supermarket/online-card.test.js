@@ -115,18 +115,18 @@ describe('supermarket online card sales', () => {
     await t.trx('supermarket_sale_intents').where({ outlet_id: market.outletId, status: 'pending' }).update({ status: 'cancelled', cancel_reason: 'test reset' });
   });
 
-  it('starts a pending sale priced server-side, opens an unrestricted checkout on the property account, and writes no sale yet', async () => {
+  it('starts a pending sale priced server-side, opens a card and bank-transfer checkout (no QR for NGN) on the property account, and writes no sale yet', async () => {
     const before = await onHand();
     const res = await start();
     expect(res.status).toBe(201);
     expect(res.body.data).toMatchObject({ status: 'pending', tender: 'online', total: '203.00', currency: 'NGN', sale: null });
     expect(res.body.meta).toMatchObject({ accessCode: 'acc-1', checkoutUrl: 'https://checkout.paystack.com/acc-1' });
-    expect(res.body.meta.qrDataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(res.body.meta.qrDataUrl).toBeNull(); // Paystack's Visa QR is gone in Nigeria
 
     const payment = await paymentFor(res.body.data.id);
     expect(payment).toMatchObject({ settlement_target: 'supermarket_sale', tender: 'online', amount: '203.00', status: 'PENDING', pos_order_id: null, folio_id: null, subaccount_source: 'property' });
     const init = paystack.initializeTransaction.mock.calls[0][0];
-    expect(init).toMatchObject({ amount: '203.00', channels: undefined, subaccount: payment.subaccount_code });
+    expect(init).toMatchObject({ amount: '203.00', channels: ['card', 'bank_transfer'], subaccount: payment.subaccount_code });
     const cashier = await t.trx('users').where({ id: users.operator }).first('email');
     expect(init.email).toBe(cashier.email);
 

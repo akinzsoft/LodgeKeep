@@ -40,6 +40,13 @@ describe('<OnlineCardDialog>', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Waiting for payment');
   });
 
+  it('draws no QR and does not mention one when the server sent none (NGN)', () => {
+    setup({ session: { ...SESSION, qrDataUrl: null } });
+    expect(screen.queryByRole('img', { name: 'Scan to pay online' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/scan the code/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pay in this window' })).toBeEnabled();
+  });
+
   it('opens Paystack in the window, and asks the server (never trusts the popup) when it closes', async () => {
     mocks.checkOnlineSale.mockResolvedValue({ intent: { ...pending, status: 'completed', sale: SALE }, checkError: null });
     popup.openPaystackPopup.mockImplementation(async ({ onClose }) => onClose());

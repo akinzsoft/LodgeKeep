@@ -71,6 +71,15 @@ const errors = require('./errors');
  * rebuild. A narrower tender is one more entry here (e.g. `['bank_transfer']`).
  */
 const ONLINE_TENDERS = Object.freeze({ online: null });
+
+/**
+ * Nigeria: Paystack stopped Visa QR there (Aug 2025), so only the channels
+ * that work are requested, and no QR is drawn (a bank app rejects a QR that
+ * merely encodes the checkout link as "invalid QR"). Other currencies keep the
+ * tender's own channels and the QR.
+ */
+const NGN_CHANNELS = Object.freeze(['card', 'bank_transfer']);
+const isNigerianCurrency = (currency) => currency === 'NGN';
 const INTENT_LIFETIME_MINUTES = Number(process.env.SUPERMARKET_ONLINE_SALE_MINUTES || 30);
 const CHECKOUT_URL_BASE = 'https://checkout.paystack.com/';
 const UNPAID_STATUSES = ['INITIATED', 'PENDING'];
@@ -223,10 +232,10 @@ async function startOnlineCheckout({ context, intentId }) {
     context,
     paymentId: intent.payment_id,
     guestEmail: intent.customer_email || staff?.email,
-    channels: ONLINE_TENDERS[intent.tender] ?? undefined,
+    channels: isNigerianCurrency(intent.currency) ? [...NGN_CHANNELS] : ONLINE_TENDERS[intent.tender] ?? undefined,
   });
   const checkoutUrl = authorizationUrl || (accessCode ? `${CHECKOUT_URL_BASE}${accessCode}` : null);
-  const qrDataUrl = checkoutUrl ? await QRCode.toDataURL(checkoutUrl, { margin: 1, width: 320 }) : null;
+  const qrDataUrl = checkoutUrl && !isNigerianCurrency(intent.currency) ? await QRCode.toDataURL(checkoutUrl, { margin: 1, width: 320 }) : null;
   const fresh = await db.table('supermarket_sale_intents').where({ id: intent.id }).first();
   return { intent: await intentView(db, fresh), accessCode: accessCode ?? null, checkoutUrl, qrDataUrl };
 }
