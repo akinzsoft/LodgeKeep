@@ -1944,7 +1944,7 @@ const ENTITIES = [
       tenant_id: t.id,
       property_id: t.properties[0].id,
       outlet_id: t.posOutlets[0].id,
-      tender: 'card',
+      tender: 'online',
       lines_json: JSON.stringify([]),
       expected_total: '1.00',
       currency: 'NGN',
@@ -1955,7 +1955,7 @@ const ENTITIES = [
       property_id: t.properties[0].id,
       outlet_id: t.posOutlets[0].id,
       sale_id: t.supermarketSales[0].id,
-      tender: 'card',
+      tender: 'online',
       lines_json: JSON.stringify([]),
       expected_total: '1.00',
       currency: 'NGN',
@@ -1964,11 +1964,11 @@ const ENTITIES = [
     crossTenant: [
       {
         name: "an intent against another tenant's outlet",
-        row: (ctx, own, other) => ({ tenant_id: own.id, property_id: own.properties[0].id, outlet_id: other.posOutlets[0].id, tender: 'card', lines_json: JSON.stringify([]), expected_total: '1.00', currency: 'NGN', expires_at: '2001-01-01 00:30:00' }),
+        row: (ctx, own, other) => ({ tenant_id: own.id, property_id: own.properties[0].id, outlet_id: other.posOutlets[0].id, tender: 'online', lines_json: JSON.stringify([]), expected_total: '1.00', currency: 'NGN', expires_at: '2001-01-01 00:30:00' }),
       },
       {
         name: "an intent on another tenant's payment",
-        row: (ctx, own, other) => ({ tenant_id: own.id, property_id: own.properties[0].id, outlet_id: own.posOutlets[0].id, payment_id: other.payments[0].id, tender: 'card', lines_json: JSON.stringify([]), expected_total: '1.00', currency: 'NGN', expires_at: '2001-01-01 00:30:00' }),
+        row: (ctx, own, other) => ({ tenant_id: own.id, property_id: own.properties[0].id, outlet_id: own.posOutlets[0].id, payment_id: other.payments[0].id, tender: 'online', lines_json: JSON.stringify([]), expected_total: '1.00', currency: 'NGN', expires_at: '2001-01-01 00:30:00' }),
       },
     ],
   },

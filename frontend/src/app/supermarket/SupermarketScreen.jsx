@@ -682,7 +682,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
                 <div className={styles.methods} role="group" aria-label="Payment method">
                   <button type="button" className={`${styles.method} ${method === 'cash' ? styles.methodActive : ''}`} aria-pressed={method === 'cash'} onClick={() => setMethod('cash')}>Cash</button>
                   <button type="button" className={`${styles.method} ${method === 'terminal' ? styles.methodActive : ''}`} aria-pressed={method === 'terminal'} onClick={() => setMethod('terminal')}>Card (terminal)</button>
-                  <button type="button" className={`${styles.method} ${method === 'online' ? styles.methodActive : ''}`} aria-pressed={method === 'online'} onClick={() => setMethod('online')}>Card (online)</button>
+                  <button type="button" className={`${styles.method} ${method === 'online' ? styles.methodActive : ''}`} aria-pressed={method === 'online'} onClick={() => setMethod('online')}>Online payment</button>
                 </div>
                 <button type="button" className={styles.payButton} onClick={handleComplete} disabled={isOffline || submitting}>{submitting ? 'Completing…' : method === 'online' ? 'Take online payment' : 'Complete sale'}</button>
                 {saleError && <p className={styles.errorBanner} role="alert">{saleError}</p>}

@@ -135,7 +135,7 @@ describe('Supermarket online card sales: real connections', () => {
 
   const post = (url, who = token) => req.post(url).set('Authorization', `Bearer ${who}`).set('Idempotency-Key', `oc-${next()}`);
   const startSale = async (who = token) => {
-    const res = await post('/api/v1/supermarket/online-sales', who).send({ outlet_id: outletId, tender: 'card', items: [{ menu_item_id: menuItemId, quantity: 2 }] });
+    const res = await post('/api/v1/supermarket/online-sales', who).send({ outlet_id: outletId, tender: 'online', items: [{ menu_item_id: menuItemId, quantity: 2 }] });
     expect(res.status).toBe(201);
     return res.body.data.id;
   };

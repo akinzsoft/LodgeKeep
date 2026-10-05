@@ -31,7 +31,7 @@ exports.up = async function up(knex) {
     table.bigInteger('outlet_id').unsigned().notNullable();
     table.bigInteger('payment_id').unsigned().nullable().comment('The Paystack payment (settlement_target = supermarket_sale) that funds it.');
     table.bigInteger('created_by_user_id').unsigned().nullable().comment('The cashier; recorded as the seller even when the webhook completes the sale.');
-    table.string('tender', 12).notNullable().defaultTo('card').comment("'card' (today) | 'transfer' (later).");
+    table.string('tender', 12).notNullable().defaultTo('online').comment("'online' (generic Paystack checkout); a narrower channel list can be added later with no schema change.");
     table.enu('status', ['pending', 'completed', 'cancelled', 'needs_review', 'refunded']).notNullable().defaultTo('pending');
     table.json('lines_json').notNullable().comment('Frozen cart: [{menu_item_id, item_name, barcode, quantity, unit_price}].');
     table.decimal('expected_total', 14, 2).notNullable().comment('Net + tax asked of Paystack (no service charge).');

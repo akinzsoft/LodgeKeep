@@ -65,10 +65,12 @@ const service = require('./service');
 const errors = require('./errors');
 
 /**
- * Paystack channels per online tender. Adding bank transfer later is one entry
- * here (`transfer: ['bank_transfer']`) plus its button on the till.
+ * Paystack channels per online tender. `online` is generic: `null` means no
+ * restriction, so Paystack's checkout offers whatever channels the account has
+ * enabled (bank transfer today, card too if it is enabled later) with no
+ * rebuild. A narrower tender is one more entry here (e.g. `['bank_transfer']`).
  */
-const ONLINE_TENDERS = Object.freeze({ card: ['card'] });
+const ONLINE_TENDERS = Object.freeze({ online: null });
 const INTENT_LIFETIME_MINUTES = Number(process.env.SUPERMARKET_ONLINE_SALE_MINUTES || 30);
 const CHECKOUT_URL_BASE = 'https://checkout.paystack.com/';
 const UNPAID_STATUSES = ['INITIATED', 'PENDING'];
@@ -158,7 +160,7 @@ async function listOnlineSalesNeedingReview({ context, outletId }) {
  */
 async function startOnlineSale({ trx, context, userId, outletId, lines, tender, confirmOversell = false, customerEmail, idempotencyKey }) {
   if (!Object.hasOwn(ONLINE_TENDERS, tender ?? '')) {
-    throw new ValidationError('INVALID_TENDER', '"tender" must be "card".', [{ field: 'tender', issue: 'invalid' }]);
+    throw new ValidationError('INVALID_TENDER', '"tender" must be "online".', [{ field: 'tender', issue: 'invalid' }]);
   }
   const email = customerEmail ? String(customerEmail).trim() : '';
   if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
@@ -221,7 +223,7 @@ async function startOnlineCheckout({ context, intentId }) {
     context,
     paymentId: intent.payment_id,
     guestEmail: intent.customer_email || staff?.email,
-    channels: ONLINE_TENDERS[intent.tender],
+    channels: ONLINE_TENDERS[intent.tender] ?? undefined,
   });
   const checkoutUrl = authorizationUrl || (accessCode ? `${CHECKOUT_URL_BASE}${accessCode}` : null);
   const qrDataUrl = checkoutUrl ? await QRCode.toDataURL(checkoutUrl, { margin: 1, width: 320 }) : null;
@@ -331,7 +333,8 @@ async function claimOnlineSalePayment({ trx, paymentId, total, currency }) {
   if (!payment || payment.settlement_target !== 'supermarket_sale' || payment.status !== 'CAPTURED') throw new Error(`Online sale payment ${paymentId} is not a captured supermarket payment.`);
   if (await trx.table('pos_order_settlements').where({ payment_id: payment.id }).first('id')) throw new Error(`Online sale payment ${paymentId} already settles a sale.`);
   if (payment.currency !== currency || compareMoney(payment.amount, total) !== 0) throw new Error(`Online sale payment ${paymentId} does not match the sale total.`);
-  return payment;
+  // The settlement is a `card`-method one (a Paystack-captured payment); what the customer actually used is on the payment (`provider_channel`).
+  return { ...payment, tender: 'card' };
 }
 
 /**

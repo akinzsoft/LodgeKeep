@@ -38,6 +38,7 @@ const { recordForStoredPayment } = require('../helpers/gateway-record');
 const paystackAdapterModule = require('../../src/modules/cashiering/paystack-adapter');
 const paystack = paystackAdapterModule.__mockAdapter;
 const cashieringService = require('../../src/modules/cashiering/service');
+const { runSupermarketRefundSweep } = require('../../src/jobs/payment-webhooks');
 
 describe('supermarket online card sales', () => {
   const t = useTestApp();
@@ -63,7 +64,7 @@ describe('supermarket online card sales', () => {
   }
 
   const start = (body = {}, userId = users.operator) =>
-    as(userId).post('/api/v1/supermarket/online-sales').send({ outlet_id: market.outletId, tender: 'card', items: [{ menu_item_id: biscuit, quantity: 2 }], ...body });
+    as(userId).post('/api/v1/supermarket/online-sales').send({ outlet_id: market.outletId, tender: 'online', items: [{ menu_item_id: biscuit, quantity: 2 }], ...body });
   const check = (intentId, userId = users.operator) => as(userId).post(`/api/v1/supermarket/online-sales/${intentId}/check`).send({});
   const onHand = async () => (await t.trx('stock_levels').where({ stock_item_id: stockItemId, outlet_id: market.outletId }).first('current_quantity'))?.current_quantity;
   const paymentFor = async (intentId) => {
@@ -114,18 +115,18 @@ describe('supermarket online card sales', () => {
     await t.trx('supermarket_sale_intents').where({ outlet_id: market.outletId, status: 'pending' }).update({ status: 'cancelled', cancel_reason: 'test reset' });
   });
 
-  it('starts a pending sale priced server-side, opens a card-only checkout on the property account, and writes no sale yet', async () => {
+  it('starts a pending sale priced server-side, opens an unrestricted checkout on the property account, and writes no sale yet', async () => {
     const before = await onHand();
     const res = await start();
     expect(res.status).toBe(201);
-    expect(res.body.data).toMatchObject({ status: 'pending', tender: 'card', total: '203.00', currency: 'NGN', sale: null });
+    expect(res.body.data).toMatchObject({ status: 'pending', tender: 'online', total: '203.00', currency: 'NGN', sale: null });
     expect(res.body.meta).toMatchObject({ accessCode: 'acc-1', checkoutUrl: 'https://checkout.paystack.com/acc-1' });
     expect(res.body.meta.qrDataUrl).toMatch(/^data:image\/png;base64,/);
 
     const payment = await paymentFor(res.body.data.id);
-    expect(payment).toMatchObject({ settlement_target: 'supermarket_sale', tender: 'card', amount: '203.00', status: 'PENDING', pos_order_id: null, folio_id: null, subaccount_source: 'property' });
+    expect(payment).toMatchObject({ settlement_target: 'supermarket_sale', tender: 'online', amount: '203.00', status: 'PENDING', pos_order_id: null, folio_id: null, subaccount_source: 'property' });
     const init = paystack.initializeTransaction.mock.calls[0][0];
-    expect(init).toMatchObject({ amount: '203.00', channels: ['card'], subaccount: payment.subaccount_code });
+    expect(init).toMatchObject({ amount: '203.00', channels: undefined, subaccount: payment.subaccount_code });
     const cashier = await t.trx('users').where({ id: users.operator }).first('email');
     expect(init.email).toBe(cashier.email);
 
@@ -337,6 +338,33 @@ describe('supermarket online card sales', () => {
     expect(paystack.fetchRefund).toHaveBeenCalledWith({ refundId: '902' });
   });
 
+  it('the background sweep completes a pending refund by itself, and a failed one bells a manager', async () => {
+    const started = await start();
+    paystackSays({ status: 'success' });
+    const saleId = (await check(started.body.data.id)).body.data.sale.id;
+    paystack.refundTransaction.mockResolvedValue({ status: 'pending', reference: 'x', refundId: '903' });
+    await as(users.manager).post(`/api/v1/supermarket/sales/${saleId}/void`).send({ reason: 'Returned' });
+    expect((await paymentFor(started.body.data.id)).status).toBe('CAPTURED');
+
+    paystack.fetchRefund.mockResolvedValue({ status: 'processing', refundId: '903' });
+    await runSupermarketRefundSweep();
+    expect((await paymentFor(started.body.data.id)).status).toBe('CAPTURED'); // still not final: left alone
+
+    paystack.fetchRefund.mockResolvedValue({ status: 'processed', refundId: '903' });
+    await runSupermarketRefundSweep();
+    expect((await paymentFor(started.body.data.id)).status).toBe('REFUNDED');
+
+    const second = await start();
+    paystackSays({ status: 'success' });
+    const saleTwo = (await check(second.body.data.id)).body.data.sale.id;
+    paystack.refundTransaction.mockResolvedValue({ status: 'pending', reference: 'y', refundId: '904' });
+    await as(users.manager).post(`/api/v1/supermarket/sales/${saleTwo}/void`).send({ reason: 'Returned' });
+    paystack.fetchRefund.mockResolvedValue({ status: 'failed', refundId: '904' });
+    await runSupermarketRefundSweep();
+    const bell = await t.trx('in_app_notifications').where({ tenant_id: ctx.a.id, user_id: users.manager }).whereRaw("JSON_EXTRACT(payload, '$.refundPaymentId') IS NOT NULL");
+    expect(bell.length).toBeGreaterThan(0);
+  });
+
   it('a refused refund changes nothing, and a cash sale still voids the old way', async () => {
     const started = await start();
     paystackSays({ status: 'success' });
@@ -365,7 +393,7 @@ describe('supermarket online card sales', () => {
   });
 
   it('a non-supermarket tender, an unknown outlet and a role without sales rights are refused', async () => {
-    expect((await start({ tender: 'transfer' })).status).toBe(400);
+    expect((await start({ tender: 'card' })).status).toBe(400);
     expect((await start({ tender: 'cash' })).status).toBe(400);
     const [viewerId] = await t.trx('users').insert({ tenant_id: ctx.a.id, email: `hk-${next()}@example.com`, first_name: 'H', last_name: 'K', password_hash: 'x', status: 'active' });
     await setRole(viewerId, 'housekeeping');

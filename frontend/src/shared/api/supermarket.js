@@ -132,7 +132,7 @@ export function rollbackProductsImport(id, reason) {
  * is set when the sale was recorded but Paystack could not be reached (reopen it
  * with `reopenOnlineCheckout`). The same `idempotencyKey` for a retry of the same attempt.
  */
-export async function startOnlineSale({ outletId, items, tender = 'card', customerEmail, confirmOversell = false, idempotencyKey }) {
+export async function startOnlineSale({ outletId, items, tender = 'online', customerEmail, confirmOversell = false, idempotencyKey }) {
   const { data, meta } = await requestWithMeta('/supermarket/online-sales', {
     method: 'POST',
     body: { outlet_id: outletId, items, tender, ...(customerEmail ? { customer_email: customerEmail } : {}), ...(confirmOversell ? { confirm_oversell: true } : {}) },

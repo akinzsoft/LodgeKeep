@@ -8,7 +8,7 @@ import styles from './OnlineCard.module.css';
 const POLL_MS = 4000;
 
 /**
- * OnlineCardDialog — the supermarket till's "Card (online)" payment. The sale is
+ * OnlineCardDialog — the supermarket till's "Online payment" (Paystack). The sale is
  * only PENDING here: the server completes it (receipt, stock, settlement) the
  * moment Paystack reports the payment, whether the webhook or this dialog's
  * own check sees it first, so a customer who has paid is never left without a
@@ -100,13 +100,13 @@ export function OnlineCardDialog({ session, currency, isOffline = false, onCompl
   return (
     <div className={styles.overlay} role="presentation">
       <div className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="online-card-title">
-        <h2 id="online-card-title" className={styles.title}>Card payment (online)</h2>
+        <h2 id="online-card-title" className={styles.title}>Online payment (Paystack)</h2>
         <p className={styles.total}><Money amount={intent.total} currencyCode={currency ?? intent.currency} /></p>
 
         {pending && (
           <>
-            <p className={styles.hint}>The customer can pay in this window, or scan the code with their phone. The sale completes by itself once the payment arrives.</p>
-            {checkout.qrDataUrl && <img className={styles.qr} src={checkout.qrDataUrl} alt="Scan to pay by card" />}
+            <p className={styles.hint}>The customer can pay in this window, or scan the code with their phone. Paystack offers whichever payment options are enabled (bank transfer, card). The sale completes by itself once the payment arrives.</p>
+            {checkout.qrDataUrl && <img className={styles.qr} src={checkout.qrDataUrl} alt="Scan to pay online" />}
             <div className={styles.actions}>
               {checkout.accessCode && <Button onClick={handlePay} disabled={isOffline || busy}>Pay in this window</Button>}
               {!checkout.accessCode && <Button onClick={handleRetryCheckout} disabled={isOffline || busy}>Try again</Button>}

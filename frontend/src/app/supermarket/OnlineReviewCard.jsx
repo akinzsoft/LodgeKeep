@@ -46,7 +46,7 @@ export function OnlineReviewCard({ outletId, isOffline = false }) {
   return (
     <Card title="Online payments needing a refund">
       {error && <p className={styles.errorBanner} role="alert">{error}</p>}
-      <p className={styles.hint}>These customers paid by card online but no sale was recorded. Refund them in full.</p>
+      <p className={styles.hint}>These customers paid online (Paystack) but no sale was recorded. Refund them in full.</p>
       <ul className={styles.setupList} aria-label="Online payments needing a refund">
         {rows.map((row) => (
           <li key={row.id} className={styles.setupRow}>

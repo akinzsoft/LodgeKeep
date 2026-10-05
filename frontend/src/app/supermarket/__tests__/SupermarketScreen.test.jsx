@@ -578,7 +578,7 @@ describe('<SupermarketScreen>', () => {
     });
   });
 
-  describe('Card (online)', () => {
+  describe('Online payment', () => {
     const ONLINE = { id: '31', status: 'pending', total: '109.12', currency: 'NGN', lines: [], sale: null };
     async function fillCart() {
       mocks.lookupBarcode.mockResolvedValue(RICE);
@@ -591,17 +591,17 @@ describe('<SupermarketScreen>', () => {
       mocks.checkOnlineSale.mockResolvedValue({ intent: { ...ONLINE, status: 'completed', sale: { ...SALE, method: 'card' } }, checkError: null });
       render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
       await fillCart();
-      await userEvent.click(screen.getByRole('button', { name: 'Card (online)' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Online payment' }));
       await userEvent.click(screen.getByRole('button', { name: 'Take online payment' }));
       expect(mocks.startOnlineSale).toHaveBeenCalledWith(expect.objectContaining({ outletId: '5', items: [{ menu_item_id: '11', quantity: 1 }] }));
       expect(mocks.createSale).not.toHaveBeenCalled();
-      expect(await screen.findByRole('dialog', { name: 'Card payment (online)' })).toBeInTheDocument();
+      expect(await screen.findByRole('dialog', { name: 'Online payment (Paystack)' })).toBeInTheDocument();
       // The cart is kept until the payment lands.
       expect(within(screen.getByRole('complementary', { name: 'Current sale' })).getByText('Rice 5kg')).toBeInTheDocument();
 
       await userEvent.click(screen.getByRole('button', { name: 'Check payment' }));
-      expect(await screen.findByText('Card (online)', { selector: 'dd' })).toBeInTheDocument();
-      expect(screen.queryByRole('dialog', { name: 'Card payment (online)' })).not.toBeInTheDocument();
+      expect(await screen.findByText('Online payment (Paystack)', { selector: 'dd' })).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'Online payment (Paystack)' })).not.toBeInTheDocument();
       expect(screen.getByText('Scan or search to start a sale.')).toBeInTheDocument();
     });
 
@@ -610,7 +610,7 @@ describe('<SupermarketScreen>', () => {
       mocks.startOnlineSale.mockResolvedValue({ intent: ONLINE, accessCode: 'a', checkoutUrl: 'u', qrDataUrl: 'data:image/png;base64,AAAA' });
       render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
       await fillCart();
-      await userEvent.click(screen.getByRole('button', { name: 'Card (online)' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Online payment' }));
       await userEvent.click(screen.getByRole('button', { name: 'Take online payment' }));
       const dialog = await screen.findByRole('alertdialog', { name: 'Sell more than recorded stock?' });
       expect(mocks.startOnlineSale).not.toHaveBeenCalled();
@@ -622,7 +622,7 @@ describe('<SupermarketScreen>', () => {
       mocks.getPendingOnlineSale.mockResolvedValue(ONLINE);
       mocks.reopenOnlineCheckout.mockResolvedValue({ intent: ONLINE, accessCode: 'acc-1', checkoutUrl: 'u', qrDataUrl: 'data:image/png;base64,AAAA' });
       render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
-      expect(await screen.findByRole('dialog', { name: 'Card payment (online)' })).toBeInTheDocument();
+      expect(await screen.findByRole('dialog', { name: 'Online payment (Paystack)' })).toBeInTheDocument();
       expect(mocks.reopenOnlineCheckout).toHaveBeenCalledWith('31');
     });
 
@@ -634,7 +634,7 @@ describe('<SupermarketScreen>', () => {
       ]);
       render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
       await userEvent.click(await screen.findByRole('tab', { name: 'All sales' }));
-      expect(await screen.findByText('Card (online)')).toBeInTheDocument();
+      expect(await screen.findByText('Online payment (Paystack)')).toBeInTheDocument();
       expect(screen.getByText('Card (terminal)')).toBeInTheDocument();
       expect(screen.getAllByText('Cash')).toHaveLength(1);
     });

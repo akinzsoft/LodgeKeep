@@ -1317,7 +1317,7 @@ async function seedTwoTenants(trx) {
         outlet_id: outlet.id,
         sale_id: supermarketSaleId,
         created_by_user_id: user.id,
-        tender: 'card',
+        tender: 'online',
         status: 'completed',
         lines_json: JSON.stringify([{ menu_item_id: String(menuItem.id), item_name: 'Fixture item', barcode: null, quantity: 1, unit_price: '20.00' }]),
         expected_total: '20.00',

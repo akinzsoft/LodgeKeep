@@ -33,9 +33,9 @@ describe('<OnlineCardDialog>', () => {
 
   it('shows the amount, a QR code and the ways to pay while waiting', () => {
     setup();
-    expect(screen.getByRole('dialog', { name: 'Card payment (online)' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Online payment (Paystack)' })).toBeInTheDocument();
     expect(screen.getByText(/203\.00/)).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'Scan to pay by card' })).toHaveAttribute('src', SESSION.qrDataUrl);
+    expect(screen.getByRole('img', { name: 'Scan to pay online' })).toHaveAttribute('src', SESSION.qrDataUrl);
     expect(screen.getByRole('button', { name: 'Pay in this window' })).toBeEnabled();
     expect(screen.getByRole('status')).toHaveTextContent('Waiting for payment');
   });

@@ -33,6 +33,8 @@ const { paymentWebhooksQueue, PAYMENT_WEBHOOKS_QUEUE } = require('./queues');
 const { knex } = require('../db');
 const { processPaymentWebhookEvent } = require('../modules/cashiering/service');
 const { processBillingWebhookEvent } = require('../modules/billing/service');
+const { refreshOnlineRefunds } = require('../modules/supermarket/paystack-sale');
+const { workerContext } = require('../modules/tenancy');
 
 const SWEEP_JOB_NAME = 'sweep';
 const SWEEP_INTERVAL_MS = Number(process.env.PAYMENT_WEBHOOK_SWEEP_INTERVAL_MS || 60_000);
@@ -71,6 +73,28 @@ async function runPaymentWebhookRetrySweep(now = new Date()) {
   return results;
 }
 
+/**
+ * A supermarket online-sale void whose refund Paystack accepted but had not
+ * processed yet: re-ask Paystack until it says processed (the original payment
+ * becomes REFUNDED) or failed (a manager is belled). One property at a time.
+ */
+async function runSupermarketRefundSweep() {
+  const pending = await knex()('payments')
+    .where({ settlement_target: 'supermarket_sale', status: 'PENDING' })
+    .whereNotNull('parent_payment_id')
+    .whereNotNull('provider_payment_id')
+    .distinct('tenant_id', 'property_id');
+  let changed = 0;
+  for (const { tenant_id: tenantId, property_id: propertyId } of pending) {
+    try {
+      changed += await refreshOnlineRefunds({ context: workerContext({ tenantId, propertyId }) });
+    } catch (error) {
+      console.error(`supermarket refund sweep failed for tenant ${tenantId} property ${propertyId}:`, error);
+    }
+  }
+  return changed;
+}
+
 /** Registers the repeatable sweep — call once at process startup. Idempotent by scheduler id. */
 async function schedulePaymentWebhookSweep() {
   await paymentWebhooksQueue().upsertJobScheduler(SWEEP_SCHEDULER_ID, { every: SWEEP_INTERVAL_MS }, { name: SWEEP_JOB_NAME, data: {} });
@@ -81,6 +105,7 @@ function startPaymentWebhooksWorker() {
     PAYMENT_WEBHOOKS_QUEUE,
     async () => {
       await runPaymentWebhookRetrySweep();
+      await runSupermarketRefundSweep();
     },
     { connection: redisConnection() }
   );
@@ -88,6 +113,7 @@ function startPaymentWebhooksWorker() {
 
 module.exports = {
   runPaymentWebhookRetrySweep,
+  runSupermarketRefundSweep,
   schedulePaymentWebhookSweep,
   startPaymentWebhooksWorker,
   SWEEP_SCHEDULER_ID,
