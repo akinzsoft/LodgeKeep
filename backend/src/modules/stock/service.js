@@ -117,6 +117,8 @@ const {
   InsufficientStockOverrideRequiredError,
   InsufficientStockForTransferError,
   ReceiveAtStoreOnlyError,
+  SupermarketRequestMustComeFromStoreError,
+  RequestItemNotAtOutletError,
   StockTakeCannotRaiseStockError,
   SameOutletTransferError,
   StockTransferRequestNotFoundError,
@@ -1394,9 +1396,23 @@ async function createTransferRequest({ trx, fromOutletId, toOutletId, lines, not
   if (new Set(ids).size !== ids.length) {
     throw new ValidationError('DUPLICATE_STOCK_ITEM', 'Each stock item can appear only once on a request — combine the quantities.', [{ field: 'lines', issue: 'duplicate' }]);
   }
-  const items = await trx.table('stock_items').whereIn('id', ids).select('id', 'status');
+  const items = await trx.table('stock_items').whereIn('id', ids).select('id', 'status', 'name', 'category');
   const activeIds = new Set(items.filter((item) => item.status === 'active').map((item) => String(item.id)));
   if (ids.some((id) => !activeIds.has(id))) throw new StockItemNotFoundError();
+
+  // A mart cashier (staff tied to a supermarket) asks the STORE for the MART'S OWN products only: not another
+  // outlet's items, even when the store holds those too. Everyone else (full access, or a bar/restaurant
+  // operator) keeps the flexible request.
+  if (scope && isSupermarketOutlet(toOutlet)) {
+    if (fromOutlet.type !== STORE_OUTLET_TYPE) {
+      const stores = await trx.table('pos_outlets').where({ type: STORE_OUTLET_TYPE, status: 'active' }).orderBy('name');
+      throw new SupermarketRequestMustComeFromStoreError(stores.map((store) => store.name));
+    }
+    const carried = new Set((await outletMenu.carriedCategoryNames(trx, toOutletId)).map(nameKey));
+    const held = new Set((await trx.table('stock_levels').where({ outlet_id: toOutletId }).select('stock_item_id')).map((row) => String(row.stock_item_id)));
+    const foreign = items.filter((item) => !((item.category && carried.has(nameKey(item.category))) || held.has(String(item.id))));
+    if (foreign.length) throw new RequestItemNotAtOutletError({ outletName: toOutlet.name, itemNames: foreign.map((item) => item.name) });
+  }
 
   const [requestId] = await trx.table('stock_transfer_requests').insert({
     from_outlet_id: fromOutletId,

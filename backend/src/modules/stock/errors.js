@@ -127,6 +127,36 @@ class ReceiveAtStoreOnlyError extends AppError {
 }
 
 /**
+ * A mart cashier (staff tied to a supermarket) asks the STORE for stock: the supplier of a request for a
+ * supermarket must be a store room when the requester is restricted. Nothing is written.
+ */
+class SupermarketRequestMustComeFromStoreError extends AppError {
+  constructor(storeNames) {
+    super(
+      'BUSINESS_RULE_SUPERMARKET_REQUEST_FROM_STORE_ONLY',
+      `Stock for a supermarket is requested from the store room${storeNames?.length ? ` (${storeNames.join(', ')})` : ''}, not from another outlet.`,
+      422,
+      { storeNames: storeNames ?? [] },
+    );
+  }
+}
+
+/**
+ * A mart cashier asked for stock items that are not the mart's own products (another outlet's items, even
+ * when the store holds them too). `details.items` names them. Nothing is written.
+ */
+class RequestItemNotAtOutletError extends AppError {
+  constructor({ outletName, itemNames }) {
+    super(
+      'BUSINESS_RULE_REQUEST_ITEM_NOT_AT_OUTLET',
+      `${outletName ? `"${outletName}"` : 'This outlet'} does not stock ${itemNames.join(', ')}: request only its own products.`,
+      422,
+      { items: itemNames },
+    );
+  }
+}
+
+/**
  * A stock take at a bar/restaurant counted MORE than the system holds there
  * while the property has a store room. Stock only reaches an outlet by a
  * request or transfer from the store, so a count may confirm or lower an
@@ -227,6 +257,8 @@ class InsufficientStockForIssueError extends AppError {
 
 module.exports = {
   ReceiveAtStoreOnlyError,
+  SupermarketRequestMustComeFromStoreError,
+  RequestItemNotAtOutletError,
   StockTakeCannotRaiseStockError,
   InsufficientStockForIssueError,
   StockTransferRequestNotFoundError,

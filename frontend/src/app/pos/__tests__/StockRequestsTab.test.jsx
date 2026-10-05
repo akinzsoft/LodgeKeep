@@ -91,20 +91,121 @@ describe('<StockRequestsTab>', () => {
       expect(screen.getByLabelText('Quantity 1')).toHaveValue('');
     });
 
-    it('embedded in the Supermarket (deliverToOutletId): delivery is fixed to that outlet, the list shows only requests delivered there, and it sends to it', async () => {
-      mocks.listTransferRequests.mockResolvedValue([pendingRequest({ id: '5' }), pendingRequest({ id: '6', toOutlet: { id: '9', name: 'Other Outlet' } })]);
-      mocks.createTransferRequest.mockResolvedValue({ id: '7', fromOutlet: { name: 'Main Store' } });
-      render(<StockRequestsTab permissions={REQUESTER} deliverToOutletId="2" />);
-      await waitFor(() => expect(screen.getByLabelText('Request from')).toHaveValue('1'));
-      expect(screen.getByLabelText('Deliver to')).toHaveValue('2');
-      expect(screen.getByLabelText('Deliver to')).toBeDisabled();
-      expect(await screen.findAllByText('Bola Barman')).toHaveLength(1); // request #5 only; #6 goes elsewhere
-      expect(screen.queryByText('Other Outlet')).not.toBeInTheDocument();
+    describe('the mart cashier (restricted, delivering to a supermarket)', () => {
+      const MART = { id: '12', name: 'Mini Mart', type: 'supermarket' };
+      const MART_COKE = { id: '20', name: 'Mart Coke', unit: 'bottle', category: 'Mart Soft Drinks', current_quantity: '30.000' };
+      const MART_RICE = { id: '22', name: 'Mart Rice', unit: 'bag', category: 'Mart Groceries', current_quantity: '0.000' };
+      const BAR_GIN = { id: '21', name: 'Bar Gin', unit: 'bottle', category: 'Spirits', current_quantity: '8.000' };
+      const REST_STEAK = { id: '23', name: 'Restaurant Steak', unit: 'kg', category: 'Kitchen', current_quantity: '5.000' };
 
-      await selectWhenLoaded('Item 1', '20');
-      await userEvent.type(screen.getByLabelText('Quantity 1'), '12');
-      await userEvent.click(screen.getByRole('button', { name: 'Send request' }));
-      expect(mocks.createTransferRequest).toHaveBeenCalledWith(expect.objectContaining({ fromOutletId: '1', toOutletId: '2' }));
+      beforeEach(() => {
+        mocks.listOutlets.mockResolvedValue([STORE, BAR, MART]);
+        mocks.getMyRequestOutlets.mockResolvedValue({ restricted: true, outletIds: ['12'] });
+        // The STORE carries and holds the mart's products AND the bar's and the restaurant's; the MART carries only its own.
+        // The mart's own list carries the MART's quantities (99 and 7): the form must show the STORE's instead (30, and none).
+        mocks.listStockItems.mockImplementation(async ({ outletId }) =>
+          String(outletId) === '1' ? [MART_COKE, BAR_GIN, REST_STEAK] : [{ ...MART_COKE, current_quantity: '99.000' }, { ...MART_RICE, current_quantity: '7.000' }]
+        );
+      });
+
+      it("offers ONLY the mart's own products, each with the store's quantity, never the bar's or restaurant's items (even though the store holds them)", async () => {
+        render(<StockRequestsTab permissions={REQUESTER} deliverToOutletId="12" />);
+        await waitFor(() => expect(screen.getByLabelText('Request from')).toHaveValue('1'));
+        const item = await screen.findByLabelText('Item 1');
+        await waitFor(() => expect(within(item).getByRole('option', { name: /Mart Coke/ })).toBeInTheDocument());
+        const options = within(item).getAllByRole('option').map((option) => option.textContent);
+        expect(options.some((text) => /Mart Coke/.test(text))).toBe(true);
+        expect(options.some((text) => /Mart Rice/.test(text))).toBe(true);
+        expect(options.some((text) => /Bar Gin/.test(text))).toBe(false);
+        expect(options.some((text) => /Restaurant Steak/.test(text))).toBe(false);
+        expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '12' });
+
+        await selectWhenLoaded('Item 1', '20');
+        expect(screen.getByText('30.000 bottle at the store now')).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', { name: 'Add another item' }));
+        await selectWhenLoaded('Item 2', '22');
+        expect(screen.getByText('None at the store now')).toBeInTheDocument(); // a mart product the store holds none of
+      });
+
+      it('limits "Request from" to the store, and shows "Deliver to" as fixed text, not a picker', async () => {
+        render(<StockRequestsTab permissions={REQUESTER} deliverToOutletId="12" />);
+        await waitFor(() => expect(screen.getByLabelText('Request from')).toHaveValue('1'));
+        const fromOptions = within(screen.getByLabelText('Request from')).getAllByRole('option').map((option) => option.textContent);
+        expect(fromOptions.join(' ')).toContain('Main Store');
+        expect(fromOptions.join(' ')).not.toContain('Main Bar');
+        expect(fromOptions.join(' ')).not.toContain('Mini Mart');
+        expect(screen.queryByLabelText('Deliver to')).not.toBeInTheDocument();
+        expect(screen.getByText('Mini Mart')).toBeInTheDocument();
+      });
+
+      it("shows only requests delivered to the mart, and sends the request to it", async () => {
+        mocks.listTransferRequests.mockResolvedValue([pendingRequest({ id: '5', toOutlet: { id: '12', name: 'Mini Mart' } }), pendingRequest({ id: '6', toOutlet: { id: '2', name: 'Main Bar' } })]);
+        mocks.createTransferRequest.mockResolvedValue({ id: '7', fromOutlet: { name: 'Main Store' } });
+        render(<StockRequestsTab permissions={REQUESTER} deliverToOutletId="12" />);
+        await waitFor(() => expect(screen.getByLabelText('Request from')).toHaveValue('1'));
+        await screen.findByText('#5');
+        expect(screen.queryByText('#6')).not.toBeInTheDocument();
+        await selectWhenLoaded('Item 1', '20');
+        await userEvent.type(screen.getByLabelText('Quantity 1'), '12');
+        await userEvent.click(screen.getByRole('button', { name: 'Send request' }));
+        expect(mocks.createTransferRequest).toHaveBeenCalledWith(expect.objectContaining({ fromOutletId: '1', toOutletId: '12' }));
+      });
+
+      it('says so when the mart has no stock items yet', async () => {
+        mocks.listStockItems.mockImplementation(async ({ outletId }) => (String(outletId) === '1' ? [BAR_GIN] : []));
+        render(<StockRequestsTab permissions={REQUESTER} deliverToOutletId="12" />);
+        expect(await screen.findByText('The mart has no stock items yet.')).toBeInTheDocument();
+      });
+    });
+
+    describe('everyone else keeps the free form', () => {
+      const MART = { id: '12', name: 'Mini Mart', type: 'supermarket' };
+
+      it('a full-access user in the Supermarket tab can still change both outlets and sees the store\'s items', async () => {
+        mocks.listOutlets.mockResolvedValue([STORE, BAR, MART]);
+        mocks.getMyRequestOutlets.mockResolvedValue({ restricted: false, outletIds: null });
+        mocks.listStockItems.mockResolvedValue([COKE, GIN]);
+        render(<StockRequestsTab permissions={REQUESTER} deliverToOutletId="12" />);
+        await waitFor(() => expect(screen.getByLabelText('Deliver to')).toHaveValue('12'));
+        expect(screen.getByLabelText('Deliver to')).toBeEnabled();
+        const fromOptions = within(screen.getByLabelText('Request from')).getAllByRole('option').map((option) => option.textContent);
+        expect(fromOptions.join(' ')).toContain('Main Bar');
+        expect(fromOptions.join(' ')).toContain('Mini Mart');
+        await waitFor(() => expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '1' }));
+        expect(mocks.listStockItems).not.toHaveBeenCalledWith({ outletId: '12' });
+        const options = within(await screen.findByLabelText('Item 1')).getAllByRole('option').map((option) => option.textContent);
+        expect(options.some((text) => /Coke/.test(text))).toBe(true);
+        expect(options.some((text) => /Gin/.test(text))).toBe(true);
+      });
+
+      it('a restricted user assigned to the bar AND the mart: choosing the mart switches the supplier to the store and clears the lines', async () => {
+        mocks.listOutlets.mockResolvedValue([STORE, BAR, MART]);
+        mocks.getMyRequestOutlets.mockResolvedValue({ restricted: true, outletIds: ['2', '12'] });
+        mocks.listStockItems.mockResolvedValue([COKE, GIN]);
+        render(<StockRequestsTab permissions={REQUESTER} />);
+        await waitFor(() => expect(screen.getByLabelText('Request from')).toHaveValue('1'));
+        await userEvent.selectOptions(screen.getByLabelText('Request from'), '2'); // another outlet: allowed for a bar delivery
+        await selectWhenLoaded('Deliver to', '2');
+        await selectWhenLoaded('Item 1', '21');
+        await selectWhenLoaded('Deliver to', '12');
+        await waitFor(() => expect(screen.getByLabelText('Request from')).toHaveValue('1'));
+        expect(screen.getByLabelText('Item 1')).toHaveValue('');
+        expect(screen.queryByLabelText('Deliver to')).not.toBeInTheDocument();
+      });
+
+      it("a restricted bar operator's form is unchanged: any outlet to request from, the supplier's items", async () => {
+        mocks.listOutlets.mockResolvedValue([STORE, BAR, MART]);
+        mocks.getMyRequestOutlets.mockResolvedValue({ restricted: true, outletIds: ['2'] });
+        mocks.listStockItems.mockResolvedValue([COKE, GIN]);
+        render(<StockRequestsTab permissions={REQUESTER} />);
+        await waitFor(() => expect(screen.getByLabelText('Deliver to')).toHaveValue('2'));
+        const fromOptions = within(screen.getByLabelText('Request from')).getAllByRole('option').map((option) => option.textContent);
+        expect(fromOptions.join(' ')).toContain('Mini Mart');
+        expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '1' });
+        expect(mocks.listStockItems).not.toHaveBeenCalledWith({ outletId: '2' });
+        const options = within(await screen.findByLabelText('Item 1')).getAllByRole('option').map((option) => option.textContent);
+        expect(options.some((text) => /Gin/.test(text))).toBe(true);
+      });
     });
 
     it('staff tied to one outlet deliver only there, already chosen', async () => {

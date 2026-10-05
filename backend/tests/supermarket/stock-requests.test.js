@@ -11,7 +11,7 @@
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
-const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
+const { insertMenuItem, insertStockItem, insertStockCategories } = require('../helpers/catalogue');
 
 describe('supermarket stock requests', () => {
   const t = useTestApp();
@@ -24,6 +24,7 @@ describe('supermarket stock requests', () => {
   const DATE = '2027-12-01';
 
   const next = () => `${Date.now().toString(36)}${(counter += 1)}`;
+  const scope = () => ({ tenant_id: ctx.a.id, property_id: propertyId });
   const tokenFor = (userId) => signAccessToken({ aud: 'staff', sub: String(userId), tenant_id: String(ctx.a.id), property_id: String(propertyId) });
   const as = (role) => ({
     get: (url) => t.request.get(url).set('Authorization', `Bearer ${tokenFor(users[role])}`),
@@ -122,5 +123,77 @@ describe('supermarket stock requests', () => {
     expect(managerReceived.status).toBe(422);
     expect(managerReceived.body.error.code).toBe('BUSINESS_RULE_RECEIVE_AT_STORE_ONLY');
     expect(await level(martId, item)).toBe('0.000');
+  });
+  describe("a restricted mart cashier asks the store for the mart's OWN products only", () => {
+    let martCashier;
+    let barCashier;
+    let barId;
+    let martItem;
+    let barItem;
+
+    beforeAll(async () => {
+      // The store carries BOTH the mart's category and the bar's, and holds both items.
+      barId = await outlet('bar', 'Request Bar');
+      await insertStockCategories(t.trx, { ...scope(), name: 'RR Mart Cat', outlet_id: martId });
+      await insertStockCategories(t.trx, { ...scope(), name: 'RR Bar Cat', outlet_id: barId });
+      await insertStockCategories(t.trx, { ...scope(), name: 'RR Mart Cat', outlet_id: storeId });
+      await insertStockCategories(t.trx, { ...scope(), name: 'RR Bar Cat', outlet_id: storeId });
+      [martItem] = await insertStockItem(t.trx, { ...scope(), name: `Mart Coke ${next()}`, unit: 'bottle', category: 'RR Mart Cat', purchase_cost: '3.00', reorder_level: '0.000' });
+      [barItem] = await insertStockItem(t.trx, { ...scope(), name: `Bar Gin ${next()}`, unit: 'bottle', category: 'RR Bar Cat', purchase_cost: '3.00', reorder_level: '0.000' });
+      await receiveAtStore(martItem, '20.000');
+      await receiveAtStore(barItem, '20.000');
+      martCashier = await userWithRole('pos_operator');
+      barCashier = await userWithRole('pos_operator');
+      await t.trx('user_outlet_assignments').insert({ ...scope(), user_id: martCashier, outlet_id: martId });
+      await t.trx('user_outlet_assignments').insert({ ...scope(), user_id: barCashier, outlet_id: barId });
+      users.martCashier = martCashier;
+      users.barCashier = barCashier;
+    });
+
+    const names = (res) => res.body.data.map((row) => row.id);
+
+    it("the mart's item list holds only the mart's products, while the store's holds both (even though the store carries both)", async () => {
+      const store = await as('martCashier').get(`/api/v1/pos/stock/items?outlet_id=${storeId}`);
+      expect(store.status).toBe(200);
+      expect(names(store)).toEqual(expect.arrayContaining([String(martItem), String(barItem)]));
+
+      const mart = await as('martCashier').get(`/api/v1/pos/stock/items?outlet_id=${martId}`);
+      expect(mart.status).toBe(200);
+      expect(names(mart)).toContain(String(martItem));
+      expect(names(mart)).not.toContain(String(barItem));
+    });
+
+    it("accepts a request for the mart's own product from the store", async () => {
+      const res = await request('martCashier', [{ stock_item_id: martItem, quantity: '5' }]);
+      expect(res.status).toBe(201);
+    });
+
+    it("refuses a request that names another outlet's item, even though the store holds it, and writes nothing", async () => {
+      const before = (await t.trx('stock_transfer_requests').count({ n: '*' }).first()).n;
+      const res = await request('martCashier', [{ stock_item_id: barItem, quantity: '2' }]);
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('BUSINESS_RULE_REQUEST_ITEM_NOT_AT_OUTLET');
+      expect(res.body.error.message).toContain('Request Mart');
+      const mixed = await request('martCashier', [{ stock_item_id: martItem, quantity: '1' }, { stock_item_id: barItem, quantity: '1' }]);
+      expect(mixed.status).toBe(422);
+      expect((await t.trx('stock_transfer_requests').count({ n: '*' }).first()).n).toBe(before);
+    });
+
+    it('refuses a supplier that is not a store room', async () => {
+      const res = await as('martCashier').post('/api/v1/pos/stock/transfer-requests').send({ from_outlet_id: barId, to_outlet_id: martId, lines: [{ stock_item_id: martItem, quantity: '1' }] });
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('BUSINESS_RULE_SUPERMARKET_REQUEST_FROM_STORE_ONLY');
+      expect(res.body.error.message).toContain('Request Store');
+    });
+
+    it('does not restrict a full-access user, who may request any item for the mart', async () => {
+      const res = await request('manager', [{ stock_item_id: barItem, quantity: '1' }]);
+      expect(res.status).toBe(201);
+    });
+
+    it("does not change a bar operator's request: any store item, from the store", async () => {
+      const res = await as('barCashier').post('/api/v1/pos/stock/transfer-requests').send({ from_outlet_id: storeId, to_outlet_id: barId, lines: [{ stock_item_id: martItem, quantity: '1' }, { stock_item_id: barItem, quantity: '1' }] });
+      expect(res.status).toBe(201);
+    });
   });
 });
