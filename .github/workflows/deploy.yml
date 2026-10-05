@@ -152,13 +152,17 @@ jobs:
             # nothing to be pending.
             $COMPOSE run --rm --no-deps -T migrate npx knex migrate:latest
             LATEST_MIGRATION="$(ls backend/migrations | sort | tail -n 1)"
-            MIGRATION_LIST="$($COMPOSE run --rm --no-deps -T migrate npx knex migrate:list 2>&1)"
+            # Strip colour codes so the exact-line match below can't be
+            # defeated by formatting.
+            MIGRATION_LIST="$($COMPOSE run --rm --no-deps -T migrate npx knex migrate:list 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
             if ! printf '%s\n' "$MIGRATION_LIST" | grep -qxF "$LATEST_MIGRATION"; then
               echo "::error::The newest migration in this checkout ($LATEST_MIGRATION) is not recorded as completed in the production database."
               printf '%s\n' "$MIGRATION_LIST" | tail -n 15
               exit 1
             fi
-            if printf '%s\n' "$MIGRATION_LIST" | grep -q "Pending Migration"; then
+            # knex prints "No Pending Migration files Found." when nothing is
+            # pending, so match only its "Found N Pending ..." line.
+            if printf '%s\n' "$MIGRATION_LIST" | grep -qE '^Found [0-9]+ Pending Migration'; then
               echo "::error::Migrations are still pending after migrate ran."
               printf '%s\n' "$MIGRATION_LIST" | tail -n 15
               exit 1
