@@ -94,6 +94,22 @@ async function listSales(req, res, next) {
   }
 }
 
+async function salesTotals(req, res, next) {
+  try {
+    res.json(ok(await service.salesTotals({ context: req.context, outletId: outletRequired(req), from: req.query.from, to: req.query.to })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function mySalesTotals(req, res, next) {
+  try {
+    res.json(ok(await service.mySalesTotals({ context: req.context, outletId: outletRequired(req) })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function summary(req, res, next) {
   try {
     res.json(ok(await service.summarize({ context: req.context, outletId: req.query.outlet_id, from: req.query.from, to: req.query.to })));
@@ -234,4 +250,4 @@ function restoreProduct(req, res, next) {
   });
 }
 
-module.exports = { stockOnHand, setupFlags, lowStock, mySales, listMyOutlets, lookup, createSale, getSale, listSales, summary, voidSale, listBarcodes, addBarcode, removeBarcode, listProducts, editProduct, archiveProduct, restoreProduct };
+module.exports = { stockOnHand, setupFlags, lowStock, mySales, listMyOutlets, lookup, createSale, getSale, listSales, salesTotals, mySalesTotals, summary, voidSale, listBarcodes, addBarcode, removeBarcode, listProducts, editProduct, archiveProduct, restoreProduct };

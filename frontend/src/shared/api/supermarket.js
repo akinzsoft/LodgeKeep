@@ -51,6 +51,20 @@ export function listSales({ outletId, from, to } = {}) {
   return request(`/supermarket/sales?${params}`);
 }
 
+/** The total of ALL the outlet's sales over a business-date range (default today), voided ones counted apart. */
+export function getSalesTotals({ outletId, from, to } = {}) {
+  const params = new URLSearchParams();
+  if (outletId) params.set('outlet_id', outletId);
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  return request(`/supermarket/sales/totals?${params}`);
+}
+
+/** The same for the caller's own sales today. */
+export function getMySalesTotals(outletId) {
+  return request(`/supermarket/my-sales/totals?${new URLSearchParams({ outlet_id: outletId })}`);
+}
+
 export function getReport({ outletId, from, to } = {}) {
   const params = new URLSearchParams();
   if (outletId) params.set('outlet_id', outletId);
