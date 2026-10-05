@@ -4,7 +4,7 @@
  * Supermarket quick-sale routes. Three keys: `supermarket.sales` sells (and
  * may read the receipt it rang), `supermarket.report` reads sales and reports
  * without being able to sell, `supermarket.manage` handles barcodes, voids and
- * the product import.
+ * the product import and product editing.
  */
 
 const { Router } = require('express');
@@ -44,6 +44,12 @@ function supermarketRouter() {
   router.get('/supermarket/barcodes', requirePermission('supermarket.manage'), controller.listBarcodes);
   router.post('/supermarket/barcodes', requirePermission('supermarket.manage'), controller.addBarcode);
   router.delete('/supermarket/barcodes/:id', requirePermission('supermarket.manage'), controller.removeBarcode);
+
+  // Product editing: price, name, category, cost, archive/restore. Refused for any product a hotel outlet also sells.
+  router.get('/supermarket/products', requirePermission('supermarket.manage'), controller.listProducts);
+  router.patch('/supermarket/products/:id', requirePermission('supermarket.manage'), controller.editProduct);
+  router.post('/supermarket/products/:id/archive', requirePermission('supermarket.manage'), controller.archiveProduct);
+  router.post('/supermarket/products/:id/restore', requirePermission('supermarket.manage'), controller.restoreProduct);
 
   // Stage 3: bulk CSV product import (all-or-nothing; undo removes untouched products).
   const manage = requirePermission('supermarket.manage');

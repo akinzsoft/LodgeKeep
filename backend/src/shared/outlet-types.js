@@ -35,4 +35,13 @@ function isPointOfSaleOutlet(outlet) {
   return Boolean(outlet) && outlet.type !== STORE_OUTLET_TYPE;
 }
 
-module.exports = { STORE_OUTLET_TYPE, SUPERMARKET_OUTLET_TYPE, SUPERMARKET_TAX_CHARGE_TYPE, isPointOfSaleOutlet, isSupermarketOutlet, taxChargeTypeForOutlet };
+/**
+ * An active outlet that sells to hotel guests: a point of sale that is not a supermarket. A category such a
+ * outlet carries is on the hotel's menu, so the supermarket never changes a product in it (the product
+ * import refuses to file into one, and product editing refuses to edit one).
+ */
+function isHotelSellingOutlet(outlet) {
+  return Boolean(outlet) && outlet.status === 'active' && isPointOfSaleOutlet(outlet) && !isSupermarketOutlet(outlet);
+}
+
+module.exports = { isHotelSellingOutlet, STORE_OUTLET_TYPE, SUPERMARKET_OUTLET_TYPE, SUPERMARKET_TAX_CHARGE_TYPE, isPointOfSaleOutlet, isSupermarketOutlet, taxChargeTypeForOutlet };

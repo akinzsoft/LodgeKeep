@@ -50,7 +50,7 @@ const { columnsForEntityType } = require('../migration/templates');
 const { recordAuditEntry } = require('../../audit');
 const { sumQuantity, compareQuantity } = require('../../shared/quantity');
 const { compareMoney } = require('../../shared/money');
-const { isSupermarketOutlet, isPointOfSaleOutlet } = require('../../shared/outlet-types');
+const { isSupermarketOutlet, isHotelSellingOutlet } = require('../../shared/outlet-types');
 const posService = require('../pos/service');
 const stockService = require('../stock/service');
 const menuImages = require('../pos/menu-images');
@@ -342,7 +342,7 @@ function validateProducts({ rows, world }) {
           add(n, 'category', 'error', `The category "${category.name}" is archived. Restore it in Setup, or use another category name.`);
         }
         // Selling outlets only: a store room carries categories to hold their stock, never to sell them.
-        const sharedWith = (world.carriers.get(String(category.id)) ?? []).filter((c) => c.status === 'active' && isPointOfSaleOutlet(c) && !isSupermarketOutlet(c));
+        const sharedWith = (world.carriers.get(String(category.id)) ?? []).filter(isHotelSellingOutlet);
         if (sharedWith.length) {
           const names = [...new Set(sharedWith.map((c) => c.outlet_name))].join(', ');
           add(n, 'category', 'error', `"${category.name}" is sold at ${names} — use a supermarket category name such as "Mart ${category.name}".`);
@@ -706,6 +706,7 @@ async function rollbackProducts({ context, run }) {
 }
 
 module.exports = {
+  keyOf,
   ENTITY_TYPE,
   COLUMNS,
   MAX_PRODUCT_ROWS,

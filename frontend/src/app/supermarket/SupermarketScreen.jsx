@@ -9,6 +9,7 @@ import { ProductTile } from './ProductTile.jsx';
 import { ProductsImportPanel } from './ProductsImportPanel.jsx';
 import { CameraScanDialog } from './CameraScanDialog.jsx';
 import { BarcodesCard } from './BarcodesCard.jsx';
+import { ProductsCard } from './ProductsCard.jsx';
 import { OnlineCardDialog } from './OnlineCardDialog.jsx';
 import { OnlineReviewCard } from './OnlineReviewCard.jsx';
 import { cameraSupported } from '../../shared/scanner/cameraScanner.js';
@@ -799,6 +800,16 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
               </>
             )}
           </Card>
+          <ProductsCard
+            outletId={outletId}
+            isOffline={isOffline}
+            refreshKey={barcodesVersion}
+            onChanged={() => {
+              loadFlags();
+              loadMenu();
+              setBarcodesVersion((version) => version + 1);
+            }}
+          />
           <OnlineReviewCard outletId={outletId} isOffline={isOffline} />
           <BarcodesCard outletId={outletId} isOffline={isOffline} canUseCamera={canUseCamera} scanDebug={scanDebug} refreshKey={barcodesVersion} onChanged={loadFlags} />
         </section>

@@ -119,7 +119,59 @@ class ProductImportReleasedError extends AppError {
   }
 }
 
+// ---------------------------------------------------------------- product editing
+
+class ProductNotFoundError extends AppError {
+  constructor() {
+    super('VALIDATION_PRODUCT_NOT_FOUND', 'The specified product does not exist at this outlet.', 404);
+  }
+}
+
+/**
+ * The product's category is also carried by a hotel selling outlet, so the one shared row is on that
+ * outlet's menu too: a supermarket edit would change the hotel's menu, which this module never does.
+ */
+class ProductSharedWithHotelError extends AppError {
+  constructor(outletNames) {
+    super('BUSINESS_RULE_PRODUCT_SHARED_WITH_HOTEL_OUTLET', `This product's category is also sold at ${outletNames.join(', ')}, so changing it here would change that menu. Move the product to a mart-only category first.`, 422, {
+      outlets: outletNames,
+    });
+  }
+}
+
+class ProductNameTakenError extends AppError {
+  constructor(name, category) {
+    super('CONFLICT_PRODUCT_NAME_TAKEN', `An active product named "${name}" already exists in "${category}".`, 409);
+  }
+}
+
+class ProductCategoryNotCarriedError extends AppError {
+  constructor(category) {
+    super('VALIDATION_PRODUCT_CATEGORY_NOT_CARRIED', `"${category}" is not one of the categories this outlet carries.`, 422, { category });
+  }
+}
+
+/** Cost is read from the product's stock item; if another product uses that item too, changing it here would change theirs. */
+class ProductCostSharedError extends AppError {
+  constructor(message = 'This product shares its stock item with another product, so its cost has to be changed in Stock.') {
+    super('BUSINESS_RULE_PRODUCT_COST_SHARED', message, 422);
+  }
+}
+
+/** The product's stock recipe changed while the edit waited; nothing was written. */
+class ProductChangedError extends AppError {
+  constructor() {
+    super('CONFLICT_PRODUCT_CHANGED', 'This product changed while you were editing it. Reload and try again.', 409);
+  }
+}
+
 module.exports = {
+  ProductNotFoundError,
+  ProductSharedWithHotelError,
+  ProductNameTakenError,
+  ProductCategoryNotCarriedError,
+  ProductCostSharedError,
+  ProductChangedError,
   OnlineSalePendingError,
   OnlineSaleNotFoundError,
   OnlineSaleStateError,

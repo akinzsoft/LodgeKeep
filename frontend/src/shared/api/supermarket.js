@@ -92,6 +92,28 @@ export function addBarcode(menuItemId, barcode) {
   return request('/supermarket/barcodes', { method: 'POST', body: { menu_item_id: menuItemId, barcode } });
 }
 
+// ---------------------------------------------------------------- product editing (supermarket.manage)
+
+/** The outlet's products with price, cost, stock and status; `includeArchived` adds archived ones. */
+export function listProducts(outletId, { includeArchived = false } = {}) {
+  const params = new URLSearchParams({ outlet_id: outletId });
+  if (includeArchived) params.set('include_archived', 'true');
+  return request(`/supermarket/products?${params}`);
+}
+
+/** Changes any of `price`, `name`, `category`, `cost_price` (decimal strings for money). Refused for a product a hotel outlet also sells. */
+export function updateProduct(id, outletId, changes) {
+  return request(`/supermarket/products/${id}`, { method: 'PATCH', body: { outlet_id: outletId, ...changes } });
+}
+
+export function archiveProduct(id, outletId, reason) {
+  return request(`/supermarket/products/${id}/archive`, { method: 'POST', body: { outlet_id: outletId, reason } });
+}
+
+export function restoreProduct(id, outletId, reason) {
+  return request(`/supermarket/products/${id}/restore`, { method: 'POST', body: { outlet_id: outletId, reason } });
+}
+
 // ---------------------------------------------------------------- Stage 3: bulk CSV product import (supermarket.manage)
 
 export function downloadProductsTemplate() {
