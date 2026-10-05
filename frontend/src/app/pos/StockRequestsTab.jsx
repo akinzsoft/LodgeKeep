@@ -63,7 +63,11 @@ function defaultIssueQuantity(line) {
   return compareQuantity(available, line.quantityRequested) < 0 ? available : line.quantityRequested;
 }
 
-export function StockRequestsTab({ isOffline = false, permissions, intent }) {
+/**
+ * `deliverToOutletId` (the Supermarket's "Request stock" tab): requests are for that one outlet only, so
+ * "Deliver to" is fixed to it and the list shows only requests delivered there.
+ */
+export function StockRequestsTab({ isOffline = false, permissions, intent, deliverToOutletId = null }) {
   const canRequest = !permissions || permissions.has('pos.stock_request');
   const canIssue = !permissions || permissions.has('pos.stock_transfer');
 
@@ -73,7 +77,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
 
   // Raising a request.
   const [fromOutletId, setFromOutletId] = useState('');
-  const [toOutletId, setToOutletId] = useState('');
+  const [toOutletId, setToOutletId] = useState(deliverToOutletId ? String(deliverToOutletId) : '');
   // Staff tied to outlets (Staff screen) deliver to their own outlets only —
   // the server refuses any other; null until known or when unrestricted.
   const [myOutletIds, setMyOutletIds] = useState(null);
@@ -130,10 +134,10 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
       .then((scope) => {
         if (!scope?.restricted) return;
         setMyOutletIds(scope.outletIds.map(String));
-        if (scope.outletIds.length === 1) setToOutletId(String(scope.outletIds[0]));
+        if (scope.outletIds.length === 1 && !deliverToOutletId) setToOutletId(String(scope.outletIds[0]));
       })
       .catch(() => {}); // unknown scope: offer every outlet; the server still enforces it
-  }, [canRequest]);
+  }, [canRequest, deliverToOutletId]);
 
   useEffect(() => {
     posApi
@@ -236,7 +240,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
 
   function chooseFrom(outletId) {
     setFromOutletId(outletId);
-    if (outletId === toOutletId) setToOutletId('');
+    if (outletId === toOutletId && !deliverToOutletId) setToOutletId('');
     setLines([blankLine()]);
     loadSourceItems(outletId);
   }
@@ -497,7 +501,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
                 </label>
                 <label className={formStyles.field}>
                   <span className={formStyles.label}>Deliver to</span>
-                  <select className={formStyles.select} value={toOutletId} onChange={(event) => setToOutletId(event.target.value)} required disabled={isOffline || Boolean(topUpOf)}>
+                  <select className={formStyles.select} value={toOutletId} onChange={(event) => setToOutletId(event.target.value)} required disabled={isOffline || Boolean(topUpOf) || Boolean(deliverToOutletId)}>
                     <option value="" disabled>
                       Select your outlet
                     </option>
@@ -599,7 +603,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent }) {
           { key: 'requestedAt', label: 'Requested', render: (row) => formatWhen(row.requestedAt) },
           { key: 'status', label: 'Status', render: (row) => <StatusPill tone={STATUS[row.status].tone} label={STATUS[row.status].label} /> },
         ]}
-        rows={requests ?? []}
+        rows={(requests ?? []).filter((row) => !deliverToOutletId || String(row.toOutlet.id) === String(deliverToOutletId))}
         rowKey={(row) => row.id}
         state={requests === null ? 'loading' : requests.length === 0 ? 'empty' : 'success'}
         emptyMessage={filter === 'pending' ? 'No pending requests.' : 'No stock requests yet.'}

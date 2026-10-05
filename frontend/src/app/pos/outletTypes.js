@@ -15,7 +15,7 @@ export function isStoreOutlet(outlet) {
   return outlet?.type === STORE_OUTLET_TYPE;
 }
 
-/** A supermarket takes its own opening stock: it is exempt from the receive-at-store and stock-take-no-raise rules. */
+/** A supermarket sells under its own VAT row. Its stock rises only by the opening-stock import or a store-approved request/transfer, like any other outlet's (it has no receive or stock-take exemption). */
 export function isSupermarketOutlet(outlet) {
   return outlet?.type === SUPERMARKET_OUTLET_TYPE;
 }
@@ -34,8 +34,7 @@ export function pointOfSaleOutlets(outlets) {
  */
 export function receivingOutlets(outlets) {
   const stores = (outlets ?? []).filter(isStoreOutlet);
-  // A supermarket receives its own stock, so it stays on the list beside the store.
-  return stores.length > 0 ? [...stores, ...(outlets ?? []).filter(isSupermarketOutlet)] : (outlets ?? []);
+  return stores.length > 0 ? stores : (outlets ?? []);
 }
 
 export function canReceiveAt(outlets, outletId) {

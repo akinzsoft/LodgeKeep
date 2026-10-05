@@ -393,7 +393,7 @@ describe('supermarket quick sale', () => {
     });
   });
 
-  describe('supermarket-only stock exemptions (bars and restaurants unchanged)', () => {
+  describe('supermarket stock only rises by the opening-stock import or a store-approved request/transfer', () => {
     const auth = () => ({ Authorization: `Bearer ${tokenFor(users.manager)}` });
 
     async function stockItem() {
@@ -407,28 +407,32 @@ describe('supermarket quick sale', () => {
       await outlet('store', 'Main Store'); // makes both rules bite
     });
 
-    it('receive: allowed at a supermarket, still refused at a bar', async () => {
+    it('receive: a manager can no longer receive directly at a supermarket (same as a bar); the store can', async () => {
       const item = await stockItem();
-      expect((await receive(market.outletId, item)).status).toBe(201);
-      const bar = await outlet('bar', 'Rule Bar');
-      const refused = await receive(bar, item);
+      const refused = await receive(market.outletId, item);
       expect(refused.status).toBe(422);
       expect(refused.body.error.code).toBe('BUSINESS_RULE_RECEIVE_AT_STORE_ONLY');
+      expect(refused.body.error.message).toContain('Main Store');
+      const bar = await outlet('bar', 'Rule Bar');
+      expect((await receive(bar, item)).status).toBe(422);
+      const store = await t.trx('pos_outlets').where({ property_id: propertyId, type: 'store' }).first('id');
+      expect((await receive(store.id, item)).status).toBe(201);
     });
 
-    it('stock take: a count above the system quantity is allowed at a supermarket, still refused at a bar', async () => {
+    it('stock take: a count above the system quantity is refused at a supermarket too, and a count that matches is fine', async () => {
       const item = await stockItem();
-      const countAbove = async (outletId) => {
+      const count = async (outletId, quantity) => {
         const open = await t.request.post('/api/v1/pos/stock/takes').set(auth()).send({ outlet_id: outletId });
         const takeId = open.body.data.id;
-        await t.request.patch(`/api/v1/pos/stock/takes/${takeId}/lines/${item}`).set(auth()).send({ counted_quantity: '5.000' });
+        await t.request.patch(`/api/v1/pos/stock/takes/${takeId}/lines/${item}`).set(auth()).send({ counted_quantity: quantity });
         return t.request.post(`/api/v1/pos/stock/takes/${takeId}/complete`).set(auth()).set('Idempotency-Key', `tk-${next()}`).send({});
       };
-      expect((await countAbove(market.outletId)).status).toBe(200);
-      const bar = await outlet('bar', 'Count Bar');
-      const refused = await countAbove(bar);
+      const refused = await count(market.outletId, '5.000');
       expect(refused.status).toBe(422);
       expect(refused.body.error.code).toBe('BUSINESS_RULE_STOCK_TAKE_CANNOT_RAISE_STOCK');
+      expect((await count(market.outletId, '0.000')).status).toBe(200);
+      const bar = await outlet('bar', 'Count Bar');
+      expect((await count(bar, '5.000')).status).toBe(422);
     });
   });
 

@@ -91,6 +91,22 @@ describe('<StockRequestsTab>', () => {
       expect(screen.getByLabelText('Quantity 1')).toHaveValue('');
     });
 
+    it('embedded in the Supermarket (deliverToOutletId): delivery is fixed to that outlet, the list shows only requests delivered there, and it sends to it', async () => {
+      mocks.listTransferRequests.mockResolvedValue([pendingRequest({ id: '5' }), pendingRequest({ id: '6', toOutlet: { id: '9', name: 'Other Outlet' } })]);
+      mocks.createTransferRequest.mockResolvedValue({ id: '7', fromOutlet: { name: 'Main Store' } });
+      render(<StockRequestsTab permissions={REQUESTER} deliverToOutletId="2" />);
+      await waitFor(() => expect(screen.getByLabelText('Request from')).toHaveValue('1'));
+      expect(screen.getByLabelText('Deliver to')).toHaveValue('2');
+      expect(screen.getByLabelText('Deliver to')).toBeDisabled();
+      expect(await screen.findAllByText('Bola Barman')).toHaveLength(1); // request #5 only; #6 goes elsewhere
+      expect(screen.queryByText('Other Outlet')).not.toBeInTheDocument();
+
+      await selectWhenLoaded('Item 1', '20');
+      await userEvent.type(screen.getByLabelText('Quantity 1'), '12');
+      await userEvent.click(screen.getByRole('button', { name: 'Send request' }));
+      expect(mocks.createTransferRequest).toHaveBeenCalledWith(expect.objectContaining({ fromOutletId: '1', toOutletId: '2' }));
+    });
+
     it('staff tied to one outlet deliver only there, already chosen', async () => {
       mocks.getMyRequestOutlets.mockResolvedValue({ restricted: true, outletIds: ['2'] });
       render(<StockRequestsTab permissions={REQUESTER} />);
