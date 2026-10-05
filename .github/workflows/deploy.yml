@@ -125,20 +125,45 @@ jobs:
             echo "::endgroup::"
 
             echo "::group::docker compose up --build (full stack — migrate and frontend included, never scoped to one service)"
+            # `migrate` is a one-shot container that exits and stays around.
+            # Remove last deploy's copy first so this deploy always creates
+            # a fresh one from the image built below, instead of relying on
+            # Compose deciding the old, already-exited container is
+            # up to date (it then never runs, and its log still shows the
+            # PREVIOUS deploy's "Already up to date").
+            $COMPOSE rm -f migrate
             $COMPOSE up -d --build
             echo "::endgroup::"
 
             echo "::group::Verify migrate actually completed"
-            # Exit code alone doesn't distinguish "ran the pending
-            # migrations" from "nothing was pending" — the real signal is
-            # knex's own "Batch N run: M migrations" log line, surfaced
-            # here for a human to read on any deploy, not just a failed one.
             MIGRATE_EXIT="$(docker inspect --format='{{.State.ExitCode}}' lodgekeep-prod-migrate-1)"
             $COMPOSE logs migrate --tail=30
             if [ "$MIGRATE_EXIT" != "0" ]; then
               echo "migrate exited with code $MIGRATE_EXIT"
               exit 1
             fi
+            # Exit code and log text both pass when migrate ran an image
+            # without the new migration files, or never ran this deploy
+            # (a prior deploy shipped code without its schema this way).
+            # So compare the database with THIS checkout: run the
+            # idempotent migrate once more (a no-op when the container
+            # above already did the work), then require the newest
+            # migration file in git to be recorded as completed and
+            # nothing to be pending.
+            $COMPOSE run --rm --no-deps -T migrate npx knex migrate:latest
+            LATEST_MIGRATION="$(ls backend/migrations | sort | tail -n 1)"
+            MIGRATION_LIST="$($COMPOSE run --rm --no-deps -T migrate npx knex migrate:list 2>&1)"
+            if ! printf '%s\n' "$MIGRATION_LIST" | grep -qxF "$LATEST_MIGRATION"; then
+              echo "::error::The newest migration in this checkout ($LATEST_MIGRATION) is not recorded as completed in the production database."
+              printf '%s\n' "$MIGRATION_LIST" | tail -n 15
+              exit 1
+            fi
+            if printf '%s\n' "$MIGRATION_LIST" | grep -q "Pending Migration"; then
+              echo "::error::Migrations are still pending after migrate ran."
+              printf '%s\n' "$MIGRATION_LIST" | tail -n 15
+              exit 1
+            fi
+            echo "Schema is at $LATEST_MIGRATION, nothing pending."
             echo "::endgroup::"
 
             echo "::group::Wait for backend to report Docker-healthy"
