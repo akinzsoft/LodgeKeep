@@ -95,7 +95,8 @@ async function archiveStockItemCategory(req, res, next) {
 async function listStockItems(req, res, next) {
   try {
     const lowStockOnly = req.query.low_stock === 'true' || req.query.low_stock === '1';
-    res.status(200).json(ok(await service.listStockItems({ context: req.context, outletId: req.query.outlet_id, lowStockOnly })));
+    const carriedOnly = req.query.carried_only === 'true' || req.query.carried_only === '1';
+    res.status(200).json(ok(await service.listStockItems({ context: req.context, outletId: req.query.outlet_id, lowStockOnly, carriedOnly })));
   } catch (error) {
     next(error);
   }

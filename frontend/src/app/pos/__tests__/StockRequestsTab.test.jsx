@@ -118,7 +118,8 @@ describe('<StockRequestsTab>', () => {
         expect(options.some((text) => /Mart Rice/.test(text))).toBe(true);
         expect(options.some((text) => /Bar Gin/.test(text))).toBe(false);
         expect(options.some((text) => /Restaurant Steak/.test(text))).toBe(false);
-        expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '12' });
+        // The mart's list asks for its CARRIED categories only (not items it merely holds a stock level for, e.g. hotel drinks left over).
+        expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '12', carriedOnly: true });
 
         await selectWhenLoaded('Item 1', '20');
         expect(screen.getByText('30.000 bottle at the store now')).toBeInTheDocument();

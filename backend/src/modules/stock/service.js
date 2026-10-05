@@ -728,7 +728,12 @@ function withLevel(item, level, outletId) {
  * added from it) — each with that
  * outlet's own quantity and reorder level.
  */
-async function listStockItems({ context, outletId, lowStockOnly }) {
+/**
+ * `carriedOnly` (the supermarket request form): only items in a category the outlet CARRIES, leaving out items
+ * the outlet merely holds a stock level for (for example hotel drinks a mart still holds from before it was
+ * cleaned up), so "the outlet's own products" means exactly its categories.
+ */
+async function listStockItems({ context, outletId, lowStockOnly, carriedOnly = false }) {
   const db = scopedDb().for(context);
   const items = await db.table('stock_items').where({ status: 'active' }).orderBy('name');
   let rows = items;
@@ -737,7 +742,7 @@ async function listStockItems({ context, outletId, lowStockOnly }) {
     const levels = await db.table('stock_levels').where({ outlet_id: outletId });
     const levelByItem = new Map(levels.map((row) => [String(row.stock_item_id), row]));
     rows = items
-      .filter((item) => (item.category && carried.has(nameKey(item.category))) || levelByItem.has(String(item.id)))
+      .filter((item) => (item.category && carried.has(nameKey(item.category))) || (!carriedOnly && levelByItem.has(String(item.id))))
       .map((item) => withLevel(item, levelByItem.get(String(item.id)), outletId));
   }
   if (!lowStockOnly) return rows;
@@ -1408,9 +1413,10 @@ async function createTransferRequest({ trx, fromOutletId, toOutletId, lines, not
       const stores = await trx.table('pos_outlets').where({ type: STORE_OUTLET_TYPE, status: 'active' }).orderBy('name');
       throw new SupermarketRequestMustComeFromStoreError(stores.map((store) => store.name));
     }
+    // The mart's own products are the items in the categories it CARRIES (not items it merely holds a level for,
+    // such as hotel drinks left from before it was cleaned up): the same rule as the form's list (`carriedOnly`).
     const carried = new Set((await outletMenu.carriedCategoryNames(trx, toOutletId)).map(nameKey));
-    const held = new Set((await trx.table('stock_levels').where({ outlet_id: toOutletId }).select('stock_item_id')).map((row) => String(row.stock_item_id)));
-    const foreign = items.filter((item) => !((item.category && carried.has(nameKey(item.category))) || held.has(String(item.id))));
+    const foreign = items.filter((item) => !(item.category && carried.has(nameKey(item.category))));
     if (foreign.length) throw new RequestItemNotAtOutletError({ outletName: toOutlet.name, itemNames: foreign.map((item) => item.name) });
   }
 

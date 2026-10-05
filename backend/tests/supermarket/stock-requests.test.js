@@ -163,6 +163,24 @@ describe('supermarket stock requests', () => {
       expect(names(mart)).not.toContain(String(barItem));
     });
 
+    it('leftover hotel stock the mart still holds (a level, no carried category) is NOT the mart\'s product: out of the list and refused in a request', async () => {
+      // As in production: hotel drinks were rung at the mart once, so it holds levels for items in categories it does not carry.
+      const [leftover] = await insertStockItem(t.trx, { ...scope(), outlet_id: martId, name: `Leftover Fanta ${next()}`, unit: 'bottle', category: 'RR Bar Cat', purchase_cost: '3.00', current_quantity: '4.000', reorder_level: '0.000' });
+      await receiveAtStore(leftover, '10.000');
+
+      const plain = await as('martCashier').get(`/api/v1/pos/stock/items?outlet_id=${martId}`);
+      expect(names(plain)).toContain(String(leftover)); // the general list still includes anything the outlet holds
+      const carriedOnly = await as('martCashier').get(`/api/v1/pos/stock/items?outlet_id=${martId}&carried_only=true`);
+      expect(carriedOnly.status).toBe(200);
+      expect(names(carriedOnly)).toContain(String(martItem));
+      expect(names(carriedOnly)).not.toContain(String(leftover));
+      expect(names(carriedOnly)).not.toContain(String(barItem));
+
+      const res = await request('martCashier', [{ stock_item_id: leftover, quantity: '1' }]);
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('BUSINESS_RULE_REQUEST_ITEM_NOT_AT_OUTLET');
+    });
+
     it("accepts a request for the mart's own product from the store", async () => {
       const res = await request('martCashier', [{ stock_item_id: martItem, quantity: '5' }]);
       expect(res.status).toBe(201);

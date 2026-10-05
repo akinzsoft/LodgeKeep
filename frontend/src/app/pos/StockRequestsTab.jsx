@@ -128,7 +128,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
     try {
       let rows;
       if (forMart && toId) {
-        const [martItems, storeItems] = await Promise.all([stockApi.listStockItems({ outletId: toId }), stockApi.listStockItems({ outletId: fromId })]);
+        const [martItems, storeItems] = await Promise.all([stockApi.listStockItems({ outletId: toId, carriedOnly: true }), stockApi.listStockItems({ outletId: fromId })]);
         const atStore = new Map(storeItems.map((item) => [String(item.id), item.current_quantity]));
         rows = martItems.map((item) => ({ ...item, current_quantity: atStore.get(String(item.id)) ?? '0.000' }));
       } else {
