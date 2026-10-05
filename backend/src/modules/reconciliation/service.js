@@ -166,6 +166,8 @@ async function listFolioPaymentLines({ db, dateFrom, dateTo }) {
     .joinScoped('reservations', (join) => join.on('reservations.id', '=', 'folios.reservation_id'))
     .joinScoped('guests', (join) => join.on('guests.id', '=', 'reservations.guest_id'), { type: 'left' })
     .joinScoped('booking_sources', (join) => join.on('booking_sources.id', '=', 'reservations.booking_source_id'), { type: 'left' })
+    // A payment taken on the hotel's physical card terminal has its provider/reference/account here; cash and Paystack have no row.
+    .joinScoped('payment_terminal_details', (join) => join.on('payment_terminal_details.payment_id', '=', 'payments.id'), { type: 'left' })
     .where('payments.settlement_target', 'folio')
     .whereNull('folio_line_items.voided_at')
     .whereBetween('folio_line_items.business_date', [dateFrom, dateTo])
@@ -185,7 +187,11 @@ async function listFolioPaymentLines({ db, dateFrom, dateTo }) {
       'reservations.id as reservation_id',
       'guests.first_name as guest_first_name',
       'guests.last_name as guest_last_name',
-      'booking_sources.name as booking_source_name'
+      'booking_sources.name as booking_source_name',
+      'payment_terminal_details.terminal_provider as terminal_provider',
+      'payment_terminal_details.terminal_reference as terminal_reference',
+      'payment_terminal_details.terminal_account_label as terminal_account_label',
+      'payment_terminal_details.terminal_account_last4 as terminal_account_last4'
     )
     .orderBy('folio_line_items.business_date', 'desc');
 }
@@ -336,7 +342,8 @@ function folioSourceLabel(row) {
 function toFolioLine(row, roomNumberByReservation, parentFeeById) {
   const isRefund = row.line_type === 'refund';
   const grossAmount = isRefund ? negateMoney(row.amount) : row.amount;
-  const method = row.provider === 'paystack' ? 'card' : 'cash';
+  const isTerminal = row.provider === 'terminal';
+  const method = row.provider === 'paystack' ? 'card' : isTerminal ? 'terminal' : 'cash';
   // A refund's OWN `payments` row is created directly by `refundPayment`,
   // never through `startPaystackCheckout` — it carries no snapshot of its
   // own, so its fee is resolved from its PARENT payment's snapshot instead
@@ -361,6 +368,16 @@ function toFolioLine(row, roomNumberByReservation, parentFeeById) {
     roomNumber: roomNumberByReservation.get(String(row.reservation_id)) ?? null,
     isRefund,
     parentPaymentId: row.parent_payment_id ?? null,
+    // Only a payment taken on the hotel's physical card terminal carries these (as a POS terminal sale does); a cash or
+    // Paystack line gains no key, so its shape is exactly what it was. A terminal has no fee known to Lodgekeep: net = gross.
+    ...(isTerminal
+      ? {
+          terminalProvider: row.terminal_provider ?? null,
+          terminalReference: row.terminal_reference ?? null,
+          terminalAccountLabel: row.terminal_account_label ?? null,
+          terminalAccountLast4: row.terminal_account_last4 ?? null,
+        }
+      : {}),
   };
 }
 

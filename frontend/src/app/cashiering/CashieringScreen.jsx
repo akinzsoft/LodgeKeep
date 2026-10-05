@@ -5,6 +5,7 @@ import { cashieringApi, arApi, profilesApi, ApiError } from '../../shared/api/in
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { OutstandingBalancesTab } from './OutstandingBalancesTab.jsx';
 import { PrintedFolio } from './PrintedFolio.jsx';
+import { TerminalPaymentFields } from './TerminalPaymentFields.jsx';
 import formStyles from './CashieringForm.module.css';
 import styles from './CashieringScreen.module.css';
 
@@ -488,6 +489,11 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
             setShowPaymentForm(false);
             reload();
           }}
+          onTerminal={async (values) => {
+            await onAction(() => cashieringApi.captureTerminalPayment(folio.id, values));
+            setShowPaymentForm(false);
+            reload();
+          }}
           onPaystack={async (values) => {
             const result = await cashieringApi.capturePaystackPayment(folio.id, values);
             if (result?.authorizationUrl) setCheckoutUrl(result.authorizationUrl);
@@ -753,9 +759,26 @@ function AdjustmentForm({ disabled, isArBilled = false, onSubmit, onCancel }) {
  * since a charge or adjustment is legitimately arbitrary, never "the
  * balance").
  */
-function PaymentForm({ currency, balance, disabled, onCash, onPaystack, onCancel }) {
+function PaymentForm({ currency, balance, disabled, onCash, onTerminal, onPaystack, onCancel }) {
   const [method, setMethod] = useState('cash');
   const [guestEmail, setGuestEmail] = useState('');
+  const [terminalAccounts, setTerminalAccounts] = useState([]);
+  const [terminalAccountId, setTerminalAccountId] = useState('');
+  const [terminalReference, setTerminalReference] = useState('');
+
+  // The hotel's recorded terminal accounts (id, name, last 4). A failed load just means none is offered: the payment is still recordable.
+  useEffect(() => {
+    let cancelled = false;
+    cashieringApi
+      .listTerminalAccountOptions()
+      .then((list) => {
+        if (!cancelled) setTerminalAccounts(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <form
@@ -763,6 +786,7 @@ function PaymentForm({ currency, balance, disabled, onCash, onPaystack, onCancel
       onSubmit={(event) => {
         event.preventDefault();
         if (method === 'cash') onCash({ amount: balance, currency });
+        else if (method === 'terminal') onTerminal({ amount: balance, currency, accountId: terminalAccountId, reference: terminalReference });
         else onPaystack({ amount: balance, currency, guestEmail });
       }}
     >
@@ -771,6 +795,7 @@ function PaymentForm({ currency, balance, disabled, onCash, onPaystack, onCancel
           <span className={formStyles.label}>Method</span>
           <select className={formStyles.select} value={method} onChange={(event) => setMethod(event.target.value)}>
             <option value="cash">Cash</option>
+            <option value="terminal">Card (terminal)</option>
             <option value="paystack">Paystack (card/digital)</option>
           </select>
         </label>
@@ -783,6 +808,16 @@ function PaymentForm({ currency, balance, disabled, onCash, onPaystack, onCancel
             aria-readonly="true"
           />
         </label>
+        {method === 'terminal' && (
+          <TerminalPaymentFields
+            styles={formStyles}
+            accounts={terminalAccounts}
+            accountId={terminalAccountId}
+            reference={terminalReference}
+            onAccountChange={setTerminalAccountId}
+            onReferenceChange={setTerminalReference}
+          />
+        )}
         {method === 'paystack' && (
           <label className={formStyles.field}>
             <span className={formStyles.label}>Guest email</span>

@@ -241,6 +241,8 @@ const TABLE_SCOPES = Object.freeze({
   // entirely separate bars/restaurants.
   pos_outlets: { scope: SCOPES.PROPERTY },
   pos_outlet_terminal_accounts: { scope: SCOPES.PROPERTY },
+  property_terminal_accounts: { scope: SCOPES.PROPERTY },
+  payment_terminal_details: { scope: SCOPES.PROPERTY },
   pos_outlet_payment_subaccounts: { scope: SCOPES.PROPERTY },
   // Supermarket quick-sale layer (20261119090000).
   supermarket_barcodes: { scope: SCOPES.PROPERTY },

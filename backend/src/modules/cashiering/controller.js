@@ -22,6 +22,7 @@ const { scopedDb } = require('../../db');
 const { hasPermission } = require('../../auth/rbac');
 const { PermissionDeniedError } = require('../../auth/errors');
 const service = require('./service');
+const terminalAccounts = require('./terminal-accounts');
 
 function require_(body, field) {
   const value = body?.[field];
@@ -241,6 +242,88 @@ async function captureCashPayment(req, res, next) {
   }
 }
 
+/** A payment taken on the hotel's physical card terminal: recorded like cash (no gateway), with the terminal's account and reference. */
+async function captureTerminalPayment(req, res, next) {
+  try {
+    const amount = require_(req.body, 'amount');
+    const currency = require_(req.body, 'currency');
+    await runIdempotentMutation(req, res, {
+      operationType: 'cashiering.capture_terminal_payment',
+      entityType: 'payments',
+      action: 'capture_terminal',
+      handler: async (trx) => {
+        const payment = await service.captureTerminalPayment({
+          trx,
+          folioId: req.params.folioId,
+          amount,
+          currency,
+          idempotencyKey: req.get('Idempotency-Key'),
+          userId: req.context.userId,
+          businessDate: req.body?.business_date,
+          terminal: { accountId: req.body?.account_id, reference: req.body?.reference },
+        });
+        return { status: 201, body: ok(payment) };
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ---- The hotel's terminal accounts (Setup: setup.manage) and the payment form's picker (cashiering.void_line)
+
+function accountInput(body) {
+  return { provider: body?.provider, accountNumber: body?.account_number, accountLabel: body?.account_label, bankName: body?.bank_name };
+}
+
+async function listTerminalAccounts(req, res, next) {
+  try {
+    res.status(200).json(ok(await terminalAccounts.listTerminalAccounts({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function listTerminalAccountOptions(req, res, next) {
+  try {
+    res.status(200).json(ok(await terminalAccounts.listTerminalAccountOptions({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createTerminalAccount(req, res, next) {
+  try {
+    const created = await terminalAccounts.createTerminalAccount({ context: req.context, input: accountInput(req.body) });
+    await req.audit({ entityType: 'property_terminal_accounts', entityId: created.id, action: 'create', afterState: created });
+    res.status(201).json(ok(created));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateTerminalAccount(req, res, next) {
+  try {
+    const result = await terminalAccounts.updateTerminalAccount({ context: req.context, accountId: req.params.accountId, input: accountInput(req.body) });
+    if (!result) return notFound(res);
+    await req.audit({ entityType: 'property_terminal_accounts', entityId: result.after.id, action: 'update', beforeState: result.before, afterState: result.after });
+    res.status(200).json(ok(result.after));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function removeTerminalAccount(req, res, next) {
+  try {
+    const removed = await terminalAccounts.removeTerminalAccount({ context: req.context, accountId: req.params.accountId });
+    if (!removed) return notFound(res);
+    await req.audit({ entityType: 'property_terminal_accounts', entityId: removed.id, action: 'delete', beforeState: removed });
+    res.status(200).json(ok({ id: removed.id }));
+  } catch (error) {
+    next(error);
+  }
+}
+
 /**
  * Both phases in one HTTP action (see file header): the local intent is
  * idempotency-guarded; the checkout call that follows is not (it is
@@ -372,6 +455,12 @@ async function receivePaystackWebhook(req, res, next) {
 }
 
 module.exports = {
+  captureTerminalPayment,
+  listTerminalAccounts,
+  listTerminalAccountOptions,
+  createTerminalAccount,
+  updateTerminalAccount,
+  removeTerminalAccount,
   getFolio,
   listFoliosForReservation,
   openAdditionalFolio,

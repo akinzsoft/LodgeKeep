@@ -152,6 +152,8 @@ async function seedTwoTenants(trx) {
     posMenuCategories: [],
     posOutletCategories: [],
     posOutletTerminalAccounts: [],
+    propertyTerminalAccounts: [],
+    paymentTerminalDetails: [],
     posOutletPaymentSubaccounts: [],
     supermarketBarcodes: [],
     supermarketReceiptSequences: [],
@@ -655,6 +657,33 @@ async function seedTwoTenants(trx) {
       }),
       property_id: property.id,
       folio_id: folio.id,
+    });
+
+    // The hotel's front-desk terminal account, and a terminal-details row on the fixture payment (only so the isolation
+    // and purge suites have a row to see; the payment is cash, so no report ever reads it). No extra payment is added:
+    // the hotel golden-output snapshots pin payment ids, so the fixture's payment count must not change.
+    t.propertyTerminalAccounts.push({
+      id: await insertReturningId(trx, 'property_terminal_accounts', {
+        tenant_id: t.id,
+        property_id: property.id,
+        provider: 'gtbank',
+        account_number: '5050505050',
+        account_label: 'Fixture front desk POS',
+      }),
+      property_id: property.id,
+    });
+    t.paymentTerminalDetails.push({
+      id: await insertReturningId(trx, 'payment_terminal_details', {
+        tenant_id: t.id,
+        property_id: property.id,
+        payment_id: t.payments[0].id,
+        terminal_provider: 'gtbank',
+        terminal_reference: 'FIXTURE-REF',
+        terminal_account_label: 'Fixture front desk POS',
+        terminal_account_last4: '5050',
+      }),
+      property_id: property.id,
+      payment_id: t.payments[0].id,
     });
   }
 

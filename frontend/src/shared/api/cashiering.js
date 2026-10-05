@@ -138,6 +138,44 @@ export function captureCashPayment(folioId, { amount, currency }) {
 }
 
 /**
+ * A payment taken on the hotel's own physical card terminal: recorded like cash (the terminal did the charge, no
+ * gateway). `accountId` (one of the hotel's recorded terminal accounts) and `reference` are both optional.
+ */
+export function captureTerminalPayment(folioId, { amount, currency, accountId, reference }) {
+  return request(`/cashiering/folios/${folioId}/payments/terminal`, {
+    method: 'POST',
+    body: { amount, currency, account_id: accountId || undefined, reference: reference || undefined },
+    headers: { 'Idempotency-Key': idempotencyKey() },
+  });
+}
+
+/** What the payment form may offer: id, name, provider and last 4 only (never the full number). */
+export function listTerminalAccountOptions() {
+  return request('/cashiering/terminal-account-options');
+}
+
+// The hotel's terminal accounts (Setup, admin only). Recording only: no money is routed.
+export function listTerminalAccounts() {
+  return request('/cashiering/terminal-accounts');
+}
+
+function terminalAccountBody({ provider, accountNumber, bankName, accountLabel }) {
+  return { provider: provider || undefined, account_number: accountNumber, bank_name: bankName || undefined, account_label: accountLabel || undefined };
+}
+
+export function createTerminalAccount(account) {
+  return request('/cashiering/terminal-accounts', { method: 'POST', body: terminalAccountBody(account) });
+}
+
+export function updateTerminalAccount(accountId, account) {
+  return request(`/cashiering/terminal-accounts/${accountId}`, { method: 'PATCH', body: terminalAccountBody(account) });
+}
+
+export function removeTerminalAccount(accountId) {
+  return request(`/cashiering/terminal-accounts/${accountId}`, { method: 'DELETE' });
+}
+
+/**
  * Gap closure (found while wiring "pay at the point of booking," not
  * previously flagged): the backend's `authorizationUrl` — and the
  * honest-202-partial-success path's `checkoutError`/`retry` — travel in

@@ -2020,6 +2020,59 @@ const ENTITIES = [
   },
 
   {
+    table: 'property_terminal_accounts',
+    uniqueKeys: [['tenant_id', 'property_id', 'account_number']],
+    // The fixture records account 5050505050 only, so 3030303030 is free for a new row.
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      provider: 'opay',
+      account_number: '3030303030',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      provider: 'gtbank',
+      account_number: '5050505050',
+    }),
+    crossTenant: [
+      {
+        name: "records an account against another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          provider: 'opay',
+          account_number: '3030303030',
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'payment_terminal_details',
+    // No unique key: one row per payment is kept by the service, not the schema (a refund of a terminal payment
+    // has its own copy). `newRow` adds a second details row to the fixture payment.
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      payment_id: t.payments[0].id,
+      terminal_provider: 'opay',
+    }),
+    crossTenant: [
+      {
+        name: "records terminal details against another tenant's payment",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          payment_id: other.payments[0].id,
+          terminal_provider: 'opay',
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'pos_outlet_terminal_accounts',
     uniqueKeys: [['outlet_id', 'account_number']],
     // The fixture bar records account 0123456789 only, so 2020202020 is free for a new row.

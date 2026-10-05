@@ -35,7 +35,15 @@ function cashieringRouter() {
   router.post('/cashiering/folios/:folioId/charges', requirePermission('cashiering.post_charge'), controller.postCharge);
   router.post('/cashiering/folios/:folioId/adjustments', requirePermission('cashiering.void_line'), controller.postAdjustment);
   router.post('/cashiering/folios/:folioId/payments/cash', requirePermission('cashiering.void_line'), controller.captureCashPayment);
+  router.post('/cashiering/folios/:folioId/payments/terminal', requirePermission('cashiering.void_line'), controller.captureTerminalPayment);
   router.post('/cashiering/folios/:folioId/payments/paystack', requirePermission('cashiering.void_line'), controller.capturePaystackPayment);
+
+  // The hotel's own card-terminal accounts (recording only): managed in Setup, listed (id, name, last 4) for the payment form.
+  router.get('/cashiering/terminal-account-options', requirePermission('cashiering.void_line'), controller.listTerminalAccountOptions);
+  router.get('/cashiering/terminal-accounts', requirePermission('setup.manage'), controller.listTerminalAccounts);
+  router.post('/cashiering/terminal-accounts', requirePermission('setup.manage'), controller.createTerminalAccount);
+  router.patch('/cashiering/terminal-accounts/:accountId', requirePermission('setup.manage'), controller.updateTerminalAccount);
+  router.delete('/cashiering/terminal-accounts/:accountId', requirePermission('setup.manage'), controller.removeTerminalAccount);
 
   router.post('/cashiering/line-items/:lineItemId/void', requirePermission('cashiering.void_line'), controller.voidLineItem);
   router.post('/cashiering/line-items/:lineItemId/move', requirePermission('cashiering.void_line'), controller.moveLineItem);

@@ -11,6 +11,8 @@ import { UsersTab } from './UsersTab.jsx';
 import { EmailSettingsTab } from './EmailSettingsTab.jsx';
 import { PaymentSubaccountTab } from './PaymentSubaccountTab.jsx';
 import { NotificationsTab } from './NotificationsTab.jsx';
+import { OutletTerminalAccountsCard } from '../pos/OutletTerminalAccountsCard.jsx';
+import { cashieringApi } from '../../shared/api/index.js';
 import { ImpersonationHistory } from './ImpersonationHistory.jsx';
 import { SetupWizard } from './SetupWizard.jsx';
 import styles from './SetupScreen.module.css';
@@ -45,6 +47,14 @@ import styles from './SetupScreen.module.css';
  * actually returns those fields, so this screen is what finally has real
  * values to show instead of a placeholder.
  */
+/** The hotel's own (front desk) terminal accounts: the same card as an outlet's, against the cashiering endpoints. */
+const HOTEL_TERMINAL_ACCOUNTS_API = {
+  list: () => cashieringApi.listTerminalAccounts(),
+  create: (form) => cashieringApi.createTerminalAccount(form),
+  update: (id, form) => cashieringApi.updateTerminalAccount(id, form),
+  remove: (id) => cashieringApi.removeTerminalAccount(id),
+};
+
 const TABS = [
   { key: 'wizard', label: 'Guided Setup' },
   { key: 'property', label: 'Property' },
@@ -160,7 +170,17 @@ export function SetupScreen({ activePropertyId, isOffline = false, onPropertiesC
         {tab === 'reference-data' && <ReferenceDataTab disabled={!activeProperty} />}
         {tab === 'users' && <UsersTab disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'email' && <EmailSettingsTab disabled={!activeProperty} isOffline={isOffline} />}
-        {tab === 'payments' && <PaymentSubaccountTab disabled={!activeProperty} isOffline={isOffline} />}
+        {tab === 'payments' && (
+          <>
+            <PaymentSubaccountTab disabled={!activeProperty} isOffline={isOffline} />
+            <OutletTerminalAccountsCard
+              api={HOTEL_TERMINAL_ACCOUNTS_API}
+              title="Front desk terminal accounts"
+              intro="Record the bank accounts the hotel's own card terminals pay into (room and folio payments). This changes no money flow — a cashier picks one when taking a Card (terminal) payment, so it can be matched against that account's own settlement report. Removing an account never changes payments already recorded."
+              isOffline={isOffline}
+            />
+          </>
+        )}
         {tab === 'notifications' && <NotificationsTab disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'support-access' && <ImpersonationHistory />}
       </div>
