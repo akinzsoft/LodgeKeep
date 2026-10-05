@@ -54,6 +54,9 @@ const scanner = vi.hoisted(() => ({
   newScanStats: () => ({ notReady: 0, attempts: 0, completed: 0, empty: 0, errors: 0, lastError: null, lastMs: null, lastCode: null, frameSize: null, inFlightSince: null }),
 }));
 vi.mock('../../../shared/scanner/cameraScanner.js', () => scanner);
+vi.mock('../../pos/StockWastageTab.jsx', () => ({
+  StockWastageTab: ({ lockedOutlet }) => <div data-testid="stock-wastage">wastage at {lockedOutlet.name}</div>,
+}));
 vi.mock('../../pos/StockRequestsTab.jsx', () => ({
   StockRequestsTab: ({ deliverToOutletId }) => <div data-testid="stock-requests">requests for {deliverToOutletId}</div>,
 }));
@@ -107,6 +110,19 @@ describe('<SupermarketScreen>', () => {
     mocks.getPendingOnlineSale.mockResolvedValue(null);
     mocks.listOnlineSalesNeedingReview.mockResolvedValue([]);
     scanner.cameraSupported.mockReturnValue(false);
+  });
+
+  describe('wastage', () => {
+    it('shows a Wastage tab to a cashier with pos.stock_view, locked to this outlet, and not to one without', async () => {
+      const { unmount } = render(<SupermarketScreen activeProperty={PROPERTY} permissions={new Set(['supermarket.sales', 'pos.stock_view'])} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Wastage' }));
+      expect(screen.getByTestId('stock-wastage')).toHaveTextContent('wastage at Mini Mart');
+      unmount();
+
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await screen.findByRole('tab', { name: 'Sell' });
+      expect(screen.queryByRole('tab', { name: 'Wastage' })).not.toBeInTheDocument();
+    });
   });
 
   describe('requesting stock', () => {

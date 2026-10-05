@@ -193,6 +193,17 @@ class StoreOutletNotAPointOfSaleError extends AppError {
   }
 }
 
+/** A supermarket sells only from the Supermarket screen: the Register and guest QR ordering refuse it. */
+class SupermarketOutletNotARegisterError extends AppError {
+  constructor(outletName) {
+    super(
+      'BUSINESS_RULE_SUPERMARKET_USE_SUPERMARKET_SCREEN',
+      `${outletName ? `"${outletName}"` : 'This outlet'} is a supermarket: sell at it from the Supermarket screen, not the POS Register.`,
+      422,
+    );
+  }
+}
+
 /** Turning an outlet into a store while it is still selling would strand an open tab or a live guest QR code. */
 class StoreOutletConversionBlockedError extends AppError {
   constructor({ openOrderCount, guestOrderingEnabled, activeTokenCount }) {
@@ -211,6 +222,7 @@ class StoreOutletConversionBlockedError extends AppError {
 
 module.exports = {
   StoreOutletNotAPointOfSaleError,
+  SupermarketOutletNotARegisterError,
   StoreOutletConversionBlockedError,
   OrderNotOpenError,
   OrderItemAlreadyVoidedError,

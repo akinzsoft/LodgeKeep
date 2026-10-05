@@ -21,6 +21,7 @@
 const { Router } = require('express');
 const controller = require('./controller');
 const scope = require('./outlet-scope');
+const { refuseSupermarketTab } = require('./register-guard');
 const { receiveImage } = require('../../shared/image-store');
 const { requirePermission, requireAnyPermission } = require('../../auth');
 
@@ -81,15 +82,15 @@ function posRouter() {
   router.post('/pos/orders/transfer', requirePermission('pos.operate'), controller.transferTabs);
   router.get('/pos/orders/:id', requirePermission('pos.operate'), scope.orderInScope, controller.getOrder);
   router.post('/pos/orders', requirePermission('pos.operate'), scope.newOrderOutletInScope, controller.openOrder);
-  router.post('/pos/orders/:id/items', requirePermission('pos.operate'), scope.orderInScope, controller.addItem);
+  router.post('/pos/orders/:id/items', requirePermission('pos.operate'), scope.orderInScope, refuseSupermarketTab, controller.addItem);
   router.post('/pos/orders/:id/items/:itemId/void', requirePermission('pos.operate'), scope.orderItemInScope, controller.voidOrderItem);
-  router.post('/pos/orders/:id/items/:itemId/split-group', requirePermission('pos.operate'), scope.orderItemInScope, controller.assignItemSplitGroup);
+  router.post('/pos/orders/:id/items/:itemId/split-group', requirePermission('pos.operate'), scope.orderItemInScope, refuseSupermarketTab, controller.assignItemSplitGroup);
   router.post('/pos/orders/:id/rename', requirePermission('pos.operate'), scope.orderInScope, controller.renameOrder);
   router.post('/pos/orders/:id/void', requirePermission('pos.operate'), scope.orderInScope, controller.voidOrder);
-  router.get('/pos/orders/:id/settlement-preview', requirePermission('pos.operate'), scope.orderInScope, controller.previewSettlement);
-  router.post('/pos/orders/:id/paystack-checkout', requirePermission('pos.operate'), scope.orderInScope, controller.startPaystackCheckout);
-  router.post('/pos/orders/:id/paystack-checkout/:paymentId/verify', requirePermission('pos.operate'), scope.orderInScope, controller.verifyPaystackPayment);
-  router.post('/pos/orders/:id/settle', requirePermission('pos.operate'), scope.orderInScope, controller.settleOrder);
+  router.get('/pos/orders/:id/settlement-preview', requirePermission('pos.operate'), scope.orderInScope, refuseSupermarketTab, controller.previewSettlement);
+  router.post('/pos/orders/:id/paystack-checkout', requirePermission('pos.operate'), scope.orderInScope, refuseSupermarketTab, controller.startPaystackCheckout);
+  router.post('/pos/orders/:id/paystack-checkout/:paymentId/verify', requirePermission('pos.operate'), scope.orderInScope, refuseSupermarketTab, controller.verifyPaystackPayment);
+  router.post('/pos/orders/:id/settle', requirePermission('pos.operate'), scope.orderInScope, refuseSupermarketTab, controller.settleOrder);
   router.post('/pos/orders/:id/settlements/:settlementId/void', requirePermission('pos.manage'), controller.voidSettlement);
 
   // A reconciliation report, not a till action — manager tier, like the other POS overrides.

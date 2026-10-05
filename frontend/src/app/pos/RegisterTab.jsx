@@ -8,7 +8,7 @@ import { CategoryIcon, AllCategoriesIcon, PaymentMethodIcon, TrashIcon } from '.
 import { EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
 import formStyles from './POSForm.module.css';
 import styles from './RegisterTab.module.css';
-import { pointOfSaleOutlets } from './outletTypes.js';
+import { registerOutlets } from './outletTypes.js';
 
 const AUTH_METHODS = [
   { value: 'signature', label: 'Signature' },
@@ -276,7 +276,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     Promise.all([posApi.listOutlets(), myOutlets])
       .then(([rows, mine]) => {
         const allowed = mine.restricted ? rows.filter((row) => mine.outletIds.includes(String(row.id))) : rows;
-        setOutlets(pointOfSaleOutlets(allowed));
+        setOutlets(registerOutlets(allowed));
       })
       .catch((caught) => {
         setOutlets([]);

@@ -434,6 +434,13 @@ describe('<RegisterTab>', () => {
     expect(within(screen.getByLabelText('Outlet')).queryByRole('option', { name: 'Main Store' })).not.toBeInTheDocument();
   });
 
+  it('never offers a supermarket outlet — it sells only from the Supermarket screen', async () => {
+    mocks.listOutlets.mockResolvedValue([{ id: '12', name: 'Mini Mart', type: 'supermarket' }, OUTLET]);
+    render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
+    await selectWhenLoaded('Outlet', 'Main Bar');
+    expect(within(screen.getByLabelText('Outlet')).queryByRole('option', { name: 'Mini Mart' })).not.toBeInTheDocument();
+  });
+
   it('offers an assigned operator only their own outlets', async () => {
     mocks.listOutlets.mockResolvedValue([{ id: '7', name: 'Pool Bar', type: 'bar' }, OUTLET]);
     mocks.getMyOutlets.mockResolvedValue({ restricted: true, outletIds: [String(OUTLET.id)] });

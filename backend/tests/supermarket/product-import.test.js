@@ -339,10 +339,9 @@ describe('supermarket product import', () => {
       const name = `On tab ${next()}`;
       const id = await importFile(csv([`${name},Mart T ${next()},3.00,,,1.00,10,,`]));
       const item = await productByName(name);
-      const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, device_ref: `TAB-${next()}` });
-      const tab = await as(users.manager).post('/api/v1/pos/orders').send({ outlet_id: outletId, terminal_id: terminalId });
-      expect(tab.status).toBe(201);
-      expect((await as(users.manager).post(`/api/v1/pos/orders/${tab.body.data.id}/items`).send({ menu_item_id: item.id, quantity: 1 })).status).toBe(200);
+      // A tab left open at the mart (the Register can no longer open one there, but one from before the outlet became a supermarket can exist).
+      const [tabId] = await t.trx('pos_orders').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, table_label: 'Old tab', source: 'staff' });
+      await t.trx('pos_order_items').insert({ tenant_id: ctx.a.id, property_id: propertyId, pos_order_id: tabId, menu_item_id: item.id, quantity: 1, unit_price: '3.00', modifiers: null });
       const res = await undo(id);
       expect(res.body.data.rowsRefused[0].reason).toContain('rung on a tab');
     });

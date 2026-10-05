@@ -93,4 +93,18 @@ describe('<StockWastageTab>', () => {
     expect(screen.getByLabelText('Outlet')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Record wastage' })).toBeDisabled();
   });
+
+  it('with a locked outlet (the Supermarket): no outlet picker, items load for that outlet, and the loss is recorded there', async () => {
+    mocks.recordWastage.mockResolvedValue({ ...STOCK_ITEM, current_quantity: '5.000' });
+    render(<StockWastageTab lockedOutlet={{ id: '12', name: 'Mini Mart' }} />);
+    expect(screen.getByText(/recording wastage at mini mart/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Outlet')).not.toBeInTheDocument();
+    expect(mocks.listOutlets).not.toHaveBeenCalled();
+    await selectWhenLoaded('Stock item', '20');
+    expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '12' });
+    await userEvent.type(screen.getByLabelText('Quantity lost'), '2');
+    await userEvent.type(screen.getByLabelText('Reason'), 'Expired');
+    await userEvent.click(screen.getByRole('button', { name: /record wastage/i }));
+    expect(mocks.recordWastage).toHaveBeenCalledWith('20', { outletId: '12', quantity: '2', reason: 'Expired' });
+  });
 });
