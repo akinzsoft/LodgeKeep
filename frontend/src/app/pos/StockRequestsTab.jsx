@@ -3,7 +3,7 @@ import { Card, DataTable, Button, StatusPill, ConfirmDialog } from '../../shared
 import { formatQuantity, compareQuantity, quantityShortfall } from './stockFormat.js';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
 import { StockItemOptions } from './stockItemOptions.jsx';
-import { isStoreOutlet } from './outletTypes.js';
+import { isStoreOutlet, isSupermarketOutlet } from './outletTypes.js';
 import formStyles from './POSForm.module.css';
 
 /**
@@ -81,6 +81,8 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
   // Staff tied to outlets (Staff screen) deliver to their own outlets only —
   // the server refuses any other; null until known or when unrestricted.
   const [myOutletIds, setMyOutletIds] = useState(null);
+  // Whether the assignment lookup has answered (a failed lookup counts: the server still decides).
+  const [scopeKnown, setScopeKnown] = useState(false);
   const [sourceItems, setSourceItems] = useState(null);
   const [lines, setLines] = useState(() => [blankLine()]);
   const [note, setNote] = useState('');
@@ -113,12 +115,25 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
   const selected =
     (requests ?? []).find((row) => String(row.id) === String(selectedId)) ?? (focused && String(focused.id) === String(selectedId) ? focused : null);
 
-  async function loadSourceItems(outletId) {
+  /**
+   * The items the form offers. An ordinary request lists the SUPPLYING outlet's stock items. A restricted
+   * mart user (staff tied to a supermarket, delivering to it) lists the MART'S OWN products only (never
+   * another outlet's items, even when the store holds them too), each with the store's quantity beside it
+   * (zero when the store holds none).
+   */
+  async function loadItems(fromId, toId, forMart) {
     const requestId = (itemsRequest.current += 1);
     setSourceItems(null);
-    if (!outletId) return;
+    if (!fromId) return;
     try {
-      const rows = await stockApi.listStockItems({ outletId });
+      let rows;
+      if (forMart && toId) {
+        const [martItems, storeItems] = await Promise.all([stockApi.listStockItems({ outletId: toId, carriedOnly: true }), stockApi.listStockItems({ outletId: fromId })]);
+        const atStore = new Map(storeItems.map((item) => [String(item.id), item.current_quantity]));
+        rows = martItems.map((item) => ({ ...item, current_quantity: atStore.get(String(item.id)) ?? '0.000' }));
+      } else {
+        rows = await stockApi.listStockItems({ outletId: fromId });
+      }
       if (requestId === itemsRequest.current) setSourceItems(rows);
     } catch (caught) {
       if (requestId !== itemsRequest.current) return;
@@ -132,11 +147,13 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
     stockApi
       .getMyRequestOutlets()
       .then((scope) => {
-        if (!scope?.restricted) return;
-        setMyOutletIds(scope.outletIds.map(String));
-        if (scope.outletIds.length === 1 && !deliverToOutletId) setToOutletId(String(scope.outletIds[0]));
+        if (scope?.restricted) {
+          setMyOutletIds(scope.outletIds.map(String));
+          if (scope.outletIds.length === 1 && !deliverToOutletId) setToOutletId(String(scope.outletIds[0]));
+        }
+        setScopeKnown(true);
       })
-      .catch(() => {}); // unknown scope: offer every outlet; the server still enforces it
+      .catch(() => setScopeKnown(true)); // unknown scope: offer every outlet; the server still enforces it
   }, [canRequest, deliverToOutletId]);
 
   useEffect(() => {
@@ -146,10 +163,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
         setOutlets(rows);
         // Most requests go to the store — start there when there is one.
         const store = rows.find(isStoreOutlet);
-        if (store && canRequest) {
-          setFromOutletId(String(store.id));
-          loadSourceItems(String(store.id));
-        }
+        if (store && canRequest) setFromOutletId(String(store.id));
       })
       .catch((caught) => {
         setOutlets([]);
@@ -226,7 +240,6 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
     setTopUpOf(request);
     setFromOutletId(String(request.fromOutlet.id));
     setToOutletId(String(request.toOutlet.id));
-    loadSourceItems(String(request.fromOutlet.id));
     setLines(missing.length ? missing.map((line) => ({ key: (lineKeySeed += 1), stockItemId: String(line.stockItemId), quantity: line.missing })) : [blankLine()]);
     setNote(`Top-up of #${request.id}`);
     formRef.current?.scrollIntoView?.({ block: 'start' });
@@ -242,12 +255,42 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
     setFromOutletId(outletId);
     if (outletId === toOutletId && !deliverToOutletId) setToOutletId('');
     setLines([blankLine()]);
-    loadSourceItems(outletId);
+  }
+
+  /**
+   * Changing "Deliver to" can change the form's basis (a restricted user choosing the mart: stores only, and
+   * the mart's own items): the supplier and any chosen lines then no longer fit, so they start again.
+   */
+  function chooseTo(outletId) {
+    const next = (outlets ?? []).find((outlet) => String(outlet.id) === String(outletId));
+    const nextMartMode = Boolean(myOutletIds) && isSupermarketOutlet(next);
+    setToOutletId(outletId);
+    if (nextMartMode !== martMode) {
+      const store = (outlets ?? []).find(isStoreOutlet);
+      setFromOutletId(nextMartMode && store ? String(store.id) : nextMartMode ? '' : fromOutletId);
+      setLines([blankLine()]);
+    }
   }
 
   function updateLine(key, changes) {
     setLines((current) => current.map((line) => (line.key === key ? { ...line, ...changes } : line)));
   }
+
+  const toOutlet = (outlets ?? []).find((outlet) => String(outlet.id) === String(toOutletId));
+  // A restricted user (staff tied to outlets) delivering to a supermarket: the mart cashier. They ask the
+  // STORE for the MART'S OWN products; everyone else (full access, bar/restaurant operators) keeps the free form.
+  const martMode = Boolean(myOutletIds) && isSupermarketOutlet(toOutlet);
+  // In the Supermarket tab delivery is fixed to the mart for restricted users, and until the lookup answers.
+  const deliveryLocked = Boolean(deliverToOutletId) && (!scopeKnown || Boolean(myOutletIds));
+  const fromOptions = martMode ? (outlets ?? []).filter(isStoreOutlet) : (outlets ?? []);
+
+  useEffect(() => {
+    if (!canRequest || !fromOutletId) return;
+    if (deliverToOutletId && !scopeKnown) return; // the list depends on who is asking: wait for the lookup
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- loads the items for the chosen outlets
+    loadItems(fromOutletId, toOutletId, martMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the chosen outlets and the mode only
+  }, [fromOutletId, toOutletId, martMode, scopeKnown, canRequest]);
 
   const chosenIds = new Set(lines.map((line) => line.stockItemId).filter(Boolean));
   const itemById = new Map((sourceItems ?? []).map((item) => [String(item.id), item]));
@@ -492,16 +535,22 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
                     <option value="" disabled>
                       Select an outlet
                     </option>
-                    {(outlets ?? []).map((outlet) => (
+                    {fromOptions.map((outlet) => (
                       <option key={outlet.id} value={outlet.id}>
                         {outletLabel(outlet)}
                       </option>
                     ))}
                   </select>
                 </label>
+                {(martMode || deliveryLocked) && toOutlet ? (
+                  <div className={formStyles.field}>
+                    <span className={formStyles.label}>Deliver to</span>
+                    <p className={formStyles.hint}>{toOutlet.name}</p>
+                  </div>
+                ) : (
                 <label className={formStyles.field}>
                   <span className={formStyles.label}>Deliver to</span>
-                  <select className={formStyles.select} value={toOutletId} onChange={(event) => setToOutletId(event.target.value)} required disabled={isOffline || Boolean(topUpOf) || Boolean(deliverToOutletId)}>
+                  <select className={formStyles.select} value={toOutletId} onChange={(event) => chooseTo(event.target.value)} required disabled={isOffline || Boolean(topUpOf)}>
                     <option value="" disabled>
                       Select your outlet
                     </option>
@@ -512,6 +561,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
                     ))}
                   </select>
                 </label>
+                )}
               </div>
 
               {lines.map((line, index) => {
@@ -533,7 +583,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
                         </option>
                         <StockItemOptions items={(sourceItems ?? []).filter((candidate) => String(candidate.id) === String(line.stockItemId) || !chosenIds.has(String(candidate.id)))} />
                       </select>
-                      {item && <span className={formStyles.hint}>{formatQuantity(item.current_quantity, item.unit)} at the store now</span>}
+                      {item && <span className={formStyles.hint}>{compareQuantity(item.current_quantity ?? '0', '0') > 0 ? `${formatQuantity(item.current_quantity, item.unit)} at the store now` : 'None at the store now'}</span>}
                     </label>
                     <label className={formStyles.field}>
                       <span className={formStyles.label}>Quantity {index + 1}</span>
@@ -558,7 +608,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
                   </div>
                 );
               })}
-              {fromOutletId && sourceItems?.length === 0 && <p className={formStyles.hint}>This outlet carries no stock items yet.</p>}
+              {fromOutletId && sourceItems?.length === 0 && <p className={formStyles.hint}>{martMode ? 'The mart has no stock items yet.' : 'This outlet carries no stock items yet.'}</p>}
 
               <div className={formStyles.actionsRow}>
                 <Button type="button" variant="secondary" onClick={() => setLines((current) => [...current, blankLine()])} disabled={isOffline || !fromOutletId}>
@@ -603,7 +653,7 @@ export function StockRequestsTab({ isOffline = false, permissions, intent, deliv
           { key: 'requestedAt', label: 'Requested', render: (row) => formatWhen(row.requestedAt) },
           { key: 'status', label: 'Status', render: (row) => <StatusPill tone={STATUS[row.status].tone} label={STATUS[row.status].label} /> },
         ]}
-        rows={(requests ?? []).filter((row) => !deliverToOutletId || String(row.toOutlet.id) === String(deliverToOutletId))}
+        rows={(requests ?? []).filter((row) => !deliveryLocked || String(row.toOutlet.id) === String(deliverToOutletId))}
         rowKey={(row) => row.id}
         state={requests === null ? 'loading' : requests.length === 0 ? 'empty' : 'success'}
         emptyMessage={filter === 'pending' ? 'No pending requests.' : 'No stock requests yet.'}

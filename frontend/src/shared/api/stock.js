@@ -53,10 +53,12 @@ export function archiveStockItemCategory(id) {
 // Stock items
 // ---------------------------------------------------------------------
 
-export function listStockItems({ outletId, lowStockOnly } = {}) {
+/** `carriedOnly`: only items in categories the outlet carries (not ones it merely holds a level for) — the supermarket request form. */
+export function listStockItems({ outletId, lowStockOnly, carriedOnly } = {}) {
   const params = new URLSearchParams();
   if (outletId) params.set('outlet_id', outletId);
   if (lowStockOnly) params.set('low_stock', 'true');
+  if (carriedOnly) params.set('carried_only', 'true');
   const query = params.toString();
   return request(`/pos/stock/items${query ? `?${query}` : ''}`);
 }
