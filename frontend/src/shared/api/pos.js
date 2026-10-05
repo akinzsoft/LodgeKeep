@@ -136,6 +136,11 @@ export function setOutletPayoutAccount(outletId, { bankCode, bankName, accountNu
   return request(`/pos/outlets/${outletId}/payout-account`, { method: 'PUT', body: { bank_code: bankCode, bank_name: bankName, account_number: accountNumber } });
 }
 
+/** Asks Paystack about the subaccount payments settle to now: `{source, ok, problems[], local, paystack}`. Read-only. */
+export function verifyOutletPayoutAccount(outletId) {
+  return request(`/pos/outlets/${outletId}/payout-account/verify`, { method: 'POST', body: {} });
+}
+
 export function clearOutletPayoutAccount(outletId) {
   return request(`/pos/outlets/${outletId}/payout-account`, { method: 'DELETE' });
 }

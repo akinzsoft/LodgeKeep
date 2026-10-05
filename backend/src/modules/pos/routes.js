@@ -42,6 +42,7 @@ function posRouter() {
   // Where an outlet's ONLINE card payments settle (its own Paystack subaccount,
   // else the property's). Admin / super_admin only, like the property account.
   router.get('/pos/outlets/:id/payout-account', requirePermission('setup.view'), controller.getOutletPayoutAccount);
+  router.post('/pos/outlets/:id/payout-account/verify', requirePermission('setup.manage'), controller.verifyOutletPayoutAccount);
   router.post('/pos/outlets/:id/payout-account/resolve-bank-account', requirePermission('setup.manage'), controller.resolveOutletPayoutBankAccount);
   router.put('/pos/outlets/:id/payout-account', requirePermission('setup.manage'), controller.setOutletPayoutAccount);
   router.delete('/pos/outlets/:id/payout-account', requirePermission('setup.manage'), controller.clearOutletPayoutAccount);

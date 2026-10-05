@@ -324,6 +324,40 @@ async function getOutletPayoutAccount({ context, outletId }) {
   return { account: publicPayoutAccount(own), settles_to: settlesTo };
 }
 
+/**
+ * "Verify with Paystack": asks Paystack about the subaccount online payments at
+ * this outlet settle to RIGHT NOW (the outlet's own, else the property's) and
+ * compares it with what we stored. Read-only; a Paystack outage is a 502, not a
+ * verdict. `problems` is empty only when Paystack reports it active (and, where
+ * it says so, verified), on the same bank account ending and the same split.
+ * The subaccount code itself is never returned.
+ */
+async function verifyOutletPayoutAccount({ context, outletId }) {
+  const db = scopedDb().for(context);
+  const outlet = await db.table('pos_outlets').where({ id: outletId }).first();
+  if (!outlet) throw new OutletNotFoundError();
+  const own = await db.table('pos_outlet_payment_subaccounts').where({ outlet_id: outletId, is_active: true }).first();
+  const row = own ?? (await db.table('property_payment_subaccounts').where({ property_id: context.propertyId, is_active: true }).first());
+  if (!row) throw new ValidationError('NO_PAYOUT_ACCOUNT', 'No payout account is configured for this outlet or the property, so there is nothing to verify.', [{ field: 'outlet_id', issue: 'no_payout_account' }]);
+  const property = await db.table('properties').where({ id: context.propertyId }).first('base_currency');
+  const { adapter } = await paystackAdapter.resolveAdapterForCurrency(db, property.base_currency);
+  const remote = await adapter.fetchSubaccount({ subaccountCode: row.subaccount_code });
+
+  const problems = [];
+  if (remote.active === false) problems.push('Paystack reports this subaccount is not active.');
+  if (remote.isVerified === false) problems.push('Paystack reports this subaccount is not verified, so payouts may not land.');
+  const remoteLast4 = remote.accountNumber ? remote.accountNumber.slice(-4) : null;
+  if (remoteLast4 && remoteLast4 !== row.account_number_last4) problems.push(`Paystack holds a different bank account (ending ${remoteLast4}) than the one recorded here (ending ${row.account_number_last4}).`);
+  if (remote.percentageCharge != null && Number(remote.percentageCharge) !== Number(row.percentage_charge)) problems.push(`Paystack's platform fee for it is ${remote.percentageCharge}%, not the ${row.percentage_charge}% recorded here.`);
+  return {
+    source: own ? 'outlet' : 'property',
+    ok: problems.length === 0,
+    problems,
+    local: { bank_name: row.bank_name, account_name: row.account_name, account_number_last4: row.account_number_last4, percentage_charge: row.percentage_charge },
+    paystack: { active: remote.active, verified: remote.isVerified, business_name: remote.businessName, settlement_bank: remote.settlementBank, account_number_last4: remoteLast4, percentage_charge: remote.percentageCharge },
+  };
+}
+
 async function resolveOutletPayoutBankAccount({ context, outletId, bankCode, accountNumber }) {
   if (!bankCode || !accountNumber) throw new ValidationError('MISSING_FIELD', 'Both "bank_code" and "account_number" are required.', [{ field: !bankCode ? 'bank_code' : 'account_number', issue: 'missing' }]);
   const db = scopedDb().for(context);
@@ -1852,6 +1886,7 @@ module.exports = {
   removeOutletTerminalAccount,
   getOutletPayoutAccount,
   resolveOutletPayoutBankAccount,
+  verifyOutletPayoutAccount,
   setOutletPayoutAccount,
   clearOutletPayoutAccount,
   archiveMenuItem,

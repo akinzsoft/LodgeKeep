@@ -264,6 +264,23 @@ function buildAdapter(secretKey) {
   }
 
   /**
+   * `GET /subaccount/:code` — what Paystack itself holds for a subaccount, for
+   * the Setup "Verify with Paystack" check (is it active, which bank account,
+   * what split). Read-only. Fields Paystack omits come back null, never guessed.
+   */
+  async function fetchSubaccount({ subaccountCode }) {
+    const data = await paystackFetch(`/subaccount/${encodeURIComponent(subaccountCode)}`, { timeoutMs: readTimeoutMs() });
+    return {
+      active: data.active ?? null,
+      isVerified: data.is_verified ?? null,
+      businessName: data.business_name ?? null,
+      settlementBank: data.settlement_bank ?? null,
+      accountNumber: data.account_number != null ? String(data.account_number) : null,
+      percentageCharge: data.percentage_charge != null ? String(data.percentage_charge) : null,
+    };
+  }
+
+  /**
    * `GET /bank/resolve` — a real, standalone bank-account-name lookup, for
    * the Setup screen's own "confirm this is the right account before we
    * create anything" step (DESIGN_SYSTEM.md §2's confirm-before-a-real-
@@ -299,6 +316,7 @@ function buildAdapter(secretKey) {
     refundTransaction,
     fetchRefund,
     createSubaccount,
+    fetchSubaccount,
     resolveBankAccount,
     verifyWebhookSignature,
   };

@@ -203,6 +203,14 @@ async function getOutletPayoutAccount(req, res, next) {
   }
 }
 
+async function verifyOutletPayoutAccount(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.verifyOutletPayoutAccount({ context: req.context, outletId: req.params.id })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function resolveOutletPayoutBankAccount(req, res, next) {
   try {
     res.status(200).json(ok(await service.resolveOutletPayoutBankAccount({ context: req.context, outletId: req.params.id, bankCode: req.body?.bank_code, accountNumber: req.body?.account_number })));
@@ -962,6 +970,7 @@ module.exports = {
   listOutletTerminalAccountOptions,
   removeOutletTerminalAccount,
   getOutletPayoutAccount,
+  verifyOutletPayoutAccount,
   resolveOutletPayoutBankAccount,
   setOutletPayoutAccount,
   clearOutletPayoutAccount,
