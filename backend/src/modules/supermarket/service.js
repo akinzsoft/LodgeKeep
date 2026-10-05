@@ -197,23 +197,13 @@ function receiptCode(outlet, number) {
 }
 
 /**
- * `trx`-based, called from `runIdempotentMutation`. `lines`: `[{barcode | menu_item_id, quantity}]`.
- * Opens the tab, adds the lines, settles it and records the receipt, all in the caller's transaction.
+ * Resolves a cart against the outlet's menu: each line by barcode or
+ * menu_item_id, priced from the menu, quantity validated. A bad line refuses
+ * the whole sale before anything is written. `[{menuItem, barcode, quantity}]`.
  */
-async function createSale({ trx, context, userId, outletId, lines, method, terminalId = null, terminal, terminalAccountId, confirmOversell = false }) {
+async function resolveSaleLines(trx, outlet, lines) {
   if (!Array.isArray(lines) || lines.length === 0) throw new ValidationError('MISSING_FIELD', 'At least one item is required.', [{ field: 'items', issue: 'missing' }]);
   if (lines.length > MAX_LINES) throw new ValidationError('CART_TOO_LARGE', `A sale may have at most ${MAX_LINES} lines.`, [{ field: 'items', issue: 'too_many' }]);
-  if (!SALE_METHODS.includes(method)) {
-    throw new ValidationError('INVALID_SETTLEMENT_METHOD', `"${method}" is not a supermarket payment method — use "cash" or "terminal".`, [{ field: 'method', issue: 'invalid' }]);
-  }
-  const outlet = await requireSupermarketOutlet({ db: trx, context, outletId });
-
-  if (terminalId) {
-    const found = await trx.table('pos_terminals').where({ id: terminalId, outlet_id: outlet.id }).first('id');
-    if (!found) throw new ValidationError('TERMINAL_NOT_FOUND', 'The specified terminal does not exist at this outlet.', [{ field: 'terminal_id', issue: 'not_found' }]);
-  }
-
-  // Resolve every line first (a bad barcode refuses the whole sale before anything is written).
   const resolved = [];
   for (const [index, line] of lines.entries()) {
     let menuItemId = line?.menu_item_id;
@@ -231,18 +221,11 @@ async function createSale({ trx, context, userId, outletId, lines, method, termi
     const priced = resolveOrderLine({ menuItem, unitPrice: menuItem.price, quantity: line.quantity, modifiers: undefined });
     resolved.push({ menuItem, barcode, quantity: priced.quantity });
   }
+  return resolved;
+}
 
-  // An oversell (recorded stock taken BELOW zero) needs the cashier's explicit
-  // confirmation: refused before anything is written, and the confirmed sale
-  // carries its own audit reason. Reaching exactly zero needs no confirmation.
-  const shortfalls = await stockService.findStockShortfalls({
-    trx,
-    lines: resolved.map((line) => ({ menuItemId: line.menuItem.id, quantity: line.quantity })),
-    outletId: outlet.id,
-  });
-  if (shortfalls.length > 0 && confirmOversell !== true) throw new errors.OversellNotConfirmedError(shortfalls);
-  const stockOverrideReason = shortfalls.length > 0 ? stockService.CONFIRMED_OVERSELL_REASON_SUPERMARKET : stockService.AUTOMATIC_OVERRIDE_REASON_SUPERMARKET;
-
+/** Opens the quick-sale tab and adds its lines (`rows`: menu_item_id, quantity, unit_price, item_name, barcode). */
+async function openQuickSaleOrder(trx, { outlet, userId, terminalId = null, rows }) {
   const [orderId] = await trx.table('pos_orders').insert({
     outlet_id: outlet.id,
     terminal_id: terminalId,
@@ -251,21 +234,16 @@ async function createSale({ trx, context, userId, outletId, lines, method, termi
     source: 'staff',
   });
   const itemRows = [];
-  for (const line of resolved) {
-    const row = { pos_order_id: orderId, menu_item_id: line.menuItem.id, quantity: line.quantity, unit_price: line.menuItem.price, modifiers: null };
+  for (const line of rows) {
+    const row = { pos_order_id: orderId, menu_item_id: line.menu_item_id, quantity: line.quantity, unit_price: line.unit_price, modifiers: null };
     const [itemId] = await trx.table('pos_order_items').insert(row);
-    itemRows.push({ ...row, id: itemId });
+    itemRows.push({ ...row, id: itemId, item_name: line.item_name, barcode: line.barcode ?? null });
   }
+  return { orderId, itemRows };
+}
 
-  const { settlements } = await posService.settleOrder({
-    trx,
-    orderId,
-    settledByUserId: userId,
-    settlements: [{ splitGroup: null, method, terminal: terminal ?? {}, terminalAccountId, tipAmount: undefined, serviceCharge: undefined }],
-    stockOverrideReason,
-  });
-  const settlement = settlements[0];
-
+/** Takes the gapless receipt number and writes the sale and its line snapshot. Returns the sale id. */
+async function recordReceiptedSale(trx, { outlet, orderId, settlement, userId, method, itemRows }) {
   const lineTotals = itemRows.map((row) => computeItemLineTotal({ unit_price: row.unit_price, quantity: row.quantity, modifiers: [] }));
   const split = allocateLineNetAndTax({ lineTotals, subtotal: settlement.subtotal, taxAmount: settlement.tax_amount });
   const receiptNumber = await takeReceiptNumber(trx, outlet);
@@ -287,8 +265,8 @@ async function createSale({ trx, context, userId, outletId, lines, method, termi
       sale_id: saleId,
       line_no: index + 1,
       menu_item_id: row.menu_item_id,
-      item_name: resolved[index].menuItem.name,
-      barcode: resolved[index].barcode,
+      item_name: row.item_name,
+      barcode: row.barcode,
       quantity: row.quantity,
       unit_price: row.unit_price,
       line_total: lineTotals[index],
@@ -296,6 +274,54 @@ async function createSale({ trx, context, userId, outletId, lines, method, termi
       line_tax: split[index].tax,
     });
   }
+  return saleId;
+}
+
+/**
+ * `trx`-based, called from `runIdempotentMutation`. `lines`: `[{barcode | menu_item_id, quantity}]`.
+ * Opens the tab, adds the lines, settles it and records the receipt, all in the caller's transaction.
+ */
+async function createSale({ trx, context, userId, outletId, lines, method, terminalId = null, terminal, terminalAccountId, confirmOversell = false }) {
+  if (!Array.isArray(lines) || lines.length === 0) throw new ValidationError('MISSING_FIELD', 'At least one item is required.', [{ field: 'items', issue: 'missing' }]);
+  if (lines.length > MAX_LINES) throw new ValidationError('CART_TOO_LARGE', `A sale may have at most ${MAX_LINES} lines.`, [{ field: 'items', issue: 'too_many' }]);
+  if (!SALE_METHODS.includes(method)) {
+    throw new ValidationError('INVALID_SETTLEMENT_METHOD', `"${method}" is not a supermarket payment method — use "cash" or "terminal".`, [{ field: 'method', issue: 'invalid' }]);
+  }
+  const outlet = await requireSupermarketOutlet({ db: trx, context, outletId });
+
+  if (terminalId) {
+    const found = await trx.table('pos_terminals').where({ id: terminalId, outlet_id: outlet.id }).first('id');
+    if (!found) throw new ValidationError('TERMINAL_NOT_FOUND', 'The specified terminal does not exist at this outlet.', [{ field: 'terminal_id', issue: 'not_found' }]);
+  }
+
+  const resolved = await resolveSaleLines(trx, outlet, lines);
+
+  // An oversell (recorded stock taken BELOW zero) needs the cashier's explicit
+  // confirmation: refused before anything is written, and the confirmed sale
+  // carries its own audit reason. Reaching exactly zero needs no confirmation.
+  const shortfalls = await stockService.findStockShortfalls({
+    trx,
+    lines: resolved.map((line) => ({ menuItemId: line.menuItem.id, quantity: line.quantity })),
+    outletId: outlet.id,
+  });
+  if (shortfalls.length > 0 && confirmOversell !== true) throw new errors.OversellNotConfirmedError(shortfalls);
+  const stockOverrideReason = shortfalls.length > 0 ? stockService.CONFIRMED_OVERSELL_REASON_SUPERMARKET : stockService.AUTOMATIC_OVERRIDE_REASON_SUPERMARKET;
+
+  const { orderId, itemRows } = await openQuickSaleOrder(trx, {
+    outlet,
+    userId,
+    terminalId,
+    rows: resolved.map((line) => ({ menu_item_id: line.menuItem.id, quantity: line.quantity, unit_price: line.menuItem.price, item_name: line.menuItem.name, barcode: line.barcode })),
+  });
+
+  const { settlements } = await posService.settleOrder({
+    trx,
+    orderId,
+    settledByUserId: userId,
+    settlements: [{ splitGroup: null, method, terminal: terminal ?? {}, terminalAccountId, tipAmount: undefined, serviceCharge: undefined }],
+    stockOverrideReason,
+  });
+  const saleId = await recordReceiptedSale(trx, { outlet, orderId, settlement: settlements[0], userId, method, itemRows });
   return getSaleWith(trx, saleId);
 }
 
@@ -306,8 +332,14 @@ async function getSaleWith(db, saleId) {
   const outlet = await db.table('pos_outlets').where({ id: sale.outlet_id }).first('id', 'code', 'name');
   const lines = await db.table('supermarket_sale_lines').where({ sale_id: sale.id }).orderBy('line_no');
   const seller = sale.sold_by_user_id ? await db.table('users').where({ id: sale.sold_by_user_id }).first('first_name', 'last_name') : null;
+  // An online (Paystack) sale: which channel paid it, and whether it has been refunded.
+  const settlement = await db.table('pos_order_settlements').where({ id: sale.settlement_id }).first('payment_id');
+  const payment = settlement?.payment_id ? await db.table('payments').where({ id: settlement.payment_id }).first('id', 'provider_channel', 'status') : null;
   return {
     ...sale,
+    payment_id: payment ? payment.id : null,
+    payment_channel: payment ? payment.provider_channel : null,
+    payment_status: payment ? payment.status : null,
     receipt_code: receiptCode(outlet, sale.receipt_number),
     outlet_name: outlet.name,
     sold_by_name: seller ? [seller.first_name, seller.last_name].filter(Boolean).join(' ') || null : null,
@@ -445,4 +477,4 @@ async function voidSale({ trx, id, reason, userId }) {
   return getSaleWith(trx, id);
 }
 
-module.exports = { cleanBarcode, requireSupermarketOutlet, MAX_BARCODE_LENGTH, stockOnHand, listMyOutlets, listBarcodes, addBarcode, removeBarcode, lookupByBarcode, searchItems, createSale, getSale, listSales, summarize, voidSale, receiptCode, listSetupFlags, listLowStock, listMySalesToday };
+module.exports = { cleanBarcode, requireSupermarketOutlet, MAX_BARCODE_LENGTH, MAX_LINES, forTill, resolveSaleLines, openQuickSaleOrder, recordReceiptedSale, getSaleWith, takeReceiptNumber, stockOnHand, listMyOutlets, listBarcodes, addBarcode, removeBarcode, lookupByBarcode, searchItems, createSale, getSale, listSales, summarize, voidSale, receiptCode, listSetupFlags, listLowStock, listMySalesToday };

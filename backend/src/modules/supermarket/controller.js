@@ -1,9 +1,20 @@
 'use strict';
 
 const { ok, notFound } = require('../../shared/response');
-const { runIdempotentMutation } = require('../../shared/mutation');
+const { runIdempotentMutation, requireIdempotencyKey } = require('../../shared/mutation');
+const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const service = require('./service');
+const online = require('./paystack-sale');
+
+/** Whether a sale was paid online (its settlement carries a supermarket Paystack payment). */
+async function isOnlineSale(context, saleId) {
+  const db = scopedDb().for(context);
+  const sale = await db.table('supermarket_sales').where({ id: saleId }).first('settlement_id');
+  if (!sale) return false;
+  const settlement = await db.table('pos_order_settlements').where({ id: sale.settlement_id }).first('payment_id');
+  return Boolean(settlement?.payment_id);
+}
 
 async function listMyOutlets(req, res, next) {
   try {
@@ -63,7 +74,12 @@ async function stockOnHand(req, res, next) {
 
 async function getSale(req, res, next) {
   try {
-    res.json(ok(await service.getSale({ context: req.context, id: req.params.id })));
+    let sale = await service.getSale({ context: req.context, id: req.params.id });
+    // A voided online sale whose refund Paystack had not processed yet: re-check it now.
+    if (sale.voided_at && sale.payment_id && sale.payment_status === 'CAPTURED') {
+      if (await online.refreshOnlineRefunds({ context: req.context })) sale = await service.getSale({ context: req.context, id: req.params.id });
+    }
+    res.json(ok(sale));
   } catch (error) {
     next(error);
   }
@@ -87,6 +103,13 @@ async function summary(req, res, next) {
 
 async function voidSale(req, res, next) {
   try {
+    // An online sale's void refunds the payment at Paystack first (outside any transaction).
+    if (await isOnlineSale(req.context, req.params.id)) {
+      const key = requireIdempotencyKey(req);
+      const result = await online.voidOnlineSale({ context: req.context, saleId: req.params.id, reason: req.body?.reason, userId: req.context.userId, idempotencyKey: key });
+      await req.audit({ entityType: 'supermarket_sales', entityId: req.params.id, action: 'void', afterState: { refundPaymentId: result.refund.id, refundStatus: result.refund.status }, reason: req.body?.reason });
+      return res.json(ok(result.sale, { refund: result.refund }));
+    }
     await runIdempotentMutation(req, res, {
       operationType: 'supermarket.void_sale',
       entityType: 'supermarket_sales',

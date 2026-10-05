@@ -157,6 +157,7 @@ async function seedTwoTenants(trx) {
     supermarketReceiptSequences: [],
     supermarketSales: [],
     supermarketSaleLines: [],
+    supermarketSaleIntents: [],
     posOutletMenuItems: [],
     stockLevels: [],
     posOrders: [],
@@ -1306,6 +1307,25 @@ async function seedTwoTenants(trx) {
       }),
       property_id: property.id,
       sale_id: supermarketSaleId,
+    });
+
+    // A completed online-payment sale linked to the fixture sale (the isolation suite collides on sale_id).
+    t.supermarketSaleIntents.push({
+      id: await insertReturningId(trx, 'supermarket_sale_intents', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: outlet.id,
+        sale_id: supermarketSaleId,
+        created_by_user_id: user.id,
+        tender: 'online',
+        status: 'completed',
+        lines_json: JSON.stringify([{ menu_item_id: String(menuItem.id), item_name: 'Fixture item', barcode: null, quantity: 1, unit_price: '20.00' }]),
+        expected_total: '20.00',
+        currency: 'NGN',
+        expires_at: '2001-01-01 00:30:00',
+        completed_at: '2001-01-01 00:10:00',
+      }),
+      property_id: property.id,
     });
 
     t.posShifts.push({

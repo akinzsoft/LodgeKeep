@@ -224,7 +224,17 @@ function buildAdapter(secretKey) {
       method: 'POST',
       body: amount ? { transaction: reference, amount: toSubunit(amount) } : { transaction: reference },
     });
-    return { status: data.status, reference: data.transaction_reference ?? reference };
+    return { status: data.status, reference: data.transaction_reference ?? reference, refundId: data.id != null ? String(data.id) : null };
+  }
+
+  /**
+   * `GET /refund/:id` — a refund's current state ('pending' | 'processing' |
+   * 'processed' | 'failed' | ...), for a refund Paystack accepted but had not
+   * processed yet (the supermarket void completes once it has).
+   */
+  async function fetchRefund({ refundId }) {
+    const data = await paystackFetch(`/refund/${encodeURIComponent(refundId)}`, { timeoutMs: readTimeoutMs() });
+    return { status: data.status, refundId: String(data.id ?? refundId) };
   }
 
   /**
@@ -250,6 +260,23 @@ function buildAdapter(secretKey) {
       subaccountCode: data.subaccount_code,
       accountName: data.account_name,
       bankName: data.settlement_bank,
+    };
+  }
+
+  /**
+   * `GET /subaccount/:code` — what Paystack itself holds for a subaccount, for
+   * the Setup "Verify with Paystack" check (is it active, which bank account,
+   * what split). Read-only. Fields Paystack omits come back null, never guessed.
+   */
+  async function fetchSubaccount({ subaccountCode }) {
+    const data = await paystackFetch(`/subaccount/${encodeURIComponent(subaccountCode)}`, { timeoutMs: readTimeoutMs() });
+    return {
+      active: data.active ?? null,
+      isVerified: data.is_verified ?? null,
+      businessName: data.business_name ?? null,
+      settlementBank: data.settlement_bank ?? null,
+      accountNumber: data.account_number != null ? String(data.account_number) : null,
+      percentageCharge: data.percentage_charge != null ? String(data.percentage_charge) : null,
     };
   }
 
@@ -287,7 +314,9 @@ function buildAdapter(secretKey) {
     initializeTransaction,
     verifyTransaction,
     refundTransaction,
+    fetchRefund,
     createSubaccount,
+    fetchSubaccount,
     resolveBankAccount,
     verifyWebhookSignature,
   };

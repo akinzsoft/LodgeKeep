@@ -100,6 +100,20 @@ const NOTIFICATION_EVENTS = Object.freeze([
     defaultRoles: [],
   },
   {
+    eventType: 'supermarket.online_payment_needs_review',
+    group: 'POS & QR orders',
+    label: 'Supermarket online payment needs a refund',
+    description: 'A customer paid online at the supermarket till but the sale could not be completed (it was cancelled or expired first, or the tax changed). The money is kept; refund it on the Supermarket screen.',
+    defaultRoles: ['manager', 'admin', 'super_admin'],
+  },
+  {
+    eventType: 'supermarket.online_refund_failed',
+    group: 'POS & QR orders',
+    label: 'Supermarket online refund failed',
+    description: 'Paystack reported that a refund for a voided supermarket online sale failed. The customer has not been repaid.',
+    defaultRoles: ['manager', 'admin', 'super_admin'],
+  },
+  {
     eventType: 'stock.reorder_level_reached',
     group: 'Inventory',
     label: 'Stock at reorder level',

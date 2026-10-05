@@ -47,6 +47,35 @@ class SupermarketSaleAlreadyVoidedError extends AppError {
   }
 }
 
+// ---------------------------------------------------------------- online (Paystack) sales
+
+/** The cashier already has an online sale waiting at this outlet: finish or cancel it first. */
+class OnlineSalePendingError extends AppError {
+  constructor(intentId) {
+    super('CONFLICT_ONLINE_SALE_PENDING', 'An online payment is already waiting at this till. Finish or cancel it first.', 409, { intent_id: String(intentId) });
+  }
+}
+
+class OnlineSaleNotFoundError extends AppError {
+  constructor() {
+    super('VALIDATION_ONLINE_SALE_NOT_FOUND', 'The specified online sale does not exist.', 404);
+  }
+}
+
+/** Cancel/refund asked of an online sale in a state that does not allow it (e.g. already paid and completed). */
+class OnlineSaleStateError extends AppError {
+  constructor(status, action) {
+    super('CONFLICT_ONLINE_SALE_STATE', `This online sale is ${status.replace('_', ' ')}; it cannot be ${action}.`, 409, { status });
+  }
+}
+
+/** A refund for this payment was already requested and is not finished; nothing new is sent to Paystack. */
+class OnlineRefundInProgressError extends AppError {
+  constructor(paymentId) {
+    super('CONFLICT_ONLINE_REFUND_IN_PROGRESS', 'A refund for this payment is already in progress. Check its status before trying again.', 409, { payment_id: String(paymentId) });
+  }
+}
+
 // ---------------------------------------------------------------- Stage 3: product import
 
 /** The uploaded file is not this import's template (missing or unknown columns, no data rows, too many rows). */
@@ -91,6 +120,10 @@ class ProductImportReleasedError extends AppError {
 }
 
 module.exports = {
+  OnlineSalePendingError,
+  OnlineSaleNotFoundError,
+  OnlineSaleStateError,
+  OnlineRefundInProgressError,
   OversellNotConfirmedError,
   ProductImportReleasedError,
   ProductImportFileError,

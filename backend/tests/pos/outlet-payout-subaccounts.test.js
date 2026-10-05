@@ -17,6 +17,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
     verifyWebhookSignature: jest.fn(),
     createSubaccount: jest.fn(),
     resolveBankAccount: jest.fn(),
+    fetchSubaccount: jest.fn(),
   };
   return {
     ...actual,
@@ -383,6 +384,57 @@ describe('per-outlet payout subaccounts (online card payments)', () => {
       expect(line.settlementAccount).toMatchObject({ source: 'outlet', outletName: 'Recon Bar B' });
       expect(csv.split('\n')[0]).toContain('settlementSource,settlementOutlet,settlementBank,settlementAccountLast4');
       expect(csv).toContain('outlet,Recon Bar A');
+    });
+  });
+  describe('verify with Paystack', () => {
+    const remote = (overrides = {}) => ({ active: true, isVerified: true, businessName: 'X', settlementBank: 'Zenith Bank', accountNumber: '0000004321', percentageCharge: '0', ...overrides });
+
+    it('confirms an outlet account Paystack holds as active on the same bank account, without exposing the code', async () => {
+      const outlet = await newOutlet('Verify Bar');
+      await giveOutletAccount(outlet.outletId, 'ACCT_verify_1');
+      paystack.fetchSubaccount.mockResolvedValueOnce(remote());
+      const res = await as(adminId).post(`${payoutUrl(outlet.outletId)}/verify`).send({});
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ source: 'outlet', ok: true, problems: [], paystack: { active: true, verified: true, account_number_last4: '4321' } });
+      expect(paystack.fetchSubaccount).toHaveBeenCalledWith({ subaccountCode: 'ACCT_verify_1' });
+      expect(JSON.stringify(res.body)).not.toContain('ACCT_verify_1');
+    });
+
+    it('verifies the PROPERTY account when the outlet has none of its own', async () => {
+      const outlet = await newOutlet('Plain Verify Bar');
+      const row = await t.trx('property_payment_subaccounts').where({ property_id: propertyId, is_active: true }).first();
+      paystack.fetchSubaccount.mockResolvedValueOnce(remote({ accountNumber: `000000${row.account_number_last4}`, percentageCharge: String(row.percentage_charge) }));
+      const res = await as(adminId).post(`${payoutUrl(outlet.outletId)}/verify`).send({});
+      expect(res.body.data).toMatchObject({ source: 'property', ok: true });
+      expect(paystack.fetchSubaccount).toHaveBeenCalledWith({ subaccountCode: propertyCode });
+    });
+
+    it('flags inactive, unverified, a different bank account and a different split, each in plain words', async () => {
+      const outlet = await newOutlet('Problem Bar');
+      await giveOutletAccount(outlet.outletId, 'ACCT_problem_1');
+      paystack.fetchSubaccount.mockResolvedValueOnce(remote({ active: false, isVerified: false, accountNumber: '0000009999', percentageCharge: '5' }));
+      const res = await as(adminId).post(`${payoutUrl(outlet.outletId)}/verify`).send({});
+      expect(res.status).toBe(200);
+      expect(res.body.data.ok).toBe(false);
+      expect(res.body.data.problems).toHaveLength(4);
+      expect(res.body.data.problems.join(' ')).toMatch(/not active.*not verified.*ending 9999.*5%/);
+    });
+
+    it('treats fields Paystack omits as unknown, not as a failure', async () => {
+      const outlet = await newOutlet('Sparse Bar');
+      await giveOutletAccount(outlet.outletId, 'ACCT_sparse_1');
+      paystack.fetchSubaccount.mockResolvedValueOnce({ active: null, isVerified: null, businessName: null, settlementBank: null, accountNumber: null, percentageCharge: null });
+      const res = await as(adminId).post(`${payoutUrl(outlet.outletId)}/verify`).send({});
+      expect(res.body.data).toMatchObject({ ok: true, problems: [] });
+    });
+
+    it('a Paystack outage is an error, never a verdict; admin only; another tenant is refused', async () => {
+      const outlet = await newOutlet('Outage Bar');
+      await giveOutletAccount(outlet.outletId, 'ACCT_outage_1');
+      paystack.fetchSubaccount.mockRejectedValueOnce(new GatewayRequestError('paystack', 'timeout', { timedOut: true }));
+      expect((await as(adminId).post(`${payoutUrl(outlet.outletId)}/verify`).send({})).status).toBeGreaterThanOrEqual(500);
+      expect((await as(managerId).post(`${payoutUrl(outlet.outletId)}/verify`).send({})).status).toBe(403);
+      expect((await as(adminId).post(`${payoutUrl(ctx.b.posOutlets[0].id)}/verify`).send({})).status).toBeGreaterThanOrEqual(400);
     });
   });
 });

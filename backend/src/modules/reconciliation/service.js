@@ -227,7 +227,7 @@ async function resolveRoomNumbers({ db, reservationIds }) {
 async function listPosRefundLines({ db, dateFrom, dateTo }) {
   const refunds = await db
     .table('payments')
-    .whereIn('settlement_target', ['pos_order', 'pos_register'])
+    .whereIn('settlement_target', ['pos_order', 'pos_register', 'supermarket_sale'])
     .whereNotNull('parent_payment_id')
     .where('status', 'CAPTURED')
     .select(

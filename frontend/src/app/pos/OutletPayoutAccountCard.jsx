@@ -22,7 +22,8 @@ export function OutletPayoutAccountCard({ outletId, outletName, isOffline = fals
   const [form, setForm] = useState(EMPTY_FORM);
   const [editing, setEditing] = useState(false);
   const [resolvedName, setResolvedName] = useState(null);
-  const [busy, setBusy] = useState(null); // 'resolving' | 'saving' | 'removing'
+  const [busy, setBusy] = useState(null); // 'resolving' | 'saving' | 'removing' | 'verifying'
+  const [verification, setVerification] = useState(null);
   const outletRef = useRef(outletId);
 
   async function load() {
@@ -43,6 +44,7 @@ export function OutletPayoutAccountCard({ outletId, outletName, isOffline = fals
     outletRef.current = outletId;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate reset-then-fetch when the outlet changes
     setInfo(null);
+    setVerification(null);
     setEditing(false);
     setResolvedName(null);
     setForm(EMPTY_FORM);
@@ -82,6 +84,7 @@ export function OutletPayoutAccountCard({ outletId, outletName, isOffline = fals
     setError(null);
     try {
       setInfo(await posApi.setOutletPayoutAccount(outletId, form));
+      setVerification(null);
       setEditing(false);
       setResolvedName(null);
       setForm(EMPTY_FORM);
@@ -92,11 +95,27 @@ export function OutletPayoutAccountCard({ outletId, outletName, isOffline = fals
     }
   }
 
+  async function handleVerify() {
+    const requestedFor = outletId;
+    setBusy('verifying');
+    setError(null);
+    setVerification(null);
+    try {
+      const result = await posApi.verifyOutletPayoutAccount(requestedFor);
+      if (outletRef.current === requestedFor) setVerification(result);
+    } catch (caught) {
+      if (outletRef.current === requestedFor) setError(caught instanceof ApiError ? caught.message : 'Could not reach Paystack to verify this account.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleRemove() {
     setBusy('removing');
     setError(null);
     try {
       setInfo(await posApi.clearOutletPayoutAccount(outletId));
+      setVerification(null);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not remove the payout account.');
     } finally {
@@ -135,8 +154,24 @@ export function OutletPayoutAccountCard({ outletId, outletName, isOffline = fals
               No payout account is configured for this outlet or the property, so card payments are unavailable here until one is set.
             </p>
           )}
+          {verification && (verification.ok ? (
+            <p role="status" className={formStyles.disabledNotice}>
+              Verified with Paystack: the {verification.source === 'outlet' ? "outlet's" : "property's"} subaccount is active
+              {verification.paystack.verified === true ? ' and verified' : ''}, settling to account ending {verification.paystack.account_number_last4 ?? verification.local.account_number_last4} ({verification.paystack.settlement_bank ?? verification.local.bank_name}).
+            </p>
+          ) : (
+            <div role="alert" className={formStyles.errorBanner}>
+              <p>Paystack&apos;s record of this payout account has a problem, so payouts may not land:</p>
+              <ul>{verification.problems.map((problem) => <li key={problem}>{problem}</li>)}</ul>
+            </div>
+          ))}
           {!editing && (
             <div className={formStyles.actionsRow}>
+              {settlesTo.source !== null && (
+                <Button variant="secondary" loading={busy === 'verifying'} disabled={isOffline} onClick={handleVerify}>
+                  Verify with Paystack
+                </Button>
+              )}
               <Button onClick={() => setEditing(true)} disabled={isOffline}>
                 {info.account ? 'Change account' : 'Set outlet account'}
               </Button>

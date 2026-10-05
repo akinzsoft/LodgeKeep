@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   resolveOutletPayoutBankAccount: vi.fn(),
   setOutletPayoutAccount: vi.fn(),
   clearOutletPayoutAccount: vi.fn(),
+  verifyOutletPayoutAccount: vi.fn(),
 }));
 
 const stockMocks = vi.hoisted(() => ({
@@ -163,6 +164,42 @@ describe('<SetupTab>', () => {
       await userEvent.click(await screen.findByRole('button', { name: 'Use the property account instead' }));
       expect(mocks.clearOutletPayoutAccount).toHaveBeenCalledWith('1');
       expect(await screen.findByText(/settles to the/i)).toHaveTextContent('property account');
+    });
+
+    describe('Verify with Paystack', () => {
+      const LOCAL = { bank_name: 'Zenith Bank', account_name: 'Hotel Ltd', account_number_last4: '1784', percentage_charge: '0.00' };
+
+      it('says the account is verified when Paystack agrees', async () => {
+        mocks.verifyOutletPayoutAccount.mockResolvedValue({ source: 'property', ok: true, problems: [], local: LOCAL, paystack: { active: true, verified: true, settlement_bank: 'Zenith Bank', account_number_last4: '1784' } });
+        await openPayout();
+        await userEvent.click(await screen.findByRole('button', { name: 'Verify with Paystack' }));
+        expect(mocks.verifyOutletPayoutAccount).toHaveBeenCalledWith('1');
+        expect(await screen.findByText(/Verified with Paystack/)).toHaveTextContent("property's subaccount is active and verified, settling to account ending 1784");
+      });
+
+      it('lists each problem in an alert so a payout that would not land is never missed', async () => {
+        mocks.verifyOutletPayoutAccount.mockResolvedValue({ source: 'property', ok: false, problems: ['Paystack reports this subaccount is not verified, so payouts may not land.'], local: LOCAL, paystack: {} });
+        await openPayout();
+        await userEvent.click(await screen.findByRole('button', { name: 'Verify with Paystack' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('not verified, so payouts may not land');
+        expect(screen.queryByText(/Verified with Paystack/)).not.toBeInTheDocument();
+      });
+
+      it('a Paystack outage reads as an error, not a verdict', async () => {
+        const { ApiError } = await import('../../../shared/api/index.js');
+        mocks.verifyOutletPayoutAccount.mockRejectedValue(new ApiError({ status: 502, code: 'PAYMENT_GATEWAY_ERROR', message: 'Could not reach Paystack' }));
+        await openPayout();
+        await userEvent.click(await screen.findByRole('button', { name: 'Verify with Paystack' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('Could not reach Paystack');
+        expect(screen.queryByText(/Verified with Paystack/)).not.toBeInTheDocument();
+      });
+
+      it('is not offered when nothing is configured to verify', async () => {
+        mocks.getOutletPayoutAccount.mockResolvedValue({ account: null, settles_to: { source: null } });
+        await openPayout();
+        await screen.findByText(/No payout account is configured/);
+        expect(screen.queryByRole('button', { name: 'Verify with Paystack' })).not.toBeInTheDocument();
+      });
     });
 
     it('is read-only guidance for anyone who is not an admin, and never loads the account', async () => {

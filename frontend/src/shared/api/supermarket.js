@@ -1,4 +1,4 @@
-import { request, requestBlob, requestMultipart } from './client.js';
+import { request, requestWithMeta, requestBlob, requestMultipart } from './client.js';
 
 /**
  * Supermarket quick-sale endpoints (`backend/src/modules/supermarket`).
@@ -122,4 +122,50 @@ export function commitProductsImport(id) {
 /** Undo: removes the products nobody has touched since. Resolves `{status, rowsRolledBack, rowsRefused}`. */
 export function rollbackProductsImport(id, reason) {
   return request(`/supermarket/imports/${id}/rollback`, { method: 'POST', body: { reason } });
+}
+
+// ---------------------------------------------------------------- online (Paystack) card sales
+
+/**
+ * Starts an online card sale: a pending sale plus its Paystack checkout. Resolves
+ * `{intent, accessCode, checkoutUrl, qrDataUrl, checkoutError}` — `checkoutError`
+ * is set when the sale was recorded but Paystack could not be reached (reopen it
+ * with `reopenOnlineCheckout`). The same `idempotencyKey` for a retry of the same attempt.
+ */
+export async function startOnlineSale({ outletId, items, tender = 'online', customerEmail, confirmOversell = false, idempotencyKey }) {
+  const { data, meta } = await requestWithMeta('/supermarket/online-sales', {
+    method: 'POST',
+    body: { outlet_id: outletId, items, tender, ...(customerEmail ? { customer_email: customerEmail } : {}), ...(confirmOversell ? { confirm_oversell: true } : {}) },
+    headers: { 'Idempotency-Key': idempotencyKey ?? crypto.randomUUID() },
+  });
+  return { intent: data, ...meta };
+}
+
+export async function reopenOnlineCheckout(id) {
+  const { data, meta } = await requestWithMeta(`/supermarket/online-sales/${id}/checkout`, { method: 'POST', body: {} });
+  return { intent: data, ...meta };
+}
+
+/** The caller's own pending online sale at this outlet, or null. */
+export function getPendingOnlineSale(outletId) {
+  return request(`/supermarket/online-sales/pending?${new URLSearchParams({ outlet_id: outletId })}`);
+}
+
+/** Asks Paystack about the payment; a payment made completes the sale. `meta.checkError` when Paystack could not be reached. */
+export async function checkOnlineSale(id) {
+  const { data, meta } = await requestWithMeta(`/supermarket/online-sales/${id}/check`, { method: 'POST', body: {} });
+  return { intent: data, checkError: meta?.checkError ?? null };
+}
+
+export function cancelOnlineSale(id, reason) {
+  return request(`/supermarket/online-sales/${id}/cancel`, { method: 'POST', body: reason ? { reason } : {} });
+}
+
+/** Online sales that were paid but could not be completed (manager): they need a refund. */
+export function listOnlineSalesNeedingReview(outletId) {
+  return request(`/supermarket/online-sales/review?${new URLSearchParams({ outlet_id: outletId })}`);
+}
+
+export function refundOnlineSale(id, reason) {
+  return request(`/supermarket/online-sales/${id}/refund`, { method: 'POST', body: { reason }, headers: { 'Idempotency-Key': crypto.randomUUID() } });
 }
