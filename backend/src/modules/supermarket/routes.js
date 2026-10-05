@@ -10,6 +10,7 @@
 const { Router } = require('express');
 const controller = require('./controller');
 const imports = require('./import-controller');
+const onlineSales = require('./online-controller');
 const { requirePermission, requireAnyPermission } = require('../../auth');
 // Stage 3 product import: the same CSV upload (disk storage, 20 MB cap) as Data Migration.
 const { csvUpload: upload } = require('../migration/storage');
@@ -29,6 +30,16 @@ function supermarketRouter() {
   router.get('/supermarket/my-sales', requirePermission('supermarket.sales'), controller.mySales);
   router.get('/supermarket/sales/:id', readSales, controller.getSale);
   router.post('/supermarket/sales/:id/void', requirePermission('supermarket.manage'), controller.voidSale);
+
+  // Online (Paystack) sales: card today. The capture completes the sale on the server.
+  router.post('/supermarket/online-sales', requirePermission('supermarket.sales'), onlineSales.startOnlineSale);
+  router.get('/supermarket/online-sales/pending', requirePermission('supermarket.sales'), onlineSales.myPending);
+  router.get('/supermarket/online-sales/review', requirePermission('supermarket.manage'), onlineSales.needingReview);
+  router.get('/supermarket/online-sales/:id', readSales, onlineSales.getOnlineSale);
+  router.post('/supermarket/online-sales/:id/checkout', requirePermission('supermarket.sales'), onlineSales.reopenCheckout);
+  router.post('/supermarket/online-sales/:id/check', requirePermission('supermarket.sales'), onlineSales.check);
+  router.post('/supermarket/online-sales/:id/cancel', requirePermission('supermarket.sales'), onlineSales.cancel);
+  router.post('/supermarket/online-sales/:id/refund', requirePermission('supermarket.manage'), onlineSales.refund);
 
   router.get('/supermarket/barcodes', requirePermission('supermarket.manage'), controller.listBarcodes);
   router.post('/supermarket/barcodes', requirePermission('supermarket.manage'), controller.addBarcode);

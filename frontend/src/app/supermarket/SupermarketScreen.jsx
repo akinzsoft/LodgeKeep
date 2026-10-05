@@ -4,10 +4,13 @@ import { Money } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney } from '../../shared/money.js';
 import { supermarketApi, posApi, ApiError } from '../../shared/api/index.js';
 import { SupermarketReceipt } from './SupermarketReceipt.jsx';
+import { paymentLabel } from './paymentLabel.js';
 import { ProductTile } from './ProductTile.jsx';
 import { ProductsImportPanel } from './ProductsImportPanel.jsx';
 import { CameraScanDialog } from './CameraScanDialog.jsx';
 import { BarcodesCard } from './BarcodesCard.jsx';
+import { OnlineCardDialog } from './OnlineCardDialog.jsx';
+import { OnlineReviewCard } from './OnlineReviewCard.jsx';
 import { cameraSupported } from '../../shared/scanner/cameraScanner.js';
 import formStyles from '../pos/POSForm.module.css';
 import styles from './Supermarket.module.css';
@@ -82,6 +85,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const [flagsError, setFlagsError] = useState(null);
   const [barcodeDrafts, setBarcodeDrafts] = useState({});
   const [stockOnHand, setStockOnHand] = useState({}); // {menu_item_id: units | null}; empty when unknown
+  const [onlineSession, setOnlineSession] = useState(null); // an online card sale waiting for payment
   const [oversell, setOversell] = useState(null); // {lines: [{name, detail}]} while the cashier is asked to confirm
   const [barcodeScanTarget, setBarcodeScanTarget] = useState(null);
   const [barcodesVersion, setBarcodesVersion] = useState(0); // reloads the Barcodes card after an add under "Products needing setup" // the Setup product whose field the camera fills
@@ -373,6 +377,18 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     setSaleError(null);
     attemptKey.current ??= crypto.randomUUID();
     try {
+      if (method === 'online') {
+        // The sale is only pending until the customer pays; the dialog finishes it.
+        const started = await supermarketApi.startOnlineSale({
+          outletId,
+          idempotencyKey: attemptKey.current,
+          confirmOversell,
+          items: cart.map((line) => ({ menu_item_id: line.menuItem.id, quantity: line.quantity })),
+        });
+        attemptKey.current = null;
+        setOnlineSession(started);
+        return;
+      }
       const sale = await supermarketApi.createSale({
         outletId,
         method,
@@ -392,7 +408,11 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       loadMenu();
       loadStock();
     } catch (caught) {
-      if (caught instanceof ApiError && caught.code === 'BUSINESS_RULE_OVERSELL_NOT_CONFIRMED' && !confirmOversell) {
+      if (caught instanceof ApiError && caught.code === 'CONFLICT_ONLINE_SALE_PENDING') {
+        attemptKey.current = null;
+        resumePendingOnline();
+        setSaleError('An online payment is already waiting at this till.');
+      } else if (caught instanceof ApiError && caught.code === 'BUSINESS_RULE_OVERSELL_NOT_CONFIRMED' && !confirmOversell) {
         // Stock changed since the screen loaded: ask with the server's own numbers.
         const lines = (caught.details?.lines ?? []).map((line) => ({ name: line.name, detail: `${Number(line.needed)} ${line.unit} needed, ${Number(line.on_hand)} on hand — stock goes to ${Number(line.projected)}` }));
         setOversell({ lines: lines.length ? lines : [{ name: 'Stock', detail: caught.message }] });
@@ -403,6 +423,37 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     } finally {
       setSubmitting(false);
     }
+  }
+
+  /** Brings back this cashier's own waiting online sale (after a reload, or a second start attempt). */
+  async function resumePendingOnline() {
+    if (!canSell || !outletId || isOffline) return;
+    try {
+      const pending = await supermarketApi.getPendingOnlineSale(outletId);
+      if (pending) setOnlineSession(await supermarketApi.reopenOnlineCheckout(pending.id));
+    } catch {
+      // Nothing to resume, or Paystack is unreachable: the cashier can still start again.
+    }
+  }
+
+  useEffect(() => {
+    resumePendingOnline();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per outlet
+  }, [outletId]);
+
+  function finishOnlineSale(sale) {
+    setOnlineSession(null);
+    setIsReprint(false);
+    setReceipt(sale);
+    setCart([]);
+    setScan('');
+    setResults([]);
+    attemptKey.current = null;
+    loadSales();
+    loadLowStock();
+    loadMySales();
+    loadMenu();
+    loadStock();
   }
 
   async function handleVoid(reason) {
@@ -631,8 +682,9 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
                 <div className={styles.methods} role="group" aria-label="Payment method">
                   <button type="button" className={`${styles.method} ${method === 'cash' ? styles.methodActive : ''}`} aria-pressed={method === 'cash'} onClick={() => setMethod('cash')}>Cash</button>
                   <button type="button" className={`${styles.method} ${method === 'terminal' ? styles.methodActive : ''}`} aria-pressed={method === 'terminal'} onClick={() => setMethod('terminal')}>Card (terminal)</button>
+                  <button type="button" className={`${styles.method} ${method === 'online' ? styles.methodActive : ''}`} aria-pressed={method === 'online'} onClick={() => setMethod('online')}>Card (online)</button>
                 </div>
-                <button type="button" className={styles.payButton} onClick={handleComplete} disabled={isOffline || submitting}>{submitting ? 'Completing…' : 'Complete sale'}</button>
+                <button type="button" className={styles.payButton} onClick={handleComplete} disabled={isOffline || submitting}>{submitting ? 'Completing…' : method === 'online' ? 'Take online payment' : 'Complete sale'}</button>
                 {saleError && <p className={styles.errorBanner} role="alert">{saleError}</p>}
               </div>
             )}
@@ -684,7 +736,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
               columns={[
                 { key: 'receipt', label: 'Receipt', render: (row) => `#${row.receipt_number}${row.voided_at ? ' (void)' : ''}` },
                 { key: 'time', label: 'Time', render: (row) => new Date(row.created_at).toLocaleString() },
-                { key: 'method', label: 'Paid by', render: (row) => (row.method === 'terminal' ? 'Card (terminal)' : 'Cash') },
+                { key: 'method', label: 'Paid by', render: (row) => paymentLabel(row) },
                 { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={row.currency} /> },
                 {
                   key: 'actions',
@@ -747,6 +799,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
               </>
             )}
           </Card>
+          <OnlineReviewCard outletId={outletId} isOffline={isOffline} />
           <BarcodesCard outletId={outletId} isOffline={isOffline} canUseCamera={canUseCamera} scanDebug={scanDebug} refreshKey={barcodesVersion} onChanged={loadFlags} />
         </section>
       )}
@@ -786,10 +839,14 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
         </ConfirmDialog>
       )}
 
+      {onlineSession && (
+        <OnlineCardDialog session={onlineSession} currency={currency} isOffline={isOffline} onCompleted={finishOnlineSale} onClose={() => setOnlineSession(null)} />
+      )}
+
       {voidTarget && (
         <ConfirmDialog
           title={`Void receipt #${voidTarget.receipt_number}?`}
-          consequence="The sale is cancelled and its stock is returned. The receipt number is kept and shows as void."
+          consequence={voidTarget.method === 'card' ? "The customer's card payment is refunded in full through Paystack, the sale is cancelled and its stock is returned. The receipt number is kept and shows as void." : "The sale is cancelled and its stock is returned. The receipt number is kept and shows as void."}
           requireReason
           confirmLabel="Void sale"
           onConfirm={handleVoid}

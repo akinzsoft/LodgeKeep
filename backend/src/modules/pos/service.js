@@ -1264,7 +1264,7 @@ function normalizeTerminalDetails({ provider, reference } = {}) {
  * hotel's own physical terminal: nothing to collect or verify, and it is
  * never counted in the drawer's expected cash.
  */
-async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOverrideReason }) {
+async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOverrideReason, claimPayment }) {
   if (!Array.isArray(settlements) || settlements.length === 0) {
     throw new ValidationError('MISSING_FIELD', 'At least one settlement is required.', [{ field: 'settlements', issue: 'missing' }]);
   }
@@ -1456,7 +1456,11 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
       // Card and NQR only settle against money Paystack actually captured
       // for this exact check — never on the cashier's word alone.
       if (settlement.method === 'card') {
-        const payment = await claimRegisterPaymentForCheck({
+        // `claimPayment` is the supermarket online sale's own claim (its payment
+        // has its own settlement target); every other caller claims a Register
+        // payment exactly as before.
+        const claim = claimPayment ?? claimRegisterPaymentForCheck;
+        const payment = await claim({
           trx,
           orderId,
           splitGroup: settlement.splitGroup ?? null,

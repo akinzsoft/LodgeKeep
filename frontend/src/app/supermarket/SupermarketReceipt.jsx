@@ -1,3 +1,4 @@
+import { paymentLabel } from './paymentLabel.js';
 import { Money } from '../../shared/format/money.jsx';
 import styles from './Supermarket.module.css';
 
@@ -43,7 +44,7 @@ export function SupermarketReceipt({ sale, property }) {
         <div><dt>Subtotal</dt><dd><Money amount={sale.subtotal} currencyCode={currency} /></dd></div>
         <div><dt>Tax</dt><dd><Money amount={sale.tax_amount} currencyCode={currency} /></dd></div>
         <div className={styles.grandTotal}><dt>Total</dt><dd><Money amount={sale.total} currencyCode={currency} /></dd></div>
-        <div><dt>Paid by</dt><dd>{sale.method === 'terminal' ? 'Card (terminal)' : 'Cash'}</dd></div>
+        <div><dt>Paid by</dt><dd>{paymentLabel(sale)}</dd></div>
       </dl>
     </div>
   );

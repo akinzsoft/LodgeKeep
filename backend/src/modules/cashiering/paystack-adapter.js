@@ -224,7 +224,17 @@ function buildAdapter(secretKey) {
       method: 'POST',
       body: amount ? { transaction: reference, amount: toSubunit(amount) } : { transaction: reference },
     });
-    return { status: data.status, reference: data.transaction_reference ?? reference };
+    return { status: data.status, reference: data.transaction_reference ?? reference, refundId: data.id != null ? String(data.id) : null };
+  }
+
+  /**
+   * `GET /refund/:id` — a refund's current state ('pending' | 'processing' |
+   * 'processed' | 'failed' | ...), for a refund Paystack accepted but had not
+   * processed yet (the supermarket void completes once it has).
+   */
+  async function fetchRefund({ refundId }) {
+    const data = await paystackFetch(`/refund/${encodeURIComponent(refundId)}`, { timeoutMs: readTimeoutMs() });
+    return { status: data.status, refundId: String(data.id ?? refundId) };
   }
 
   /**
@@ -287,6 +297,7 @@ function buildAdapter(secretKey) {
     initializeTransaction,
     verifyTransaction,
     refundTransaction,
+    fetchRefund,
     createSubaccount,
     resolveBankAccount,
     verifyWebhookSignature,

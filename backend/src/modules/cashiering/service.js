@@ -673,6 +673,14 @@ async function initiatePosRegisterPaymentIntent({ trx, posOrderId, splitGroup, t
  * property's. `source` is stamped on the payment next to `subaccount_code`.
  */
 async function resolvePayoutSubaccount(db, payment) {
+  // A supermarket online sale has no POS tab until it is paid: its outlet comes from the pending sale.
+  if (payment.settlement_target === 'supermarket_sale') {
+    const intent = await db.table('supermarket_sale_intents').where({ payment_id: payment.id }).first('outlet_id');
+    if (intent) {
+      const outletRow = await db.table('pos_outlet_payment_subaccounts').where({ outlet_id: intent.outlet_id, is_active: true }).first();
+      if (outletRow) return { row: outletRow, source: 'outlet' };
+    }
+  }
   if (payment.pos_order_id) {
     const order = await db.table('pos_orders').where({ id: payment.pos_order_id }).first('outlet_id');
     if (order) {
@@ -726,7 +734,7 @@ async function startPaystackCheckout({ context, paymentId, guestEmail, callbackU
     // A Register payment whose popup was closed unpaid stays PENDING (see
     // `verifyPayment`); hand back its stored access code so the cashier's
     // retry reopens the SAME Paystack transaction rather than a second one.
-    const resumable = payment.settlement_target === 'pos_register' && payment.status === 'PENDING' ? payment.provider_access_code : null;
+    const resumable = RESUMABLE_TARGETS.has(payment.settlement_target) && payment.status === 'PENDING' ? payment.provider_access_code : null;
     return { payment, authorizationUrl: null, accessCode: resumable ?? null };
   }
 
@@ -767,6 +775,27 @@ async function startPaystackCheckout({ context, paymentId, guestEmail, callbackU
 }
 
 const TERMINAL_PAYMENT_STATUSES = new Set(['CAPTURED', 'FAILED', 'EXPIRED', 'VOIDED', 'REFUNDED', 'PARTIALLY_REFUNDED', 'CANCELLED']);
+
+// Checkouts the payer may reopen, cancel locally and still pay later (a late
+// capture is recorded so a refund can find it): the staff Register's, and the
+// supermarket till's online sale.
+const RESUMABLE_TARGETS = new Set(['pos_register', 'supermarket_sale']);
+const LATE_CAPTURE_REASONS = {
+  pos_register: 'Captured after its Register checkout was cancelled; no settlement uses it, so it needs a refund.',
+  supermarket_sale: 'Captured after its supermarket checkout was cancelled; no sale uses it, so it needs a refund.',
+};
+
+/**
+ * The supermarket module completes its own online sales on capture (see
+ * `supermarket/paystack-sale.js`). It is registered from there at load time
+ * rather than required here, because the supermarket module requires pos,
+ * which requires this file. Without it a supermarket capture refuses to apply
+ * (and is retried) rather than capture money with no sale.
+ */
+let supermarketCaptureFinalizer = null;
+function setSupermarketCaptureFinalizer(fn) {
+  supermarketCaptureFinalizer = fn;
+}
 
 /**
  * PLAN.md Phase 6 (QR self-ordering gap closure) — the pos_order-target
@@ -919,7 +948,7 @@ async function applyGatewayResult({ trx, payment, gatewayStatus, providerPayment
   // A Register checkout cancelled locally (tab voided, tender switched) is
   // still payable on Paystack's side. If the guest pays it anyway, the money
   // is real: record the capture rather than drop it, so a refund can find it.
-  const lateRegisterCapture = payment.settlement_target === 'pos_register' && payment.status === 'CANCELLED' && gatewayStatus === 'success';
+  const lateRegisterCapture = RESUMABLE_TARGETS.has(payment.settlement_target) && payment.status === 'CANCELLED' && gatewayStatus === 'success';
   if (TERMINAL_PAYMENT_STATUSES.has(payment.status) && !lateRegisterCapture) {
     return trx.table('payments').where({ id: payment.id }).first();
   }
@@ -935,7 +964,7 @@ async function applyGatewayResult({ trx, payment, gatewayStatus, providerPayment
         status: 'CAPTURED',
         captured_at: now,
         ...(channel ? { provider_channel: channel } : {}),
-        ...(lateRegisterCapture ? { failure_reason: 'Captured after its Register checkout was cancelled; no settlement uses it, so it needs a refund.' } : {}),
+        ...(lateRegisterCapture ? { failure_reason: LATE_CAPTURE_REASONS[payment.settlement_target] } : {}),
         provider_payment_id: providerPaymentId ?? payment.provider_payment_id,
       });
     if (claimed === 0) {
@@ -952,6 +981,11 @@ async function applyGatewayResult({ trx, payment, gatewayStatus, providerPayment
       // Capture only — the Register's own `settleOrder` links this payment
       // to a settlement once it has checked the amount (see
       // `initiatePosRegisterPaymentIntent`). No folio exists to post to.
+    } else if (payment.settlement_target === 'supermarket_sale') {
+      // The supermarket completes its sale in THIS transaction (exactly once:
+      // the claim above already decided which caller applies the capture).
+      if (!supermarketCaptureFinalizer) throw new Error('A supermarket payment was captured but the supermarket module is not loaded to complete its sale.');
+      await supermarketCaptureFinalizer({ trx, payment: { ...payment, status: 'CAPTURED', provider_payment_id: providerPaymentId ?? payment.provider_payment_id }, lateCapture: lateRegisterCapture });
     } else {
       const folio = await trx.table('folios').where({ id: payment.folio_id }).first();
       const businessDate = await propertyBusinessDate({ trx, propertyId: folio.property_id });
@@ -1024,7 +1058,7 @@ async function verifyPayment({ context, paymentId, userId }) {
   // ('ongoing'/'pending'). Only a definite gateway failure ends a Register
   // payment; anything else leaves it PENDING so a retry reopens the same
   // transaction (`startPaystackCheckout`) instead of charging twice.
-  if (payment.settlement_target === 'pos_register' && result.status !== 'success' && result.status !== 'failed') {
+  if (RESUMABLE_TARGETS.has(payment.settlement_target) && result.status !== 'success' && result.status !== 'failed') {
     return payment;
   }
   return db.transaction((trx) =>
@@ -1184,7 +1218,7 @@ async function decidePaymentWebhookEvent({ eventId, now = new Date() }) {
 
   // A Register checkout cancelled locally is still payable at Paystack; a late
   // capture of it is real money `applyGatewayResult` already knows how to record.
-  const lateRegisterCapture = payment.settlement_target === 'pos_register' && payment.status === 'CANCELLED';
+  const lateRegisterCapture = RESUMABLE_TARGETS.has(payment.settlement_target) && payment.status === 'CANCELLED';
   const terminalUnpaid = TERMINAL_PAYMENT_STATUSES.has(payment.status) && !lateRegisterCapture;
   if (terminalUnpaid && eventType === 'charge.failed') return finalize('ignored', { reason: 'already_terminal', paymentStatus: payment.status }, attribution);
 
@@ -1334,6 +1368,11 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
 
   const original = await db.table('payments').where({ id: paymentId }).first();
   if (!original) throw new ValidationError('PAYMENT_NOT_FOUND', 'The specified payment does not exist.');
+  // A supermarket online sale is refunded by voiding the sale (it also returns
+  // the stock and marks the sale void), never through this generic refund.
+  if (original.settlement_target === 'supermarket_sale') {
+    throw new ValidationError('USE_SUPERMARKET_VOID', 'Refund a supermarket online sale by voiding the sale on the Supermarket screen.', [{ field: 'payment_id', issue: 'supermarket_sale' }]);
+  }
   if (original.status !== 'CAPTURED' && original.status !== 'PARTIALLY_REFUNDED') {
     throw new InvalidPaymentTransitionError(original.status, 'REFUNDED');
   }
@@ -1573,6 +1612,9 @@ async function sumPostedRoomChargesByDate({ db, dates, baseCurrency }) {
 }
 
 module.exports = {
+  setSupermarketCaptureFinalizer,
+  resolvePayoutSubaccount,
+  TERMINAL_PAYMENT_STATUSES,
   LATE_ROOM_CHARGE_PREFIX,
   sumPostedRoomChargesByDate,
   listOtherFolioIncome,

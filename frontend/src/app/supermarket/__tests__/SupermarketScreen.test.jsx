@@ -20,6 +20,13 @@ const mocks = vi.hoisted(() => ({
   removeBarcode: vi.fn(),
   getStockOnHand: vi.fn(),
   listProductsImports: vi.fn(),
+  startOnlineSale: vi.fn(),
+  getPendingOnlineSale: vi.fn(),
+  reopenOnlineCheckout: vi.fn(),
+  checkOnlineSale: vi.fn(),
+  cancelOnlineSale: vi.fn(),
+  listOnlineSalesNeedingReview: vi.fn(),
+  refundOnlineSale: vi.fn(),
 }));
 
 const posMocks = vi.hoisted(() => ({
@@ -89,6 +96,8 @@ describe('<SupermarketScreen>', () => {
     mocks.listProductsImports.mockResolvedValue([]);
     mocks.listBarcodes.mockResolvedValue([]);
     mocks.getStockOnHand.mockResolvedValue({});
+    mocks.getPendingOnlineSale.mockResolvedValue(null);
+    mocks.listOnlineSalesNeedingReview.mockResolvedValue([]);
     scanner.cameraSupported.mockReturnValue(false);
   });
 
@@ -566,6 +575,89 @@ describe('<SupermarketScreen>', () => {
       await userEvent.click(await screen.findByRole('tab', { name: 'Products import' }));
       expect(await screen.findByText('Import products from a spreadsheet')).toBeInTheDocument();
       expect(mocks.listProductsImports).toHaveBeenCalledWith('5');
+    });
+  });
+
+  describe('Card (online)', () => {
+    const ONLINE = { id: '31', status: 'pending', total: '109.12', currency: 'NGN', lines: [], sale: null };
+    async function fillCart() {
+      mocks.lookupBarcode.mockResolvedValue(RICE);
+      await userEvent.type(await screen.findByLabelText(/scan a barcode/i), '6001{Enter}');
+      await screen.findByText('Items total');
+    }
+
+    it('starts an online sale from the cart, opens the payment window, and shows the receipt once it completes', async () => {
+      mocks.startOnlineSale.mockResolvedValue({ intent: ONLINE, accessCode: 'acc-1', checkoutUrl: 'u', qrDataUrl: 'data:image/png;base64,AAAA' });
+      mocks.checkOnlineSale.mockResolvedValue({ intent: { ...ONLINE, status: 'completed', sale: { ...SALE, method: 'card' } }, checkError: null });
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await fillCart();
+      await userEvent.click(screen.getByRole('button', { name: 'Card (online)' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Take online payment' }));
+      expect(mocks.startOnlineSale).toHaveBeenCalledWith(expect.objectContaining({ outletId: '5', items: [{ menu_item_id: '11', quantity: 1 }] }));
+      expect(mocks.createSale).not.toHaveBeenCalled();
+      expect(await screen.findByRole('dialog', { name: 'Card payment (online)' })).toBeInTheDocument();
+      // The cart is kept until the payment lands.
+      expect(within(screen.getByRole('complementary', { name: 'Current sale' })).getByText('Rice 5kg')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Check payment' }));
+      expect(await screen.findByText('Card (online)', { selector: 'dd' })).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'Card payment (online)' })).not.toBeInTheDocument();
+      expect(screen.getByText('Scan or search to start a sale.')).toBeInTheDocument();
+    });
+
+    it('asks to confirm an oversell before an online sale, like a cash sale', async () => {
+      mocks.getStockOnHand.mockResolvedValue({ 11: 0 });
+      mocks.startOnlineSale.mockResolvedValue({ intent: ONLINE, accessCode: 'a', checkoutUrl: 'u', qrDataUrl: 'data:image/png;base64,AAAA' });
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await fillCart();
+      await userEvent.click(screen.getByRole('button', { name: 'Card (online)' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Take online payment' }));
+      const dialog = await screen.findByRole('alertdialog', { name: 'Sell more than recorded stock?' });
+      expect(mocks.startOnlineSale).not.toHaveBeenCalled();
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Sell anyway' }));
+      expect(mocks.startOnlineSale).toHaveBeenCalledWith(expect.objectContaining({ confirmOversell: true }));
+    });
+
+    it('brings back this cashier\'s own waiting online payment after a reload', async () => {
+      mocks.getPendingOnlineSale.mockResolvedValue(ONLINE);
+      mocks.reopenOnlineCheckout.mockResolvedValue({ intent: ONLINE, accessCode: 'acc-1', checkoutUrl: 'u', qrDataUrl: 'data:image/png;base64,AAAA' });
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      expect(await screen.findByRole('dialog', { name: 'Card payment (online)' })).toBeInTheDocument();
+      expect(mocks.reopenOnlineCheckout).toHaveBeenCalledWith('31');
+    });
+
+    it('labels sales by how they were paid, so an online card sale never reads as cash', async () => {
+      mocks.listSales.mockResolvedValue([
+        { ...SALE, id: '1', method: 'cash' },
+        { ...SALE, id: '2', receipt_number: 8, method: 'terminal' },
+        { ...SALE, id: '3', receipt_number: 9, method: 'card' },
+      ]);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'All sales' }));
+      expect(await screen.findByText('Card (online)')).toBeInTheDocument();
+      expect(screen.getByText('Card (terminal)')).toBeInTheDocument();
+      expect(screen.getAllByText('Cash')).toHaveLength(1);
+    });
+
+    it('warns a manager that voiding an online sale refunds the customer', async () => {
+      mocks.listSales.mockResolvedValue([{ ...SALE, id: '3', receipt_number: 9, method: 'card' }]);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'All sales' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Void' }));
+      expect(await screen.findByText(/refunded in full through Paystack/)).toBeInTheDocument();
+    });
+
+    it('lists paid-but-unfinished online payments for a manager to refund, with a reason', async () => {
+      mocks.listOnlineSalesNeedingReview.mockResolvedValueOnce([{ id: '44', total: '203.00', currency: 'NGN', review_reason: 'paid after the sale was cancelled', lines: [{ quantity: 2, item_name: 'Biscuit' }] }]).mockResolvedValue([]);
+      mocks.refundOnlineSale.mockResolvedValue({});
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Setup' }));
+      expect(await screen.findByText(/2 × Biscuit/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Refund' }));
+      const dialog = await screen.findByRole('alertdialog');
+      await userEvent.type(within(dialog).getByRole('textbox'), 'Paid after cancel');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Refund customer' }));
+      expect(mocks.refundOnlineSale).toHaveBeenCalledWith('44', 'Paid after cancel');
     });
   });
 });
