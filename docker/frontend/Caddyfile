@@ -147,8 +147,30 @@
 		# where the till lives as a screen with no URL of its own — so this is
 		# as narrow as the current single-page app allows. The matchers mirror
 		# main.jsx's own startsWith() checks exactly (so /portalx is the portal too).
+		#
+		# The marketing landing page (frontend/src/landing) is shown ONLY at the
+		# exact bare app domain's `/` (selectEntryTree.js is the real decision;
+		# this is its twin for headers). It gets its own strict policy: no
+		# camera, no WebAssembly, no payment script — it only needs its own
+		# files, plus a self-hosted demo video (`media-src 'self'`). The host
+		# comes from APP_DOMAIN (passed to this container in docker-compose);
+		# if that variable is missing the default below can never match a real
+		# host, so every host keeps the staff-app policy exactly as before.
+		# `@staffApp` excludes the landing request, so the two never overlap
+		# (Caddy `header` directives would otherwise add, not replace).
+		@landing {
+			host {$APP_DOMAIN:no-landing.invalid}
+			path /
+		}
 		@strictApps path /portal* /platform* /qr-order* /signup*
-		@staffApp not path /portal* /platform* /qr-order* /signup*
+		@staffApp {
+			not path /portal* /platform* /qr-order* /signup*
+			not {
+				host {$APP_DOMAIN:no-landing.invalid}
+				path /
+			}
+		}
+		header @landing Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		header @staffApp Permissions-Policy "camera=(self), microphone=(), geolocation=(), payment=(self)"
 		header @staffApp Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://js.paystack.co https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		header @strictApps Content-Security-Policy "default-src 'self'; script-src 'self' https://js.paystack.co https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"

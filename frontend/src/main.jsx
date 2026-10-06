@@ -1,4 +1,4 @@
-import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, StrictMode, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 // Inter was always named first in `--font-sans` but never actually loaded,
 // so every screen silently rendered in the OS fallback. Self-hosted (no
@@ -12,6 +12,7 @@ import './styles/tokens.css';
 import './styles/print.css';
 import styles from './main.module.css';
 import { AuthProvider, useAuth } from './app/auth/index.js';
+import { selectEntryTree } from './landing/selectEntryTree.js';
 import { StaffLoginScreen } from './app/auth/screens/StaffLoginScreen.jsx';
 import { MfaChallengeScreen } from './app/auth/screens/MfaChallengeScreen.jsx';
 import { AcceptInvitationScreen } from './app/auth/screens/AcceptInvitationScreen.jsx';
@@ -478,24 +479,50 @@ function Demo() {
  * all — every route under `/qr-order` is fully anonymous
  * (`shared/api/qr-ordering.js`'s own header).
  */
-createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    {window.location.pathname.startsWith('/portal') ? (
-      <PortalApp />
-    ) : window.location.pathname.startsWith('/platform') ? (
-      <PlatformApp />
-    ) : window.location.pathname.startsWith('/qr-order') ? (
-      <QrOrderApp />
-    ) : window.location.pathname.startsWith('/signup') ? (
+// The marketing landing page is code-split: only the bare app domain's own
+// visitors ever download it, never a tenant's staff devices.
+const LandingApp = lazy(() => import('./landing/LandingApp.jsx'));
+
+// Which tree to render is decided in one tested place (`selectEntryTree`). The
+// landing page appears ONLY at the exact bare app domain's `/`; every other
+// host (each tenant subdomain, a custom domain) keeps the tree it always had.
+const entryTree = selectEntryTree({
+  hostname: window.location.hostname,
+  pathname: window.location.pathname,
+  appDomain: import.meta.env.VITE_APP_DOMAIN,
+});
+
+function EntryTree() {
+  switch (entryTree) {
+    case 'landing':
+      return (
+        <Suspense fallback={null}>
+          <LandingApp />
+        </Suspense>
+      );
+    case 'portal':
+      return <PortalApp />;
+    case 'platform':
+      return <PlatformApp />;
+    case 'qr-order':
+      return <QrOrderApp />;
+    case 'signup':
       // PLAN.md Phase 5 gap closure — public, no session of any kind
       // (POST /api/v1/signup is mounted outside buildStaffRouter()
       // entirely, since no tenant exists yet), so this needs no
       // <AuthProvider> any more than /qr-order's fully anonymous tree does.
-      <SignupScreen />
-    ) : (
-      <AuthProvider>
-        <Demo />
-      </AuthProvider>
-    )}
+      return <SignupScreen />;
+    default:
+      return (
+        <AuthProvider>
+          <Demo />
+        </AuthProvider>
+      );
+  }
+}
+
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <EntryTree />
   </StrictMode>
 );
