@@ -30,8 +30,9 @@ export function listTransferCandidates(outletId) {
 }
 
 /** Hands open tabs to another operator, all or nothing; returns the updated tabs. */
-export function transferTabs({ orderIds, toUserId }) {
-  return request('/pos/orders/transfer', { method: 'POST', body: { order_ids: orderIds, to_user_id: toUserId } });
+/** `reason` is required when a manager hands over tabs they don't own (an override, audited). */
+export function transferTabs({ orderIds, toUserId, reason }) {
+  return request('/pos/orders/transfer', { method: 'POST', body: { order_ids: orderIds, to_user_id: toUserId, reason: reason || undefined } });
 }
 
 /** `{restricted, outletIds}` — the outlets this user may use on the Register and Shifts (staff outlet assignments); `restricted: false` means every outlet. */
@@ -243,21 +244,24 @@ export function openOrder({ outletId, terminalId, tableLabel }) {
  *   rejected with `BUSINESS_RULE_INSUFFICIENT_STOCK` — see
  *   `RegisterTab.jsx`'s own confirm-then-retry handling.
  */
-export function addItem(orderId, { menuItemId, quantity, modifiers, stockOverrideReason }) {
-  return request(`/pos/orders/${orderId}/items`, { method: 'POST', body: { menu_item_id: menuItemId, quantity, modifiers, stock_override_reason: stockOverrideReason } });
+export function addItem(orderId, { menuItemId, quantity, modifiers, stockOverrideReason, overrideReason }) {
+  return request(`/pos/orders/${orderId}/items`, {
+    method: 'POST',
+    body: { menu_item_id: menuItemId, quantity, modifiers, stock_override_reason: stockOverrideReason, override_reason: overrideReason || undefined },
+  });
 }
 
 export function voidOrderItem(orderId, itemId, reason) {
   return request(`/pos/orders/${orderId}/items/${itemId}/void`, { method: 'POST', body: { reason } });
 }
 
-export function assignItemSplitGroup(orderId, itemId, splitGroup) {
-  return request(`/pos/orders/${orderId}/items/${itemId}/split-group`, { method: 'POST', body: { split_group: splitGroup } });
+export function assignItemSplitGroup(orderId, itemId, splitGroup, { overrideReason } = {}) {
+  return request(`/pos/orders/${orderId}/items/${itemId}/split-group`, { method: 'POST', body: { split_group: splitGroup, override_reason: overrideReason || undefined } });
 }
 
 /** Renames an open tab ("Table 4", "Pool bar – John", "Room 205"). */
-export function renameOrder(orderId, tableLabel) {
-  return request(`/pos/orders/${orderId}/rename`, { method: 'POST', body: { table_label: tableLabel } });
+export function renameOrder(orderId, tableLabel, { overrideReason } = {}) {
+  return request(`/pos/orders/${orderId}/rename`, { method: 'POST', body: { table_label: tableLabel, override_reason: overrideReason || undefined } });
 }
 
 export function voidOrder(orderId, reason) {
@@ -282,11 +286,11 @@ export function getSettlementPreview(orderId) {
  * already `CAPTURED` has none and can be settled straight away.
  * @param {{splitGroup?: number|null, tender: 'card'|'nqr', customerEmail?: string}} params
  */
-export async function startPaystackCheckout(orderId, { splitGroup, tender, customerEmail }) {
+export async function startPaystackCheckout(orderId, { splitGroup, tender, customerEmail, overrideReason }) {
   const { data, meta } = await requestWithMeta(`/pos/orders/${orderId}/paystack-checkout`, {
     method: 'POST',
     headers: { 'Idempotency-Key': idempotencyKey() },
-    body: { split_group: splitGroup ?? null, tender, customer_email: customerEmail || undefined },
+    body: { split_group: splitGroup ?? null, tender, customer_email: customerEmail || undefined, override_reason: overrideReason || undefined },
   });
   return { payment: data, accessCode: meta?.accessCode ?? null, checkoutError: meta?.checkoutError ?? null };
 }
@@ -301,9 +305,10 @@ export function verifyPaystackPayment(orderId, paymentId) {
  * @param {{stockOverrideReason?: string}} [options] `stockOverrideReason`
  *   covers the WHOLE settle request (every split group in one call), only
  *   required after a prior attempt was rejected with
- *   `BUSINESS_RULE_INSUFFICIENT_STOCK`.
+ *   `BUSINESS_RULE_INSUFFICIENT_STOCK`. `overrideReason` is a manager's
+ *   reason for settling another operator's tab (required by the server then).
  */
-export function settleOrder(orderId, settlements, { stockOverrideReason } = {}) {
+export function settleOrder(orderId, settlements, { stockOverrideReason, overrideReason } = {}) {
   return request(`/pos/orders/${orderId}/settle`, {
     method: 'POST',
     headers: { 'Idempotency-Key': idempotencyKey() },
@@ -322,6 +327,7 @@ export function settleOrder(orderId, settlements, { stockOverrideReason } = {}) 
           : undefined,
       })),
       stock_override_reason: stockOverrideReason,
+      override_reason: overrideReason || undefined,
     },
   });
 }

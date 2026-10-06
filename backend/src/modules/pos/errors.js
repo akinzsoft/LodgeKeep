@@ -73,13 +73,21 @@ class ShiftNotYoursError extends AppError {
 }
 
 /**
- * A tab's opener may void it, void its lines and rename it; anyone else
- * needs `pos.manage` (user-requested). A tab with no opener (a guest QR
- * order) stays open to any operator at its outlet.
+ * Only a tab's owner (its opener, or whoever it was handed to) may add to,
+ * split, settle, void, rename or hand it over; anyone else needs
+ * `pos.manage`. A tab with no owner (a guest QR order) stays open to any
+ * operator at its outlet. See `assertCanChangeTab`.
  */
 class TabNotYoursError extends AppError {
   constructor(orderId) {
-    super('FORBIDDEN_TAB_NOT_YOURS', 'Only the operator who opened this tab can change it. A manager can do it on their behalf.', 403, { orderId });
+    super('FORBIDDEN_TAB_NOT_YOURS', 'This tab belongs to another operator. Ask them to hand it over to you, or a manager can do it on their behalf.', 403, { orderId });
+  }
+}
+
+/** A manager acting on another operator's tab must say why; the reason goes on the audit row. */
+class TabOverrideReasonRequiredError extends ValidationError {
+  constructor(orderId) {
+    super('OVERRIDE_REASON_REQUIRED', "This tab belongs to another operator. Give a reason to work on it on their behalf.", [{ field: 'override_reason', issue: 'missing', orderId }]);
   }
 }
 
@@ -221,6 +229,7 @@ class StoreOutletConversionBlockedError extends AppError {
 }
 
 module.exports = {
+  TabOverrideReasonRequiredError,
   StoreOutletNotAPointOfSaleError,
   SupermarketOutletNotARegisterError,
   StoreOutletConversionBlockedError,

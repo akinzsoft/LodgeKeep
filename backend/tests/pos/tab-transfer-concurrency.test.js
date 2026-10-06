@@ -84,7 +84,7 @@ describe('tab transfer under real concurrent connections', () => {
     const first = await openTab(`R${round}-A`);
     const second = await openTab(`R${round}-B`);
     const send = (managerId, orderIds, toUserId) =>
-      req.post('/api/v1/pos/orders/transfer').set('Authorization', `Bearer ${token(managerId)}`).send({ order_ids: orderIds, to_user_id: toUserId });
+      req.post('/api/v1/pos/orders/transfer').set('Authorization', `Bearer ${token(managerId)}`).send({ order_ids: orderIds, to_user_id: toUserId, reason: 'Shift change' });
 
     const [one, two] = await Promise.all([send(users.managerOne, [first, second], users.receiverOne), send(users.managerTwo, [second, first], users.receiverTwo)]);
     expect([one.status, two.status]).toEqual([200, 200]);

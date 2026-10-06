@@ -163,7 +163,8 @@ describe('GET /api/v1/pos/tickets', () => {
     expect(again.status).toBe(200);
     expect(String(again.body.data.ticket_done_by_user_id)).toBe(String(ctx.a.users[1].id));
 
-    const added = await t.request.post(`/api/v1/pos/orders/${tab}/items`).set('Authorization', `Bearer ${operator()}`).send({ menu_item_id: menuItemId, quantity: 1 });
+    // The tab's owner (who opened it) adds; adding to someone else's tab is owner-only (tab-owner.test.js).
+    const added = await t.request.post(`/api/v1/pos/orders/${tab}/items`).set('Authorization', `Bearer ${manager()}`).send({ menu_item_id: menuItemId, quantity: 1 });
     expect(added.status).toBe(200);
     expect(ours((await get()).body.data, [tab]).map((row) => row.items.length)).toEqual([2]);
   });

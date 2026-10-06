@@ -109,8 +109,17 @@ describe('handing tabs over', () => {
     expect((await row(own)).owner_user_id).toBeNull();
     expect((await row(others)).owner_user_id).toBeNull();
 
-    const byManager = await transfer(manager, { order_ids: [others], to_user_id: opener });
+    // A manager moving someone else's tab is an override: it needs a reason.
+    const noReason = await transfer(manager, { order_ids: [others], to_user_id: opener });
+    expect(noReason.status).toBe(400);
+    expect(noReason.body.error.code).toBe('VALIDATION_OVERRIDE_REASON_REQUIRED');
+    expect((await row(others)).owner_user_id).toBeNull();
+
+    const byManager = await transfer(manager, { order_ids: [others], to_user_id: opener, reason: '  Colleague went home sick  ' });
     expect(byManager.status).toBe(200);
+    const audit = await t.trx('audit_log').where({ entity_type: 'pos_orders', entity_id: others, action: 'transfer' }).first();
+    expect(String(audit.user_id)).toBe(String(manager));
+    expect(audit.reason).toBe('Colleague went home sick');
     expect(String((await row(others)).owner_user_id)).toBe(String(opener));
   });
 
