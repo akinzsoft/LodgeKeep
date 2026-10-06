@@ -41,7 +41,8 @@ describe('landing page sections', () => {
     expect(screen.getByText(/one-time setup fee/)).toBeInTheDocument();
     expect(screen.getByText(/35,000\.00/)).toBeInTheDocument();
     expect(screen.queryByText(/50,000\.00/)).not.toBeInTheDocument();
-    expect(document.body.textContent).not.toMatch(/per-room|per-user|more than one property/i);
+    expect(screen.getByText('No per-room or per-user fees')).toBeInTheDocument();
+    expect(screen.getByText('Multiple properties on one account')).toBeInTheDocument();
     expect(screen.getByText(/14-day free trial/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /start free trial/i })).toHaveAttribute('href', '/signup');
   });

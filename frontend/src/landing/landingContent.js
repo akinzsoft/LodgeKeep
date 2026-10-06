@@ -157,14 +157,17 @@ export const content = {
     currency: 'NGN',
     interval: 'per month',
     trial: '14-day free trial · no card needed to start',
-    // Only claims confirmed by Planmsys. "No per-room or per-user fees" and
-    // "more than one property on the same account" were left out until confirmed.
+    // Commercial claims confirmed by Planmsys. The monthly amount must equal
+    // the seeded `plans.price` (migration 20261124090000) or customers are
+    // charged something other than what is quoted.
     includes: [
       'Hotel PMS, front desk, housekeeping, cashiering and night audit',
       'POS for bars and restaurants, with stock control',
       'Supermarket till with barcode scanning',
       'Paystack online payments, card-terminal records and NQR',
       'Reports, profit and loss and payment reconciliation',
+      'Multiple properties on one account',
+      'No per-room or per-user fees',
     ],
     cta: 'Start free trial',
   },
