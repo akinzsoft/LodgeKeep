@@ -532,16 +532,18 @@ async function listTransferCandidates(req, res, next) {
 async function transferTabs(req, res, next) {
   try {
     const canActForOthers = await holdsPermission(req.context, 'pos.manage');
+    // Optional for an owner; required (as the override reason) when a manager moves someone else's tab.
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 255) || null : null;
     const moved = await service.transferTabs({
       context: req.context,
       orderIds: req.body?.order_ids,
       toUserId: req.body?.to_user_id,
       userId: req.context.userId,
       canActForOthers,
-      reason: typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 255) : null,
+      reason,
     });
     for (const { before, after } of moved) {
-      await req.audit({ entityType: 'pos_orders', entityId: after.id, action: 'transfer', beforeState: before, afterState: after, reason: req.body?.reason });
+      await req.audit({ entityType: 'pos_orders', entityId: after.id, action: 'transfer', beforeState: before, afterState: after, reason });
     }
     res.status(200).json(ok(moved.map(({ after }) => after)));
   } catch (error) {
@@ -615,18 +617,39 @@ async function openOrder(req, res, next) {
   }
 }
 
+/**
+ * The tab-owner override for one request: whether the caller may act on
+ * other operators' tabs (`pos.manage`), and the reason they gave
+ * (`override_reason`). The service decides under the order lock whether it
+ * is an override at all; `overrideAudit` turns its answer into audit fields.
+ */
+async function tabActor(req) {
+  return {
+    userId: req.context.userId,
+    canActForOthers: await holdsPermission(req.context, 'pos.manage'),
+    overrideReason: service.cleanOverrideReason(req.body?.override_reason),
+  };
+}
+
+function overrideAudit(actor, ownerOverride) {
+  return ownerOverride == null ? {} : { reason: actor.overrideReason, ownerOverride: { owner_user_id: ownerOverride } };
+}
+
 async function addItem(req, res, next) {
   try {
     const menuItemId = require_(req.body, 'menu_item_id');
-    const result = await service.addItem({
+    const actor = await tabActor(req);
+    const { ownerOverride, ...result } = await service.addItem({
       context: req.context,
       orderId: req.params.id,
       menuItemId,
       quantity: req.body?.quantity,
       modifiers: req.body?.modifiers,
       stockOverrideReason: req.body?.stock_override_reason,
+      ...actor,
     });
-    await req.audit({ entityType: 'pos_orders', entityId: req.params.id, action: 'add_item', afterState: result });
+    const override = overrideAudit(actor, ownerOverride);
+    await req.audit({ entityType: 'pos_orders', entityId: req.params.id, action: 'add_item', afterState: { ...result, ...override.ownerOverride }, reason: override.reason });
     res.status(200).json(ok(result));
   } catch (error) {
     next(error);
@@ -645,14 +668,27 @@ async function voidOrderItem(req, res, next) {
   }
 }
 
+/** Audited with the line's split group before and after: a split decides who pays for what. */
 async function assignItemSplitGroup(req, res, next) {
   try {
-    const item = await service.assignItemSplitGroup({
+    const actor = await tabActor(req);
+    const { before, after, ownerOverride } = await service.assignItemSplitGroup({
       context: req.context,
       orderItemId: req.params.itemId,
       splitGroup: req.body?.split_group ?? null,
+      ...actor,
     });
-    res.status(200).json(ok(item));
+    const override = overrideAudit(actor, ownerOverride);
+    const allocation = (item) => ({ pos_order_id: item.pos_order_id, menu_item_id: item.menu_item_id, quantity: item.quantity, split_group: item.split_group });
+    await req.audit({
+      entityType: 'pos_order_items',
+      entityId: after.id,
+      action: 'assign_split_group',
+      beforeState: allocation(before),
+      afterState: { ...allocation(after), ...override.ownerOverride },
+      reason: override.reason,
+    });
+    res.status(200).json(ok(after));
   } catch (error) {
     next(error);
   }
@@ -662,9 +698,10 @@ async function renameOrder(req, res, next) {
   try {
     const before = await service.getOrder({ context: req.context, id: req.params.id });
     if (!before) return notFound(res);
-    const canActForOthers = await holdsPermission(req.context, 'pos.manage');
-    const order = await service.renameOrder({ context: req.context, orderId: req.params.id, tableLabel: req.body?.table_label, userId: req.context.userId, canActForOthers });
-    await req.audit({ entityType: 'pos_orders', entityId: order.id, action: 'rename', beforeState: { table_label: before.table_label }, afterState: { table_label: order.table_label } });
+    const actor = await tabActor(req);
+    const { order, ownerOverride } = await service.renameOrder({ context: req.context, orderId: req.params.id, tableLabel: req.body?.table_label, ...actor });
+    const override = overrideAudit(actor, ownerOverride);
+    await req.audit({ entityType: 'pos_orders', entityId: order.id, action: 'rename', beforeState: { table_label: before.table_label }, afterState: { table_label: order.table_label, ...override.ownerOverride }, reason: override.reason });
     res.status(200).json(ok(order));
   } catch (error) {
     next(error);
@@ -695,13 +732,17 @@ async function previewSettlement(req, res, next) {
 
 async function settleOrder(req, res, next) {
   try {
+    const actor = await tabActor(req);
+    // Set inside the handler (it learns the owner under the order lock); read only for a non-replayed call.
+    let override = {};
     await runIdempotentMutation(req, res, {
       operationType: 'pos.settle_order',
       entityType: 'pos_orders',
       entityId: req.params.id,
       action: 'settle',
+      auditExtras: () => ({ reason: override.reason, afterState: override.ownerOverride }),
       handler: async (trx) => {
-        const result = await service.settleOrder({
+        const { ownerOverride, ...result } = await service.settleOrder({
           trx,
           orderId: req.params.id,
           settledByUserId: req.context.userId,
@@ -718,7 +759,9 @@ async function settleOrder(req, res, next) {
               : undefined,
           })),
           stockOverrideReason: req.body?.stock_override_reason,
+          actor,
         });
+        override = overrideAudit(actor, ownerOverride);
         return { status: 200, body: ok(result) };
       },
     });
@@ -740,25 +783,30 @@ async function startPaystackCheckout(req, res, next) {
   try {
     const tender = require_(req.body, 'tender');
     const key = requireIdempotencyKey(req);
+    const actor = await tabActor(req);
+    // Set inside the handler (it learns the owner under the order lock); read only when not replayed.
+    let override = {};
     const outcome = await withIdempotency({
       context: req.context,
       operationType: 'pos.start_register_paystack_checkout',
       key,
       payload: { ...req.body, orderId: req.params.id },
       handler: async (trx) => {
-        const payment = await service.prepareRegisterPayment({
+        const { payment, ownerOverride } = await service.prepareRegisterPayment({
           trx,
           orderId: req.params.id,
           splitGroup: req.body?.split_group ?? null,
           tender,
           idempotencyKey: key,
+          actor,
         });
+        override = overrideAudit(actor, ownerOverride);
         return { status: 201, body: ok(payment) };
       },
     });
     const prepared = outcome.body.data;
     if (!outcome.replayed) {
-      await req.audit({ entityType: 'payments', entityId: prepared.id, action: 'initiate_register_paystack_payment', afterState: prepared });
+      await req.audit({ entityType: 'payments', entityId: prepared.id, action: 'initiate_register_paystack_payment', afterState: { ...prepared, ...override.ownerOverride }, reason: override.reason });
     }
 
     try {

@@ -34,8 +34,9 @@ function requireIdempotencyKey(req) {
  * @param {string|number} [params.entityId]  Falls back to `result.body.data.id` when omitted (a create, where the id isn't known until the handler runs).
  * @param {string} params.action  `audit_log.action`.
  * @param {(trx: object) => Promise<{status: number, body: object}>} params.handler
+ * @param {() => {reason?: string, afterState?: object}} [params.auditExtras]  Called only for a non-replayed call, after the handler ran: a reason and extra after-state fields the handler only learns inside the transaction (e.g. a manager's tab-owner override).
  */
-async function runIdempotentMutation(req, res, { operationType, entityType, entityId, action, handler }) {
+async function runIdempotentMutation(req, res, { operationType, entityType, entityId, action, handler, auditExtras }) {
   const key = requireIdempotencyKey(req);
   const result = await withIdempotency({
     context: req.context,
@@ -45,12 +46,13 @@ async function runIdempotentMutation(req, res, { operationType, entityType, enti
     handler,
   });
   if (!result.replayed) {
+    const extras = auditExtras ? auditExtras() : {};
     await req.audit({
       entityType,
       entityId: entityId ?? result.body?.data?.id ?? null,
       action,
-      afterState: result.body?.data,
-      reason: req.body?.reason,
+      afterState: extras.afterState ? { ...result.body?.data, ...extras.afterState } : result.body?.data,
+      reason: extras.reason ?? req.body?.reason,
     });
     // ARCHITECTURE.md §13/§14: best-effort reactive dispatch trigger, fired
     // after the transaction that wrote any outbox row has already

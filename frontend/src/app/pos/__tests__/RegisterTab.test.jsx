@@ -804,7 +804,7 @@ describe('<RegisterTab>', () => {
     await userEvent.type(input, 'Room 205');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Save name' }));
 
-    expect(mocks.renameOrder).toHaveBeenCalledWith('9', 'Room 205');
+    expect(mocks.renameOrder).toHaveBeenCalledWith('9', 'Room 205', { overrideReason: undefined });
     expect(await screen.findByRole('button', { name: 'Room 205' })).toBeInTheDocument();
   });
 
@@ -836,7 +836,7 @@ describe('<RegisterTab>', () => {
       await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Hand over' }));
 
       expect(mocks.listTransferCandidates).toHaveBeenCalledWith(OUTLET.id);
-      expect(mocks.transferTabs).toHaveBeenCalledWith({ orderIds: ['9'], toUserId: '8' });
+      expect(mocks.transferTabs).toHaveBeenCalledWith({ orderIds: ['9'], toUserId: '8', reason: '' });
       expect(await screen.findByText(/Another operator's tab/)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^Rename/ })).not.toBeInTheDocument();
     });
@@ -848,7 +848,7 @@ describe('<RegisterTab>', () => {
       await userEvent.click(await screen.findByRole('button', { name: 'Hand over my tabs (2)' }));
       await userEvent.selectOptions(await screen.findByLabelText('Hand to'), 'Nia Night');
       await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Hand over' }));
-      expect(mocks.transferTabs).toHaveBeenCalledWith({ orderIds: ['9', '11'], toUserId: '8' });
+      expect(mocks.transferTabs).toHaveBeenCalledWith({ orderIds: ['9', '11'], toUserId: '8', reason: '' });
       await waitFor(() => expect(screen.queryByRole('button', { name: /^Hand over my tabs/ })).not.toBeInTheDocument());
     });
 
@@ -876,22 +876,85 @@ describe('<RegisterTab>', () => {
       await screen.findByText('Order Ticket');
     }
 
-    it('offers an operator no void or rename on it, and says why', async () => {
+    it('lets an operator do nothing on it — no add, split, checkout, void or rename — and says why', async () => {
       await openExistingTab({ currentUserId: '7' });
-      expect(screen.getByText(/Another operator's tab/)).toBeInTheDocument();
+      expect(screen.getByText(/Another operator's tab — ask them to hand it over/)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^Rename/ })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Remove Table 1' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^Void / })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^Remove one / })).not.toBeInTheDocument();
-      // Adding to it is still allowed.
-      expect(screen.getByRole('button', { name: /^Add another / })).toBeInTheDocument();
+      // Security fix: adding to (and checking out) someone else's tab is owner-only.
+      expect(screen.getByRole('button', { name: /^Add another / })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Add House Cocktail' })).toBeDisabled();
+      expect(screen.queryByRole('button', { name: 'Send to Bar & Checkout' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Split bill' })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Why are you working on it/)).not.toBeInTheDocument();
     });
 
-    it('offers a manager every control on it', async () => {
+    it('asks a manager for a reason once, then sends it with every action on that tab', async () => {
+      mocks.addItem.mockResolvedValue({});
+      mocks.renameOrder.mockResolvedValue({ ...othersTab, table_label: 'VIP' });
       await openExistingTab({ currentUserId: '7', canManageTabs: true });
-      expect(screen.getByRole('button', { name: /^Rename/ })).toBeInTheDocument();
+      // Void needs no override reason (its own reason is required), so those stay.
       expect(screen.getByRole('button', { name: 'Remove Table 1' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^Void / })).toBeInTheDocument();
+      // Everything else waits for the reason.
+      expect(screen.getByRole('button', { name: 'Add House Cocktail' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /^Rename/ })).toBeDisabled();
+      expect(screen.queryByRole('button', { name: 'Send to Bar & Checkout' })).not.toBeInTheDocument();
+      const workOn = screen.getByRole('button', { name: 'Work on this tab' });
+      expect(workOn).toBeDisabled();
+
+      await userEvent.type(screen.getByLabelText(/Why are you working on it/), 'Cashier on break');
+      await userEvent.click(workOn);
+      expect(await screen.findByText(/reason: Cashier on break/)).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add House Cocktail' }));
+      expect(mocks.addItem).toHaveBeenCalledWith('9', expect.objectContaining({ menuItemId: '3', overrideReason: 'Cashier on break' }));
+      expect(await screen.findByRole('button', { name: 'Send to Bar & Checkout' })).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: /^Rename/ }));
+      const dialog = await screen.findByRole('dialog', { name: 'Rename tab' });
+      const nameInput = within(dialog).getByLabelText('Tab name');
+      await userEvent.clear(nameInput);
+      await userEvent.type(nameInput, 'VIP');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Save name' }));
+      expect(mocks.renameOrder).toHaveBeenCalledWith('9', 'VIP', { overrideReason: 'Cashier on break' });
+    });
+
+    it("sends a manager's reason with a split change and with checkout on someone else's tab", async () => {
+      mocks.listOrders.mockResolvedValue([othersTab]);
+      mocks.getOrder.mockResolvedValue({ order: othersTab, items: [orderItem({ id: '1' }), orderItem({ id: '2' })], settlements: [] });
+      mocks.assignItemSplitGroup.mockResolvedValue({});
+      mocks.settleOrder.mockResolvedValue({ order: { ...othersTab, status: 'settled' }, settlements: [] });
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} currentUserId="7" canManageTabs />);
+      await selectStation();
+      await userEvent.click(await screen.findByRole('button', { name: 'Table 1' }));
+      await userEvent.type(await screen.findByLabelText(/Why are you working on it/), 'Guest complaint');
+      await userEvent.click(screen.getByRole('button', { name: 'Work on this tab' }));
+      await screen.findByText('Subtotal');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Split bill' }));
+      const modal = screen.getByText('Split this tab').closest('form');
+      await userEvent.selectOptions(within(modal).getAllByRole('combobox')[0], '1');
+      expect(mocks.assignItemSplitGroup).toHaveBeenCalledWith('9', '1', 1, { overrideReason: 'Guest complaint' });
+      await userEvent.click(within(modal).getByRole('button', { name: 'Cancel' }));
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Send to Bar & Checkout' }));
+      expect(mocks.settleOrder).toHaveBeenCalledWith('9', expect.any(Array), expect.objectContaining({ overrideReason: 'Guest complaint' }));
+    });
+
+    it("makes a manager give a reason to hand over someone else's tab", async () => {
+      mocks.listTransferCandidates.mockResolvedValue([{ id: '8', first_name: 'Nia', last_name: 'Night', role: 'pos_operator' }]);
+      mocks.transferTabs.mockResolvedValue([{ ...othersTab, owner_user_id: '8' }]);
+      await openExistingTab({ currentUserId: '7', canManageTabs: true });
+      await userEvent.click(screen.getByRole('button', { name: 'Hand over Table 1' }));
+      await userEvent.selectOptions(await screen.findByLabelText('Hand to'), 'Nia Night');
+      const submit = within(screen.getByRole('dialog')).getByRole('button', { name: 'Hand over' });
+      expect(submit).toBeDisabled();
+      await userEvent.type(within(screen.getByRole('dialog')).getByLabelText(/Reason/), 'Shift change');
+      await userEvent.click(submit);
+      expect(mocks.transferTabs).toHaveBeenCalledWith({ orderIds: ['9'], toUserId: '8', reason: 'Shift change' });
     });
 
     it("offers the opener every control on their own tab", async () => {
@@ -1230,7 +1293,7 @@ describe('<RegisterTab>', () => {
     const modal = screen.getByText('Split this tab').closest('form');
     const [firstItemSelect] = within(modal).getAllByRole('combobox');
     await userEvent.selectOptions(firstItemSelect, '1');
-    expect(mocks.assignItemSplitGroup).toHaveBeenCalledWith('9', '1', 1);
+    expect(mocks.assignItemSplitGroup).toHaveBeenCalledWith('9', '1', 1, { overrideReason: undefined });
 
     expect(await within(modal).findByText('Ungrouped')).toBeInTheDocument();
     expect(within(modal).getByRole('heading', { name: 'Group 1' })).toBeInTheDocument();

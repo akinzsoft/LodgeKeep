@@ -97,6 +97,7 @@ const {
   ShiftNotFoundError,
   ShiftNotYoursError,
   TabNotYoursError,
+  TabOverrideReasonRequiredError,
   TabNotTransferableError,
   SettlementAlreadyVoidedError,
   RegisterPaymentInvalidError,
@@ -849,12 +850,13 @@ async function openOrder({ context, outletId, terminalId = null, openedByUserId 
   return getOrder({ context, id });
 }
 
-async function addItem({ context, orderId, menuItemId, quantity, modifiers, stockOverrideReason }) {
+async function addItem({ context, orderId, menuItemId, quantity, modifiers, stockOverrideReason, userId, canActForOthers = false, overrideReason = null }) {
   const db = scopedDb().for(context);
   return db.transaction(async (trx) => {
     const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
     if (!order) throw new OrderNotFoundError();
     if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
+    const ownerOverride = assertCanChangeTab(order, { userId, canActForOthers, overrideReason });
 
     // Matched in the WHERE clause, not fetched-then-compared in JS — see
     // `openOrder`'s own comment on why.
@@ -893,7 +895,7 @@ async function addItem({ context, orderId, menuItemId, quantity, modifiers, stoc
     });
     // A new item sends the tab back to the kitchen queue.
     if (order.ticket_done_at) await trx.table('pos_orders').where({ id: orderId }).update({ ticket_done_at: null, ticket_done_by_user_id: null });
-    return { order, items: await trx.table('pos_order_items').where({ pos_order_id: orderId }).orderBy('id') };
+    return { order, items: await trx.table('pos_order_items').where({ pos_order_id: orderId }).orderBy('id'), ownerOverride };
   });
 }
 
@@ -938,18 +940,36 @@ function tabOwnerId(order) {
   return order.owner_user_id ?? order.opened_by_user_id ?? null;
 }
 
+/** A manager's override reason as stored: trimmed, at most 500 characters, null when blank. */
+function cleanOverrideReason(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, 500) : null;
+}
+
 /**
- * Void and rename belong to a tab's owner (user-requested). Anyone else
- * needs `pos.manage` (`canActForOthers`); a void still records its own
- * reason and voider. A tab with no owner — a guest QR order — is left to
- * any operator at its outlet. The owner can change (a transfer), so the
+ * Everything that changes an open tab belongs to its owner (security fix:
+ * adding items, split groups and settlement used to be open to any operator
+ * at the outlet). Adding, splitting, settling, Paystack checkout, voiding,
+ * renaming and handing over all call this under the order lock.
+ *
+ * - The owner (or anyone, on a guest QR tab with no owner) passes.
+ * - Anyone else needs `pos.manage` (`canActForOthers`) AND a reason
+ *   (`overrideReason`), which the caller writes to the audit row. A void
+ *   passes `reasonRequired: false` because its own void reason is already
+ *   mandatory and audited.
+ *
+ * Returns the owner's id when the caller is acting for them (an override,
+ * to be audited), else null. The owner can change (a transfer), so the
  * deciding check always runs on the row read under the order lock;
  * `voidOrder`'s earlier check is only an early refusal before Paystack.
  */
-function assertCanChangeTab(order, { userId, canActForOthers }) {
+function assertCanChangeTab(order, { userId, canActForOthers = false, overrideReason = null, reasonRequired = true }) {
   const owner = tabOwnerId(order);
-  if (owner == null || canActForOthers) return;
-  if (String(owner) !== String(userId)) throw new TabNotYoursError(order.id);
+  if (owner == null || String(owner) === String(userId)) return null;
+  if (!canActForOthers) throw new TabNotYoursError(order.id);
+  if (reasonRequired && !cleanOverrideReason(overrideReason)) throw new TabOverrideReasonRequiredError(order.id);
+  return owner;
 }
 
 const MAX_TABS_PER_TRANSFER = 50;
@@ -1014,7 +1034,7 @@ async function transferTabs({ context, orderIds, toUserId, userId, canActForOthe
       if (tabOwnerId(order) == null) {
         throw new TabNotTransferableError(order.id);
       }
-      assertCanChangeTab(order, { userId, canActForOthers });
+      assertCanChangeTab(order, { userId, canActForOthers, overrideReason: reason });
     }
 
     const recipient = await trx
@@ -1058,7 +1078,7 @@ async function voidOrderItem({ context, orderItemId, reason, userId, canActForOt
   const db = scopedDb().for(context);
   return db.transaction(async (trx) => {
     const { order } = await lockOrderAndItem({ trx, orderItemId });
-    assertCanChangeTab(order, { userId, canActForOthers });
+    assertCanChangeTab(order, { userId, canActForOthers, reasonRequired: false });
     await trx.table('pos_order_items').where({ id: orderItemId }).update({
       voided_at: new Date(),
       void_reason: reason,
@@ -1068,12 +1088,19 @@ async function voidOrderItem({ context, orderItemId, reason, userId, canActForOt
   });
 }
 
-async function assignItemSplitGroup({ context, orderItemId, splitGroup }) {
+/**
+ * Moves one line to a split group (null = ungrouped). Owner-only like every
+ * tab change; returns the line before and after so the caller can audit the
+ * allocation change (a split decides who pays for what).
+ */
+async function assignItemSplitGroup({ context, orderItemId, splitGroup, userId, canActForOthers = false, overrideReason = null }) {
   const db = scopedDb().for(context);
   return db.transaction(async (trx) => {
-    await lockOrderAndItem({ trx, orderItemId });
+    const { order, item: before } = await lockOrderAndItem({ trx, orderItemId });
+    const ownerOverride = assertCanChangeTab(order, { userId, canActForOthers, overrideReason });
     await trx.table('pos_order_items').where({ id: orderItemId }).update({ split_group: splitGroup ?? null });
-    return trx.table('pos_order_items').where({ id: orderItemId }).first();
+    const after = await trx.table('pos_order_items').where({ id: orderItemId }).first();
+    return { before, after, ownerOverride };
   });
 }
 
@@ -1082,7 +1109,7 @@ async function assignItemSplitGroup({ context, orderItemId, splitGroup }) {
  * "Pool bar – John", "Room 205"). Locks the order like every tab mutation;
  * a settled or voided tab keeps the name it closed with.
  */
-async function renameOrder({ context, orderId, tableLabel, userId, canActForOthers = false }) {
+async function renameOrder({ context, orderId, tableLabel, userId, canActForOthers = false, overrideReason = null }) {
   const name = typeof tableLabel === 'string' ? tableLabel.trim() : '';
   if (!name || name.length > 60) {
     throw new ValidationError('INVALID_TAB_NAME', 'A tab name is required, up to 60 characters.', [{ field: 'table_label', issue: name ? 'too_long' : 'missing' }]);
@@ -1092,9 +1119,9 @@ async function renameOrder({ context, orderId, tableLabel, userId, canActForOthe
     const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
     if (!order) throw new OrderNotFoundError();
     if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
-    assertCanChangeTab(order, { userId, canActForOthers });
+    const ownerOverride = assertCanChangeTab(order, { userId, canActForOthers, overrideReason });
     await trx.table('pos_orders').where({ id: orderId }).update({ table_label: name });
-    return trx.table('pos_orders').where({ id: orderId }).first();
+    return { order: await trx.table('pos_orders').where({ id: orderId }).first(), ownerOverride };
   });
 }
 
@@ -1104,7 +1131,7 @@ async function voidOrder({ context, orderId, reason, userId, canActForOthers = f
 
   // Refuse someone else's tab before asking Paystack anything.
   const existing = await db.table('pos_orders').where({ id: orderId }).first();
-  if (existing) assertCanChangeTab(existing, { userId, canActForOthers });
+  if (existing) assertCanChangeTab(existing, { userId, canActForOthers, reasonRequired: false });
 
   // A card/NQR checkout still open on Paystack may already have been paid.
   // Ask Paystack first — outside any transaction (ARCHITECTURE.md §7) — so
@@ -1120,7 +1147,7 @@ async function voidOrder({ context, orderId, reason, userId, canActForOthers = f
     const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
     if (!order) throw new OrderNotFoundError();
     if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
-    assertCanChangeTab(order, { userId, canActForOthers });
+    assertCanChangeTab(order, { userId, canActForOthers, reasonRequired: false });
 
     const unsettled = await listUnsettledRegisterPayments({ db: trx, orderId });
     const captured = unsettled.find((p) => p.status === 'CAPTURED');
@@ -1248,8 +1275,13 @@ function normalizeTerminalDetails({ provider, reference } = {}) {
  * `terminal` follows the cash path (tax, tip) but is a card taken on the
  * hotel's own physical terminal: nothing to collect or verify, and it is
  * never counted in the drawer's expected cash.
+ *
+ * `actor` ({userId, canActForOthers, overrideReason}) applies the tab-owner
+ * rule (`assertCanChangeTab`) under the order lock. The Register passes it;
+ * the supermarket, QR and online-capture callers settle tabs they opened
+ * themselves (or run as the system) and omit it.
  */
-async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOverrideReason, claimPayment }) {
+async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOverrideReason, claimPayment, actor = null }) {
   if (!Array.isArray(settlements) || settlements.length === 0) {
     throw new ValidationError('MISSING_FIELD', 'At least one settlement is required.', [{ field: 'settlements', issue: 'missing' }]);
   }
@@ -1257,6 +1289,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
   const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
   if (!order) throw new OrderNotFoundError();
   if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
+  const ownerOverride = actor ? assertCanChangeTab(order, actor) : null;
 
   const items = await trx.table('pos_order_items').where({ pos_order_id: orderId }).whereNull('voided_at');
   const groupsPresent = new Set(items.map((item) => groupKey(item.split_group)));
@@ -1493,7 +1526,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
       methods: [...new Set(results.map((row) => row.method))],
     },
   });
-  return { order: settledOrder, settlements: results };
+  return { order: settledOrder, settlements: results, ownerOverride };
 }
 
 // ---------------------------------------------------------------------
@@ -1534,13 +1567,15 @@ async function listUnsettledRegisterPayments({ db, orderId }) {
  * matches (items changed, or the cashier switched Card to NQR) is
  * cancelled and replaced.
  */
-async function prepareRegisterPayment({ trx, orderId, splitGroup, tender, idempotencyKey }) {
+async function prepareRegisterPayment({ trx, orderId, splitGroup, tender, idempotencyKey, actor = null }) {
   if (!Object.hasOwn(REGISTER_TENDERS, tender ?? '')) {
     throw new ValidationError('INVALID_TENDER', '"tender" must be "card" or "nqr".', [{ field: 'tender', issue: 'invalid' }]);
   }
   const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
   if (!order) throw new OrderNotFoundError();
   if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
+  // Taking card payment is settling; the same owner rule (see settleOrder's `actor`).
+  const ownerOverride = actor ? assertCanChangeTab(order, actor) : null;
 
   const items = await trx.table('pos_order_items').where({ pos_order_id: orderId }).whereNull('voided_at');
   const groupItems = items.filter((item) => groupKey(item.split_group) === groupKey(splitGroup));
@@ -1556,9 +1591,9 @@ async function prepareRegisterPayment({ trx, orderId, splitGroup, tender, idempo
 
   const existing = (await listUnsettledRegisterPayments({ db: trx, orderId })).filter((p) => groupKey(p.split_group) === groupKey(splitGroup));
   const captured = existing.find((p) => p.status === 'CAPTURED');
-  if (captured) return captured;
+  if (captured) return { payment: captured, ownerOverride };
   const reusable = existing.find((p) => p.tender === tender && compareMoney(p.amount, amount) === 0);
-  if (reusable) return reusable;
+  if (reusable) return { payment: reusable, ownerOverride };
   if (existing.length > 0) {
     await trx
       .table('payments')
@@ -1567,7 +1602,7 @@ async function prepareRegisterPayment({ trx, orderId, splitGroup, tender, idempo
       .update({ status: 'CANCELLED', failure_reason: 'Superseded — the check total or tender changed before payment.' });
   }
 
-  return cashieringService.initiatePosRegisterPaymentIntent({
+  const payment = await cashieringService.initiatePosRegisterPaymentIntent({
     trx,
     posOrderId: orderId,
     splitGroup,
@@ -1576,6 +1611,7 @@ async function prepareRegisterPayment({ trx, orderId, splitGroup, tender, idempo
     currency: property?.base_currency,
     idempotencyKey,
   });
+  return { payment, ownerOverride };
 }
 
 /**
@@ -1805,6 +1841,7 @@ async function closeShift({ trx, shiftId, countedCash, userId, canCloseForOthers
 }
 
 module.exports = {
+  cleanOverrideReason,
   TERMINAL_PROVIDERS,
   listTransferCandidates,
   transferTabs,

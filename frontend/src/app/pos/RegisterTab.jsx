@@ -165,13 +165,21 @@ function defaultSettlementForm(splitGroup) {
  * and covered by dedicated regression tests.
  */
 export function RegisterTab({ activeProperty, isOffline = false, currentUserLabel, currentUserId, canManageTabs = false }) {
-  // Void and rename belong to a tab's opener; a manager (`pos.manage`) may
-  // act on anyone's, and a tab with no opener (a guest QR order) is anyone's
-  // at the outlet — the server's rule (`assertCanChangeTab`). An unknown
-  // current user leaves every control in place for the server to decide.
-  // A tab's owner is whoever it was last handed to, else its opener.
+  // An open tab belongs to its owner (whoever it was last handed to, else its
+  // opener): only they add to, split, settle, rename, void or hand it over —
+  // the server's rule (`assertCanChangeTab`). A manager (`pos.manage`) may
+  // work on anyone's tab but gives a reason, asked once per tab here and
+  // sent (and audited) with every action on it; a void uses its own reason.
+  // A tab with no owner (a guest QR order) is anyone's at the outlet. An
+  // unknown current user leaves every control in place for the server.
   const tabOwner = (order) => order?.owner_user_id ?? order?.opened_by_user_id ?? null;
-  const canChangeTab = (order) => currentUserId == null || canManageTabs || tabOwner(order) == null || String(tabOwner(order)) === String(currentUserId);
+  const ownsTab = (order) => currentUserId == null || tabOwner(order) == null || String(tabOwner(order)) === String(currentUserId);
+  const canChangeTab = (order) => canManageTabs || ownsTab(order);
+  // Manager override reasons by order id (string) — see above.
+  const [overrideReasons, setOverrideReasons] = useState({});
+  const overrideReasonOf = (orderId) => overrideReasons[String(orderId)] || undefined;
+  const canWorkOnTab = (order) => ownsTab(order) || (canManageTabs && Boolean(overrideReasonOf(order.id)));
+  const [overrideDraft, setOverrideDraft] = useState('');
 
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState([]);
@@ -368,7 +376,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     const { orderId } = tabNameDialog;
     setTabNameDialog(null);
     try {
-      const renamed = await posApi.renameOrder(orderId, name);
+      const renamed = await posApi.renameOrder(orderId, name, { overrideReason: overrideReasonOf(orderId) });
       setOpenOrders((prev) => prev.map((order) => (String(order.id) === String(orderId) ? { ...order, table_label: renamed.table_label } : order)));
       setActiveOrder((current) => (current && String(current.order.id) === String(orderId) ? { ...current, order: { ...current.order, table_label: renamed.table_label } } : current));
     } catch (caught) {
@@ -384,7 +392,9 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
    */
   async function startHandover(orders) {
     setError(null);
-    setHandover({ orders, candidates: null, toUserId: '', submitting: false });
+    // A manager handing over tabs they don't own gives a reason (prefilled from this tab's override reason).
+    const needsReason = orders.some((order) => !ownsTab(order));
+    setHandover({ orders, candidates: null, toUserId: '', submitting: false, needsReason, reason: needsReason ? (overrideReasonOf(orders[0].id) ?? '') : '' });
     try {
       const candidates = await posApi.listTransferCandidates(outletId);
       const owners = new Set(orders.map((order) => String(tabOwner(order))));
@@ -397,15 +407,21 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
 
   async function submitHandover(event) {
     event.preventDefault();
-    if (!handover?.toUserId || handover.submitting) return;
+    if (!handover?.toUserId || handover.submitting || (handover.needsReason && !handover.reason.trim())) return;
     setHandover({ ...handover, submitting: true });
     try {
-      const moved = await posApi.transferTabs({ orderIds: handover.orders.map((order) => order.id), toUserId: handover.toUserId });
+      const moved = await posApi.transferTabs({ orderIds: handover.orders.map((order) => order.id), toUserId: handover.toUserId, reason: handover.reason.trim() });
       const byId = new Map(moved.map((order) => [String(order.id), order]));
       setOpenOrders((prev) => prev.map((order) => (byId.has(String(order.id)) ? { ...order, owner_user_id: byId.get(String(order.id)).owner_user_id } : order)));
       setActiveOrder((current) =>
         current && byId.has(String(current.order.id)) ? { ...current, order: { ...current.order, owner_user_id: byId.get(String(current.order.id)).owner_user_id } } : current
       );
+      // A reason given to work on a tab no longer applies once it has a new owner.
+      setOverrideReasons((current) => {
+        const next = { ...current };
+        for (const id of byId.keys()) delete next[id];
+        return next;
+      });
       setHandover(null);
     } catch (caught) {
       setHandover(null);
@@ -503,6 +519,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   function switchToTab(order) {
     setSettleResult(null);
     setSplitModalOpen(false);
+    setOverrideDraft('');
     setActiveOrderId(order.id);
     loadActiveOrder(order.id);
   }
@@ -510,7 +527,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   async function handleAddItem(menuItemId) {
     setError(null);
     try {
-      await posApi.addItem(activeOrderId, { menuItemId, quantity: 1 });
+      await posApi.addItem(activeOrderId, { menuItemId, quantity: 1, overrideReason: overrideReasonOf(activeOrderId) });
       await loadActiveOrder(activeOrderId);
     } catch (caught) {
       // Gap closure — the stock-out override guard: a dedicated, reactive
@@ -540,7 +557,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
 
     if (pending.kind === 'addItem') {
       try {
-        await posApi.addItem(activeOrderId, { menuItemId: pending.menuItemId, quantity: 1, stockOverrideReason: reason });
+        await posApi.addItem(activeOrderId, { menuItemId: pending.menuItemId, quantity: 1, stockOverrideReason: reason, overrideReason: overrideReasonOf(activeOrderId) });
         await loadActiveOrder(activeOrderId);
       } catch (caught) {
         setError(caught instanceof ApiError ? caught.message : 'Could not add this item.');
@@ -603,7 +620,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
 
   async function handleAssignGroup(item, group) {
     try {
-      await posApi.assignItemSplitGroup(activeOrderId, item.id, group);
+      await posApi.assignItemSplitGroup(activeOrderId, item.id, group, { overrideReason: overrideReasonOf(activeOrderId) });
       await loadActiveOrder(activeOrderId);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not assign this item to a split group.');
@@ -671,7 +688,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
             ? { reservationId: form.roomChargeGuest?.reservationId, authMethod: form.authMethod, authReference: form.authReference }
             : undefined,
       })),
-      { stockOverrideReason }
+      { stockOverrideReason, overrideReason: overrideReasonOf(activeOrderId) }
     );
     // Built before anything below clears the order it reads from.
     setSettleResult(buildReceipt(result));
@@ -752,6 +769,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       splitGroup: form.splitGroup,
       tender: form.tender,
       customerEmail: form.customerEmail.trim(),
+      overrideReason: overrideReasonOf(activeOrderId),
     });
     if (payment.status === 'CAPTURED') return payment;
     if (!accessCode) {
@@ -985,6 +1003,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const selectedOutlet = (outlets ?? []).find((o) => o.id === outletId);
   // The tabs this operator owns here, for "Hand over my tabs" at shift change.
   const myTabs = currentUserId == null ? [] : openOrders.filter((order) => String(tabOwner(order)) === String(currentUserId));
+  // Add / split / checkout / rename on the open tab: its owner, or a manager once they have given a reason.
+  const activeTabWorkable = !activeOrder || canWorkOnTab(activeOrder.order);
 
   return (
     <>
@@ -1142,7 +1162,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                       type="button"
                       className={`${styles.menuCard} ${!item.is_available ? styles.menuCardSoldOut : ''}`.trim()}
                       onClick={() => handleAddItem(item.id)}
-                      disabled={isOffline || !item.is_available}
+                      disabled={isOffline || !item.is_available || !activeTabWorkable}
                       aria-label={`Add ${item.name}`}
                     >
                       {/* Decorative: the name right below already identifies the item. */}
@@ -1190,7 +1210,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                         type="button"
                         className={styles.renameLink}
                         onClick={() => setTabNameDialog({ mode: 'rename', orderId: activeOrder.order.id, value: activeOrder.order.table_label ?? '' })}
-                        disabled={isOffline || settling}
+                        disabled={isOffline || settling || !activeTabWorkable}
                         aria-label={`Rename ${activeOrder.order.table_label || `Tab #${activeOrder.order.id}`}`}
                       >
                         Rename
@@ -1211,9 +1231,30 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                       )}
                     </>
                   ) : (
-                    "Another operator's tab — a manager can void, rename or hand it over"
+                    "Another operator's tab — ask them to hand it over to you, or a manager can work on it"
                   )}
                 </p>
+
+                {canManageTabs && !ownsTab(activeOrder.order) && (
+                  <OverrideReasonPrompt
+                    reason={overrideReasonOf(activeOrder.order.id)}
+                    draft={overrideDraft}
+                    onDraftChange={setOverrideDraft}
+                    disabled={isOffline || settling}
+                    onConfirm={() => {
+                      setOverrideReasons((current) => ({ ...current, [String(activeOrder.order.id)]: overrideDraft.trim() }));
+                      setOverrideDraft('');
+                    }}
+                    onChange={() => {
+                      setOverrideDraft(overrideReasonOf(activeOrder.order.id) ?? '');
+                      setOverrideReasons((current) => {
+                        const next = { ...current };
+                        delete next[String(activeOrder.order.id)];
+                        return next;
+                      });
+                    }}
+                  />
+                )}
 
                 <div className={styles.ticketLines}>
                   {groupOrderItems(unvoidedItems).map((group) => {
@@ -1240,7 +1281,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                             </button>
                           )}
                           <span className={styles.stepperQuantity}>{quantity}</span>
-                          <button type="button" className={styles.stepperButton} onClick={() => handleAddItem(group.menuItemId)} disabled={isOffline} aria-label={`Add another ${menuItemName(group.menuItemId)}`}>
+                          <button type="button" className={styles.stepperButton} onClick={() => handleAddItem(group.menuItemId)} disabled={isOffline || !activeTabWorkable} aria-label={`Add another ${menuItemName(group.menuItemId)}`}>
                             +
                           </button>
                           {canChangeTab(activeOrder.order) && (
@@ -1277,7 +1318,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                   </p>
                 )}
 
-                {unvoidedItems.length > 0 && !splitModalOpen && (
+                {unvoidedItems.length > 0 && !splitModalOpen && activeTabWorkable && (
                   <>
                     {anySplit ? (
                       <div className={styles.splitSummary}>
@@ -1444,8 +1485,20 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                     </select>
                   </label>
                 )}
+                {handover.needsReason && (
+                  <label className={formStyles.form}>
+                    <span className={styles.fieldLabel}>Reason (you are handing over another operator&rsquo;s tab)</span>
+                    <input
+                      className={styles.darkInput}
+                      value={handover.reason}
+                      onChange={(event) => setHandover({ ...handover, reason: event.target.value })}
+                      maxLength={255}
+                      required
+                    />
+                  </label>
+                )}
                 <div className={styles.modalActionsRow}>
-                  <button type="submit" className={styles.confirmButton} disabled={!handover.toUserId || handover.submitting}>
+                  <button type="submit" className={styles.confirmButton} disabled={!handover.toUserId || handover.submitting || (handover.needsReason && !handover.reason.trim())}>
                     {handover.submitting ? 'Handing over…' : 'Hand over'}
                   </button>
                   <button type="button" className={styles.cancelButton} onClick={() => setHandover(null)} disabled={handover.submitting}>
@@ -1740,6 +1793,41 @@ function SettlementReceipt({ receipt, onNewSale }) {
         New sale
       </button>
     </div>
+  );
+}
+
+/**
+ * A manager on another operator's tab: one reason, asked once per tab,
+ * before adding, splitting, settling or renaming it. The server requires it
+ * on each of those actions and writes it to the audit row.
+ */
+function OverrideReasonPrompt({ reason, draft, onDraftChange, onConfirm, onChange, disabled }) {
+  if (reason) {
+    return (
+      <p className={styles.capturedNotice} role="status">
+        Working on another operator&rsquo;s tab — reason: {reason}{' '}
+        <button type="button" className={styles.renameLink} onClick={onChange} disabled={disabled}>
+          Change reason
+        </button>
+      </p>
+    );
+  }
+  return (
+    <form
+      className={styles.capturedNotice}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (draft.trim()) onConfirm();
+      }}
+    >
+      <label>
+        <span className={styles.fieldLabel}>This tab belongs to another operator. Why are you working on it?</span>
+        <input className={styles.darkInput} value={draft} onChange={(event) => onDraftChange(event.target.value)} maxLength={500} disabled={disabled} />
+      </label>
+      <button type="submit" className={styles.renameLink} disabled={disabled || !draft.trim()}>
+        Work on this tab
+      </button>
+    </form>
   );
 }
 
