@@ -148,22 +148,23 @@ export const content = {
   },
 
   pricing: {
-    title: 'One simple plan',
-    lead: 'Everything in LodgeKeep for one flat monthly price.',
+    title: 'Simple, honest pricing',
+    lead: 'A one-time setup, then one flat monthly subscription.',
     planName: 'Standard',
-    amount: '50000.00',
+    setupAmount: '500000.00',
+    setupLabel: 'one-time setup fee',
+    amount: '35000.00',
     currency: 'NGN',
-    interval: 'per month, per organisation',
+    interval: 'per month',
     trial: '14-day free trial · no card needed to start',
-    // CONFIRM these commercial statements with Planmsys before publishing.
+    // Only claims confirmed by Planmsys. "No per-room or per-user fees" and
+    // "more than one property on the same account" were left out until confirmed.
     includes: [
       'Hotel PMS, front desk, housekeeping, cashiering and night audit',
       'POS for bars and restaurants, with stock control',
       'Supermarket till with barcode scanning',
       'Paystack online payments, card-terminal records and NQR',
       'Reports, profit and loss and payment reconciliation',
-      'More than one property on the same account',
-      'No per-room or per-user fees',
     ],
     cta: 'Start free trial',
   },
@@ -171,10 +172,10 @@ export const content = {
   contact: {
     title: 'Talk to us or request a demo',
     lead: 'Tell us about your hotel or mart and we will show you LodgeKeep working with your numbers.',
-    // Fill these in. International form, digits only for WhatsApp/phone: '2348012345678'.
-    whatsapp: '',
-    email: '',
-    phone: '',
+    // International form, digits only for WhatsApp/phone.
+    whatsapp: '2347031308712',
+    email: 'info@planmsys.com',
+    phone: '2347031308712',
     whatsappMessage: 'Hello, I would like a demo of LodgeKeep.',
     emptyNotice: 'Contact details have not been added yet — set them in landingContent.js.',
   },

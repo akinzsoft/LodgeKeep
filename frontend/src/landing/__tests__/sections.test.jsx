@@ -15,7 +15,7 @@ describe('landing page sections', () => {
     render(<LandingApp />);
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/hotel, bar and mini.mart from one system/i);
-    for (const title of [/Hotel PMS and booking/, /POS for your bar and restaurant/, /A supermarket till that scans/, /Reports you can trust/, /Every way your customers pay/, /See it in action/, /two-minute walkthrough/, /What our customers say/, /One simple plan/, /Already a customer\?/, /Talk to us or request a demo/]) {
+    for (const title of [/Hotel PMS and booking/, /POS for your bar and restaurant/, /A supermarket till that scans/, /Reports you can trust/, /Every way your customers pay/, /See it in action/, /two-minute walkthrough/, /What our customers say/, /Simple, honest pricing/, /Already a customer\?/, /Talk to us or request a demo/]) {
       expect(screen.getByRole('heading', { name: title })).toBeInTheDocument();
     }
     expect(document.title).toBe(realContent.pageTitle);
@@ -37,7 +37,11 @@ describe('landing page sections', () => {
 
   it('the pricing shows the one real plan in Naira, with the trial', () => {
     render(<Pricing content={realContent} />);
-    expect(screen.getByText(/50,000\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/500,000\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/one-time setup fee/)).toBeInTheDocument();
+    expect(screen.getByText(/35,000\.00/)).toBeInTheDocument();
+    expect(screen.queryByText(/50,000\.00/)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/per-room|per-user|more than one property/i);
     expect(screen.getByText(/14-day free trial/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /start free trial/i })).toHaveAttribute('href', '/signup');
   });
@@ -64,8 +68,17 @@ describe('contact', () => {
     expect(screen.queryByText(realContent.contact.emptyNotice)).not.toBeInTheDocument();
   });
 
-  it('with nothing filled in, says so instead of linking to a blank number', () => {
+  it('the real contact details are filled in and link correctly', () => {
     render(<Contact content={realContent} />);
+    expect(screen.getByRole('link', { name: /whatsapp/i }).getAttribute('href')).toMatch(/^https:\/\/wa\.me\/2347031308712\?text=/);
+    expect(screen.getByRole('link', { name: /email/i })).toHaveAttribute('href', expect.stringMatching(/^mailto:info@planmsys\.com/));
+    expect(screen.getByRole('link', { name: /call/i })).toHaveAttribute('href', 'tel:2347031308712');
+    expect(screen.queryByText(realContent.contact.emptyNotice)).not.toBeInTheDocument();
+  });
+
+  it('with nothing filled in, says so instead of linking to a blank number', () => {
+    const blank = { ...realContent.contact, whatsapp: '', email: '', phone: '' };
+    render(<Contact content={withContent({ contact: blank })} />);
     expect(screen.getByText(realContent.contact.emptyNotice)).toBeInTheDocument();
     expect(screen.queryAllByRole('link')).toHaveLength(0);
   });

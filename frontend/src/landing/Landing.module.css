@@ -637,6 +637,12 @@
   text-transform: uppercase;
 }
 
+.setupFee {
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin: 0 0 var(--space-3);
+}
+
 .price {
   align-items: baseline;
   display: flex;

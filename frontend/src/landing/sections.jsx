@@ -302,6 +302,9 @@ export function Pricing({ content }) {
         <p className={`${styles.lead} ${styles.center}`}>{pricing.lead}</p>
         <div className={styles.priceCard}>
           <p className={styles.planName}>{pricing.planName}</p>
+          <p className={styles.setupFee}>
+            <span className="tabular-nums">{formatMoney(pricing.setupAmount, pricing.currency)}</span> {pricing.setupLabel}
+          </p>
           <p className={styles.price}>
             <span className={`${styles.priceAmount} tabular-nums`}>{formatMoney(pricing.amount, pricing.currency)}</span>
             <span className={styles.priceInterval}>{pricing.interval}</span>
