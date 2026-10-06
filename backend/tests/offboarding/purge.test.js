@@ -185,7 +185,7 @@ describe('tenant retention purge', () => {
   async function snapshot(tenantId) {
     const result = {};
     // Kept tables with no tenant column (the tenant row itself, and the platform's own users and backup log) have nothing per tenant to count.
-    for (const table of [...TENANT_PURGE_ORDER, ...RETAINED_TABLES.filter((name) => !['tenants', 'platform_users', 'platform_backups'].includes(name))]) {
+    for (const table of [...TENANT_PURGE_ORDER, ...RETAINED_TABLES.filter((name) => !['tenants', 'platform_users', 'platform_backups', 'landing_content_versions'].includes(name))]) {
       result[table] = await countFor(table, tenantId);
     }
     return result;

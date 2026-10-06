@@ -3211,6 +3211,18 @@ const ENTITIES = [
   },
 
   {
+    table: 'landing_content_versions',
+    // PLATFORM_SCOPED with no tenant column: Planmsys's own marketing content, append-only
+    // versions (src/modules/landing-content). Nothing unique.
+    uniqueKeys: [],
+    newRow: (ctx) => ({
+      content_json: JSON.stringify({}),
+      note: 'Isolation suite',
+      created_by_platform_user_id: ctx.platform.id,
+    }),
+  },
+
+  {
     table: 'tenant_signups',
     // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns, not
     // attribution — see table-scopes.js) — a real UNIQUE(email) enforcing

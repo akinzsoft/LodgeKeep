@@ -57,6 +57,7 @@ const { arRouter } = require('./modules/ar');
 const { groupBlocksRouter } = require('./modules/group-blocks');
 const { platformConsoleRouter, staffImpersonationRouter } = require('./modules/platform');
 const { signupRouter } = require('./modules/signup');
+const { publicLandingContentRouter, landingContentConsoleRouter } = require('./modules/landing-content');
 const { mediaRouter } = require('./shared/image-store');
 const { billingRouter, billingWebhookRouter } = require('./modules/billing');
 const { offboardingRouter } = require('./modules/offboarding');
@@ -200,6 +201,7 @@ function buildPlatformRouter() {
   router.use('/auth', platformAuthRouter());
   router.use(authenticate('platform'));
   router.use(platformConsoleRouter());
+  router.use(landingContentConsoleRouter());
   router.use((req, res) => notFound(res));
   return router;
 }
@@ -238,6 +240,9 @@ function createApp() {
   // resolution nor `authenticate('staff')`, both of which presuppose a
   // tenant already exists. See `modules/signup/routes.js`'s own header.
   app.use('/api/v1', signupRouter());
+  // The marketing landing page's content (read-only, public, no tenant) — same placement and
+  // reasoning as signup above: the page is served on the bare host, where no tenant exists.
+  app.use('/api/v1', publicLandingContentRouter());
   app.use('/api/v1/portal', buildPortalRouter());
   // PLAN.md Phase 6 — QR self-ordering's guest-facing half. Mounted before
   // `buildStaffRouter()`'s own catch-all could ever see it, at its own
