@@ -75,6 +75,7 @@ const { notifyGuestOrderReceived } = require('../qr-ordering/staff-alert');
 // cycle. See that module's own header for the credit-limit lock this
 // wiring relies on.
 const arService = require('../ar/service');
+const terminalAccounts = require('./terminal-accounts');
 const { ArAccountNotFoundError } = require('../ar/errors');
 const {
   FolioClosedError,
@@ -588,6 +589,62 @@ async function captureCashPayment({ trx, folioId, amount, currency, idempotencyK
 
   await recomputeFolioBalance({ trx, folioId });
   return trx.table('payments').where({ id: paymentId }).first();
+}
+
+/** The longest terminal reference kept (the same limit as a POS terminal sale's). */
+const MAX_TERMINAL_REFERENCE = 60;
+
+/**
+ * A payment taken on the hotel's own physical card terminal. Lodgekeep RECORDS it (the terminal did the actual
+ * charge): a synchronous CAPTURED payment with provider 'terminal' and the matching negative folio line, exactly like
+ * cash, and no gateway call. The terminal's provider, reference and an account snapshot go to the side table
+ * `payment_terminal_details`, so a cash or Paystack payment gains no column and every existing response keeps its shape.
+ *
+ * `terminal`: `{ accountId, reference }`, both optional. The account must exist at this property; its provider and
+ * a display label + last 4 are snapshotted (no foreign key, so editing the account never rewrites history).
+ */
+async function captureTerminalPayment({ trx, folioId, amount, currency, idempotencyKey, userId, businessDate, terminal = {} }) {
+  const reference = typeof terminal.reference === 'string' ? terminal.reference.trim() : '';
+  if (reference.length > MAX_TERMINAL_REFERENCE) {
+    throw new ValidationError('INVALID_TERMINAL_REFERENCE', `"reference" must be at most ${MAX_TERMINAL_REFERENCE} characters.`, [{ field: 'reference', issue: 'too_long' }]);
+  }
+  const folio = await assertFolioOpenForPayment({ trx, folioId });
+  const snapshot = terminal.accountId ? await terminalAccounts.snapshotAccount({ trx, accountId: terminal.accountId }) : null;
+  const effectiveBusinessDate = businessDate ?? (await propertyBusinessDate({ trx, propertyId: folio.property_id }));
+
+  const [paymentId] = await trx.table('payments').insert({
+    folio_id: folioId,
+    idempotency_key: idempotencyKey,
+    provider: 'terminal',
+    provider_reference: generateUlid(),
+    amount,
+    currency,
+    status: 'CAPTURED',
+    captured_at: new Date(),
+  });
+  await trx.table('payment_terminal_details').insert({
+    payment_id: paymentId,
+    terminal_provider: snapshot?.provider ?? null,
+    terminal_reference: reference || null,
+    terminal_account_label: snapshot?.label ?? null,
+    terminal_account_last4: snapshot?.last4 ?? null,
+  });
+  await trx.table('folio_line_items').insert({
+    folio_id: folioId,
+    type: 'payment',
+    description: 'Card payment (terminal)',
+    amount: negateMoney(amount),
+    currency,
+    payment_method: 'terminal',
+    payment_id: paymentId,
+    business_date: effectiveBusinessDate,
+    posted_by_user_id: userId ?? null,
+  });
+
+  await recomputeFolioBalance({ trx, folioId });
+  const payment = await trx.table('payments').where({ id: paymentId }).first();
+  const details = await trx.table('payment_terminal_details').where({ payment_id: paymentId }).first();
+  return { ...payment, terminal: { provider: details.terminal_provider, reference: details.terminal_reference, account_label: details.terminal_account_label, account_last4: details.terminal_account_last4 } };
 }
 
 // ---------------------------------------------------------------------
@@ -1386,12 +1443,15 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
 
   const reference = generateUlid();
 
-  if (original.provider === 'cash') {
+  // Cash and a physical-terminal card payment both reverse LOCALLY, with no gateway: the money goes back through
+  // the till or the terminal itself, which is the staff's to do. Anything else is a Paystack payment.
+  if (original.provider === 'cash' || original.provider === 'terminal') {
+    const isTerminal = original.provider === 'terminal';
     return db.transaction(async (trx) => {
       const [refundPaymentId] = await trx.table('payments').insert({
         folio_id: original.folio_id,
         idempotency_key: idempotencyKey,
-        provider: 'cash',
+        provider: original.provider,
         provider_reference: reference,
         amount: refundAmount,
         currency: original.currency,
@@ -1403,14 +1463,27 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
       await trx.table('folio_line_items').insert({
         folio_id: original.folio_id,
         type: 'refund',
-        description: `Cash refund of payment ${original.id}`,
+        description: `${isTerminal ? 'Card (terminal) refund' : 'Cash refund'} of payment ${original.id}`,
         amount: refundAmount,
         currency: original.currency,
-        payment_method: 'cash',
+        payment_method: original.provider,
         payment_id: refundPaymentId,
         business_date: businessDate,
         posted_by_user_id: userId ?? null,
       });
+      if (isTerminal) {
+        // The refund carries the same terminal details as the payment, so its reconciliation line is complete.
+        const details = await trx.table('payment_terminal_details').where({ payment_id: original.id }).first();
+        if (details) {
+          await trx.table('payment_terminal_details').insert({
+            payment_id: refundPaymentId,
+            terminal_provider: details.terminal_provider,
+            terminal_reference: details.terminal_reference,
+            terminal_account_label: details.terminal_account_label,
+            terminal_account_last4: details.terminal_account_last4,
+          });
+        }
+      }
       await recomputeFolioBalance({ trx, folioId: original.folio_id });
       const fullyRefunded = compareMoney(sumMoney([alreadyRefunded, refundAmount]), original.amount) === 0;
       await trx.table('payments').where({ id: original.id }).update({ status: fullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED' });
@@ -1612,6 +1685,7 @@ async function sumPostedRoomChargesByDate({ db, dates, baseCurrency }) {
 }
 
 module.exports = {
+  captureTerminalPayment,
   setSupermarketCaptureFinalizer,
   resolvePayoutSubaccount,
   TERMINAL_PAYMENT_STATUSES,

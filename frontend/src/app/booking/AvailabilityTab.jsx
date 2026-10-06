@@ -7,6 +7,7 @@ import { Money, formatMoney, isBalanceSettled, describeBalanceState } from '../.
 import { multiplyMoney } from '../../shared/money.js';
 import { addDays, formatDate } from '../../shared/format/dates.js';
 import { RoomKeypad } from './RoomKeypad.jsx';
+import { TerminalPaymentFields } from '../cashiering/TerminalPaymentFields.jsx';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
 
@@ -492,6 +493,42 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     };
   }
   const isFolioSettled = folio ? isBalanceSettled(folio.balance) : false;
+
+  // "Card (terminal)": the payment is recorded like cash (the physical terminal did the charge), with the account it was taken on.
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalAccounts, setTerminalAccounts] = useState([]);
+  const [terminalAccountId, setTerminalAccountId] = useState('');
+  const [terminalReference, setTerminalReference] = useState('');
+
+  async function openTerminalPayment() {
+    setTerminalOpen(true);
+    setPaymentError(null);
+    try {
+      const list = await cashieringApi.listTerminalAccountOptions();
+      setTerminalAccounts(Array.isArray(list) ? list : []);
+    } catch {
+      setTerminalAccounts([]); // none offered; the payment is still recordable
+    }
+  }
+
+  async function handleTerminalPayment(event) {
+    event.preventDefault();
+    setCapturingPayment(true);
+    setPaymentError(null);
+    setPaymentSuccess(null);
+    try {
+      await cashieringApi.captureTerminalPayment(folio.id, { amount: folio.balance, currency: folio.currency, accountId: terminalAccountId, reference: terminalReference });
+      setFolio(await cashieringApi.getFolio(folio.id));
+      setPaymentSuccess('Card (terminal) payment recorded.');
+      setTerminalOpen(false);
+      setTerminalAccountId('');
+      setTerminalReference('');
+    } catch (caught) {
+      setPaymentError(caught instanceof ApiError ? caught.message : 'Could not record the terminal payment.');
+    } finally {
+      setCapturingPayment(false);
+    }
+  }
 
   async function handleCashPayment() {
     setCapturingPayment(true);
@@ -1080,7 +1117,33 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                 >
                   Card
                 </Button>
+                <Button type="button" variant="secondary" disabled={isOffline || capturingPayment} onClick={openTerminalPayment}>
+                  Card (terminal)
+                </Button>
               </div>
+              {terminalOpen && (
+                <form className={formStyles.paymentPanel} onSubmit={handleTerminalPayment} aria-label="Card (terminal) payment">
+                  <p className={formStyles.paymentPanelHint}>Take the payment on the terminal, then record it here. No card is charged by Lodgekeep.</p>
+                  <div className={formStyles.row}>
+                    <TerminalPaymentFields
+                      styles={formStyles}
+                      accounts={terminalAccounts}
+                      accountId={terminalAccountId}
+                      reference={terminalReference}
+                      onAccountChange={setTerminalAccountId}
+                      onReferenceChange={setTerminalReference}
+                    />
+                  </div>
+                  <div className={formStyles.actionsRow}>
+                    <Button type="submit" loading={capturingPayment} disabled={isOffline}>
+                      Record terminal payment
+                    </Button>
+                    <Button type="button" variant="ghost" onClick={() => setTerminalOpen(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                </form>
+              )}
               {!selectedGuest?.email && (
                 <p className={formStyles.disabledNotice}>Add an email to this guest to accept card payment.</p>
               )}

@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   voidLineItem: vi.fn(),
   moveLineItem: vi.fn(),
   captureCashPayment: vi.fn(),
+  captureTerminalPayment: vi.fn(),
+  listTerminalAccountOptions: vi.fn(),
   capturePaystackPayment: vi.fn(),
   refundPayment: vi.fn(),
   openAdditionalFolio: vi.fn(),
@@ -47,6 +49,7 @@ describe('<CashieringScreen>', () => {
     mocks.listOutstandingBalances.mockResolvedValue([]);
     mocks.listCompanyProfiles.mockResolvedValue([{ id: '50', name: 'Acme Corp' }]);
     mocks.listAccounts.mockResolvedValue([]);
+    mocks.listTerminalAccountOptions.mockResolvedValue([]);
   });
 
   // The screen now defaults to the Balances tab (PRODUCT_REQUIREMENTS.md's
@@ -134,6 +137,38 @@ describe('<CashieringScreen>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
 
     expect(mocks.captureCashPayment).toHaveBeenCalledWith('1', { amount: '100.00', currency: 'NGN' });
+  });
+
+  it('records a Card (terminal) payment for the full balance with the chosen account and reference, no gateway', async () => {
+    mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+    mocks.listTerminalAccountOptions.mockResolvedValue([{ id: '5', name: 'GTBank · Desk 1', provider: 'gtbank', last4: '1122' }]);
+    mocks.captureTerminalPayment.mockResolvedValue({ id: '98', status: 'CAPTURED' });
+    await loadReservation();
+    await screen.findByText('Room 101');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Capture a payment' }));
+    await userEvent.selectOptions(screen.getByLabelText('Method'), 'terminal');
+    await userEvent.selectOptions(await screen.findByRole('combobox', { name: 'Terminal account (optional)' }), '5');
+    await userEvent.type(screen.getByLabelText('Terminal reference (optional)'), 'RRN-1');
+    await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
+
+    expect(mocks.captureTerminalPayment).toHaveBeenCalledWith('1', { amount: '100.00', currency: 'NGN', accountId: '5', reference: 'RRN-1' });
+    expect(mocks.captureCashPayment).not.toHaveBeenCalled();
+    expect(mocks.capturePaystackPayment).not.toHaveBeenCalled();
+  });
+
+  it('records a Card (terminal) payment with no account when none is recorded, and the terminal fields only show for that method', async () => {
+    mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+    mocks.captureTerminalPayment.mockResolvedValue({ id: '97', status: 'CAPTURED' });
+    await loadReservation();
+    await screen.findByText('Room 101');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Capture a payment' }));
+    expect(screen.queryByLabelText('Terminal reference (optional)')).not.toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('Method'), 'terminal');
+    await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
+
+    expect(mocks.captureTerminalPayment).toHaveBeenCalledWith('1', { amount: '100.00', currency: 'NGN', accountId: '', reference: '' });
   });
 
   /**

@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   listRoomBoard: vi.fn(),
   openBookingFolio: vi.fn(),
   captureCashPayment: vi.fn(),
+  captureTerminalPayment: vi.fn(),
+  listTerminalAccountOptions: vi.fn(),
   capturePaystackPayment: vi.fn(),
   verifyPayment: vi.fn(),
   getFolio: vi.fn(),
@@ -38,6 +40,8 @@ vi.mock('../../../shared/api/index.js', async () => {
     },
     cashieringApi: {
       captureCashPayment: mocks.captureCashPayment,
+      captureTerminalPayment: mocks.captureTerminalPayment,
+      listTerminalAccountOptions: mocks.listTerminalAccountOptions,
       capturePaystackPayment: mocks.capturePaystackPayment,
       verifyPayment: mocks.verifyPayment,
       getFolio: mocks.getFolio,
@@ -849,6 +853,26 @@ describe('<AvailabilityTab>', () => {
     expect(await screen.findByText(/Added to the waitlist/)).toBeInTheDocument();
     expect(mocks.openBookingFolio).not.toHaveBeenCalled();
     expect(screen.queryByText(/Balance due/)).not.toBeInTheDocument();
+  });
+
+  it('records a Card (terminal) payment at booking with the chosen account, then shows the settled state', async () => {
+    mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
+    mocks.openBookingFolio.mockResolvedValue({ id: '20', balance: '150.00', currency: 'NGN', status: 'open' });
+    mocks.listTerminalAccountOptions.mockResolvedValue([{ id: '7', name: 'GTBank · Desk', provider: 'gtbank', last4: '4455' }]);
+    mocks.captureTerminalPayment.mockResolvedValue({ id: '31', status: 'CAPTURED' });
+    mocks.getFolio.mockResolvedValue({ id: '20', balance: '0.00', currency: 'NGN', status: 'open' });
+
+    await searchAndBook();
+    await screen.findByText(/₦150\.00/);
+    await userEvent.click(screen.getByRole('button', { name: 'Card (terminal)' }));
+    await userEvent.selectOptions(await screen.findByRole('combobox', { name: 'Terminal account (optional)' }), '7');
+    await userEvent.type(screen.getByLabelText('Terminal reference (optional)'), 'RRN-77');
+    await userEvent.click(screen.getByRole('button', { name: 'Record terminal payment' }));
+
+    expect(mocks.captureTerminalPayment).toHaveBeenCalledWith('20', { amount: '150.00', currency: 'NGN', accountId: '7', reference: 'RRN-77' });
+    expect(mocks.captureCashPayment).not.toHaveBeenCalled();
+    expect(mocks.capturePaystackPayment).not.toHaveBeenCalled();
+    expect(await screen.findByText(/No balance due/)).toBeInTheDocument();
   });
 
   it('captures a cash payment for the folio’s real balance, and shows the settled state once it zeroes', async () => {

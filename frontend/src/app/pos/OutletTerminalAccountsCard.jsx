@@ -21,7 +21,15 @@ function accountName(row) {
  * accounts, optional per sale. Admin / super_admin only (`setup.manage`);
  * lists show the last 4 digits only, the full number appears while editing.
  */
-export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = false, canManage = true }) {
+export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = false, canManage = true, api = null, title = null, intro = null }) {
+  // `api` swaps the data source (the hotel's own front-desk accounts reuse this card); by default it is this outlet's.
+  const source = api ?? {
+    list: () => posApi.listOutletTerminalAccounts(outletId),
+    create: (form) => posApi.createOutletTerminalAccount(outletId, form),
+    update: (id, form) => posApi.updateOutletTerminalAccount(outletId, id, form),
+    remove: (id) => posApi.removeOutletTerminalAccount(outletId, id),
+  };
+  const cardTitle = title ?? `Terminal accounts — ${outletName}`;
   const [accounts, setAccounts] = useState(null);
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(null); // 'new' | account id
@@ -33,7 +41,7 @@ export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = f
   async function load() {
     const requestedFor = outletId;
     try {
-      const list = await posApi.listOutletTerminalAccounts(requestedFor);
+      const list = await source.list();
       if (outletRef.current !== requestedFor) return;
       setAccounts(list);
       setError(null);
@@ -55,7 +63,7 @@ export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = f
 
   if (!canManage) {
     return (
-      <Card title={`Terminal accounts — ${outletName}`}>
+      <Card title={cardTitle}>
         <p className={formStyles.hint}>Only an administrator can add, change or remove the accounts your card terminals pay into. Cashiers pick one of them when taking a terminal payment.</p>
       </Card>
     );
@@ -78,8 +86,8 @@ export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = f
     setSaving(true);
     setError(null);
     try {
-      if (editing === 'new') await posApi.createOutletTerminalAccount(outletId, form);
-      else await posApi.updateOutletTerminalAccount(outletId, editing, form);
+      if (editing === 'new') await source.create(form);
+      else await source.update(editing, form);
       setEditing(null);
       await load();
     } catch (caught) {
@@ -92,7 +100,7 @@ export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = f
   async function handleRemove(row) {
     setError(null);
     try {
-      await posApi.removeOutletTerminalAccount(outletId, row.id);
+      await source.remove(row.id);
       if (editing === row.id) setEditing(null);
       await load();
     } catch (caught) {
@@ -101,10 +109,14 @@ export function OutletTerminalAccountsCard({ outletId, outletName, isOffline = f
   }
 
   return (
-    <Card title={`Terminal accounts — ${outletName}`}>
+    <Card title={cardTitle}>
       <p className={formStyles.hint}>
-        Record the bank accounts this outlet&apos;s {EXTERNAL_TERMINAL_LABEL} terminals pay into. This changes no money flow — cashiers pick one when taking a terminal payment,
-        so each sale can be matched against that account&apos;s own settlement report. Removing an account never changes sales already recorded.
+        {intro ?? (
+          <>
+            Record the bank accounts this outlet&apos;s {EXTERNAL_TERMINAL_LABEL} terminals pay into. This changes no money flow — cashiers pick one when taking a terminal payment,
+            so each sale can be matched against that account&apos;s own settlement report. Removing an account never changes sales already recorded.
+          </>
+        )}
       </p>
       {error && (
         <p role="alert" className={formStyles.errorBanner}>
