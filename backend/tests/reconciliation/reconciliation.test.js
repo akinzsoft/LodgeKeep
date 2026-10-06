@@ -37,6 +37,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { managerApproval } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
 const { insertMenuItem } = require('../helpers/catalogue');
@@ -268,9 +269,12 @@ describe('Payment reconciliation report', () => {
     expect(refundableSettled.status).toBe(200);
     const refundableStoredPayment = await t.trx('payments').where({ id: refundablePayment }).first();
     paystack.refundTransaction.mockResolvedValue({ status: 'processed', reference: refundableStoredPayment.provider_reference });
+    // Refunding a Register payment needs a manager's PIN approval (src/modules/approvals).
+    const refundApproval = await managerApproval(t.request, { token: managerToken, approverUserId: ctx.a.users[0].id, action: 'pos.refund_payment', targetId: refundablePayment });
     const posRefundRes = await t.request
       .post(`/api/v1/cashiering/payments/${refundablePayment}/refund`)
       .set('Authorization', `Bearer ${managerToken}`)
+      .set('X-Manager-Approval', refundApproval)
       .set('Idempotency-Key', idemKey())
       .send({ reason: 'Wrong order' });
     expect(posRefundRes.status).toBe(201);

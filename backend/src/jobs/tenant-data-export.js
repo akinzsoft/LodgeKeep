@@ -100,6 +100,8 @@ const EXPORT_TABLE_DENYLIST = new Set([
   'password_reset_codes',
   'mfa_devices',
   'mfa_login_codes',
+  // Manager approval PINs (bcrypt hashes) — credential state, like the above.
+  'approval_pins',
   'guest_password_resets',
   'user_invitations',
   // Planmsys/platform-internal bookkeeping — not the tenant's own operational history.
@@ -122,6 +124,8 @@ const EXPORT_TABLE_DENYLIST = new Set([
 const GLOBAL_COLUMN_DENYLIST = {
   users: ['password_hash', 'mfa_secret'],
   guest_accounts: ['password_hash'],
+  // Who approved what stays the tenant's own history; the token hash does not.
+  manager_approvals: ['token_hash'],
 };
 
 /** Every table this export includes, in declaration order — TENANT_SCOPED and PROPERTY_SCOPED, minus the denylist above. PLATFORM_SCOPED and GLOBAL_REFERENCE tables are never Planmsys-internal-vs-tenant-data ambiguous — they're excluded outright, not by name. */

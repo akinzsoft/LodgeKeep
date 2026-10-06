@@ -19,6 +19,7 @@
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { managerApproval } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { sumMoney: sumMoneyForTest } = require('../../src/shared/money');
 const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
@@ -305,9 +306,12 @@ describe('Expense report and profit summary', () => {
       const item = await newItem({ costPrice: '77.00' });
       const before = await statement();
       const { orderId, settlementId } = await sell([[item, 1]]);
+      // A settlement void needs a manager's PIN approval (src/modules/approvals); user 0 approves their own.
+      const approval = await managerApproval(t.request, { token: manager(), approverUserId: ctx.a.users[0].id, action: 'pos.void_settlement', targetId: settlementId });
       const voided = await t.request
         .post(`/api/v1/pos/orders/${orderId}/settlements/${settlementId}/void`)
         .set('Authorization', `Bearer ${manager()}`)
+        .set('X-Manager-Approval', approval)
         .set('Idempotency-Key', idemKey())
         .send({ reason: 'test void' });
       expect(voided.status).toBe(200);

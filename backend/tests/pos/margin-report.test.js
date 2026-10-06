@@ -10,6 +10,7 @@
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { managerApproval } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
 
@@ -166,9 +167,11 @@ describe('Cost-of-sales margin report (gap closure)', () => {
     expect(before.body.data.byMenuItem.some((r) => String(r.menuItemId) === String(menuItemId))).toBe(true);
 
     const settlementId = settled.settlements[0].id;
+    const voidApproval = await managerApproval(t.request, { token: managerToken(), approverUserId: ctx.a.users[0].id, action: 'pos.void_settlement', targetId: settlementId });
     const voided = await t.request
       .post(`/api/v1/pos/orders/${settled.order.id}/settlements/${settlementId}/void`)
       .set('Authorization', `Bearer ${managerToken()}`)
+      .set('X-Manager-Approval', voidApproval)
       .set('Idempotency-Key', idemKey())
       .send({ reason: 'test void' });
     expect(voided.status).toBe(200);

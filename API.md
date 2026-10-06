@@ -91,6 +91,22 @@ Three identity populations, three token issuers, three sets of routes — see PR
 - **A staff request against a `trial`-expired or `suspended` tenant** (PLAN.md Phase 5) still authenticates normally and every read still succeeds — only a mutating request gets `403 FORBIDDEN_TENANT_READ_ONLY`, enforced once, structurally, by the same kind of HTTP-method gate the impersonation read-only rule already uses (SECURITY.md §2).
 - **A request against a capability the tenant's own PLAN doesn't grant** (PLAN.md Phase 5's own final exit criterion, PRODUCT_REQUIREMENTS.md §3.22) gets `403 FORBIDDEN_PLAN_ENTITLEMENT`, `details: {featureKey, planCode}` — orthogonal to RBAC: this fires regardless of the caller's role, since no role at that tenant can bypass a plan boundary. `src/shared/entitlements.js`'s `hasEntitlement` is the one primitive every such check reads through; today it gates exactly one real capability, `multi_property` (`POST /properties`'s second-and-later property), enforced inside the service layer rather than route middleware since it's inherently count-dependent (a tenant's first property is always creatable, regardless of plan).
 
+### Manager approval (`X-Manager-Approval`)
+
+Some actions need a manager's PIN at the moment they happen (SECURITY.md §5, `src/modules/approvals`). The till first asks for an approval, then sends the returned token in a header — never the body, so the idempotency payload hash is unaffected:
+
+```
+GET  /api/v1/approvals/approvers?action=pos.void_settlement   → [{id, name, hasPin}]
+POST /api/v1/approvals   {action, approver_user_id, pin, reason, target_id?}
+                         → 201 {token, expires_at, approval_id, approver:{id, name}}
+GET  /api/v1/me/approval-pin                                → {has_pin, set_at, locked_until}
+PUT  /api/v1/me/approval-pin   {current_password, pin}      → {has_pin, set_at}
+
+POST /api/v1/pos/orders/{id}/settlements/{settlementId}/void      X-Manager-Approval: <token>
+```
+
+Gated: settlement void; `POST /pos/orders/{id}/items` and `/settle` when a stock override applies; `POST /cashiering/payments/{id}/refund` for a Register/QR payment; `POST /supermarket/sales` and `/supermarket/online-sales` when a confirmed oversell applies; `POST /supermarket/sales/{id}/void`; `POST /supermarket/online-sales/{id}/refund`. Errors: `403 FORBIDDEN_MANAGER_APPROVAL_REQUIRED` (no token), `422 VALIDATION_APPROVAL_INVALID` (used, expired, or for another action/record/person/property, or the approver lost the permission), `422 VALIDATION_APPROVAL_PIN_INCORRECT` (`details.attemptsLeft`), `422 BUSINESS_RULE_APPROVAL_PIN_NOT_SET`, `423 LOCKED_APPROVAL_PIN`, `403 FORBIDDEN_APPROVER_NOT_ELIGIBLE`. None uses `AUTH_*`: a wrong PIN must never end the session.
+
 ## 5. Resource endpoint conventions
 
 **Tenant/property scoping is implicit, never a URL or body parameter.** There is no `/api/v1/tenants/{id}/reservations` — the scope comes from the authenticated session (ARCHITECTURE.md §3, SECURITY.md §2), and a client attempting to pass `tenant_id` in a request gets it silently ignored (TESTING.md ISO-4), not honoured.

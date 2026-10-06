@@ -42,6 +42,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
 const { recordForStoredPayment } = require('../helpers/gateway-record');
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { managerApproval } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystackAdapterModule = require('../../src/modules/cashiering/paystack-adapter');
 const paystack = paystackAdapterModule.__mockAdapter;
@@ -407,9 +408,12 @@ describe('POS Register — Paystack card/NQR checkout', () => {
       const settled = await settle(orderId, { method: 'card', service_charge: '1.50', payment_id: started.body.data.id });
       expect(settled.status).toBe(200);
 
+      const settlementId = settled.body.data.settlements[0].id;
+      const approval = await managerApproval(t.request, { token: tokenFor(ctx.a, managerId), approverUserId: managerId, action: 'pos.void_settlement', targetId: settlementId });
       const res = await t.request
-        .post(`/api/v1/pos/orders/${orderId}/settlements/${settled.body.data.settlements[0].id}/void`)
+        .post(`/api/v1/pos/orders/${orderId}/settlements/${settlementId}/void`)
         .set('Authorization', `Bearer ${tokenFor(ctx.a, managerId)}`)
+        .set('X-Manager-Approval', approval)
         .set('Idempotency-Key', idemKey())
         .send({ reason: 'Wrong tab' });
       expect(res.status).toBe(409);

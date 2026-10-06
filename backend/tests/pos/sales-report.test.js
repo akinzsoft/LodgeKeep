@@ -37,6 +37,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { managerApproval } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
 const { insertMenuItem } = require('../helpers/catalogue');
@@ -159,9 +160,11 @@ describe('POS sales report', () => {
     ]);
     expect(splitSettled.status).toBe(200);
     const cashCheck = splitSettled.body.data.settlements.find((s) => s.method === 'cash');
+    const voidApproval = await managerApproval(t.request, { token: managerToken, approverUserId: ctx.a.users[0].id, action: 'pos.void_settlement', targetId: cashCheck.id });
     await t.request
       .post(`/api/v1/pos/orders/${voidedCheckOrderId}/settlements/${cashCheck.id}/void`)
       .set('Authorization', `Bearer ${managerToken}`)
+      .set('X-Manager-Approval', voidApproval)
       .set('Idempotency-Key', idemKey())
       .send({ reason: 'Rang up on the wrong tab' })
       .expect(200);

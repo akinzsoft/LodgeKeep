@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ConfirmDialog } from '../../shared/components/index.js';
+import { ManagerApprovalDialog } from '../approvals/ManagerApprovalDialog.jsx';
 import { Money } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney, percentOfMoney } from '../../shared/money.js';
 import { posApi, ApiError } from '../../shared/api/index.js';
@@ -548,16 +549,18 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
    * card/NQR collection loop — a card/NQR payment is already captured by
    * the time settlement can reject for insufficient stock, so a retry here
    * never re-opens the Paystack popup, only resubmits `settleOrder` with
-   * the reason attached.
+   * the reason attached. Selling past recorded stock needs a manager's PIN
+   * approval (`ManagerApprovalDialog`): the approval and the reason go with
+   * the retry.
    */
-  async function confirmStockOverride(reason) {
+  async function confirmStockOverride(approval, reason) {
     const pending = stockOverrideNeeded;
     setStockOverrideNeeded(null);
     setError(null);
 
     if (pending.kind === 'addItem') {
       try {
-        await posApi.addItem(activeOrderId, { menuItemId: pending.menuItemId, quantity: 1, stockOverrideReason: reason, overrideReason: overrideReasonOf(activeOrderId) });
+        await posApi.addItem(activeOrderId, { menuItemId: pending.menuItemId, quantity: 1, stockOverrideReason: reason, overrideReason: overrideReasonOf(activeOrderId), approval });
         await loadActiveOrder(activeOrderId);
       } catch (caught) {
         setError(caught instanceof ApiError ? caught.message : 'Could not add this item.');
@@ -569,7 +572,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     setSettling(true);
     try {
       setPaymentStage('Settling…');
-      await performSettle(pending.paymentIds, reason);
+      await performSettle(pending.paymentIds, reason, approval);
     } catch (caught) {
       const readable = caught instanceof ApiError || caught instanceof PaymentNotCompletedError;
       setError(readable ? caught.message : 'Could not settle this tab.');
@@ -671,7 +674,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
    * already captured by the time settlement can reject for insufficient
    * stock. Throws on failure; the caller decides how to surface it.
    */
-  async function performSettle(paymentIds, stockOverrideReason) {
+  async function performSettle(paymentIds, stockOverrideReason, approval) {
     const result = await posApi.settleOrder(
       activeOrderId,
       settlementForms.map((form) => ({
@@ -688,7 +691,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
             ? { reservationId: form.roomChargeGuest?.reservationId, authMethod: form.authMethod, authReference: form.authReference }
             : undefined,
       })),
-      { stockOverrideReason, overrideReason: overrideReasonOf(activeOrderId) }
+      { stockOverrideReason, overrideReason: overrideReasonOf(activeOrderId), approval }
     );
     // Built before anything below clears the order it reads from.
     setSettleResult(buildReceipt(result));
@@ -1574,15 +1577,17 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
           )}
 
           {/* Gap closure — the stock-out override guard. Allowed, never
-              blocked outright, but a reason is required to proceed —
-              matching this file's own void/remove-tab confirmations. */}
+              blocked outright, but a manager must approve it with their PIN
+              and give a reason. */}
           {stockOverrideNeeded && (
-            <ConfirmDialog
+            <ManagerApprovalDialog
+              action="pos.stock_override"
+              targetId={activeOrderId}
               title="Low stock"
-              consequence={`${describeStockOverrideItems(stockOverrideNeeded.items)} You can still proceed — say why below.`}
-              requireReason
+              consequence={`${describeStockOverrideItems(stockOverrideNeeded.items)} A manager can still let it through.`}
               confirmLabel="Proceed anyway"
-              onConfirm={confirmStockOverride}
+              isOffline={isOffline}
+              onApproved={confirmStockOverride}
               onCancel={() => setStockOverrideNeeded(null)}
             />
           )}

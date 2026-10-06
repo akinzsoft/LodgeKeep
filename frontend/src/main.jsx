@@ -382,7 +382,14 @@ function Demo() {
         canOpen={(notification) => notificationScreenFor(notification) !== null}
         onDismiss={(id) => (String(id).startsWith('reminder:') ? requestReminders.dismiss(id) : staffNotifications.dismissPopup(id))}
       />
-      {profileOpen && <MyAccountModal isOffline={!isOnline} onClose={() => setProfileOpen(false)} />}
+      {profileOpen && (
+        <MyAccountModal
+          isOffline={!isOnline}
+          // Anyone who can approve a void/refund/stock override at a till sets their approval PIN here.
+          canApprove={grantedPermissions.has('pos.manage') || grantedPermissions.has('supermarket.manage')}
+          onClose={() => setProfileOpen(false)}
+        />
+      )}
       {switchError && (
         <p role="alert" className={styles.switchError}>
           {switchError}

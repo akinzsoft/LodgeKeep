@@ -34,6 +34,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { managerApproval } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystackAdapterModule = require('../../src/modules/cashiering/paystack-adapter');
 const paystack = paystackAdapterModule.__mockAdapter;
@@ -61,6 +62,11 @@ describe('POS Register — Card (external terminal)', () => {
     post: (url) => t.request.post(url).set('Authorization', `Bearer ${tokenFor(userId)}`),
   });
   const idemKey = () => `ext-card-${(counter += 1)}`;
+  // A settlement void needs a manager's PIN approval (src/modules/approvals); the manager approves their own.
+  async function managerVoid(orderId, settlementId) {
+    const approval = await managerApproval(t.request, { token: tokenFor(managerId), approverUserId: managerId, action: 'pos.void_settlement', targetId: settlementId });
+    return as(managerId).post(`/api/v1/pos/orders/${orderId}/settlements/${settlementId}/void`).set('X-Manager-Approval', approval).set('Idempotency-Key', idemKey()).send({ reason: 'keyed in error' });
+  }
 
   async function setRole(userId, role) {
     const existing = await t.trx('user_property_access').where({ user_id: userId, property_id: propertyId }).first('id');
@@ -188,7 +194,7 @@ describe('POS Register — Card (external terminal)', () => {
       const orderId = await openTab();
       const res = await settleWith(orderId, { method: 'terminal', terminal_provider: 'opay' });
       const settlementId = res.body.data.settlements[0].id;
-      const voided = await as(managerId).post(`/api/v1/pos/orders/${orderId}/settlements/${settlementId}/void`).set('Idempotency-Key', idemKey()).send({ reason: 'keyed in error' });
+      const voided = await managerVoid(orderId, settlementId);
       expect(voided.status).toBe(200);
       expect(voided.body.data.voided_at).not.toBeNull();
     });
@@ -269,7 +275,7 @@ describe('POS Register — Card (external terminal)', () => {
       const toVoid = await openTab();
       const res = await settleWith(toVoid, { method: 'terminal', terminal_provider: 'gtbank' });
       voidedSettlementId = res.body.data.settlements[0].id;
-      await as(managerId).post(`/api/v1/pos/orders/${toVoid}/settlements/${voidedSettlementId}/void`).set('Idempotency-Key', idemKey()).send({ reason: 'keyed in error' });
+      await managerVoid(toVoid, voidedSettlementId);
 
       const got = await as(managerId).get(`/api/v1/reconciliation/payments?date_from=${REPORT_DATE}&date_to=${REPORT_DATE}`);
       expect(got.status).toBe(200);

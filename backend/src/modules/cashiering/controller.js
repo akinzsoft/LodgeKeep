@@ -23,6 +23,10 @@ const { hasPermission } = require('../../auth/rbac');
 const { PermissionDeniedError } = require('../../auth/errors');
 const service = require('./service');
 const terminalAccounts = require('./terminal-accounts');
+const { claimApproval } = require('../approvals');
+
+/** Payments that settle a POS tab (Register card/NQR, QR guest-order card): refunding one needs a manager's approval. */
+const POS_PAYMENT_TARGETS = new Set(['pos_order', 'pos_register']);
 
 function require_(body, field) {
   const value = body?.[field];
@@ -425,6 +429,9 @@ async function refundPayment(req, res, next) {
           reason,
           idempotencyKey: req.get('Idempotency-Key'),
           userId: req.context.userId,
+          // A refund of a POS payment (a Register or QR guest-order card payment) needs a manager's PIN approval.
+          // Folio refunds are unchanged.
+          approve: (trx, payment) => (POS_PAYMENT_TARGETS.has(payment.settlement_target) ? claimApproval(req, trx, 'pos.refund_payment', req.params.id) : null),
         });
         return { status: 201, body: ok(payment) };
       },

@@ -7,6 +7,7 @@
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { approvedPoster, setApprovalPin } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { insertMenuItem } = require('../helpers/catalogue');
 
@@ -29,6 +30,11 @@ describe('supermarket sales reports', () => {
     get: (url) => t.request.get(url).set('Authorization', `Bearer ${tokenFor(userId, tenant)}`),
     post: (url) => t.request.post(url).set('Authorization', `Bearer ${tokenFor(userId, tenant)}`).set('Idempotency-Key', `sr-${next()}`),
   });
+
+
+  // A void, a needs-review refund or a confirmed oversell needs a manager's PIN approval (src/modules/approvals),
+  // fetched by the person at the till before the request, as the Supermarket screen does.
+  const approvedPost = approvedPoster({ request: () => t.request, tokenFor, post: (userId, url) => as(userId).post(url), approver: () => users.manager });
 
   async function userWithRole(role) {
     const [id] = await t.trx('users').insert({ tenant_id: ctx.a.id, email: `${role}-${next()}@example.com`, first_name: role, last_name: 'User', password_hash: 'x', status: 'active' });
@@ -58,6 +64,7 @@ describe('supermarket sales reports', () => {
     martId = await outlet('supermarket', 'Reports Mart');
     barId = await outlet('bar', 'Reports Bar');
     for (const role of ['manager', 'pos_operator']) users[role] = await userWithRole(role);
+    await setApprovalPin(t.trx, { tenantId: ctx.a.id, userId: users.manager });
     users.other = await userWithRole('pos_operator');
     [itemId] = await insertMenuItem(t.trx, { ...scope(), outlet_id: martId, name: `Report item ${next()}`, category: 'Reports Mart Cat', price: '10.00' });
   });
@@ -71,7 +78,7 @@ describe('supermarket sales reports', () => {
       expect(res.status).toBe(200);
       expect(res.body.data).toMatchObject({ from: TODAY, to: TODAY, saleCount: 3, voidedCount: 0, total: '60.00', subtotal: '60.00', tax: '0.00', voidedTotal: '0.00' });
 
-      const voided = await as(users.manager).post(`/api/v1/supermarket/sales/${c.id}/void`).send({ reason: 'test' });
+      const voided = await approvedPost(users.manager, `/api/v1/supermarket/sales/${c.id}/void`, { reason: 'test' }, 'supermarket.void_sale', c.id);
       expect(voided.status).toBe(200);
       res = await totals(users.manager);
       expect(res.body.data).toMatchObject({ saleCount: 2, voidedCount: 1, total: '40.00', voidedTotal: '20.00' });
@@ -158,7 +165,7 @@ describe('supermarket sales reports', () => {
       await payAs(await sell(users.manager, 4), 'card', 'bank_transfer'); // 40 transfer
       await payAs(await sell(users.manager, 5), 'card', 'ussd'); // 50 other online
       const voided = await sell(users.manager, 6); // 60 cash, then voided
-      await as(users.manager).post(`/api/v1/supermarket/sales/${voided.id}/void`).send({ reason: 'test' });
+      await approvedPost(users.manager, `/api/v1/supermarket/sales/${voided.id}/void`, { reason: 'test' }, 'supermarket.void_sale', voided.id);
 
       const res = await totals(users.manager);
       expect(res.status).toBe(200);
@@ -218,7 +225,7 @@ describe('supermarket sales reports', () => {
       await sell(users.pos_operator, 1); // 10
       const mine2 = await sell(users.pos_operator, 2); // 20
       await sell(users.other, 7); // 70, someone else's
-      await as(users.manager).post(`/api/v1/supermarket/sales/${mine2.id}/void`).send({ reason: 'test' });
+      await approvedPost(users.manager, `/api/v1/supermarket/sales/${mine2.id}/void`, { reason: 'test' }, 'supermarket.void_sale', mine2.id);
       const res = await myTotals(users.pos_operator);
       expect(res.status).toBe(200);
       expect(res.body.data).toMatchObject({ from: '2027-12-30', to: '2027-12-30', saleCount: 1, voidedCount: 1, total: '10.00', voidedTotal: '20.00' });

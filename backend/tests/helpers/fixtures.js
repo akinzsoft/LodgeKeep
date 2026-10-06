@@ -30,6 +30,7 @@
 
 const crypto = require('crypto');
 const { encrypt } = require('../../src/shared/encryption');
+const { testPinHash } = require('./approvals');
 
 /**
  * The seven roles of SECURITY.md §5's authorization matrix, seeded per tenant.
@@ -114,6 +115,8 @@ async function seedTwoTenants(trx) {
     sessions: [],
     passwordResetCodes: [],
     mfaLoginCodes: [],
+    approvalPins: [],
+    managerApprovals: [],
     mfaDevices: [],
     invitations: [],
     auditLog: [],
@@ -1941,6 +1944,38 @@ async function seedTwoTenants(trx) {
         label: plan.label,
       });
     }
+  }
+
+  // Manager approvals: user 0 holds the test approval PIN (a real bcrypt
+  // hash, tests/helpers/approvals.js), and one approval they gave (already
+  // used) — so both tables have rows for each tenant, the isolation suite's
+  // interleaved-id assumptions hold, and a test can ask user 0 to approve.
+  const approvalPinHash = await testPinHash();
+  for (const t of both) {
+    t.approvalPins.push({
+      id: await insertReturningId(trx, 'approval_pins', {
+        tenant_id: t.id,
+        user_id: t.users[0].id,
+        pin_hash: approvalPinHash,
+        set_at: new Date(),
+      }),
+      user_id: t.users[0].id,
+    });
+    const approvalHash = tokenHash(`${t.slug}-approval-used`);
+    t.managerApprovals.push({
+      id: await insertReturningId(trx, 'manager_approvals', {
+        tenant_id: t.id,
+        property_id: t.properties[0].id,
+        token_hash: approvalHash,
+        action: 'pos.void_settlement',
+        requested_by_user_id: t.users[0].id,
+        approver_user_id: t.users[0].id,
+        reason: 'Fixture approval',
+        expires_at: hoursFromNow(-1),
+        used_at: hoursFromNow(-1.5),
+      }),
+      token_hash: approvalHash,
+    });
   }
 
   // mfa_devices: user 0 confirmed, user 1 mid-enrolment. Both TOTP, which the

@@ -94,6 +94,13 @@ describe('describeNotification', () => {
       describeNotification({ type: 'night_audit.overdue', payload: { businessDate: '2027-02-15', todayInPropertyTz: '2027-02-16' } })
     ).toEqual({ title: 'Night audit overdue — 2027-02-15', detail: "It's already 2027-02-16 and that date is still open." });
   });
+
+  it('a locked manager approval PIN names the manager and the till user', () => {
+    expect(describeNotification({ type: 'approvals.pin_locked', payload: { approverName: 'Grace Manager', triedByName: 'Ada Bello', action: 'pos.void_settlement' } })).toEqual({
+      title: 'Approval PIN locked — Grace Manager',
+      detail: "Wrong PINs entered at Ada Bello's till · locked for 15 minutes",
+    });
+  });
 });
 
 describe('helpers', () => {

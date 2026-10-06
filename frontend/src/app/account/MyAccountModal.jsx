@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import { Skeleton, Button } from '../../shared/components/index.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { ApiError } from '../../shared/api/index.js';
+import { ApprovalPinSection } from '../approvals/ApprovalPinSection.jsx';
 import styles from './MyAccountModal.module.css';
 
 /**
@@ -30,10 +31,15 @@ import styles from './MyAccountModal.module.css';
  * void/refund/cancel-shaped irreversible action; a plain submit matches
  * the existing forgot-password-completion screen's own precedent).
  *
+ * A third section, "Approval PIN", appears for staff who can approve
+ * sensitive actions at a till (`canApprove`): the manager PIN of the shared
+ * approval mechanism (`app/approvals`).
+ *
  * @param {boolean} [isOffline]
+ * @param {boolean} [canApprove]
  * @param {() => void} onClose
  */
-export function MyAccountModal({ isOffline = false, onClose }) {
+export function MyAccountModal({ isOffline = false, canApprove = false, onClose }) {
   const { getMyProfile, updateProfile, changeMyPassword } = useAuth();
   const titleId = useId();
 
@@ -294,6 +300,8 @@ export function MyAccountModal({ isOffline = false, onClose }) {
             </div>
           </form>
         </div>
+
+        {canApprove && <ApprovalPinSection styles={styles} isOffline={isOffline} />}
       </div>
     </div>
   );

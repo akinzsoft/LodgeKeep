@@ -167,7 +167,7 @@ async function listOnlineSalesNeedingReview({ context, outletId }) {
  * Local half, inside the request's idempotency transaction. `lines` are the
  * same `[{barcode | menu_item_id, quantity}]` a cash sale takes.
  */
-async function startOnlineSale({ trx, context, userId, outletId, lines, tender, confirmOversell = false, customerEmail, idempotencyKey }) {
+async function startOnlineSale({ trx, context, userId, outletId, lines, tender, confirmOversell = false, approve = null, customerEmail, idempotencyKey }) {
   if (!Object.hasOwn(ONLINE_TENDERS, tender ?? '')) {
     throw new ValidationError('INVALID_TENDER', '"tender" must be "online".', [{ field: 'tender', issue: 'invalid' }]);
   }
@@ -187,6 +187,8 @@ async function startOnlineSale({ trx, context, userId, outletId, lines, tender, 
     outletId: outlet.id,
   });
   if (shortfalls.length > 0 && confirmOversell !== true) throw new errors.OversellNotConfirmedError(shortfalls);
+  // A confirmed oversell also needs a manager's approval, claimed in this transaction (as for a cash sale).
+  if (shortfalls.length > 0 && approve) await approve(trx);
 
   const frozen = resolved.map((line) => ({ menu_item_id: String(line.menuItem.id), item_name: line.menuItem.name, barcode: line.barcode, quantity: line.quantity, unit_price: line.menuItem.price }));
   const { total, currency } = await priceCart(trx, outlet, frozen);
@@ -400,13 +402,17 @@ cashieringService.setSupermarketCaptureFinalizer(finalizeCapturedOnlineSale);
  * (void the sale, or close the needs-review intent) in one transaction. A
  * Paystack refusal marks the refund FAILED and changes nothing else.
  */
-async function issueRefund({ context, payment, reason, userId, idempotencyKey, apply }) {
+async function issueRefund({ context, payment, reason, userId, idempotencyKey, apply, approve }) {
   const db = scopedDb().for(context);
   const refundPaymentId = await db.transaction(async (trx) => {
     const locked = await trx.table('payments').where({ id: payment.id }).forUpdate().first();
     if (locked.status !== 'CAPTURED') throw new errors.OnlineSaleStateError(`payment ${locked.status.toLowerCase()}`, 'refunded');
     const children = await trx.table('payments').where({ parent_payment_id: payment.id }).whereIn('status', ['INITIATED', 'PENDING', 'CAPTURED']).first('id');
     if (children) throw new errors.OnlineRefundInProgressError(payment.id);
+    if (typeof approve !== 'function') throw new Error('issueRefund: a manager approval (approve) is required.');
+    // The manager's approval is claimed with the refund record, before Paystack is called: a refund Paystack
+    // then refuses keeps the approval used, and the same approval can never send a second refund.
+    await approve(trx);
     const [id] = await trx.table('payments').insert({
       pos_order_id: locked.pos_order_id,
       settlement_target: 'supermarket_sale',
@@ -460,7 +466,7 @@ async function issueRefund({ context, payment, reason, userId, idempotencyKey, a
  * Void of a completed online sale: full refund + stock back + sale void, one
  * manager action with a reason. (Cash and terminal sales keep `voidSale`.)
  */
-async function voidOnlineSale({ context, saleId, reason, userId, idempotencyKey }) {
+async function voidOnlineSale({ context, saleId, reason, userId, idempotencyKey, approve }) {
   const cleanReason = String(reason || '').trim();
   if (!cleanReason) throw new ValidationError('MISSING_FIELD', '"reason" is required to void a sale.', [{ field: 'reason', issue: 'missing' }]);
   const db = scopedDb().for(context);
@@ -477,6 +483,7 @@ async function voidOnlineSale({ context, saleId, reason, userId, idempotencyKey 
     reason: cleanReason,
     userId,
     idempotencyKey,
+    approve,
     apply: async (trx) => {
       await trx.table('pos_orders').where({ id: settlement.pos_order_id }).forUpdate().first();
       const lockedSale = await trx.table('supermarket_sales').where({ id: saleId }).forUpdate().first();
@@ -490,7 +497,7 @@ async function voidOnlineSale({ context, saleId, reason, userId, idempotencyKey 
 }
 
 /** Manager refund of a paid online sale that never completed (`needs_review`). */
-async function refundOnlinePayment({ context, intentId, reason, userId, idempotencyKey }) {
+async function refundOnlinePayment({ context, intentId, reason, userId, idempotencyKey, approve }) {
   const cleanReason = String(reason || '').trim();
   if (!cleanReason) throw new ValidationError('MISSING_FIELD', '"reason" is required for a refund.', [{ field: 'reason', issue: 'missing' }]);
   const db = scopedDb().for(context);
@@ -503,6 +510,7 @@ async function refundOnlinePayment({ context, intentId, reason, userId, idempote
     reason: cleanReason,
     userId,
     idempotencyKey,
+    approve,
     apply: async (trx) => {
       await trx.table('supermarket_sale_intents').where({ id: intent.id }).update({ status: 'refunded' });
     },

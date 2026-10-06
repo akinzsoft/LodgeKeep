@@ -32,6 +32,7 @@ jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { approvedPoster } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
 const { recordForStoredPayment } = require('../helpers/gateway-record');
@@ -57,14 +58,21 @@ describe('supermarket online card sales', () => {
     post: (url) => t.request.post(url).set('Authorization', `Bearer ${tokenFor(userId)}`).set('Idempotency-Key', `oc-${next()}`),
   });
 
+
+  // A void, a needs-review refund or a confirmed oversell needs a manager's PIN approval (src/modules/approvals),
+  // fetched by the person at the till before the request, as the Supermarket screen does.
+  const approvedPost = approvedPoster({ request: () => t.request, tokenFor, post: (userId, url) => as(userId).post(url), approver: () => users.manager });
+
   async function setRole(userId, role) {
     const existing = await t.trx('user_property_access').where({ user_id: userId, property_id: propertyId }).first('id');
     if (existing) await t.trx('user_property_access').where({ id: existing.id }).update({ role });
     else await t.trx('user_property_access').insert({ tenant_id: ctx.a.id, property_id: propertyId, user_id: userId, role });
   }
 
-  const start = (body = {}, userId = users.operator) =>
-    as(userId).post('/api/v1/supermarket/online-sales').send({ outlet_id: market.outletId, tender: 'online', items: [{ menu_item_id: biscuit, quantity: 2 }], ...body });
+  const start = (body = {}, userId = users.operator) => {
+    const sent = { outlet_id: market.outletId, tender: 'online', items: [{ menu_item_id: biscuit, quantity: 2 }], ...body };
+    return body.confirm_oversell ? approvedPost(userId, '/api/v1/supermarket/online-sales', sent, 'supermarket.oversell') : as(userId).post('/api/v1/supermarket/online-sales').send(sent);
+  };
   const check = (intentId, userId = users.operator) => as(userId).post(`/api/v1/supermarket/online-sales/${intentId}/check`).send({});
   const onHand = async () => (await t.trx('stock_levels').where({ stock_item_id: stockItemId, outlet_id: market.outletId }).first('current_quantity'))?.current_quantity;
   const paymentFor = async (intentId) => {
@@ -239,7 +247,7 @@ describe('supermarket online card sales', () => {
 
     expect((await as(users.operator).post(`/api/v1/supermarket/online-sales/${intent.id}/refund`).send({ reason: 'x' })).status).toBe(403);
     paystack.refundTransaction.mockResolvedValue({ status: 'processed', reference: payment.provider_reference, refundId: '555' });
-    const refunded = await as(users.manager).post(`/api/v1/supermarket/online-sales/${intent.id}/refund`).send({ reason: 'Paid after cancel' });
+    const refunded = await approvedPost(users.manager, `/api/v1/supermarket/online-sales/${intent.id}/refund`, { reason: 'Paid after cancel' }, 'supermarket.refund_online', intent.id);
     expect(refunded.status).toBe(200);
     expect(refunded.body.data.status).toBe('refunded');
     expect(refunded.body.meta.refund).toMatchObject({ status: 'CAPTURED', amount: '203.00', parent_payment_id: payment.id });
@@ -309,7 +317,7 @@ describe('supermarket online card sales', () => {
     const before = Number(await onHand());
 
     paystack.refundTransaction.mockResolvedValue({ status: 'processed', reference: 'x', refundId: '901' });
-    const voided = await as(users.manager).post(`/api/v1/supermarket/sales/${saleId}/void`).send({ reason: 'Wrong item' });
+    const voided = await approvedPost(users.manager, `/api/v1/supermarket/sales/${saleId}/void`, { reason: 'Wrong item' }, 'supermarket.void_sale', saleId);
     expect(voided.status).toBe(200);
     expect(voided.body.data.voided_at).not.toBeNull();
     expect(voided.body.meta.refund).toMatchObject({ status: 'CAPTURED', amount: '203.00' });
@@ -317,7 +325,7 @@ describe('supermarket online card sales', () => {
     expect((await paymentFor(started.body.data.id)).status).toBe('REFUNDED');
     expect(paystack.refundTransaction).toHaveBeenCalledTimes(1);
 
-    const again = await as(users.manager).post(`/api/v1/supermarket/sales/${saleId}/void`).send({ reason: 'Again' });
+    const again = await approvedPost(users.manager, `/api/v1/supermarket/sales/${saleId}/void`, { reason: 'Again' }, 'supermarket.void_sale', saleId);
     expect(again.status).toBe(409);
     expect(paystack.refundTransaction).toHaveBeenCalledTimes(1);
   });
@@ -327,7 +335,7 @@ describe('supermarket online card sales', () => {
     paystackSays({ status: 'success' });
     const saleId = (await check(started.body.data.id)).body.data.sale.id;
     paystack.refundTransaction.mockResolvedValue({ status: 'pending', reference: 'x', refundId: '902' });
-    const voided = await as(users.manager).post(`/api/v1/supermarket/sales/${saleId}/void`).send({ reason: 'Returned' });
+    const voided = await approvedPost(users.manager, `/api/v1/supermarket/sales/${saleId}/void`, { reason: 'Returned' }, 'supermarket.void_sale', saleId);
     expect(voided.body.data.voided_at).not.toBeNull();
     expect(voided.body.meta.refund.status).toBe('PENDING');
     expect((await paymentFor(started.body.data.id)).status).toBe('CAPTURED');
@@ -343,7 +351,7 @@ describe('supermarket online card sales', () => {
     paystackSays({ status: 'success' });
     const saleId = (await check(started.body.data.id)).body.data.sale.id;
     paystack.refundTransaction.mockResolvedValue({ status: 'pending', reference: 'x', refundId: '903' });
-    await as(users.manager).post(`/api/v1/supermarket/sales/${saleId}/void`).send({ reason: 'Returned' });
+    await approvedPost(users.manager, `/api/v1/supermarket/sales/${saleId}/void`, { reason: 'Returned' }, 'supermarket.void_sale', saleId);
     expect((await paymentFor(started.body.data.id)).status).toBe('CAPTURED');
 
     paystack.fetchRefund.mockResolvedValue({ status: 'processing', refundId: '903' });
@@ -358,7 +366,7 @@ describe('supermarket online card sales', () => {
     paystackSays({ status: 'success' });
     const saleTwo = (await check(second.body.data.id)).body.data.sale.id;
     paystack.refundTransaction.mockResolvedValue({ status: 'pending', reference: 'y', refundId: '904' });
-    await as(users.manager).post(`/api/v1/supermarket/sales/${saleTwo}/void`).send({ reason: 'Returned' });
+    await approvedPost(users.manager, `/api/v1/supermarket/sales/${saleTwo}/void`, { reason: 'Returned' }, 'supermarket.void_sale', saleTwo);
     paystack.fetchRefund.mockResolvedValue({ status: 'failed', refundId: '904' });
     await runSupermarketRefundSweep();
     const bell = await t.trx('in_app_notifications').where({ tenant_id: ctx.a.id, user_id: users.manager }).whereRaw("JSON_EXTRACT(payload, '$.refundPaymentId') IS NOT NULL");
@@ -370,13 +378,13 @@ describe('supermarket online card sales', () => {
     paystackSays({ status: 'success' });
     const saleId = (await check(started.body.data.id)).body.data.sale.id;
     paystack.refundTransaction.mockRejectedValue(new Error('Insufficient balance'));
-    const refused = await as(users.manager).post(`/api/v1/supermarket/sales/${saleId}/void`).send({ reason: 'x' });
+    const refused = await approvedPost(users.manager, `/api/v1/supermarket/sales/${saleId}/void`, { reason: 'x' }, 'supermarket.void_sale', saleId);
     expect(refused.status).toBeGreaterThanOrEqual(400);
     expect((await t.trx('supermarket_sales').where({ id: saleId }).first()).voided_at).toBeNull();
     expect((await paymentFor(started.body.data.id)).status).toBe('CAPTURED');
 
     const cash = await as(users.operator).post('/api/v1/supermarket/sales').send({ outlet_id: market.outletId, method: 'cash', items: [{ menu_item_id: biscuit, quantity: 1 }] });
-    const cashVoid = await as(users.manager).post(`/api/v1/supermarket/sales/${cash.body.data.id}/void`).send({ reason: 'Test' });
+    const cashVoid = await approvedPost(users.manager, `/api/v1/supermarket/sales/${cash.body.data.id}/void`, { reason: 'Test' }, 'supermarket.void_sale', cash.body.data.id);
     expect(cashVoid.status).toBe(200);
     expect(paystack.refundTransaction).toHaveBeenCalledTimes(1);
   });

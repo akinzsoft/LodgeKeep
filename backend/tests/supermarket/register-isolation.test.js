@@ -8,6 +8,7 @@
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { managerApproval, setApprovalPin } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { insertMenuItem } = require('../helpers/catalogue');
 
@@ -57,6 +58,7 @@ describe('supermarket outlets are not sellable through the Register', () => {
     [martTerminal] = await t.trx('pos_terminals').insert({ ...scope(), outlet_id: martId, device_ref: `MT-${next()}` });
     [barTerminal] = await t.trx('pos_terminals').insert({ ...scope(), outlet_id: barId, device_ref: `BT-${next()}` });
     for (const role of ['manager', 'pos_operator']) users[role] = await userWithRole(role);
+    await setApprovalPin(t.trx, { tenantId: ctx.a.id, userId: users.manager });
   });
   users = {};
 
@@ -123,7 +125,18 @@ describe('supermarket outlets are not sellable through the Register', () => {
       const sold = await as('pos_operator').post('/api/v1/supermarket/sales').send({ outlet_id: martId, method: 'cash', confirm_oversell: true, items: [{ menu_item_id: menuId, quantity: 2 }] });
       expect(sold.status).toBe(201);
       expect(sold.body.data.receipt_code).toBeTruthy();
-      const voided = await as('manager').post(`/api/v1/supermarket/sales/${sold.body.data.id}/void`).send({ reason: 'test' });
+      // The Register's settlement-void route refuses a supermarket tab even with a manager's approval: a sale is
+      // voided through the supermarket, which keeps its receipt in step.
+      const sale = await t.trx('supermarket_sales').where({ id: sold.body.data.id }).first();
+      const settlement = await t.trx('pos_order_settlements').where({ id: sale.settlement_id }).first();
+      const posApproval = await managerApproval(t.request, { token: tokenFor(users.manager), approverUserId: users.manager, action: 'pos.void_settlement', targetId: settlement.id });
+      const viaRegister = await as('manager').post(`/api/v1/pos/orders/${settlement.pos_order_id}/settlements/${settlement.id}/void`).set('X-Manager-Approval', posApproval).send({ reason: 'test' });
+      expect(viaRegister.status).toBe(422);
+      expect(viaRegister.body.error.code).toBe(CODE);
+      expect((await t.trx('pos_order_settlements').where({ id: settlement.id }).first()).voided_at).toBeNull();
+
+      const approval = await managerApproval(t.request, { token: tokenFor(users.manager), approverUserId: users.manager, action: 'supermarket.void_sale', targetId: sold.body.data.id });
+      const voided = await as('manager').post(`/api/v1/supermarket/sales/${sold.body.data.id}/void`).set('X-Manager-Approval', approval).send({ reason: 'test' });
       expect(voided.status).toBe(200);
     });
   });

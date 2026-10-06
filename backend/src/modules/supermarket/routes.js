@@ -31,7 +31,8 @@ function supermarketRouter() {
   router.get('/supermarket/my-sales', requirePermission('supermarket.sales'), controller.mySales);
   router.get('/supermarket/my-sales/totals', requirePermission('supermarket.sales'), controller.mySalesTotals);
   router.get('/supermarket/sales/:id', readSales, controller.getSale);
-  router.post('/supermarket/sales/:id/void', requirePermission('supermarket.manage'), controller.voidSale);
+  // Any cashier may start a void; a manager's PIN approval (`approvals` module) is what authorises it.
+  router.post('/supermarket/sales/:id/void', requirePermission('supermarket.sales'), controller.voidSale);
 
   // Online (Paystack) sales: card today. The capture completes the sale on the server.
   router.post('/supermarket/online-sales', requirePermission('supermarket.sales'), onlineSales.startOnlineSale);

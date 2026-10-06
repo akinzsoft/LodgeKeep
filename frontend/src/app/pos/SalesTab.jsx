@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { DataTable, Button, ConfirmDialog, Toast } from '../../shared/components/index.js';
+import { DataTable, Button, Toast } from '../../shared/components/index.js';
+import { ManagerApprovalDialog } from '../approvals/ManagerApprovalDialog.jsx';
 import { terminalProviderLabel, terminalAccountText } from '../../shared/terminalProviders.js';
 import { Money } from '../../shared/format/money.jsx';
 import { posApi, cashieringApi, ApiError } from '../../shared/api/index.js';
@@ -115,12 +116,13 @@ export function SalesTab({ activeProperty, isOffline = false }) {
     }
   }
 
-  async function confirmRefund(reason) {
+  // A manager approved this refund with their PIN; the approval goes with the request (header), used once.
+  async function confirmRefund(approval, reason) {
     const payment = refunding;
     setRefunding(null);
     setError(null);
     try {
-      await cashieringApi.refundPayment(payment.paymentId, { reason });
+      await cashieringApi.refundPayment(payment.paymentId, { reason, approval });
       setToast('Refund sent to Paystack.');
       await runReport();
     } catch (caught) {
@@ -347,12 +349,14 @@ export function SalesTab({ activeProperty, isOffline = false }) {
       )}
 
       {refunding && (
-        <ConfirmDialog
+        <ManagerApprovalDialog
+          action="pos.refund_payment"
+          targetId={refunding.paymentId}
           title="Refund card payment"
           consequence={`This sends a refund to Paystack for ${tabName(refunding)}. The guest gets their money back and this cannot be undone.`}
-          requireReason
-          confirmLabel="Refund"
-          onConfirm={confirmRefund}
+          confirmLabel="Approve refund"
+          isOffline={isOffline}
+          onApproved={confirmRefund}
           onCancel={() => setRefunding(null)}
         />
       )}

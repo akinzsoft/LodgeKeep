@@ -1,4 +1,5 @@
 import { request, requestWithMeta, requestBlob, requestMultipart } from './client.js';
+import { approvalHeaders } from './approvals.js';
 
 /**
  * PLAN.md Phase 4's POS core module. Same shape as `cashiering.js`/
@@ -244,9 +245,11 @@ export function openOrder({ outletId, terminalId, tableLabel }) {
  *   rejected with `BUSINESS_RULE_INSUFFICIENT_STOCK` — see
  *   `RegisterTab.jsx`'s own confirm-then-retry handling.
  */
-export function addItem(orderId, { menuItemId, quantity, modifiers, stockOverrideReason, overrideReason }) {
+/** `approval`: a manager's approval token, needed only to sell past recorded stock (with `stockOverrideReason`). */
+export function addItem(orderId, { menuItemId, quantity, modifiers, stockOverrideReason, overrideReason, approval }) {
   return request(`/pos/orders/${orderId}/items`, {
     method: 'POST',
+    headers: approvalHeaders(approval),
     body: { menu_item_id: menuItemId, quantity, modifiers, stock_override_reason: stockOverrideReason, override_reason: overrideReason || undefined },
   });
 }
@@ -308,10 +311,10 @@ export function verifyPaystackPayment(orderId, paymentId) {
  *   `BUSINESS_RULE_INSUFFICIENT_STOCK`. `overrideReason` is a manager's
  *   reason for settling another operator's tab (required by the server then).
  */
-export function settleOrder(orderId, settlements, { stockOverrideReason, overrideReason } = {}) {
+export function settleOrder(orderId, settlements, { stockOverrideReason, overrideReason, approval } = {}) {
   return request(`/pos/orders/${orderId}/settle`, {
     method: 'POST',
-    headers: { 'Idempotency-Key': idempotencyKey() },
+    headers: { 'Idempotency-Key': idempotencyKey(), ...approvalHeaders(approval) },
     body: {
       settlements: settlements.map((s) => ({
         split_group: s.splitGroup ?? null,
@@ -332,10 +335,11 @@ export function settleOrder(orderId, settlements, { stockOverrideReason, overrid
   });
 }
 
-export function voidSettlement(orderId, settlementId, reason) {
+/** Needs a manager's approval token (`approvalsApi.requestApproval`, action `pos.void_settlement`). */
+export function voidSettlement(orderId, settlementId, reason, approval) {
   return request(`/pos/orders/${orderId}/settlements/${settlementId}/void`, {
     method: 'POST',
-    headers: { 'Idempotency-Key': idempotencyKey() },
+    headers: { 'Idempotency-Key': idempotencyKey(), ...approvalHeaders(approval) },
     body: { reason },
   });
 }

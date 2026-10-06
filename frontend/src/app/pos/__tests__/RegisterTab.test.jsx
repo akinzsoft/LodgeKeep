@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { RegisterTab } from '../RegisterTab.jsx';
 import { ApiError } from '../../../shared/api/index.js';
 import { selectWhenLoaded } from './selectWhenLoaded.js';
+import { approveInDialog, TEST_APPROVERS, TEST_APPROVAL_TOKEN } from '../../approvals/__tests__/approveInDialog.js';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
@@ -30,10 +31,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const paystackMocks = vi.hoisted(() => ({ openPaystackPopup: vi.fn() }));
+// Selling past recorded stock needs a manager's PIN approval (ManagerApprovalDialog).
+const approvalMocks = vi.hoisted(() => ({ listApprovers: vi.fn(), requestApproval: vi.fn() }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
-  return { ...actual, posApi: mocks };
+  return { ...actual, posApi: mocks, approvalsApi: approvalMocks };
 });
 
 vi.mock('../../../shared/paystack.js', () => paystackMocks);
@@ -81,6 +84,8 @@ async function openNewTab(initialItems = []) {
 
 describe('<RegisterTab>', () => {
   beforeEach(() => {
+    approvalMocks.listApprovers.mockResolvedValue(TEST_APPROVERS);
+    approvalMocks.requestApproval.mockResolvedValue({ token: TEST_APPROVAL_TOKEN });
     Object.values(mocks).forEach((fn) => fn.mockReset());
     paystackMocks.openPaystackPopup.mockReset();
     window.print = vi.fn();
@@ -1394,12 +1399,12 @@ describe('<RegisterTab>', () => {
 
       mocks.addItem.mockResolvedValueOnce({});
       mocks.getOrder.mockResolvedValueOnce({ order, items: [orderItem()], settlements: [] });
-      await userEvent.type(screen.getByLabelText('Reason'), 'Confirmed with the bar, count is off');
-      await userEvent.click(screen.getByRole('button', { name: 'Proceed anyway' }));
+      await approveInDialog({ reason: 'Confirmed with the bar, count is off', confirmLabel: 'Proceed anyway' });
 
+      expect(approvalMocks.requestApproval).toHaveBeenCalledWith(expect.objectContaining({ action: 'pos.stock_override', targetId: '9', approverUserId: '7' }));
       expect(mocks.addItem).toHaveBeenLastCalledWith(
         '9',
-        expect.objectContaining({ menuItemId: '3', quantity: 1, stockOverrideReason: 'Confirmed with the bar, count is off' })
+        expect.objectContaining({ menuItemId: '3', quantity: 1, stockOverrideReason: 'Confirmed with the bar, count is off', approval: TEST_APPROVAL_TOKEN })
       );
       expect(screen.queryByText('Low stock')).not.toBeInTheDocument();
     });
@@ -1426,13 +1431,12 @@ describe('<RegisterTab>', () => {
       expect(await screen.findByText('Low stock')).toBeInTheDocument();
 
       mocks.settleOrder.mockResolvedValueOnce({ order: { ...order, status: 'settled' }, settlements: [settlementRow()] });
-      await userEvent.type(screen.getByLabelText('Reason'), 'Last of this batch');
-      await userEvent.click(screen.getByRole('button', { name: 'Proceed anyway' }));
+      await approveInDialog({ reason: 'Last of this batch', confirmLabel: 'Proceed anyway' });
 
       expect(mocks.settleOrder).toHaveBeenLastCalledWith(
         '9',
         [expect.objectContaining({ method: 'cash' })],
-        expect.objectContaining({ stockOverrideReason: 'Last of this batch' })
+        expect.objectContaining({ stockOverrideReason: 'Last of this batch', approval: TEST_APPROVAL_TOKEN })
       );
       await screen.findByRole('region', { name: 'Sale receipt' });
     });
@@ -1454,14 +1458,13 @@ describe('<RegisterTab>', () => {
       expect(paystackMocks.openPaystackPopup).toHaveBeenCalledTimes(1);
 
       mocks.settleOrder.mockResolvedValueOnce({ order: { ...order, status: 'settled' }, settlements: [settlementRow({ method: 'card', payment_id: '70' })] });
-      await userEvent.type(screen.getByLabelText('Reason'), 'Confirmed');
-      await userEvent.click(screen.getByRole('button', { name: 'Proceed anyway' }));
+      await approveInDialog({ reason: 'Confirmed', confirmLabel: 'Proceed anyway' });
 
       expect(paystackMocks.openPaystackPopup).toHaveBeenCalledTimes(1); // Still once — no second popup.
       expect(mocks.settleOrder).toHaveBeenLastCalledWith(
         '9',
         [expect.objectContaining({ method: 'card', paymentId: '70' })],
-        expect.objectContaining({ stockOverrideReason: 'Confirmed' })
+        expect.objectContaining({ stockOverrideReason: 'Confirmed', approval: TEST_APPROVAL_TOKEN })
       );
       await screen.findByRole('region', { name: 'Sale receipt' });
     });

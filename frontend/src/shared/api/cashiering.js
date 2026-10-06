@@ -1,4 +1,5 @@
 import { request, requestWithMeta, requestBlob } from './client.js';
+import { approvalHeaders } from './approvals.js';
 
 /**
  * PLAN.md Phase 2.5's cashiering module. Same shape as `reservations.js`:
@@ -213,10 +214,11 @@ export function verifyPayment(paymentId) {
 }
 
 /** @param {string} paymentId @param {{amount?: string, reason: string}} params */
-export function refundPayment(paymentId, { amount, reason }) {
+/** A refund of a POS (Register / QR guest order) payment also needs a manager's `approval` token (action `pos.refund_payment`). */
+export function refundPayment(paymentId, { amount, reason, approval }) {
   return request(`/cashiering/payments/${paymentId}/refund`, {
     method: 'POST',
     body: { amount, reason },
-    headers: { 'Idempotency-Key': idempotencyKey() },
+    headers: { 'Idempotency-Key': idempotencyKey(), ...approvalHeaders(approval) },
   });
 }

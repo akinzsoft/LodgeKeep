@@ -281,7 +281,7 @@ async function recordReceiptedSale(trx, { outlet, orderId, settlement, userId, m
  * `trx`-based, called from `runIdempotentMutation`. `lines`: `[{barcode | menu_item_id, quantity}]`.
  * Opens the tab, adds the lines, settles it and records the receipt, all in the caller's transaction.
  */
-async function createSale({ trx, context, userId, outletId, lines, method, terminalId = null, terminal, terminalAccountId, confirmOversell = false }) {
+async function createSale({ trx, context, userId, outletId, lines, method, terminalId = null, terminal, terminalAccountId, confirmOversell = false, approve = null }) {
   if (!Array.isArray(lines) || lines.length === 0) throw new ValidationError('MISSING_FIELD', 'At least one item is required.', [{ field: 'items', issue: 'missing' }]);
   if (lines.length > MAX_LINES) throw new ValidationError('CART_TOO_LARGE', `A sale may have at most ${MAX_LINES} lines.`, [{ field: 'items', issue: 'too_many' }]);
   if (!SALE_METHODS.includes(method)) {
@@ -305,6 +305,8 @@ async function createSale({ trx, context, userId, outletId, lines, method, termi
     outletId: outlet.id,
   });
   if (shortfalls.length > 0 && confirmOversell !== true) throw new errors.OversellNotConfirmedError(shortfalls);
+  // A confirmed oversell also needs a manager's approval (`src/modules/approvals`), claimed in this transaction.
+  if (shortfalls.length > 0 && approve) await approve(trx);
   const stockOverrideReason = shortfalls.length > 0 ? stockService.CONFIRMED_OVERSELL_REASON_SUPERMARKET : stockService.AUTOMATIC_OVERRIDE_REASON_SUPERMARKET;
 
   const { orderId, itemRows } = await openQuickSaleOrder(trx, {
@@ -576,7 +578,7 @@ async function listMySalesToday({ context, outletId }) {
   return rows.map((row) => ({ ...row, receipt_code: receiptCode(outlet, row.receipt_number) }));
 }
 
-/** Voids the sale (and its settlement and stock), keeping the receipt number. `trx`-based, manager-level. */
+/** Voids the sale (and its settlement and stock), keeping the receipt number. `trx`-based; the controller has already claimed a manager's PIN approval (`src/modules/approvals`) in the same transaction. */
 async function voidSale({ trx, id, reason, userId }) {
   if (!reason || !String(reason).trim()) throw new ValidationError('MISSING_FIELD', '"reason" is required to void a sale.', [{ field: 'reason', issue: 'missing' }]);
   const sale = await trx.table('supermarket_sales').where({ id }).forUpdate().first();

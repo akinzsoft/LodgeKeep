@@ -8,6 +8,7 @@
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { approvedPoster } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
 
@@ -28,6 +29,11 @@ describe('supermarket stage 2', () => {
   });
   const sell = (userId, body, outlet = outletId) => as(userId).post('/api/v1/supermarket/sales').send({ outlet_id: outlet, method: 'cash', ...body });
   const flags = (userId, outlet = outletId) => as(userId).get(`/api/v1/supermarket/setup-flags?outlet_id=${outlet}`);
+
+
+  // A void, a needs-review refund or a confirmed oversell needs a manager's PIN approval (src/modules/approvals),
+  // fetched by the person at the till before the request, as the Supermarket screen does.
+  const approvedPost = approvedPoster({ request: () => t.request, tokenFor, post: (userId, url) => as(userId).post(url), approver: () => users.manager });
 
   async function setRole(userId, role) {
     const existing = await t.trx('user_property_access').where({ user_id: userId, property_id: propertyId }).first('id');
@@ -189,7 +195,7 @@ describe('supermarket stage 2', () => {
       expect(during.summary.subtotal).not.toBe(baseline.summary.subtotal);
       expect(during.topItems.find((row) => row.name === 'Void goods')).toMatchObject({ quantity: 3 });
 
-      const voided = await as(users.manager).post(`/api/v1/supermarket/sales/${sale.body.data.id}/void`).send({ reason: 'Customer returned the goods' });
+      const voided = await approvedPost(users.manager, `/api/v1/supermarket/sales/${sale.body.data.id}/void`, { reason: 'Customer returned the goods' }, 'supermarket.void_sale', sale.body.data.id);
       expect(voided.status).toBe(200);
       expect(voided.body.data.voided_at).toBeTruthy();
 
@@ -203,7 +209,7 @@ describe('supermarket stage 2', () => {
       const settlement = await t.trx('pos_order_settlements').where({ id: sale.body.data.settlement_id }).first();
       expect(settlement.voided_at).toBeTruthy();
       // A second void is refused and does not restore stock twice.
-      expect((await as(users.manager).post(`/api/v1/supermarket/sales/${sale.body.data.id}/void`).send({ reason: 'again' })).status).toBe(409);
+      expect((await approvedPost(users.manager, `/api/v1/supermarket/sales/${sale.body.data.id}/void`, { reason: 'again' }, 'supermarket.void_sale', sale.body.data.id)).status).toBe(409);
       expect(await level()).toBe('10.000');
     });
   });
