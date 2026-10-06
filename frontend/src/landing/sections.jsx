@@ -255,7 +255,7 @@ export function VideoSection({ content }) {
         <p className={`${styles.lead} ${styles.center}`}>{video.lead}</p>
         {video.src ? (
           <video className={styles.video} controls preload="none" poster={video.poster || undefined} playsInline>
-            <source src={video.src} type="video/mp4" />
+            <source src={video.src} type={video.src.endsWith('.webm') ? 'video/webm' : 'video/mp4'} />
             Your browser cannot play this video.
           </video>
         ) : (
@@ -277,8 +277,8 @@ export function Testimonials({ content }) {
       <div className={styles.container}>
         <h2 className={`${styles.h2} ${styles.center}`} id="testimonials-title">{testimonials.title}</h2>
         <ul className={styles.cardGrid}>
-          {items.map((item) => (
-            <li key={`${item.name}-${item.quote.slice(0, 12)}`} className={`${styles.card} ${item.placeholder ? styles.placeholderCard : ''}`}>
+          {items.map((item, index) => (
+            <li key={`${index}-${item.name}`} className={`${styles.card} ${item.placeholder ? styles.placeholderCard : ''}`}>
               <QuoteIcon className={styles.quoteIcon} />
               <blockquote className={styles.quote}>{item.quote}</blockquote>
               <p className={styles.quoteBy}>
@@ -302,17 +302,19 @@ export function Pricing({ content }) {
         <p className={`${styles.lead} ${styles.center}`}>{pricing.lead}</p>
         <div className={styles.priceCard}>
           <p className={styles.planName}>{pricing.planName}</p>
-          <p className={styles.setupFee}>
-            <span className="tabular-nums">{formatMoney(pricing.setupAmount, pricing.currency)}</span> {pricing.setupLabel}
-          </p>
+          {pricing.setupAmount && (
+            <p className={styles.setupFee}>
+              <span className="tabular-nums">{formatMoney(pricing.setupAmount, pricing.currency)}</span> {pricing.setupLabel}
+            </p>
+          )}
           <p className={styles.price}>
             <span className={`${styles.priceAmount} tabular-nums`}>{formatMoney(pricing.amount, pricing.currency)}</span>
             <span className={styles.priceInterval}>{pricing.interval}</span>
           </p>
           <p className={styles.trial}>{pricing.trial}</p>
           <ul className={styles.checkList}>
-            {pricing.includes.map((point) => (
-              <li key={point}>
+            {pricing.includes.map((point, index) => (
+              <li key={`${index}-${point}`}>
                 <CheckIcon className={styles.checkIcon} />
                 <span>{point}</span>
               </li>
