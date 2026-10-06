@@ -219,6 +219,13 @@ const NOTIFICATION_EVENTS = Object.freeze([
     defaultRoles: ['manager', 'admin', 'super_admin'],
   },
   {
+    eventType: 'approvals.pin_locked',
+    group: 'Security',
+    label: 'Manager approval PIN locked',
+    description: "Five wrong PINs in 15 minutes locked a manager's approval PIN for 15 minutes. Someone may be guessing at a till.",
+    defaultRoles: ['manager', 'admin', 'super_admin'],
+  },
+  {
     eventType: 'night_audit.completed',
     group: 'Night audit',
     label: 'Night audit closed the day',

@@ -44,6 +44,7 @@ const dbModule = require('../../src/db');
 const { createApp } = require('../../src/app');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { insertMenuItem, insertStockItem, setOutletAvailability, setStockQuantity, outletMenuItem } = require('../helpers/catalogue');
+const { setApprovalPin, managerApproval } = require('../helpers/approvals');
 
 describe('POS inventory & stock: real concurrency', () => {
   let req;
@@ -89,6 +90,8 @@ describe('POS inventory & stock: real concurrency', () => {
     [terminalId] = await db()('pos_terminals').insert({ tenant_id: tenantId, property_id: propertyId, outlet_id: outletId, device_ref: 'STOCKRACE-TERM' });
 
     token = signAccessToken({ aud: 'staff', sub: String(userId), tenant_id: String(tenantId), property_id: String(propertyId) });
+    // Selling past recorded stock needs a manager's PIN approval; this manager approves their own.
+    await setApprovalPin(db(), { tenantId, userId });
   });
 
   afterAll(async () => {
@@ -115,6 +118,8 @@ describe('POS inventory & stock: real concurrency', () => {
     await db()('role_permissions').where({ tenant_id: tenantId }).delete();
     // Bell rows the flow under test raised (staff notifications) reference these users.
     await db()('in_app_notifications').where({ tenant_id: tenantId }).delete();
+    await db()('manager_approvals').where({ tenant_id: tenantId }).delete();
+    await db()('approval_pins').where({ tenant_id: tenantId }).delete();
     await db()('users').where({ tenant_id: tenantId }).delete();
     await db()('roles').where({ tenant_id: tenantId }).delete();
     await db()('properties').where({ tenant_id: tenantId }).delete();
@@ -186,10 +191,14 @@ describe('POS inventory & stock: real concurrency', () => {
     return orderCounterValue;
   }
 
-  function settleCash(orderId, { stockOverrideReason } = {}) {
+  /** A stock-override approval for `orderId`, fetched BEFORE the racing requests start so they still race. */
+  const stockApproval = (orderId) => managerApproval(req, { token, approverUserId: userId, action: 'pos.stock_override', targetId: orderId });
+
+  function settleCash(orderId, { stockOverrideReason, approval = null } = {}) {
     return req
       .post(`/api/v1/pos/orders/${orderId}/settle`)
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Manager-Approval', approval ?? '')
       .set('Idempotency-Key', idemKey('settle'))
       .send({ settlements: [{ method: 'cash' }], stock_override_reason: stockOverrideReason });
   }
@@ -212,7 +221,11 @@ describe('POS inventory & stock: real concurrency', () => {
     // deliberately does not reserve against a concurrent tab) — both
     // requests supply the override reason the guard requires either way.
     const reason = 'Only one left, confirmed by the bar';
-    const [resA, resB] = await Promise.all([settleCash(orderA, { stockOverrideReason: reason }), settleCash(orderB, { stockOverrideReason: reason })]);
+    const [approvalA, approvalB] = [await stockApproval(orderA), await stockApproval(orderB)];
+    const [resA, resB] = await Promise.all([
+      settleCash(orderA, { stockOverrideReason: reason, approval: approvalA }),
+      settleCash(orderB, { stockOverrideReason: reason, approval: approvalB }),
+    ]);
     // Deduction is never blocked (this session's confirmed decision) —
     // BOTH settlements succeed regardless of the resulting balance.
     expect(resA.status).toBe(200);
@@ -377,8 +390,9 @@ describe('POS inventory & stock: real concurrency', () => {
         .set('Idempotency-Key', idemKey('waste5'))
         .send({ outlet_id: outletId, quantity: '1.000', reason: 'Concurrency test spill' });
 
+    const soloApproval = await stockApproval(soloOrderId);
     const [settleRes, wasteRes] = await Promise.all([
-      settleCash(soloOrderId, { stockOverrideReason: 'Last of this batch, confirmed by the bar' }),
+      settleCash(soloOrderId, { stockOverrideReason: 'Last of this batch, confirmed by the bar', approval: soloApproval }),
       wasteB(),
     ]);
     expect(settleRes.status).toBe(200);
@@ -475,8 +489,9 @@ describe('POS inventory & stock: real concurrency', () => {
     // read happens to run first may or may not find the item already
     // restocked — the reason is harmless (unused) if the guard finds
     // nothing affected, and required if it does.
+    const restockApproval = await stockApproval(orderId);
     const [settleRes, goodsRes] = await Promise.all([
-      settleCash(orderId, { stockOverrideReason: 'Confirmed with the bar, restock incoming' }),
+      settleCash(orderId, { stockOverrideReason: 'Confirmed with the bar, restock incoming', approval: restockApproval }),
       goodsReceived(),
     ]);
     expect(settleRes.status).toBe(200);

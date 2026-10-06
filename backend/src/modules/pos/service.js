@@ -850,7 +850,17 @@ async function openOrder({ context, outletId, terminalId = null, openedByUserId 
   return getOrder({ context, id });
 }
 
-async function addItem({ context, orderId, menuItemId, quantity, modifiers, stockOverrideReason, userId, canActForOthers = false, overrideReason = null }) {
+/**
+ * `approve(trx)` — a manager's approval (`src/modules/approvals`), claimed
+ * only when selling past recorded stock actually applies; the Register's
+ * controller passes one, automatic-reason callers (QR, card capture,
+ * supermarket) none.
+ */
+function approvalHook(approve, trx) {
+  return approve ? () => approve(trx) : null;
+}
+
+async function addItem({ context, orderId, menuItemId, quantity, modifiers, stockOverrideReason, approve = null, userId, canActForOthers = false, overrideReason = null }) {
   const db = scopedDb().for(context);
   return db.transaction(async (trx) => {
     const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
@@ -884,6 +894,8 @@ async function addItem({ context, orderId, menuItemId, quantity, modifiers, stoc
       userId: context.userId,
       propertyId: order.property_id,
       outletId: order.outlet_id,
+      // The Register claims a manager's approval here, in this transaction (see the controller).
+      onOverride: approvalHook(approve, trx),
     });
 
     await trx.table('pos_order_items').insert({
@@ -1281,7 +1293,7 @@ function normalizeTerminalDetails({ provider, reference } = {}) {
  * the supermarket, QR and online-capture callers settle tabs they opened
  * themselves (or run as the system) and omit it.
  */
-async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOverrideReason, claimPayment, actor = null }) {
+async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOverrideReason, approve = null, claimPayment, actor = null }) {
   if (!Array.isArray(settlements) || settlements.length === 0) {
     throw new ValidationError('MISSING_FIELD', 'At least one settlement is required.', [{ field: 'settlements', issue: 'missing' }]);
   }
@@ -1322,6 +1334,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
     userId: settledByUserId,
     propertyId: order.property_id,
     outletId: order.outlet_id,
+    onOverride: approvalHook(approve, trx),
   });
   const overrideReasonsByStockItemId = stockOverrideReason?.trim()
     ? new Map(stockGuardResult.affectedStockItemIds.map((id) => [id, stockOverrideReason.trim()]))
@@ -1663,7 +1676,7 @@ async function claimRegisterPaymentForCheck({ trx, orderId, splitGroup, paymentI
   return payment;
 }
 
-/** Post-settlement void — PRODUCT_REQUIREMENTS.md §3.4's "Manager overrides ... require a manager PIN," gated on `pos.manage` at the route layer rather than a separate PIN-re-entry mechanism this codebase has no other example of. Voids the settlement record and, for a room charge, the underlying folio line via the existing `voidLineItem`. */
+/** Post-settlement void — PRODUCT_REQUIREMENTS.md §3.4's "Manager overrides ... require a manager PIN." The PIN is the caller's job: the Register's void route and the supermarket's void each claim a manager approval (`src/modules/approvals`) in this same transaction before calling here; the QR order rejection calls here without one (a guest order the staff refuse). Voids the settlement record and, for a room charge, the underlying folio line via the existing `voidLineItem`. */
 async function voidSettlement({ trx, settlementId, reason, userId }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to void a settlement.', [{ field: 'reason', issue: 'missing' }]);
   const settlement = await trx.table('pos_order_settlements').where({ id: settlementId }).first();

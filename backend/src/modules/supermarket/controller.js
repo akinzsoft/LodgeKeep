@@ -7,6 +7,7 @@ const { ValidationError } = require('../../shared/errors');
 const service = require('./service');
 const productEdit = require('./product-edit');
 const online = require('./paystack-sale');
+const { approvalConsumer } = require('../approvals');
 
 /** Whether a sale was paid online (its settlement carries a supermarket Paystack payment). */
 async function isOnlineSale(context, saleId) {
@@ -56,6 +57,7 @@ async function createSale(req, res, next) {
           terminal: { provider: req.body?.terminal_provider, reference: req.body?.terminal_reference },
           terminalAccountId: req.body?.terminal_account_id,
           confirmOversell: req.body?.confirm_oversell === true,
+          approve: approvalConsumer(req, 'supermarket.oversell'),
         });
         return { status: 201, body: ok(sale) };
       },
@@ -120,10 +122,21 @@ async function summary(req, res, next) {
 
 async function voidSale(req, res, next) {
   try {
+    // A cashier may start a void, but only of a sale at their own outlets (another outlet's receipt is "not found").
+    await service.getSale({ context: req.context, id: req.params.id });
+    // A manager's approval, claimed inside the void's own transaction (for an online sale: with the refund record).
+    const approve = approvalConsumer(req, 'supermarket.void_sale', req.params.id);
     // An online sale's void refunds the payment at Paystack first (outside any transaction).
     if (await isOnlineSale(req.context, req.params.id)) {
       const key = requireIdempotencyKey(req);
-      const result = await online.voidOnlineSale({ context: req.context, saleId: req.params.id, reason: req.body?.reason, userId: req.context.userId, idempotencyKey: key });
+      const result = await online.voidOnlineSale({
+        context: req.context,
+        saleId: req.params.id,
+        reason: req.body?.reason,
+        userId: req.context.userId,
+        idempotencyKey: key,
+        approve,
+      });
       await req.audit({ entityType: 'supermarket_sales', entityId: req.params.id, action: 'void', afterState: { refundPaymentId: result.refund.id, refundStatus: result.refund.status }, reason: req.body?.reason });
       return res.json(ok(result.sale, { refund: result.refund }));
     }
@@ -132,7 +145,11 @@ async function voidSale(req, res, next) {
       entityType: 'supermarket_sales',
       entityId: req.params.id,
       action: 'void',
-      handler: async (trx) => ({ status: 200, body: ok(await service.voidSale({ trx, id: req.params.id, reason: req.body?.reason, userId: req.context.userId })) }),
+      handler: async (trx) => {
+        // Claimed first: a void that then fails leaves the approval unused.
+        await approve(trx);
+        return { status: 200, body: ok(await service.voidSale({ trx, id: req.params.id, reason: req.body?.reason, userId: req.context.userId })) };
+      },
     });
   } catch (error) {
     next(error);

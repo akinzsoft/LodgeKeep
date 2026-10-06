@@ -490,9 +490,14 @@ async function unitsOnHandForMenuItems({ trx, menuItemIds, outletId }) {
  * captured) — the SAME rule and the SAME error code apply to every channel;
  * only how each frontend responds to the rejection differs.
  *
+ * `onOverride` (optional) runs only when an override is actually applied
+ * — after the reason check, before anything is written — so a caller can
+ * require a manager's approval for it (the staff Register does, through
+ * `src/modules/approvals`); automatic-reason callers pass none.
+ *
  * @returns {Promise<{affectedStockItemIds: number[]}>}
  */
-async function assertStockAvailableOrOverridden({ trx, lines, overrideReason, userId, propertyId, outletId, source = 'api' }) {
+async function assertStockAvailableOrOverridden({ trx, lines, overrideReason, userId, propertyId, outletId, source = 'api', onOverride = null }) {
   if (!outletId) throw new Error('assertStockAvailableOrOverridden: outletId is required — stock is counted per outlet.');
   const deductionByStockItem = await computeStockDeductionsForLines({ trx, lines });
   if (deductionByStockItem.size === 0) return { affectedStockItemIds: [] };
@@ -516,6 +521,7 @@ async function assertStockAvailableOrOverridden({ trx, lines, overrideReason, us
 
   const reason = typeof overrideReason === 'string' ? overrideReason.trim() : '';
   if (!reason) throw new InsufficientStockOverrideRequiredError(affected);
+  if (onOverride) await onOverride(affected);
 
   for (const item of affected) {
     await recordAuditEntry(trx, {

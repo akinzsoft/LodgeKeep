@@ -10,6 +10,7 @@
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { managerApproval } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
 
@@ -155,9 +156,11 @@ describe('POS sales report — profit', () => {
 
     const order = await t.request.get(`/api/v1/pos/orders/${voided}`).set('Authorization', `Bearer ${managerToken}`);
     const settlementId = order.body.data.settlements[0].id;
+    const voidApproval = await managerApproval(t.request, { token: managerToken, approverUserId: ctx.a.users[0].id, action: 'pos.void_settlement', targetId: settlementId });
     await t.request
       .post(`/api/v1/pos/orders/${voided}/settlements/${settlementId}/void`)
       .set('Authorization', `Bearer ${managerToken}`)
+      .set('X-Manager-Approval', voidApproval)
       .set('Idempotency-Key', 'sales-profit-void')
       .send({ reason: 'test' })
       .expect(200);

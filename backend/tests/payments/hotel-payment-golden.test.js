@@ -68,6 +68,7 @@ const { seedTwoTenants } = require('../helpers/fixtures');
 const { insertMenuItem } = require('../helpers/catalogue');
 const { gatewayRecordFor, recordForStoredPayment } = require('../helpers/gateway-record');
 const { signAccessToken } = require('../../src/auth/tokens');
+const { hashPassword } = require('../../src/auth/password');
 const paystackAdapterModule = require('../../src/modules/cashiering/paystack-adapter');
 const { rateLimitRedisConnection } = require('../../src/shared/rate-limit-redis-connection');
 
@@ -423,6 +424,15 @@ describe('Golden output — every hotel payment path', () => {
   }
 
   const settle = (orderId, settlements) => post(`/api/v1/pos/orders/${orderId}/settle`).send({ settlements });
+
+  // A void or refund of a Register payment needs a manager's PIN approval (src/modules/approvals). The manager
+  // approves their own action here; the approval rows live outside every snapshotted table and entity type.
+  const GOLDEN_PIN = '482915';
+  async function approval(action, targetId) {
+    const res = await post('/api/v1/approvals', { idempotent: false }).send({ action, approver_user_id: managerId, pin: GOLDEN_PIN, reason: 'Golden approval', target_id: targetId });
+    expect(res.status).toBe(201);
+    return res.body.data.token;
+  }
   const preview = (orderId) => get(`/api/v1/pos/orders/${orderId}/settlement-preview`);
 
   async function posState(orderId) {
@@ -465,6 +475,7 @@ describe('Golden output — every hotel payment path', () => {
     await t.trx('property_payment_subaccounts').where({ tenant_id: ctx.a.id, property_id: propertyId }).update({ percentage_charge: FEE_PERCENTAGE });
     await setRole(managerId, 'manager');
     await t.trx('users').where({ id: managerId }).update({ first_name: 'Golden', last_name: 'Manager' });
+    await t.trx('approval_pins').where({ tenant_id: ctx.a.id, user_id: managerId }).update({ pin_hash: await hashPassword(GOLDEN_PIN) });
     managerToken = tokenFor(managerId);
 
     const outletId = ctx.a.posOutlets[0].id;
@@ -602,7 +613,8 @@ describe('Golden output — every hotel payment path', () => {
       const previewRes = await preview(orderId);
       const settled = await settle(orderId, [{ method: 'cash', service_charge: '3.00', tip_amount: '2.00' }]);
       const settlementId = settled.body.data?.settlements?.[0]?.id;
-      const voided = await post(`/api/v1/pos/orders/${orderId}/settlements/${settlementId}/void`).send({ reason: 'Golden keyed in error' });
+      const voidApproval = await approval('pos.void_settlement', settlementId);
+      const voided = await post(`/api/v1/pos/orders/${orderId}/settlements/${settlementId}/void`).set('X-Manager-Approval', voidApproval).send({ reason: 'Golden keyed in error' });
 
       const snapshot = await golden(async () => ({
         opened: response(opened, 'pos_orders'),
@@ -664,11 +676,13 @@ describe('Golden output — every hotel payment path', () => {
       const orderRead = await get(`/api/v1/pos/orders/${orderId}`);
       const settled = await settle(orderId, [{ method: 'card', service_charge: '3.00', payment_id: paymentId }]);
       const settlementId = settled.body.data?.settlements?.[0]?.id;
-      const voidRefused = await post(`/api/v1/pos/orders/${orderId}/settlements/${settlementId}/void`).send({ reason: 'Golden wrong tab' });
+      const voidRefusedApproval = await approval('pos.void_settlement', settlementId);
+      const voidRefused = await post(`/api/v1/pos/orders/${orderId}/settlements/${settlementId}/void`).set('X-Manager-Approval', voidRefusedApproval).send({ reason: 'Golden wrong tab' });
       const afterSettle = await posState(orderId);
 
       paystack.refundTransaction.mockImplementation(async ({ reference }) => ({ status: 'processed', reference }));
-      const refund = await post(`/api/v1/cashiering/payments/${paymentId}/refund`).send({ reason: 'Golden Register refund' });
+      const refundApproval = await approval('pos.refund_payment', paymentId);
+      const refund = await post(`/api/v1/cashiering/payments/${paymentId}/refund`).set('X-Manager-Approval', refundApproval).send({ reason: 'Golden Register refund' });
 
       const snapshot = await golden(async () => ({
         preview: response(previewRes),

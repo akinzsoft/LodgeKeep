@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { SalesTab } from '../SalesTab.jsx';
 import { ApiError } from '../../../shared/api/index.js';
 import { selectWhenLoaded } from './selectWhenLoaded.js';
+import { approveInDialog, TEST_APPROVERS, TEST_APPROVAL_TOKEN } from '../../approvals/__tests__/approveInDialog.js';
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
@@ -11,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   getSalesReportCsv: vi.fn(),
   refundPayment: vi.fn(),
   triggerDownload: vi.fn(),
+  listApprovers: vi.fn(),
+  requestApproval: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -19,6 +22,7 @@ vi.mock('../../../shared/api/index.js', async () => {
     ...actual,
     posApi: { listOutlets: mocks.listOutlets, getSalesReport: mocks.getSalesReport, getSalesReportCsv: mocks.getSalesReportCsv },
     cashieringApi: { refundPayment: mocks.refundPayment },
+    approvalsApi: { listApprovers: mocks.listApprovers, requestApproval: mocks.requestApproval },
   };
 });
 
@@ -179,20 +183,21 @@ describe('<SalesTab>', () => {
       expect(screen.queryByText('Card payments to refund')).not.toBeInTheDocument();
     });
 
-    it('refunds a stray payment with a required reason, then reruns the report', async () => {
+    it("refunds a stray payment once a manager approves it with their PIN and a reason, then reruns the report", async () => {
       mocks.getSalesReport.mockResolvedValueOnce({ ...REPORT, unsettledCardPayments: [STRAY] }).mockResolvedValueOnce(REPORT);
       mocks.refundPayment.mockResolvedValue({});
+      mocks.listApprovers.mockResolvedValue(TEST_APPROVERS);
+      mocks.requestApproval.mockResolvedValue({ token: TEST_APPROVAL_TOKEN });
       render(<SalesTab activeProperty={PROPERTY} />);
       await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
 
       const row = (await screen.findByText('#12 · Table 5')).closest('tr');
       await userEvent.click(within(row).getByRole('button', { name: 'Refund' }));
-      const dialog = await screen.findByRole('alertdialog');
-      expect(within(dialog).getByRole('button', { name: 'Refund' })).toBeDisabled();
-      await userEvent.type(within(dialog).getByLabelText('Reason'), 'Paid after the tab was removed');
-      await userEvent.click(within(dialog).getByRole('button', { name: 'Refund' }));
+      await approveInDialog({ reason: 'Paid after the tab was removed', confirmLabel: 'Approve refund' });
 
-      expect(mocks.refundPayment).toHaveBeenCalledWith('70', { reason: 'Paid after the tab was removed' });
+      expect(mocks.listApprovers).toHaveBeenCalledWith('pos.refund_payment');
+      expect(mocks.requestApproval).toHaveBeenCalledWith({ action: 'pos.refund_payment', approverUserId: '7', pin: '482915', reason: 'Paid after the tab was removed', targetId: '70' });
+      expect(mocks.refundPayment).toHaveBeenCalledWith('70', { reason: 'Paid after the tab was removed', approval: TEST_APPROVAL_TOKEN });
       expect(await screen.findByText('Refund sent to Paystack.')).toBeInTheDocument();
       expect(mocks.getSalesReport).toHaveBeenCalledTimes(2);
       expect(screen.queryByText('Card payments to refund')).not.toBeInTheDocument();

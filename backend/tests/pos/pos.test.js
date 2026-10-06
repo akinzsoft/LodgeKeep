@@ -33,6 +33,7 @@ const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { sumMoney } = require('../../src/shared/money');
 const { insertMenuCategories, insertMenuItem, setOutletAvailability } = require('../helpers/catalogue');
+const { managerApproval } = require('../helpers/approvals');
 
 describe('POS (PLAN.md Phase 4)', () => {
   const t = useTestApp();
@@ -806,9 +807,12 @@ describe('POS (PLAN.md Phase 4)', () => {
       expect(tipLine.amount).toBe('5.00');
 
       // Voiding the settlement voids the tip line too — no orphaned tip left on the folio.
+      const voidToken = tokenFor({ userId: ctx.a.users[0].id });
+      const voidApproval = await managerApproval(t.request, { token: voidToken, approverUserId: ctx.a.users[0].id, action: 'pos.void_settlement', targetId: settlement.id });
       const voided = await t.request
         .post(`/api/v1/pos/orders/${order.id}/settlements/${settlement.id}/void`)
-        .set('Authorization', `Bearer ${tokenFor({ userId: ctx.a.users[0].id })}`)
+        .set('Authorization', `Bearer ${voidToken}`)
+        .set('X-Manager-Approval', voidApproval)
         .set('Idempotency-Key', idemKey())
         .send({ reason: 'test cleanup' });
       expect(voided.status).toBe(200);
@@ -894,7 +898,7 @@ describe('POS (PLAN.md Phase 4)', () => {
       expect(settlementRows).toHaveLength(0);
     });
 
-    it('a post-settlement void requires pos.manage, not just pos.operate, and voids the underlying folio line for a room charge', async () => {
+    it("a post-settlement void needs a manager's PIN approval (not the caller's own pos.manage), and voids the underlying folio line for a room charge", async () => {
       await grantRoleToUser({ tenant: ctx.a, userIndex: 0, role: 'manager' });
       await grantRoleToUser({ tenant: ctx.a, userIndex: 1, role: 'pos_operator' });
       const managerToken = tokenFor({ userId: ctx.a.users[0].id });
@@ -911,16 +915,23 @@ describe('POS (PLAN.md Phase 4)', () => {
         .send({ settlements: [{ method: 'room_charge', room_charge: { reservation_id: guest.reservationId, auth_method: 'pin', auth_reference: 'x' } }] });
       const settlementId = settle.body.data.settlements[0].id;
 
-      const forbidden = await t.request
-        .post(`/api/v1/pos/orders/${order.id}/settlements/${settlementId}/void`)
-        .set('Authorization', `Bearer ${operatorToken}`)
-        .set('Idempotency-Key', idemKey())
-        .send({ reason: 'Comp' });
-      expect(forbidden.status).toBe(403);
+      // Neither the operator nor the signed-in manager can void without a fresh approval.
+      for (const token of [operatorToken, managerToken]) {
+        const forbidden = await t.request
+          .post(`/api/v1/pos/orders/${order.id}/settlements/${settlementId}/void`)
+          .set('Authorization', `Bearer ${token}`)
+          .set('Idempotency-Key', idemKey())
+          .send({ reason: 'Comp' });
+        expect(forbidden.status).toBe(403);
+        expect(forbidden.body.error.code).toBe('FORBIDDEN_MANAGER_APPROVAL_REQUIRED');
+      }
 
+      // The operator starts it; the manager approves with their PIN.
+      const approval = await managerApproval(t.request, { token: operatorToken, approverUserId: ctx.a.users[0].id, action: 'pos.void_settlement', targetId: settlementId });
       const voided = await t.request
         .post(`/api/v1/pos/orders/${order.id}/settlements/${settlementId}/void`)
-        .set('Authorization', `Bearer ${managerToken}`)
+        .set('Authorization', `Bearer ${operatorToken}`)
+        .set('X-Manager-Approval', approval)
         .set('Idempotency-Key', idemKey())
         .send({ reason: 'Manager comp' });
       expect(voided.status).toBe(200);
@@ -1042,9 +1053,11 @@ describe('POS (PLAN.md Phase 4)', () => {
       await t.trx('pos_shifts').where({ id: shift.id }).update({ opened_at: new Date(new Date(orphanSale.settled_at).getTime() - 60_000) });
 
       const voided = await cashSale(token, setup);
+      const voidApproval = await managerApproval(t.request, { token: managerToken, approverUserId: ctx.a.users[0].id, action: 'pos.void_settlement', targetId: voided.id });
       const voidRes = await t.request
         .post(`/api/v1/pos/orders/${voided.pos_order_id}/settlements/${voided.id}/void`)
         .set('Authorization', `Bearer ${managerToken}`)
+        .set('X-Manager-Approval', voidApproval)
         .set('Idempotency-Key', idemKey())
         .send({ reason: 'Rung up in error' });
       expect(voidRes.status).toBe(200);

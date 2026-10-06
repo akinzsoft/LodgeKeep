@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Card, Button, ConfirmDialog } from '../../shared/components/index.js';
+import { Card, Button } from '../../shared/components/index.js';
+import { ManagerApprovalDialog } from '../approvals/ManagerApprovalDialog.jsx';
 import { Money } from '../../shared/format/money.jsx';
 import { supermarketApi, ApiError } from '../../shared/api/index.js';
 import styles from './Supermarket.module.css';
@@ -9,7 +10,8 @@ import styles from './Supermarket.module.css';
  * were RECEIVED but could not become a sale (paid after the cashier cancelled
  * or the sale expired, or the tax changed while the customer paid). The money
  * is kept, never dropped; a manager refunds it here (the full amount, with a
- * reason). Hidden while there is nothing to review.
+ * reason, approved with a manager's PIN). Hidden while there is nothing to
+ * review.
  */
 export function OnlineReviewCard({ outletId, isOffline = false }) {
   const [rows, setRows] = useState(null);
@@ -31,11 +33,11 @@ export function OnlineReviewCard({ outletId, isOffline = false }) {
     load();
   }, [load]);
 
-  async function handleRefund(reason) {
+  async function handleRefund(approval, reason) {
     const row = target;
     setTarget(null);
     try {
-      await supermarketApi.refundOnlineSale(row.id, reason);
+      await supermarketApi.refundOnlineSale(row.id, reason, approval);
       await load();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'The refund could not be sent.');
@@ -57,12 +59,14 @@ export function OnlineReviewCard({ outletId, isOffline = false }) {
         ))}
       </ul>
       {target && (
-        <ConfirmDialog
+        <ManagerApprovalDialog
+          action="supermarket.refund_online"
+          targetId={target.id}
           title="Refund this online payment?"
           consequence="The full amount goes back to the customer's card through Paystack. This cannot be undone."
-          requireReason
           confirmLabel="Refund customer"
-          onConfirm={handleRefund}
+          isOffline={isOffline}
+          onApproved={handleRefund}
           onCancel={() => setTarget(null)}
         />
       )}

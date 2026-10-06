@@ -3833,6 +3833,73 @@ const ENTITIES = [
       },
     ],
   },
+
+  {
+    table: 'approval_pins',
+    // One PIN per user: the fixture gives user 0 a PIN, so user 1 is free.
+    uniqueKeys: [['tenant_id', 'user_id']],
+    newRow: (ctx, t) => ({ tenant_id: t.id, user_id: t.users[1].id, pin_hash: PASSWORD_HASH, set_at: new Date() }),
+    duplicateRow: (ctx, t) => ({ tenant_id: t.id, user_id: t.users[0].id, pin_hash: PASSWORD_HASH, set_at: new Date() }),
+    crossTenant: [
+      {
+        name: "sets an approval PIN for another tenant's user",
+        row: (ctx, own, other) => ({ tenant_id: own.id, user_id: other.users[1].id, pin_hash: PASSWORD_HASH, set_at: new Date() }),
+      },
+    ],
+  },
+
+  {
+    table: 'manager_approvals',
+    uniqueKeys: [['token_hash']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      token_hash: tokenHash(`${t.slug}-approval-new`),
+      action: 'pos.void_settlement',
+      requested_by_user_id: t.users[1].id,
+      approver_user_id: t.users[0].id,
+      reason: 'New approval',
+      expires_at: hoursFromNow(1),
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      token_hash: tokenHash(`${t.slug}-approval-used`),
+      action: 'pos.void_settlement',
+      requested_by_user_id: t.users[1].id,
+      approver_user_id: t.users[0].id,
+      reason: 'Clash',
+      expires_at: hoursFromNow(1),
+    }),
+    crossTenant: [
+      {
+        name: "records an approval by another tenant's manager",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          token_hash: tokenHash(`${own.slug}-approval-crossing`),
+          action: 'pos.void_settlement',
+          requested_by_user_id: own.users[0].id,
+          approver_user_id: other.users[0].id,
+          reason: 'Crossing',
+          expires_at: hoursFromNow(1),
+        }),
+      },
+      {
+        name: "records an approval at another tenant's property",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: other.properties[0].id,
+          token_hash: tokenHash(`${own.slug}-approval-crossing-prop`),
+          action: 'pos.void_settlement',
+          requested_by_user_id: own.users[0].id,
+          approver_user_id: own.users[0].id,
+          reason: 'Crossing',
+          expires_at: hoursFromNow(1),
+        }),
+      },
+    ],
+  },
 ];
 
 const byTable = (table) => ENTITIES.find((e) => e.table === table);

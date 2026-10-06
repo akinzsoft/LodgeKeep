@@ -1419,7 +1419,7 @@ async function refundedSoFar({ trx, paymentId }) {
  * processed. `reason` is mandatory (CLAUDE.md: "money confirmations require
  * a reason field").
  */
-async function refundPayment({ context, paymentId, amount, reason, idempotencyKey, userId }) {
+async function refundPayment({ context, paymentId, amount, reason, idempotencyKey, userId, approve = null }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required for a refund.', [{ field: 'reason', issue: 'missing' }]);
   const db = scopedDb().for(context);
 
@@ -1442,12 +1442,17 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
   }
 
   const reference = generateUlid();
+  // `approve(trx, payment)` — a manager's approval (`src/modules/approvals`), passed by the refund route, which
+  // claims one for a POS payment only (a folio refund is a no-op there); the QR order rejection passes none.
+  // Called after every check above, inside the local refund's own transaction, or — for Paystack — in a short
+  // transaction just before the gateway is asked (it cannot share one with an external call).
 
   // Cash and a physical-terminal card payment both reverse LOCALLY, with no gateway: the money goes back through
   // the till or the terminal itself, which is the staff's to do. Anything else is a Paystack payment.
   if (original.provider === 'cash' || original.provider === 'terminal') {
     const isTerminal = original.provider === 'terminal';
     return db.transaction(async (trx) => {
+      if (approve) await approve(trx, original);
       const [refundPaymentId] = await trx.table('payments').insert({
         folio_id: original.folio_id,
         idempotency_key: idempotencyKey,
@@ -1492,6 +1497,7 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
   }
 
   // Paystack — the real external call, outside a transaction (§6.4).
+  if (approve) await db.transaction((trx) => approve(trx, original));
   const { adapter } = await paystack.resolveAdapterForCurrency(db, original.currency);
   const gatewayResult = await adapter.refundTransaction({ reference: original.provider_reference, amount: amount ?? undefined });
   const processed = gatewayResult.status === 'processed' || gatewayResult.status === 'success';

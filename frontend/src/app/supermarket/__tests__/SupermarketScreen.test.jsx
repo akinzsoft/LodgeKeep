@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { approveInDialog, TEST_APPROVERS, TEST_APPROVAL_TOKEN } from '../../approvals/__tests__/approveInDialog.js';
 import { SupermarketScreen } from '../SupermarketScreen.jsx';
 import { ApiError } from '../../../shared/api/index.js';
 
@@ -63,10 +64,12 @@ vi.mock('../../pos/StockRequestsTab.jsx', () => ({
   StockRequestsTab: ({ deliverToOutletId }) => <div data-testid="stock-requests">requests for {deliverToOutletId}</div>,
 }));
 vi.mock('../../../shared/sound/alertBeep.js', () => ({ playScanTone: vi.fn(), playAlertBeep: vi.fn(), unlockAlertSound: vi.fn() }));
+// A void, a needs-review refund or a confirmed oversell needs a manager's PIN approval (ManagerApprovalDialog).
+const approvalMocks = vi.hoisted(() => ({ listApprovers: vi.fn(), requestApproval: vi.fn() }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
-  return { ...actual, supermarketApi: mocks, posApi: posMocks };
+  return { ...actual, supermarketApi: mocks, posApi: posMocks, approvalsApi: approvalMocks };
 });
 
 const PROPERTY = { name: 'Alpha Hotels', base_currency: 'NGN' };
@@ -97,6 +100,8 @@ describe('<SupermarketScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     Object.values(posMocks).forEach((fn) => fn.mockReset());
+    approvalMocks.listApprovers.mockResolvedValue(TEST_APPROVERS);
+    approvalMocks.requestApproval.mockResolvedValue({ token: TEST_APPROVAL_TOKEN });
     // By default the full-menu call fails, so these tests exercise the scan/search fallback.
     posMocks.listMenuItems.mockRejectedValue(new ApiError({ code: 'FORBIDDEN_PERMISSION', message: 'no', status: 403 }));
     posMocks.listMenuCategories.mockResolvedValue([]);
@@ -458,7 +463,7 @@ describe('<SupermarketScreen>', () => {
       expect(within(cart).getByText('Only 3 in stock')).toBeInTheDocument();
 
       await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
-      const dialog = await screen.findByRole('alertdialog', { name: 'Sell more than recorded stock?' });
+      const dialog = await screen.findByRole('dialog', { name: 'Sell more than recorded stock?' });
       expect(within(dialog).getByText(/4 in the sale, 3 in stock — 1 more than recorded/)).toBeInTheDocument();
       expect(mocks.createSale).not.toHaveBeenCalled();
 
@@ -467,8 +472,9 @@ describe('<SupermarketScreen>', () => {
       expect(within(cart).getByText('Rice 5kg')).toBeInTheDocument(); // the cart is kept
 
       await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
-      await userEvent.click(within(await screen.findByRole('alertdialog', { name: 'Sell more than recorded stock?' })).getByRole('button', { name: 'Sell anyway' }));
-      expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ items: [{ menu_item_id: '11', quantity: 4 }], confirmOversell: true }));
+      await approveInDialog({ reason: 'Delivery counted wrong', confirmLabel: 'Sell anyway' });
+      expect(approvalMocks.requestApproval).toHaveBeenCalledWith(expect.objectContaining({ action: 'supermarket.oversell', approverUserId: '7', reason: 'Delivery counted wrong' }));
+      expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ items: [{ menu_item_id: '11', quantity: 4 }], confirmOversell: true, approval: TEST_APPROVAL_TOKEN }));
       expect(await screen.findByTestId('supermarket-receipt')).toBeInTheDocument();
       expect(mocks.getStockOnHand).toHaveBeenCalledTimes(2); // reloaded after the sale
     });
@@ -481,8 +487,8 @@ describe('<SupermarketScreen>', () => {
       await vi.waitFor(() => expect(mocks.getStockOnHand).toHaveBeenCalled());
       await scanRice(3); // exactly the last 3
       await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-      expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ confirmOversell: false }));
+      expect(screen.queryByRole('dialog', { name: 'Sell more than recorded stock?' })).not.toBeInTheDocument();
+      expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ confirmOversell: false, approval: null }));
     });
 
     it('asks with the server\'s numbers when stock changed since the screen loaded, and resends on the same key', async () => {
@@ -494,13 +500,15 @@ describe('<SupermarketScreen>', () => {
       render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
       await scanRice(1);
       await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
-      const dialog = await screen.findByRole('alertdialog', { name: 'Sell more than recorded stock?' });
+      const dialog = await screen.findByRole('dialog', { name: 'Sell more than recorded stock?' });
       expect(within(dialog).getByText(/10 bag needed, 3 on hand — stock goes to -7/)).toBeInTheDocument();
+      await within(dialog).findByLabelText(/PIN/);
       expect(screen.queryByRole('alert')).not.toBeInTheDocument(); // a question, not an error
-      await userEvent.click(within(dialog).getByRole('button', { name: 'Sell anyway' }));
+      await approveInDialog({ reason: 'Stock moved', confirmLabel: 'Sell anyway' });
       const [first, second] = mocks.createSale.mock.calls.map(([args]) => args);
       expect(first.confirmOversell).toBe(false);
       expect(second.confirmOversell).toBe(true);
+      expect(second.approval).toBe(TEST_APPROVAL_TOKEN);
       expect(second.idempotencyKey).toBe(first.idempotencyKey);
       expect(await screen.findByTestId('supermarket-receipt')).toBeInTheDocument();
     });
@@ -517,19 +525,29 @@ describe('<SupermarketScreen>', () => {
     expect(screen.queryByRole('button', { name: 'Void' })).not.toBeInTheDocument();
   });
 
-  it('voids a sale only with a reason', async () => {
+  it("voids a sale only once a manager approves it with their PIN and a reason", async () => {
     mocks.listSales.mockResolvedValue([{ id: '90', receipt_number: 7, created_at: '2027-09-01T10:00:00', method: 'cash', total: '134.38', currency: 'NGN', voided_at: null }]);
     mocks.voidSale.mockResolvedValue({ ...SALE, voided_at: '2027-09-01T11:00:00' });
     render(<SupermarketScreen activeProperty={PROPERTY} permissions={MANAGER} />);
 
     await userEvent.click(await screen.findByRole('tab', { name: 'All sales' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Void' }));
-    const confirm = screen.getByRole('button', { name: 'Void sale' });
-    expect(confirm).toBeDisabled();
-    await userEvent.type(screen.getByLabelText(/reason/i), 'Wrong item');
-    await userEvent.click(confirm);
+    await approveInDialog({ reason: 'Wrong item', confirmLabel: 'Void sale' });
 
-    expect(mocks.voidSale).toHaveBeenCalledWith('90', 'Wrong item');
+    expect(approvalMocks.requestApproval).toHaveBeenCalledWith({ action: 'supermarket.void_sale', approverUserId: '7', pin: '482915', reason: 'Wrong item', targetId: '90' });
+    expect(mocks.voidSale).toHaveBeenCalledWith('90', 'Wrong item', TEST_APPROVAL_TOKEN);
+  });
+
+  it("lets a cashier start a void from Today's sales; a manager approves it", async () => {
+    mocks.listMySales.mockResolvedValue([{ id: '91', receipt_code: 'MRT-8', receipt_number: 8, created_at: '2027-09-01T10:00:00', method: 'cash', total: '20.00', currency: 'NGN', voided_at: null }]);
+    mocks.voidSale.mockResolvedValue({ ...SALE, id: '91', voided_at: '2027-09-01T11:00:00' });
+    render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+
+    await userEvent.click(await screen.findByRole('tab', { name: "Today's sales" }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Void' }));
+    expect(await screen.findByRole('dialog', { name: 'Void receipt MRT-8?' })).toBeInTheDocument();
+    await approveInDialog({ reason: 'Customer changed mind', confirmLabel: 'Void sale' });
+    expect(mocks.voidSale).toHaveBeenCalledWith('91', 'Customer changed mind', TEST_APPROVAL_TOKEN);
   });
 
   it('explains when the user is assigned to no supermarket outlet', async () => {
@@ -832,10 +850,10 @@ describe('<SupermarketScreen>', () => {
       await fillCart();
       await userEvent.click(screen.getByRole('button', { name: 'Online payment' }));
       await userEvent.click(screen.getByRole('button', { name: 'Take online payment' }));
-      const dialog = await screen.findByRole('alertdialog', { name: 'Sell more than recorded stock?' });
+      await screen.findByRole('dialog', { name: 'Sell more than recorded stock?' });
       expect(mocks.startOnlineSale).not.toHaveBeenCalled();
-      await userEvent.click(within(dialog).getByRole('button', { name: 'Sell anyway' }));
-      expect(mocks.startOnlineSale).toHaveBeenCalledWith(expect.objectContaining({ confirmOversell: true }));
+      await approveInDialog({ reason: 'Shelf count is behind', confirmLabel: 'Sell anyway' });
+      expect(mocks.startOnlineSale).toHaveBeenCalledWith(expect.objectContaining({ confirmOversell: true, approval: TEST_APPROVAL_TOKEN }));
     });
 
     it('brings back this cashier\'s own waiting online payment after a reload', async () => {
@@ -874,10 +892,9 @@ describe('<SupermarketScreen>', () => {
       await userEvent.click(await screen.findByRole('tab', { name: 'Setup' }));
       expect(await screen.findByText(/2 × Biscuit/)).toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: 'Refund' }));
-      const dialog = await screen.findByRole('alertdialog');
-      await userEvent.type(within(dialog).getByRole('textbox'), 'Paid after cancel');
-      await userEvent.click(within(dialog).getByRole('button', { name: 'Refund customer' }));
-      expect(mocks.refundOnlineSale).toHaveBeenCalledWith('44', 'Paid after cancel');
+      await approveInDialog({ reason: 'Paid after cancel', confirmLabel: 'Refund customer' });
+      expect(approvalMocks.requestApproval).toHaveBeenCalledWith(expect.objectContaining({ action: 'supermarket.refund_online', targetId: '44' }));
+      expect(mocks.refundOnlineSale).toHaveBeenCalledWith('44', 'Paid after cancel', TEST_APPROVAL_TOKEN);
     });
   });
 });

@@ -91,7 +91,10 @@ function posRouter() {
   router.post('/pos/orders/:id/paystack-checkout', requirePermission('pos.operate'), scope.orderInScope, refuseSupermarketTab, controller.startPaystackCheckout);
   router.post('/pos/orders/:id/paystack-checkout/:paymentId/verify', requirePermission('pos.operate'), scope.orderInScope, refuseSupermarketTab, controller.verifyPaystackPayment);
   router.post('/pos/orders/:id/settle', requirePermission('pos.operate'), scope.orderInScope, refuseSupermarketTab, controller.settleOrder);
-  router.post('/pos/orders/:id/settlements/:settlementId/void', requirePermission('pos.manage'), controller.voidSettlement);
+  // A post-settlement void needs a manager's PIN approval at the moment it happens (`approvals` module), not the
+  // signed-in user's own `pos.manage`: any operator may start it, within their outlets, on a Register tab only (a
+  // supermarket sale is voided through the supermarket, which keeps its receipt in step).
+  router.post('/pos/orders/:id/settlements/:settlementId/void', requirePermission('pos.operate'), scope.orderInScope, refuseSupermarketTab, controller.voidSettlement);
 
   // A reconciliation report, not a till action — manager tier, like the other POS overrides.
   // Profit on this report uses recipe/cost data that is otherwise `pos.stock_manage`-only. Today every role holding `pos.manage` also holds `pos.stock_manage`; if that ever changes, gate the profit fields separately.

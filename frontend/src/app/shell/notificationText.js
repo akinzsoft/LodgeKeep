@@ -144,6 +144,11 @@ export function describeNotification(notification) {
         title: `Night audit overdue — ${p.businessDate ?? 'a business date'}`,
         detail: p.todayInPropertyTz ? `It's already ${p.todayInPropertyTz} and that date is still open.` : '',
       };
+    case 'approvals.pin_locked':
+      return {
+        title: `Approval PIN locked — ${p.approverName ?? 'a manager'}`,
+        detail: join(p.triedByName ? `Wrong PINs entered at ${p.triedByName}'s till` : 'Wrong PINs entered at a till', 'locked for 15 minutes'),
+      };
     default:
       return { title: notification.type, detail: '' };
   }

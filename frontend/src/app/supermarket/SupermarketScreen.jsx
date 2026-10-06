@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Card, Button, DataTable, ConfirmDialog, PrintDocument, PrintLetterhead } from '../../shared/components/index.js';
+import { Card, Button, DataTable, PrintDocument, PrintLetterhead } from '../../shared/components/index.js';
+import { ManagerApprovalDialog } from '../approvals/ManagerApprovalDialog.jsx';
 import { Money } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney } from '../../shared/money.js';
 import { supermarketApi, posApi, ApiError } from '../../shared/api/index.js';
@@ -59,6 +60,8 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const canSell = permissions.has('supermarket.sales');
   const canReport = permissions.has('supermarket.report');
   const canVoid = permissions.has('supermarket.manage');
+  // A cashier may start a void; a manager approves it with their PIN (ManagerApprovalDialog).
+  const canStartVoid = canSell;
   // Stock reaches the mart only by a store-approved request: a cashier raises one here, the store issues it under Stock → Requests.
   const canRequestStock = canSell && permissions.has('pos.stock_request');
   // A mart-only cashier has no POS, so wastage (damaged/expired stock) is recorded here.
@@ -431,7 +434,8 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     completeSale(false);
   }
 
-  async function completeSale(confirmOversell) {
+  /** `approval`: a manager's PIN approval, sent with a confirmed oversell only. */
+  async function completeSale(confirmOversell, approval = null) {
     if (cart.length === 0 || submitting) return;
     setOversell(null);
     setSubmitting(true);
@@ -444,6 +448,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
           outletId,
           idempotencyKey: attemptKey.current,
           confirmOversell,
+          approval,
           items: cart.map((line) => ({ menu_item_id: line.menuItem.id, quantity: line.quantity })),
         });
         attemptKey.current = null;
@@ -455,6 +460,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
         method,
         idempotencyKey: attemptKey.current,
         confirmOversell,
+        approval,
         items: cart.map((line) => ({ menu_item_id: line.menuItem.id, quantity: line.quantity })),
       });
       setIsReprint(false);
@@ -517,11 +523,11 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     loadStock();
   }
 
-  async function handleVoid(reason) {
+  async function handleVoid(approval, reason) {
     const target = voidTarget;
     setVoidTarget(null);
     try {
-      const voided = await supermarketApi.voidSale(target.id, reason);
+      const voided = await supermarketApi.voidSale(target.id, reason, approval);
       if (receipt && String(receipt.id) === String(voided.id)) setReceipt(voided);
       await loadSales();
       loadLowStock();
@@ -783,7 +789,18 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
                 { key: 'receipt', label: 'Receipt', render: (row) => `${row.receipt_code}${row.voided_at ? ' (void)' : ''}` },
                 { key: 'time', label: 'Time', render: (row) => new Date(row.created_at).toLocaleTimeString() },
                 { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={row.currency} /> },
-                { key: 'actions', label: '', render: (row) => <Button size="compact" variant="secondary" onClick={() => showReceipt(row)}>Reprint</Button> },
+                {
+                  key: 'actions',
+                  label: '',
+                  render: (row) => (
+                    <>
+                      <Button size="compact" variant="secondary" onClick={() => showReceipt(row)}>Reprint</Button>
+                      {canStartVoid && !row.voided_at && (
+                        <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => setVoidTarget(row)}>Void</Button>
+                      )}
+                    </>
+                  ),
+                },
               ]}
               rows={mySales}
               rowKey={(row) => row.id}
@@ -835,7 +852,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
                   render: (row) => (
                     <>
                       <Button size="compact" variant="secondary" onClick={() => showReceipt(row)}>Receipt</Button>
-                      {canVoid && !row.voided_at && (
+                      {canStartVoid && !row.voided_at && (
                         <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => setVoidTarget(row)}>Void</Button>
                       )}
                     </>
@@ -938,11 +955,13 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       )}
 
       {oversell && (
-        <ConfirmDialog
+        <ManagerApprovalDialog
+          action="supermarket.oversell"
           title="Sell more than recorded stock?"
-          consequence="Recorded stock will go below zero. The sale is recorded as confirmed by you."
+          consequence="Recorded stock will go below zero. The sale is recorded with the approving manager."
           confirmLabel="Sell anyway"
-          onConfirm={() => completeSale(true)}
+          isOffline={isOffline}
+          onApproved={(approval) => completeSale(true, approval)}
           onCancel={() => setOversell(null)}
         >
           <ul className={styles.oversellList} aria-label="Products over stock">
@@ -950,7 +969,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
               <li key={`${line.name}-${index}`}><strong>{line.name}</strong>: {line.detail}</li>
             ))}
           </ul>
-        </ConfirmDialog>
+        </ManagerApprovalDialog>
       )}
 
       {onlineSession && (
@@ -958,12 +977,14 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
       )}
 
       {voidTarget && (
-        <ConfirmDialog
-          title={`Void receipt #${voidTarget.receipt_number}?`}
+        <ManagerApprovalDialog
+          action="supermarket.void_sale"
+          targetId={voidTarget.id}
+          title={`Void receipt ${voidTarget.receipt_code ?? `#${voidTarget.receipt_number}`}?`}
           consequence={voidTarget.method === 'card' ? "The customer's card payment is refunded in full through Paystack, the sale is cancelled and its stock is returned. The receipt number is kept and shows as void." : "The sale is cancelled and its stock is returned. The receipt number is kept and shows as void."}
-          requireReason
           confirmLabel="Void sale"
-          onConfirm={handleVoid}
+          isOffline={isOffline}
+          onApproved={handleVoid}
           onCancel={() => setVoidTarget(null)}
         />
       )}

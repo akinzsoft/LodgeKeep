@@ -21,6 +21,7 @@
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { managerApproval } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { extendedCost } = require('../../src/shared/quantity');
 const { insertMenuItem, setOutletAvailability, setStockQuantity, outletMenuItem } = require('../helpers/catalogue');
@@ -153,19 +154,30 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
     return res.body.data;
   }
 
+  // Selling past recorded stock needs a manager's approval: with a reason, the till fetches one from user 0 (the manager).
+  const stockApproval = (token, orderId, reason) =>
+    reason?.trim() ? managerApproval(t.request, { token, approverUserId: ctx.a.users[0].id, action: 'pos.stock_override', targetId: orderId }) : null;
+
+  const voidApproval = (orderId, settlementId) =>
+    managerApproval(t.request, { token: managerToken(), approverUserId: ctx.a.users[0].id, action: 'pos.void_settlement', targetId: settlementId });
+
   async function addItem(token, orderId, { menuItemId, quantity = 1, stockOverrideReason, expectStatus = 200 } = {}) {
+    const approval = await stockApproval(token, orderId, stockOverrideReason);
     const res = await t.request
       .post(`/api/v1/pos/orders/${orderId}/items`)
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Manager-Approval', approval ?? '')
       .send({ menu_item_id: menuItemId, quantity, stock_override_reason: stockOverrideReason });
     expect(res.status).toBe(expectStatus);
     return res.body.data;
   }
 
   async function settleCash(token, orderId, { stockOverrideReason, expectStatus = 200 } = {}) {
+    const approval = await stockApproval(token, orderId, stockOverrideReason);
     const res = await t.request
       .post(`/api/v1/pos/orders/${orderId}/settle`)
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Manager-Approval', approval ?? '')
       .set('Idempotency-Key', idemKey())
       .send({ settlements: [{ method: 'cash' }], stock_override_reason: stockOverrideReason });
     expect(res.status).toBe(expectStatus);
@@ -577,9 +589,11 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       await seedStockReceipt(ctx.a, stockItem, '5.000');
 
       const order = await openOrder(managerToken(), { outletId, terminalId });
+      const approval = await stockApproval(managerToken(), order.id, 'Confirmed with the bar, count is off');
       const accepted = await t.request
         .post(`/api/v1/pos/orders/${order.id}/items`)
         .set('Authorization', `Bearer ${managerToken()}`)
+        .set('X-Manager-Approval', approval)
         .send({ menu_item_id: menuItemId, quantity: 1, stock_override_reason: 'Confirmed with the bar, count is off' });
       expect(accepted.status).toBe(200);
 
@@ -694,9 +708,11 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
         .set('Authorization', `Bearer ${managerToken()}`)
         .send({ split_group: 1 });
 
+      const settleApproval = await stockApproval(managerToken(), order.id, 'Confirmed, selling anyway');
       const settleRes = await t.request
         .post(`/api/v1/pos/orders/${order.id}/settle`)
         .set('Authorization', `Bearer ${managerToken()}`)
+        .set('X-Manager-Approval', settleApproval)
         .set('Idempotency-Key', idemKey())
         .send({ settlements: [{ method: 'cash', split_group: 1 }], stock_override_reason: 'Confirmed, selling anyway' });
       expect(settleRes.status).toBe(200);
@@ -757,9 +773,11 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       await t.trx('stock_items').where({ id: stockItem.id }).update({ purchase_cost: '99.00' });
       await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: '2027-07-01' });
 
+      const approval = await voidApproval(order.id, settlementId);
       const voidRes = await t.request
         .post(`/api/v1/pos/orders/${order.id}/settlements/${settlementId}/void`)
         .set('Authorization', `Bearer ${managerToken()}`)
+        .set('X-Manager-Approval', approval)
         .set('Idempotency-Key', idemKey())
         .send({ reason: 'Guest walked out, refunded in cash' });
       expect(voidRes.status).toBe(200);
@@ -795,9 +813,11 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
 
       expect((await outletMenuItem(t.trx, menuItemId, outletId)).is_available).toBe(0);
 
+      const approval = await voidApproval(order.id, settlementId);
       await t.request
         .post(`/api/v1/pos/orders/${order.id}/settlements/${settlementId}/void`)
         .set('Authorization', `Bearer ${managerToken()}`)
+        .set('X-Manager-Approval', approval)
         .set('Idempotency-Key', idemKey())
         .send({ reason: 'Mistake order' });
 

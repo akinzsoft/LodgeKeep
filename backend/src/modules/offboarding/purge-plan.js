@@ -113,6 +113,8 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'in_app_notifications',
   'notification_log',
   'mfa_login_codes',
+  'manager_approvals', // references users and properties
+  'approval_pins',
   'password_reset_codes',
   'mfa_devices',
   'sessions',

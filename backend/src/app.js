@@ -65,6 +65,7 @@ const { accessMonitoringRouter } = require('./modules/access-monitoring');
 const { qrOrderPublicRouter, qrOrderStaffRouter } = require('./modules/qr-ordering');
 const { expensesRouter } = require('./modules/expenses');
 const { reconciliationRouter } = require('./modules/reconciliation');
+const { approvalsRouter } = require('./modules/approvals');
 
 function buildStaffRouter() {
   const router = express.Router();
@@ -107,6 +108,8 @@ function buildStaffRouter() {
   // authenticate() specifically: it reads req.context for who/tenant/property.
   router.use(attachAudit());
   // Business routers mount here, ahead of the catch-all, as each module lands.
+  // Manager approvals (PIN re-authentication) — shared by every gated action below.
+  router.use(approvalsRouter());
   router.use(setupRouter());
   router.use(usersRouter());
   router.use(reservationsRouter());

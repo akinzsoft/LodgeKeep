@@ -1,4 +1,5 @@
 import { request, requestWithMeta, requestBlob, requestMultipart } from './client.js';
+import { approvalHeaders } from './approvals.js';
 
 /**
  * Supermarket quick-sale endpoints (`backend/src/modules/supermarket`).
@@ -26,11 +27,12 @@ export function searchItems(outletId, q) {
  * until it is resent with `confirmOversell` after the cashier confirms.
  * Pass the same `idempotencyKey` when retrying the same attempt.
  */
-export function createSale({ outletId, items, method, idempotencyKey, confirmOversell = false }) {
+/** A confirmed oversell (`confirmOversell`) also needs a manager's `approval` token (action `supermarket.oversell`). */
+export function createSale({ outletId, items, method, idempotencyKey, confirmOversell = false, approval }) {
   return request('/supermarket/sales', {
     method: 'POST',
     body: { outlet_id: outletId, items, method, ...(confirmOversell ? { confirm_oversell: true } : {}) },
-    headers: { 'Idempotency-Key': idempotencyKey ?? crypto.randomUUID() },
+    headers: { 'Idempotency-Key': idempotencyKey ?? crypto.randomUUID(), ...approvalHeaders(approval) },
   });
 }
 
@@ -73,8 +75,9 @@ export function getReport({ outletId, from, to } = {}) {
   return request(`/supermarket/report?${params}`);
 }
 
-export function voidSale(id, reason) {
-  return request(`/supermarket/sales/${id}/void`, { method: 'POST', body: { reason }, headers: { 'Idempotency-Key': crypto.randomUUID() } });
+/** Needs a manager's approval token (action `supermarket.void_sale`). */
+export function voidSale(id, reason, approval) {
+  return request(`/supermarket/sales/${id}/void`, { method: 'POST', body: { reason }, headers: { 'Idempotency-Key': crypto.randomUUID(), ...approvalHeaders(approval) } });
 }
 
 /** Products at an outlet needing setup: no barcode and/or no stock recipe. */
@@ -168,11 +171,11 @@ export function rollbackProductsImport(id, reason) {
  * is set when the sale was recorded but Paystack could not be reached (reopen it
  * with `reopenOnlineCheckout`). The same `idempotencyKey` for a retry of the same attempt.
  */
-export async function startOnlineSale({ outletId, items, tender = 'online', customerEmail, confirmOversell = false, idempotencyKey }) {
+export async function startOnlineSale({ outletId, items, tender = 'online', customerEmail, confirmOversell = false, idempotencyKey, approval }) {
   const { data, meta } = await requestWithMeta('/supermarket/online-sales', {
     method: 'POST',
     body: { outlet_id: outletId, items, tender, ...(customerEmail ? { customer_email: customerEmail } : {}), ...(confirmOversell ? { confirm_oversell: true } : {}) },
-    headers: { 'Idempotency-Key': idempotencyKey ?? crypto.randomUUID() },
+    headers: { 'Idempotency-Key': idempotencyKey ?? crypto.randomUUID(), ...approvalHeaders(approval) },
   });
   return { intent: data, ...meta };
 }
@@ -202,6 +205,7 @@ export function listOnlineSalesNeedingReview(outletId) {
   return request(`/supermarket/online-sales/review?${new URLSearchParams({ outlet_id: outletId })}`);
 }
 
-export function refundOnlineSale(id, reason) {
-  return request(`/supermarket/online-sales/${id}/refund`, { method: 'POST', body: { reason }, headers: { 'Idempotency-Key': crypto.randomUUID() } });
+/** Needs a manager's approval token (action `supermarket.refund_online`). */
+export function refundOnlineSale(id, reason, approval) {
+  return request(`/supermarket/online-sales/${id}/refund`, { method: 'POST', body: { reason }, headers: { 'Idempotency-Key': crypto.randomUUID(), ...approvalHeaders(approval) } });
 }

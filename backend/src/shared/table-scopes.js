@@ -438,6 +438,14 @@ const TABLE_SCOPES = Object.freeze({
   expense_categories: { scope: SCOPES.PROPERTY },
   recurring_expense_schedules: { scope: SCOPES.PROPERTY },
   expenses: { scope: SCOPES.PROPERTY },
+
+  // Manager approvals (security fix: PIN re-authentication for sensitive
+  // actions) — 20261123090000_create_approval_pins and
+  // 20261123091000_create_manager_approvals. A PIN belongs to a person,
+  // tenant-wide (like `mfa_login_codes`); an approval is given at one
+  // property for an action there.
+  approval_pins: { scope: SCOPES.TENANT },
+  manager_approvals: { scope: SCOPES.PROPERTY },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

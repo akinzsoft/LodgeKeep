@@ -14,6 +14,7 @@ const { requireIdempotencyKey } = require('../../shared/mutation');
 const { withIdempotency } = require('../../shared/idempotency');
 const { ValidationError } = require('../../shared/errors');
 const online = require('./paystack-sale');
+const { approvalConsumer } = require('../approvals');
 
 async function startOnlineSale(req, res, next) {
   try {
@@ -32,6 +33,7 @@ async function startOnlineSale(req, res, next) {
           lines: req.body?.items,
           tender: req.body?.tender,
           confirmOversell: req.body?.confirm_oversell === true,
+          approve: approvalConsumer(req, 'supermarket.oversell'),
           customerEmail: req.body?.customer_email,
           idempotencyKey: key,
         });
@@ -114,7 +116,14 @@ async function cancel(req, res, next) {
 async function refund(req, res, next) {
   try {
     const key = requireIdempotencyKey(req);
-    const result = await online.refundOnlinePayment({ context: req.context, intentId: req.params.id, reason: req.body?.reason, userId: req.context.userId, idempotencyKey: key });
+    const result = await online.refundOnlinePayment({
+      context: req.context,
+      intentId: req.params.id,
+      reason: req.body?.reason,
+      userId: req.context.userId,
+      idempotencyKey: key,
+      approve: approvalConsumer(req, 'supermarket.refund_online', req.params.id),
+    });
     await req.audit({ entityType: 'supermarket_sale_intents', entityId: req.params.id, action: 'refund_online_payment', afterState: { refundPaymentId: result.refund.id, refundStatus: result.refund.status }, reason: req.body?.reason });
     res.json(ok(result.intent, { refund: result.refund }));
   } catch (error) {

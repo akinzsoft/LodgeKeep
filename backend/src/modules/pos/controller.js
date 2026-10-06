@@ -25,6 +25,7 @@ const { PermissionDeniedError } = require('../../auth/errors');
 const { computeSalesReport } = require('./sales-report');
 const { computeCostOfSalesMargin } = require('../stock/reporting');
 const { toCsv } = require('../reporting/service');
+const { claimApproval, approvalConsumer } = require('../approvals');
 
 function require_(body, field) {
   const value = body?.[field];
@@ -646,6 +647,8 @@ async function addItem(req, res, next) {
       quantity: req.body?.quantity,
       modifiers: req.body?.modifiers,
       stockOverrideReason: req.body?.stock_override_reason,
+      // Selling past recorded stock needs a manager's approval, claimed only when an override actually applies.
+      approve: approvalConsumer(req, 'pos.stock_override', req.params.id),
       ...actor,
     });
     const override = overrideAudit(actor, ownerOverride);
@@ -759,6 +762,7 @@ async function settleOrder(req, res, next) {
               : undefined,
           })),
           stockOverrideReason: req.body?.stock_override_reason,
+          approve: approvalConsumer(req, 'pos.stock_override', req.params.id),
           actor,
         });
         override = overrideAudit(actor, ownerOverride);
@@ -908,6 +912,10 @@ async function voidSettlement(req, res, next) {
       entityId: req.params.settlementId,
       action: 'void',
       handler: async (trx) => {
+        // The manager's approval is claimed first, inside this transaction: a void that then fails leaves it unused.
+        await claimApproval(req, trx, 'pos.void_settlement', req.params.settlementId);
+        const onThisTab = await trx.table('pos_order_settlements').where({ id: req.params.settlementId, pos_order_id: req.params.id }).first('id');
+        if (!onThisTab) throw new ValidationError('SETTLEMENT_NOT_FOUND', 'The specified settlement does not exist.');
         const settlement = await service.voidSettlement({ trx, settlementId: req.params.settlementId, reason, userId: req.context.userId });
         return { status: 200, body: ok(settlement) };
       },

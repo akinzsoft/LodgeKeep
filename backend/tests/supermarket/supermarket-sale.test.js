@@ -12,6 +12,7 @@
 
 const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
+const { managerApproval, approvedPoster } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
 
@@ -33,6 +34,11 @@ describe('supermarket quick sale', () => {
     del: (url) => t.request.delete(url).set('Authorization', `Bearer ${tokenFor(userId)}`),
   });
 
+
+  // A void, a needs-review refund or a confirmed oversell needs a manager's PIN approval (src/modules/approvals),
+  // fetched by the person at the till before the request, as the Supermarket screen does.
+  const approvedPost = approvedPoster({ request: () => t.request, tokenFor, post: (userId, url) => as(userId).post(url), approver: () => users.manager });
+
   async function setRole(userId, role) {
     const existing = await t.trx('user_property_access').where({ user_id: userId, property_id: propertyId }).first('id');
     if (existing) await t.trx('user_property_access').where({ id: existing.id }).update({ role });
@@ -50,7 +56,10 @@ describe('supermarket quick sale', () => {
     return res.body.data;
   }
 
-  const sell = (userId, body) => as(userId).post('/api/v1/supermarket/sales').send({ outlet_id: market.outletId, method: 'cash', ...body });
+  const sell = (userId, body) => {
+    const sent = { outlet_id: market.outletId, method: 'cash', ...body };
+    return body.confirm_oversell ? approvedPost(userId, '/api/v1/supermarket/sales', sent, 'supermarket.oversell') : as(userId).post('/api/v1/supermarket/sales').send(sent);
+  };
   const vatRows = () => t.trx('taxes').where({ tenant_id: ctx.a.id, property_id: propertyId });
 
   async function addSupermarketVat({ inclusive }) {
@@ -215,7 +224,7 @@ describe('supermarket quick sale', () => {
       const two = await sell(users.operator, { items: [{ barcode: '6001000000035' }] });
       expect(Number(two.body.data.receipt_number)).toBe(Number(one.body.data.receipt_number) + 1);
 
-      const voided = await as(users.manager).post(`/api/v1/supermarket/sales/${one.body.data.id}/void`).send({ reason: 'Customer changed mind' });
+      const voided = await approvedPost(users.manager, `/api/v1/supermarket/sales/${one.body.data.id}/void`, { reason: 'Customer changed mind' }, 'supermarket.void_sale', one.body.data.id);
       expect(voided.status).toBe(200);
       expect(voided.body.data.voided_at).not.toBeNull();
       const three = await sell(users.operator, { items: [{ barcode: '6001000000035' }] });
@@ -284,9 +293,16 @@ describe('supermarket quick sale', () => {
     it('a confirmed oversell takes stock to -7, recorded with the confirmed reason and the cashier, on the same idempotency key', async () => {
       const juice = await stockedProduct({ name: 'Juice B', onHand: '3.000', code: '6001000000728' });
       const key = `sm-${next()}`;
-      const post = (body) => t.request.post('/api/v1/supermarket/sales').set('Authorization', `Bearer ${tokenFor(users.operator)}`).set('Idempotency-Key', key).send({ outlet_id: market.outletId, method: 'cash', items: [{ barcode: '6001000000728', quantity: 10 }], ...body });
+      const post = (body, approval = '') =>
+        t.request
+          .post('/api/v1/supermarket/sales')
+          .set('Authorization', `Bearer ${tokenFor(users.operator)}`)
+          .set('Idempotency-Key', key)
+          .set('X-Manager-Approval', approval)
+          .send({ outlet_id: market.outletId, method: 'cash', items: [{ barcode: '6001000000728', quantity: 10 }], ...body });
       expect((await post({})).status).toBe(422);
-      const res = await post({ confirm_oversell: true }); // the refusal stored nothing, so the same key carries the confirmed retry
+      const approval = await managerApproval(t.request, { token: tokenFor(users.operator), approverUserId: users.manager, action: 'supermarket.oversell' });
+      const res = await post({ confirm_oversell: true }, approval); // the refusal stored nothing, so the same key carries the confirmed retry
       expect(res.status).toBe(201);
       expect(await levelOf(juice.stockId)).toBe('-7.000');
       const move = await t.trx('stock_movements').where({ stock_item_id: juice.stockId, type: 'sold' }).first();
@@ -507,7 +523,7 @@ describe('supermarket quick sale', () => {
     it('voiding a sale needs the manager key and a reason', async () => {
       const sale = await sell(users.operator, { items: [{ barcode: '6001000000035' }] });
       expect((await as(users.operator).post(`/api/v1/supermarket/sales/${sale.body.data.id}/void`).send({ reason: 'x' })).status).toBe(403);
-      expect((await as(users.manager).post(`/api/v1/supermarket/sales/${sale.body.data.id}/void`).send({})).status).toBe(400);
+      expect((await approvedPost(users.manager, `/api/v1/supermarket/sales/${sale.body.data.id}/void`, {}, 'supermarket.void_sale', sale.body.data.id)).status).toBe(400);
     });
   });
 
