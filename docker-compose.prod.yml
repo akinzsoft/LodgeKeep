@@ -153,6 +153,9 @@ services:
     restart: unless-stopped
     environment:
       ACME_EMAIL: ${ACME_EMAIL}
+      # The bare app domain, for the Caddyfile's landing-page header rule
+      # (the same value the build gets as VITE_APP_DOMAIN above).
+      APP_DOMAIN: ${APP_DOMAIN}
     ports:
       - "80:80"
       - "443:443"

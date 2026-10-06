@@ -1,0 +1,50 @@
+import { useEffect } from 'react';
+import { content } from './landingContent.js';
+import { Header, Hero, FindCompany, TrustStrip, Features, Payments, Gallery, VideoSection, Testimonials, Pricing, Contact, Footer } from './sections.jsx';
+import styles from './Landing.module.css';
+
+/**
+ * The marketing landing page — rendered ONLY at the exact bare app domain's
+ * `/` (see `selectEntryTree.js`), never on a tenant subdomain. A static,
+ * public page: it calls no API, holds no session and loads no third-party
+ * script, so it needs no `<AuthProvider>`. The "Start free trial" buttons go
+ * to the existing `/signup`; "Sign in" sends a customer to their own address.
+ *
+ * All words, images and contact details live in `landingContent.js`.
+ */
+export default function LandingApp() {
+  useEffect(() => {
+    document.title = content.pageTitle;
+    let meta = document.querySelector('meta[name="description"]');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.setAttribute('name', 'description');
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute('content', content.pageDescription);
+  }, []);
+
+  return (
+    <div className={styles.root}>
+      <a className={styles.skipLink} href="#main">Skip to the content</a>
+      <Header content={content} />
+      <main id="main">
+        <Hero content={content} />
+        <TrustStrip content={content} />
+        <Features content={content} />
+        <Payments content={content} />
+        <Gallery content={content} />
+        <VideoSection content={content} />
+        <Testimonials content={content} />
+        <Pricing content={content} />
+        <section className={styles.signInBand} aria-label="Sign in">
+          <div className={`${styles.container} ${styles.narrow}`}>
+            <FindCompany content={content} />
+          </div>
+        </section>
+        <Contact content={content} />
+      </main>
+      <Footer content={content} />
+    </div>
+  );
+}

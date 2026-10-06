@@ -49,6 +49,9 @@ const CONNECTION_OWNERS = [
   'src/db/**/*.js',
   'src/modules/tenancy/**/*.js',
   'tests/helpers/**/*.js',
+  // Dev-only demo-data script (refuses NODE_ENV=production and any database but
+  // lodgekeep_dev); it backdates rows by direct SQL, which no accessor allows.
+  'scripts/seed-demo-tenant.js',
 ];
 
 /** Matches `knex`, `mysql2`, and any subpath of either — but not `knexfile`. */
