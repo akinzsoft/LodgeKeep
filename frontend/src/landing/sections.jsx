@@ -255,7 +255,7 @@ export function VideoSection({ content }) {
         <p className={`${styles.lead} ${styles.center}`}>{video.lead}</p>
         {video.src ? (
           <video className={styles.video} controls preload="none" poster={video.poster || undefined} playsInline>
-            <source src={video.src} type="video/mp4" />
+            <source src={video.src} type={video.src.endsWith('.webm') ? 'video/webm' : 'video/mp4'} />
             Your browser cannot play this video.
           </video>
         ) : (
@@ -277,8 +277,8 @@ export function Testimonials({ content }) {
       <div className={styles.container}>
         <h2 className={`${styles.h2} ${styles.center}`} id="testimonials-title">{testimonials.title}</h2>
         <ul className={styles.cardGrid}>
-          {items.map((item) => (
-            <li key={`${item.name}-${item.quote.slice(0, 12)}`} className={`${styles.card} ${item.placeholder ? styles.placeholderCard : ''}`}>
+          {items.map((item, index) => (
+            <li key={`${index}-${item.name}`} className={`${styles.card} ${item.placeholder ? styles.placeholderCard : ''}`}>
               <QuoteIcon className={styles.quoteIcon} />
               <blockquote className={styles.quote}>{item.quote}</blockquote>
               <p className={styles.quoteBy}>
@@ -313,8 +313,8 @@ export function Pricing({ content }) {
           </p>
           <p className={styles.trial}>{pricing.trial}</p>
           <ul className={styles.checkList}>
-            {pricing.includes.map((point) => (
-              <li key={point}>
+            {pricing.includes.map((point, index) => (
+              <li key={`${index}-${point}`}>
                 <CheckIcon className={styles.checkIcon} />
                 <span>{point}</span>
               </li>

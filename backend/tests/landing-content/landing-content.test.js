@@ -55,6 +55,8 @@ describe('validateContent', () => {
     expect(issuesOf({ contact: { whatsapp: '12345' } })).toEqual(['contact.whatsapp']);
     expect(issuesOf({ contact: { whatsapp: 'call me' } })).toEqual(['contact.whatsapp']);
     expect(issuesOf({ contact: { email: 'nope' } })).toEqual(['contact.email']);
+    // Becomes a mailto: link, so characters that could add mail headers are refused.
+    for (const bad of ['a@b.co?bcc=x@y.com', 'a@b.co&cc=x@y.com', 'a@b.co,x@y.com']) expect(issuesOf({ contact: { email: bad } })).toEqual(['contact.email']);
     expect(issuesOf({ pricing: { setupAmount: '-5' } })).toEqual(['pricing.setupAmount']);
     expect(issuesOf({ pricing: { setupAmount: '1.234' } })).toEqual(['pricing.setupAmount']);
     expect(issuesOf({ pricing: { includes: [] } })).toEqual(['pricing.includes']);
@@ -196,5 +198,24 @@ describe('landing content over HTTP', () => {
 
   test('restoring a version that does not exist is a 404', async () => {
     expect((await asUser(admin).post('/api/v1/platform/landing-content/versions/999999999/restore')).status).toBe(404);
+  });
+});
+
+describe('the backend allow-list and the frontend field list stay in step', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const { SCHEMA } = require('../../src/modules/landing-content/fields');
+
+  // The frontend list drives the console form and applyOverrides; the backend list is the authority
+  // on what may be saved. A field added to only one side would quietly not work, so this pins them.
+  const source = fs.readFileSync(path.join(__dirname, '../../../frontend/src/landing/contentOverrides.js'), 'utf8');
+  const frontend = [...source.matchAll(/\{ section: '(\w+)', field: '(\w+)', kind: '(\w+)' \}/g)].map(([, section, field, kind]) => ({ section, field, kind }));
+  const KIND = { text: 'text', money: 'optional', digits: 'optional', email: 'optional', media: 'optional', list: 'list', testimonials: 'items' };
+  const backend = Object.entries(SCHEMA).flatMap(([section, fields]) => Object.entries(fields).map(([field, rule]) => ({ section, field, kind: KIND[rule.kind] })));
+  const key = (e) => `${e.section}.${e.field}:${e.kind}`;
+
+  test('the same fields, with compatible kinds, on both sides', () => {
+    expect(frontend.length).toBeGreaterThan(10);
+    expect(frontend.map(key).sort()).toEqual(backend.map(key).sort());
   });
 });

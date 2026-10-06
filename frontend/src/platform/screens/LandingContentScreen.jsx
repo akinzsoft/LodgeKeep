@@ -68,7 +68,7 @@ export function LandingContentScreen({ onBack, onLogout }) {
   }, [load]);
 
   const set = (section, field, value) => setForm((current) => ({ ...current, [section]: { ...current[section], [field]: value } }));
-  const issueFor = (path) => fieldIssues.find((issue) => issue.field === path || issue.field.startsWith(`${path}[`) || issue.field.startsWith(`${path}.`));
+  const issueFor = (path) => fieldIssues.find((issue) => typeof issue?.field === 'string' && (issue.field === path || issue.field.startsWith(`${path}[`) || issue.field.startsWith(`${path}.`)));
 
   async function run(action, doneMessage) {
     setSaving(true);

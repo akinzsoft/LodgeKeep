@@ -19,7 +19,9 @@
 
 const { ValidationError } = require('../../shared/errors');
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Deliberately strict: the address becomes a mailto: link, so characters like ? & , (which could add
+// mail headers such as bcc=) are not allowed.
+const EMAIL = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 const MONEY = /^\d{1,10}(\.\d{1,2})?$/;
 const MEDIA_PATH = /^\/[A-Za-z0-9._\-/]+\.(mp4|webm|webp|png|jpe?g)$/;
 
