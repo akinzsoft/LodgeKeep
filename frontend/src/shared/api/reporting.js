@@ -51,3 +51,14 @@ export function getChainOverview() {
 export function getChainOverviewCsv() {
   return requestBlob('/reports/chain-overview?format=csv');
 }
+
+/** The combined business summary — rooms, each outlet and the mini-mart, gross collected. `reports.view_business`. */
+export function getBusinessSummary({ dateFrom, dateTo }) {
+  const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+  return request(`/reports/business-summary?${params}`);
+}
+
+export function getBusinessSummaryCsv({ dateFrom, dateTo }) {
+  const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo, format: 'csv' });
+  return requestBlob(`/reports/business-summary?${params}`);
+}

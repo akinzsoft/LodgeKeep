@@ -614,7 +614,12 @@ function summarizeByMethod(lines) {
     .sort((a, b) => compareMoney(b.grossTotal, a.grossTotal));
 }
 
-async function computePaymentReconciliation({ context, dateFrom, dateTo }) {
+/**
+ * Builds the report AND, for the business summary (`reporting/business-summary.js`), which outlet each
+ * POS line belongs to. The outlet references live in side maps keyed by the very line objects the report
+ * returns, never on the lines themselves, so the public report's shape is exactly what it was.
+ */
+async function buildReconciliation({ context, dateFrom, dateTo }) {
   assertReasonableRange(dateFrom, dateTo);
   const db = scopedDb().for(context);
   const property = await db.table('properties').where({ id: context.propertyId }).first('base_currency');
@@ -629,7 +634,8 @@ async function computePaymentReconciliation({ context, dateFrom, dateTo }) {
   const folioLines = folioRows.map((row) => toFolioLine(row, roomNumberByReservation, folioParentFeeById));
 
   const settlementRows = await listStandingSettlements({ db, dateFrom, dateTo });
-  const posSettlementLines = settlementRows.filter((row) => row.method !== 'room_charge').map(toPosSettlementLine);
+  const standingPosRows = settlementRows.filter((row) => row.method !== 'room_charge');
+  const posSettlementLines = standingPosRows.map(toPosSettlementLine);
 
   const unsettled = await listUnsettledCardPayments({ db });
   const unsettledOutletIds = [...new Set(unsettled.map((row) => String(row.outletId)).filter(Boolean))];
@@ -645,13 +651,26 @@ async function computePaymentReconciliation({ context, dateFrom, dateTo }) {
   const posRefundRows = await listPosRefundLines({ db, dateFrom, dateTo });
   const posRefundLines = posRefundRows.map(toPosRefundLine);
 
+  const outletByLine = new Map();
+  const settlementRowByLine = new Map();
+  standingPosRows.forEach((row, index) => {
+    outletByLine.set(posSettlementLines[index], row.outlet_id ?? null);
+    settlementRowByLine.set(posSettlementLines[index], row);
+  });
+  const inRangeOrphans = unsettled.filter((row) => {
+    const businessDate = new Date(row.capturedAt).toISOString().slice(0, 10);
+    return businessDate >= dateFrom && businessDate <= dateTo;
+  });
+  orphanedLines.forEach((line, index) => outletByLine.set(line, inRangeOrphans[index].outletId ?? null));
+  posRefundLines.forEach((line, index) => outletByLine.set(line, posRefundRows[index].outletId ?? null));
+
   const lines = [...folioLines, ...posSettlementLines, ...orphanedLines, ...posRefundLines].sort((a, b) => {
     if (a.businessDate !== b.businessDate) return a.businessDate < b.businessDate ? 1 : -1;
     return new Date(b.capturedAt) - new Date(a.capturedAt);
   });
   await attachSettlementAccounts({ db, lines });
 
-  return {
+  const report = {
     dateFrom,
     dateTo,
     currency: property?.base_currency ?? null,
@@ -662,6 +681,14 @@ async function computePaymentReconciliation({ context, dateFrom, dateTo }) {
     bySettlementAccount: summarizeBySettlementAccount(lines),
     lines,
   };
+  // `chargedToRoomRows`: POS tabs charged to a room folio. No money is taken at the outlet (the guest pays on the
+  // folio, where it is counted), so they are never report lines; the business summary shows them as a memo.
+  const chargedToRoomRows = settlementRows.filter((row) => row.method === 'room_charge');
+  return { report, outletByLine, settlementRowByLine, chargedToRoomRows, db };
+}
+
+async function computePaymentReconciliation(args) {
+  return (await buildReconciliation(args)).report;
 }
 
 const CSV_COLUMNS = [
@@ -702,4 +729,4 @@ function toCsvRows(lines) {
   }));
 }
 
-module.exports = { computePaymentReconciliation, CSV_COLUMNS, toCsvRows, MAX_RANGE_DAYS };
+module.exports = { computePaymentReconciliation, buildReconciliation, CSV_COLUMNS, toCsvRows, MAX_RANGE_DAYS };

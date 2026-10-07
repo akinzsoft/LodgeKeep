@@ -4,6 +4,7 @@ import { OccupancyTab } from './OccupancyTab.jsx';
 import { RevenueTab } from './RevenueTab.jsx';
 import { HousekeepingSummaryTab } from './HousekeepingSummaryTab.jsx';
 import { PaymentReconciliationTab } from './PaymentReconciliationTab.jsx';
+import { BusinessSummaryTab } from './BusinessSummaryTab.jsx';
 import styles from './ReportingScreen.module.css';
 
 /**
@@ -33,8 +34,12 @@ const TABS = [
   { key: 'reconciliation', label: 'Payment reconciliation' },
 ];
 
-export function ReportingScreen({ activePropertyId }) {
-  const [tab, setTab] = useState('occupancy');
+const BUSINESS_TAB = { key: 'business', label: 'Business summary' };
+
+/** `canViewBusinessSummary`: the signed-in user holds `reports.view_business`; only then is the combined summary offered, and it becomes the first tab. */
+export function ReportingScreen({ activePropertyId, canViewBusinessSummary = false }) {
+  const tabs = canViewBusinessSummary ? [BUSINESS_TAB, ...TABS] : TABS;
+  const [tab, setTab] = useState(canViewBusinessSummary ? 'business' : 'occupancy');
   const [properties, setProperties] = useState(null);
   const [error, setError] = useState(null);
 
@@ -69,7 +74,7 @@ export function ReportingScreen({ activePropertyId }) {
       ) : (
         <>
           <div className={styles.tabs} role="tablist" aria-label="Reporting sections">
-            {TABS.map((t) => (
+            {tabs.map((t) => (
               <button
                 key={t.key}
                 type="button"
@@ -84,6 +89,7 @@ export function ReportingScreen({ activePropertyId }) {
           </div>
 
           <div className={styles.panel}>
+            {tab === 'business' && <BusinessSummaryTab activeProperty={activeProperty} />}
             {tab === 'occupancy' && <OccupancyTab />}
             {tab === 'revenue' && <RevenueTab activeProperty={activeProperty} />}
             {tab === 'housekeeping' && <HousekeepingSummaryTab />}

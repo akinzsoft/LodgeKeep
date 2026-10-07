@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   getOccupancyReport: vi.fn(),
   getRevenueReport: vi.fn(),
   getOversoldRoomTypes: vi.fn(),
+  getBusinessSummary: vi.fn(),
   listRuns: vi.fn(),
 }));
 
@@ -34,6 +35,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       getOccupancyReport: mocks.getOccupancyReport,
       getRevenueReport: mocks.getRevenueReport,
       getOversoldRoomTypes: mocks.getOversoldRoomTypes,
+      getBusinessSummary: mocks.getBusinessSummary,
     },
     nightAuditApi: { listRuns: mocks.listRuns },
   };
@@ -275,6 +277,36 @@ describe('<HomeDashboard>', () => {
       renderDashboard();
       await within(card('Occupancy')).findByText('30%');
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('whole-business total tile', () => {
+    const SUMMARY = {
+      currencies: [
+        { currency: 'NGN', rows: [], total: { grossCollected: '1234.50', byMethod: {} }, reconciliation: { grossTotal: '1234.50', matches: true } },
+        { currency: 'USD', rows: [], total: { grossCollected: '9.00', byMethod: {} }, reconciliation: { grossTotal: '9.00', matches: true } },
+      ],
+    };
+
+    it('is not shown, and nothing is fetched, without reports.view_business', () => {
+      renderDashboard();
+      expect(screen.queryByRole('article', { name: 'Total business today' })).not.toBeInTheDocument();
+      expect(mocks.getBusinessSummary).not.toHaveBeenCalled();
+    });
+
+    it("shows today's gross collected across all sources from the base-currency table, for the business date", async () => {
+      mocks.getBusinessSummary.mockResolvedValue(SUMMARY);
+      renderDashboard({ canViewBusinessSummary: true });
+      expect(await within(card('Total business today')).findByText(/1,234\.50/)).toBeInTheDocument();
+      expect(mocks.getBusinessSummary).toHaveBeenCalledWith({ dateFrom: BUSINESS_DATE, dateTo: BUSINESS_DATE });
+      expect(within(card('Total business today')).getByText(/other currencies in the report/)).toBeInTheDocument();
+    });
+
+    it('degrades to its own error without breaking the other cards', async () => {
+      mocks.getBusinessSummary.mockRejectedValue(new ApiError({ code: 'INTERNAL_ERROR', message: 'Not allowed' }));
+      renderDashboard({ canViewBusinessSummary: true });
+      expect(await within(card('Total business today')).findByText('Not allowed')).toBeInTheDocument();
+      expect(card('Room revenue')).toBeInTheDocument();
     });
   });
 });

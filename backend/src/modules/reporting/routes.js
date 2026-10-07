@@ -11,6 +11,9 @@
  * `reports.view_financial` for the revenue report. Housekeeping/pos_operator
  * hold neither key.
  *
+ * `reports.view_business` (the combined rooms + outlets + mini-mart summary) is manager/admin/super_admin only:
+ * it reads financial, POS and supermarket money at once, so it has its own key rather than borrowing one domain's.
+ *
  * `reports.view_chain` (PLAN.md Phase 6) is `super_admin` only, unlike
  * every other key in this file — the second place this matrix's Admin `✓`
  * genuinely diverges from Super-admin's `✓`, after `room_types.update`
@@ -28,6 +31,7 @@ function reportingRouter() {
   router.get('/reports/housekeeping', requirePermission('reports.view'), controller.housekeepingSummary);
   router.get('/reports/oversold', requirePermission('reports.view'), controller.oversoldRoomTypes);
   router.get('/reports/revenue', requirePermission('reports.view_financial'), controller.revenue);
+  router.get('/reports/business-summary', requirePermission('reports.view_business'), controller.businessSummaryReport);
   router.get('/reports/chain-overview', requirePermission('reports.view_chain'), controller.chainOverview);
 
   return router;

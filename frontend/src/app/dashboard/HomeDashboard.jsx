@@ -58,14 +58,16 @@ const TREND_DAYS = 14;
  * @param {() => void} [onNavigateToSetup]
  * @param {(key: string) => void} [onNavigate]   Opens another screen by nav key.
  * @param {(key: string) => boolean} [canNavigate]   Whether this user's role can open that screen.
+ * @param {boolean} [canViewBusinessSummary]   The user holds `reports.view_business`: shows the whole-business total tile (rooms + outlets + mini-mart, gross collected).
  * @param {Date} [now]   Injectable clock for the greeting — tests only.
  */
-export function HomeDashboard({ greetingName, businessDate, activeProperty, onNavigateToSetup, onNavigate, canNavigate = () => true, now: nowProp }) {
+export function HomeDashboard({ greetingName, businessDate, activeProperty, onNavigateToSetup, onNavigate, canNavigate = () => true, canViewBusinessSummary = false, now: nowProp }) {
   const [now] = useState(() => nowProp ?? new Date());
   const [reservations, setReservations] = useState(LOADING);
   const [roomTypes, setRoomTypes] = useState(null);
   const [occupancyResult, setOccupancy] = useState(LOADING);
   const [revenueResult, setRevenue] = useState(LOADING);
+  const [businessResult, setBusiness] = useState(LOADING);
   // Both reports need a business date to anchor on — a property that has
   // never had one configured gets a named empty state, not a fetch.
   const occupancy = businessDate ? occupancyResult : NO_BUSINESS_DATE;
@@ -102,6 +104,7 @@ export function HomeDashboard({ greetingName, businessDate, activeProperty, onNa
       const from = shiftDate(businessDate, -(TREND_DAYS - 1));
       load(reportingApi.getOccupancyReport({ dateFrom: from, dateTo: businessDate }), setOccupancy);
       load(reportingApi.getRevenueReport({ dateFrom: from, dateTo: businessDate }), setRevenue);
+      if (canViewBusinessSummary) load(reportingApi.getBusinessSummary({ dateFrom: businessDate, dateTo: businessDate }), setBusiness);
       reportingApi.getOversoldRoomTypes(businessDate).then(guard(setOversold)).catch(() => guard(setOversold)(null));
     }
 
@@ -129,9 +132,13 @@ export function HomeDashboard({ greetingName, businessDate, activeProperty, onNa
     return () => {
       cancelled = true;
     };
-  }, [businessDate, propertyId]);
+  }, [businessDate, propertyId, canViewBusinessSummary]);
 
   const currencyCode = activeProperty?.base_currency;
+  // Whole-business total for the business date: the base-currency table's grand total (gross collected).
+  const business = !businessDate ? NO_BUSINESS_DATE : businessResult;
+  const businessTable = business.state === 'success' ? business.data.currencies.find((table) => table.currency === currencyCode) ?? null : null;
+  const otherCurrencies = business.state === 'success' ? business.data.currencies.filter((table) => table.currency !== currencyCode).length : 0;
   const timeZone = activeProperty?.timezone;
   const trend = businessDate ? dateWindow(businessDate, TREND_DAYS) : [];
   const yesterday = businessDate ? shiftDate(businessDate, -1) : null;
@@ -246,6 +253,20 @@ export function HomeDashboard({ greetingName, businessDate, activeProperty, onNa
             ) : null
           }
         />
+        {canViewBusinessSummary && (
+          <KpiCard
+            tone="amber"
+            icon={<RevenueIcon />}
+            label="Total business today"
+            hint="Money collected today across rooms, bars/restaurants and the mini-mart (tax, service and tips included). Ties to Payment Reconciliation."
+            source={business}
+            ready={Boolean(businessTable)}
+            emptyMessage="Nothing collected on this business date yet."
+            value={businessTable ? <Money amount={businessTable.total.grossCollected} currencyCode={currencyCode} /> : null}
+            delta={null}
+            detail={otherCurrencies > 0 ? 'Collected · rooms, outlets, mini-mart (other currencies in the report)' : 'Collected · rooms, outlets, mini-mart'}
+          />
+        )}
       </section>
 
       <section className={styles.card} aria-label="Today's operations">
