@@ -419,7 +419,7 @@ function Demo() {
       ) : screenKey === 'staff' ? (
         <StaffScreen activeProperty={activePropertyRecord} isOffline={!isOnline} />
       ) : screenKey === 'reports' ? (
-        <ReportingScreen activePropertyId={user.activePropertyId} />
+        <ReportingScreen activePropertyId={user.activePropertyId} canViewBusinessSummary={grantedPermissions.has('reports.view_business')} />
       ) : screenKey === 'cashiering' ? (
         <CashieringScreen isOffline={!isOnline} activeProperty={activePropertyRecord} />
       ) : screenKey === 'night_audit' ? (
@@ -454,6 +454,7 @@ function Demo() {
           onNavigateToSetup={() => setActiveItemKey('setup')}
           onNavigate={navigateTo}
           canNavigate={(key) => isNavItemAllowed(key, grantedPermissions)}
+          canViewBusinessSummary={grantedPermissions.has('reports.view_business')}
         />
       )}
       {toast && (

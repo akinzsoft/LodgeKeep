@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   getRevenueReport: vi.fn(),
   getHousekeepingSummary: vi.fn(),
   getOversoldRoomTypes: vi.fn(),
+  getBusinessSummary: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -22,6 +23,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       getRevenueReport: mocks.getRevenueReport,
       getHousekeepingSummary: mocks.getHousekeepingSummary,
       getOversoldRoomTypes: mocks.getOversoldRoomTypes,
+      getBusinessSummary: mocks.getBusinessSummary,
     },
   };
 });
@@ -104,5 +106,16 @@ describe('<ReportingScreen>', () => {
     await userEvent.click(await screen.findByRole('tab', { name: 'Housekeeping' }));
     await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
     expect(await screen.findByText('2 open discrepancies')).toBeInTheDocument();
+  });
+
+  it('offers the Business summary as the first, default tab only with reports.view_business', async () => {
+    mocks.getBusinessSummary.mockResolvedValue({ basisNote: 'n', currencies: [], roomChargesBilled: null });
+    const { unmount } = render(<ReportingScreen activePropertyId="1" canViewBusinessSummary />);
+    expect(await screen.findByRole('tab', { name: 'Business summary' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('tab')[0]).toHaveTextContent('Business summary');
+    unmount();
+    render(<ReportingScreen activePropertyId="1" />);
+    expect(await screen.findByRole('tab', { name: 'Occupancy' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: 'Business summary' })).not.toBeInTheDocument();
   });
 });
