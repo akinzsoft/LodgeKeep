@@ -286,7 +286,7 @@ exports.seed = async function seed(knex) {
    * super_admin get it via `ensureAdminSuperAdminFullAccess`).
    */
   async function ensureManagerReconciliationAccess(tenantId) {
-    await grantManagerKeys(tenantId, ['reconciliation.view', 'reports.view_business']);
+    await grantManagerKeys(tenantId, ['reconciliation.view', 'reports.view_business', 'pos.stock_cost_edit']);
   }
 
   /**

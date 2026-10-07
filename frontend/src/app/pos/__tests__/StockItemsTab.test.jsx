@@ -655,7 +655,7 @@ describe('<StockItemsTab>', () => {
     });
   });
 
-  it('editing prefills the real values and never shows an editable cost field — cost is read-only', async () => {
+  it('editing prefills the real values and shows no editable cost field without pos.stock_cost_edit', async () => {
     mocks.listStockItems.mockResolvedValue([item()]);
     mocks.updateStockItem.mockResolvedValue(item({ name: 'Premium Vodka' }));
     render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} />);
@@ -665,7 +665,7 @@ describe('<StockItemsTab>', () => {
     const editCard = screen.getByRole('heading', { name: 'Edit — Vodka' }).closest('section');
 
     // The read-only cost note is present, but there is no input to edit it.
-    expect(within(editCard).getByText(/set automatically by the most recent goods-received delivery/)).toBeInTheDocument();
+    expect(within(editCard).getByText(/set by the most recent goods-received delivery. Changing it needs a manager/)).toBeInTheDocument();
     expect(within(editCard).getByText(/quantity only changes through a recorded event/)).toBeInTheDocument();
     expect(within(editCard).getByText('Receive', { selector: 'strong' })).toBeInTheDocument();
     expect(within(editCard).queryByLabelText(/cost/i)).not.toBeInTheDocument();
@@ -681,6 +681,39 @@ describe('<StockItemsTab>', () => {
     );
     expect(mocks.updateStockItem.mock.calls[0][1]).not.toHaveProperty('purchase_cost');
     expect(mocks.updateStockItem.mock.calls[0][1]).not.toHaveProperty('purchaseCost');
+  });
+
+  it('with pos.stock_cost_edit the cost is editable, a changed cost needs a reason, and both are sent', async () => {
+    mocks.listStockItems.mockResolvedValue([item()]);
+    mocks.updateStockItem.mockResolvedValue(item({ purchase_cost: '2.00' }));
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} canEditCost />);
+    const row = (await screen.findByText('Vodka')).closest('tr');
+    await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+    const editCard = screen.getByRole('heading', { name: 'Edit — Vodka' }).closest('section');
+
+    expect(within(editCard).queryByLabelText('Reason for the cost change')).not.toBeInTheDocument();
+    const cost = within(editCard).getByLabelText('Cost price');
+    await userEvent.clear(cost);
+    await userEvent.type(cost, '2.00');
+    await userEvent.click(within(editCard).getByRole('button', { name: 'Save changes' }));
+    expect(mocks.updateStockItem).not.toHaveBeenCalled();
+    expect(within(editCard).getByRole('alert')).toHaveTextContent(/reason/i);
+
+    await userEvent.type(within(editCard).getByLabelText('Reason for the cost change'), 'Data entry error');
+    await userEvent.click(within(editCard).getByRole('button', { name: 'Save changes' }));
+    expect(mocks.updateStockItem).toHaveBeenCalledWith('9', expect.objectContaining({ purchaseCost: '2.00', reason: 'Data entry error' }));
+  });
+
+  it('with pos.stock_cost_edit an unchanged cost sends no cost fields', async () => {
+    mocks.listStockItems.mockResolvedValue([item()]);
+    mocks.updateStockItem.mockResolvedValue(item());
+    render(<StockItemsTab activeProperty={{ base_currency: 'NGN' }} canEditCost />);
+    const row = (await screen.findByText('Vodka')).closest('tr');
+    await userEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+    const editCard = screen.getByRole('heading', { name: 'Edit — Vodka' }).closest('section');
+    await userEvent.click(within(editCard).getByRole('button', { name: 'Save changes' }));
+    expect(mocks.updateStockItem.mock.calls[0][1]).not.toHaveProperty('purchaseCost');
+    expect(mocks.updateStockItem.mock.calls[0][1]).not.toHaveProperty('reason');
   });
 
   it('editing can still move an item to a different registered category via its own dropdown — unlike creation, this is a normal choice among existing categories', async () => {

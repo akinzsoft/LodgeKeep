@@ -49,7 +49,7 @@ const EMPTY_ADD_SELL_FORM = { name: null, price: '', category: '', quantity: '1'
  * the separate Goods Received tab, which stays untouched for multi-line
  * deliveries.
  */
-export function StockItemsTab({ activeProperty, isOffline = false }) {
+export function StockItemsTab({ activeProperty, isOffline = false, canEditCost = false }) {
   const [outlets, setOutlets] = useState(null);
   const [items, setItems] = useState(null);
   const [outletFilter, setOutletFilter] = useState('');
@@ -76,7 +76,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
   const [addError, setAddError] = useState(null);
   const [addSubmitting, setAddSubmitting] = useState(false);
 
-  const [editForm, setEditForm] = useState({ name: '', unit: '', category: '', supplier: '', reorder_level: '' });
+  const [editForm, setEditForm] = useState({ name: '', unit: '', category: '', supplier: '', reorder_level: '', purchase_cost: '', reason: '' });
   const [editError, setEditError] = useState(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
 
@@ -319,7 +319,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
 
   function openEdit(item) {
     setActivePanel({ type: 'edit', item });
-    setEditForm({ name: item.name, unit: item.unit, category: item.category ?? '', supplier: item.supplier ?? '', reorder_level: item.reorder_level });
+    setEditForm({ name: item.name, unit: item.unit, category: item.category ?? '', supplier: item.supplier ?? '', reorder_level: item.reorder_level, purchase_cost: item.purchase_cost, reason: '' });
     setEditError(null);
   }
 
@@ -495,6 +495,11 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
 
   async function handleEditSubmit(event) {
     event.preventDefault();
+    const costChanged = canEditCost && Number(editForm.purchase_cost) !== Number(activePanel.item.purchase_cost);
+    if (costChanged && !editForm.reason.trim()) {
+      setEditError('Give a reason for changing the cost price.');
+      return;
+    }
     setEditSubmitting(true);
     setEditError(null);
     try {
@@ -506,6 +511,7 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
         // The reorder level shown is this outlet's own (stock is counted per outlet).
         reorderLevel: editForm.reorder_level,
         outletId: outletFilter,
+        ...(costChanged ? { purchaseCost: editForm.purchase_cost, reason: editForm.reason } : {}),
       });
       setActivePanel(null);
       await reloadItems();
@@ -823,10 +829,11 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                       {editError}
                     </p>
                   )}
-                  <p className={formStyles.hint}>
-                    Cost is <Money amount={editingItem.purchase_cost} currencyCode={activeProperty.base_currency} /> — set automatically by the most recent goods-received delivery, not editable
-                    here.
-                  </p>
+                  {!canEditCost && (
+                    <p className={formStyles.hint}>
+                      Cost is <Money amount={editingItem.purchase_cost} currencyCode={activeProperty.base_currency} /> — set by the most recent goods-received delivery. Changing it needs a manager.
+                    </p>
+                  )}
                   <p className={formStyles.hint}>
                     On hand is {formatQuantity(editingItem.current_quantity, editingItem.unit)} — quantity only changes through a recorded event, not a direct edit. A delivery is logged with{' '}
                     <strong>Receive</strong> at the store room; an outlet gets stock by a request. Sales, Wastage, and a Stock take are the other ways it moves.
@@ -870,6 +877,27 @@ export function StockItemsTab({ activeProperty, isOffline = false }) {
                         disabled={isOffline}
                       />
                     </label>
+                    {canEditCost && (
+                      <>
+                        <label className={formStyles.field}>
+                          <span className={formStyles.label}>Cost price</span>
+                          <input
+                            className={formStyles.input}
+                            inputMode="decimal"
+                            value={editForm.purchase_cost}
+                            onChange={(e) => setEditForm({ ...editForm, purchase_cost: e.target.value })}
+                            disabled={isOffline}
+                          />
+                        </label>
+                        {Number(editForm.purchase_cost) !== Number(editingItem.purchase_cost) && (
+                          <label className={formStyles.field}>
+                            <span className={formStyles.label}>Reason for the cost change</span>
+                            <input className={formStyles.input} value={editForm.reason} onChange={(e) => setEditForm({ ...editForm, reason: e.target.value })} disabled={isOffline} />
+                          </label>
+                        )}
+                        <p className={formStyles.hint}>Past sales keep the cost they were recorded with; the new cost applies to future sales and to margin reports.</p>
+                      </>
+                    )}
                     <div className={formStyles.actionsRow}>
                       <Button type="submit" loading={editSubmitting} disabled={isOffline}>
                         Save changes

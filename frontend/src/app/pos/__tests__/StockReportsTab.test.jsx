@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getCostOfSalesMargin: vi.fn(),
   getStockOverview: vi.fn(),
   listStockMovements: vi.fn(),
+  getCostCheck: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -26,6 +27,7 @@ vi.mock('../../../shared/api/index.js', async () => {
       getCostOfSalesMargin: mocks.getCostOfSalesMargin,
       getStockOverview: mocks.getStockOverview,
       listStockMovements: mocks.listStockMovements,
+      getCostCheck: mocks.getCostCheck,
     },
   };
 });
@@ -36,6 +38,7 @@ const EMPTY_MARGIN = { byMenuItem: [], byCategory: [], totals: { revenue: '0.00'
 describe('<StockReportsTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
+    mocks.getCostCheck.mockResolvedValue({ rows: [] });
     mocks.listOutlets.mockResolvedValue([{ id: '1', name: 'Main Bar' }]);
     mocks.listStockItems.mockResolvedValue([{ id: '20', name: 'Vodka (bottle)' }]);
     mocks.getCostOfSalesMargin.mockResolvedValue(EMPTY_MARGIN);
@@ -262,5 +265,20 @@ describe('<StockReportsTab>', () => {
       const table = (await screen.findByRole('heading', { name: 'Cost of sales — by stock item' })).closest('section');
       expect(await within(table).findByText('Spirits')).toBeInTheDocument();
     });
+  });
+
+  it('lists items costed at or above their price, with the stock items behind the cost', async () => {
+    mocks.getCostCheck.mockResolvedValue({
+      rows: [{ menuItemId: '5', name: 'Fanta', price: '200.00', unitCost: '2000.00', ratio: 10, components: [{ stockItemId: '1', name: 'fanta', unit: 'bottle', quantity: '1.000', purchaseCost: '2000.00', cost: '2000.00' }] }],
+    });
+    render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
+    const card = (await screen.findByText(/Cost check/)).closest('section');
+    expect(await within(card).findByText('Fanta')).toBeInTheDocument();
+    expect(within(card).getByText(/fanta \(.*at 2000\.00\)/)).toBeInTheDocument();
+  });
+
+  it('says so when nothing costs as much as it sells for', async () => {
+    render(<StockReportsTab activeProperty={{ base_currency: 'NGN' }} />);
+    expect(await screen.findByText('No item costs as much as it sells for.')).toBeInTheDocument();
   });
 });

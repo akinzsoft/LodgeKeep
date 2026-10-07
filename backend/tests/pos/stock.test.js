@@ -253,7 +253,7 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
       expect(ids).not.toContain(healthy.id);
     });
 
-    it('a plain update cannot overwrite current_quantity, purchase_cost, or status — only name/unit/supplier/reorder_level are allowlisted', async () => {
+    it('a plain update cannot overwrite current_quantity or status (purchase_cost needs pos.stock_cost_edit and a reason — see stock-cost-edit.test.js)', async () => {
       const outletA = await freshOutletSetup();
       const item = await createStockItem(managerToken(), { outletId: outletA.outletId, purchaseCost: '5.00' });
       await seedStockReceipt(ctx.a, item, '10.000');
@@ -264,7 +264,6 @@ describe('POS inventory & stock control (PLAN.md Phase 6)', () => {
         .send({
           name: 'Renamed',
           current_quantity: '999.000',
-          purchase_cost: '1.00',
           status: 'archived',
         });
       expect(res.status).toBe(200);

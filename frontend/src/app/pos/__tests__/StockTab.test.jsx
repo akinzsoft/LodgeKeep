@@ -14,6 +14,7 @@ const stockMocks = vi.hoisted(() => ({
   listTransfers: vi.fn(),
   listTransferRequests: vi.fn(),
   getMyRequestOutlets: vi.fn(),
+  getCostCheck: vi.fn(),
 }));
 
 vi.mock('../../../shared/api/index.js', async () => {
@@ -28,6 +29,7 @@ describe('<StockTab>', () => {
     mocks.listOutlets.mockResolvedValue([]);
     mocks.listMenuItems.mockResolvedValue([]);
     stockMocks.listStockItems.mockResolvedValue([]);
+    stockMocks.getCostCheck.mockResolvedValue({ rows: [] });
     stockMocks.listStockTakes.mockResolvedValue([]);
     stockMocks.listTransfers.mockResolvedValue([]);
     stockMocks.listTransferRequests.mockResolvedValue([]);

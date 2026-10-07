@@ -2121,6 +2121,7 @@ async function seedTwoTenants(trx) {
     ['reports.view_business', 'reports'],
     ['pos.stock_view', 'pos'],
     ['pos.stock_manage', 'pos'],
+    ['pos.stock_cost_edit', 'pos'],
     ['pos.stock_transfer', 'pos'],
     ['pos.stock_request', 'pos'],
     ['door_access.view', 'door_access'],
@@ -2392,6 +2393,7 @@ async function seedTwoTenants(trx) {
     for (const role of ['manager', 'admin', 'super_admin']) {
       rows.push({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions['reconciliation.view'] });
       rows.push({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions['reports.view_business'] });
+      rows.push({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions['pos.stock_cost_edit'] });
     }
     await trx('role_permissions').insert(rows);
   }
