@@ -66,7 +66,7 @@ describe('<StockRequestsTab>', () => {
       render(<StockRequestsTab permissions={REQUESTER} />);
 
       await waitFor(() => expect(screen.getByLabelText('Request from')).toHaveValue('1'));
-      expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '1' });
+      await waitFor(() => expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '1' }));
       await selectWhenLoaded('Deliver to', '2');
       await selectWhenLoaded('Item 1', '20');
       expect(screen.getByText('30.000 bottle at the store now')).toBeInTheDocument();
@@ -119,7 +119,7 @@ describe('<StockRequestsTab>', () => {
         expect(options.some((text) => /Bar Gin/.test(text))).toBe(false);
         expect(options.some((text) => /Restaurant Steak/.test(text))).toBe(false);
         // The mart's list asks for its CARRIED categories only (not items it merely holds a stock level for, e.g. hotel drinks left over).
-        expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '12', carriedOnly: true });
+        await waitFor(() => expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '12', carriedOnly: true }));
 
         await selectWhenLoaded('Item 1', '20');
         expect(screen.getByText('30.000 bottle at the store now')).toBeInTheDocument();
@@ -202,10 +202,12 @@ describe('<StockRequestsTab>', () => {
         await waitFor(() => expect(screen.getByLabelText('Deliver to')).toHaveValue('2'));
         const fromOptions = within(screen.getByLabelText('Request from')).getAllByRole('option').map((option) => option.textContent);
         expect(fromOptions.join(' ')).toContain('Mini Mart');
-        expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '1' });
+        await waitFor(() => expect(mocks.listStockItems).toHaveBeenCalledWith({ outletId: '1' }));
         expect(mocks.listStockItems).not.toHaveBeenCalledWith({ outletId: '2' });
-        const options = within(await screen.findByLabelText('Item 1')).getAllByRole('option').map((option) => option.textContent);
-        expect(options.some((text) => /Gin/.test(text))).toBe(true);
+        await waitFor(() => {
+          const options = within(screen.getByLabelText('Item 1')).getAllByRole('option').map((option) => option.textContent);
+          expect(options.some((text) => /Gin/.test(text))).toBe(true);
+        });
       });
     });
 
