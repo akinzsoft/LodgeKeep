@@ -507,9 +507,11 @@ async function computeMenuItemSalesTotals({ db, dateFrom, dateTo, outletId }) {
 async function listSettledItemLines({ db, dateFrom, dateTo, outletId }) {
   const settlements = await listStandingSettlements({ db, dateFrom, dateTo, outletId });
   const settlementByOrderGroup = new Map();
+  const outletBySettlement = new Map();
   const orderIds = new Set();
   for (const row of settlements) {
     settlementByOrderGroup.set(`${row.pos_order_id}:${groupKey(row.split_group)}`, row.id);
+    outletBySettlement.set(String(row.id), row.outlet_id ?? null);
     orderIds.add(row.pos_order_id);
   }
   if (orderIds.size === 0) return [];
@@ -531,7 +533,7 @@ async function listSettledItemLines({ db, dateFrom, dateTo, outletId }) {
   for (const item of items) {
     const settlementId = settlementByOrderGroup.get(`${item.pos_order_id}:${groupKey(item.split_group)}`);
     if (settlementId === undefined) continue; // that check's own split group was voided
-    lines.push({ settlementId, menuItemId: item.menu_item_id, name: item.name ?? `#${item.menu_item_id}`, quantity: item.quantity });
+    lines.push({ settlementId, outletId: outletBySettlement.get(String(settlementId)) ?? null, menuItemId: item.menu_item_id, name: item.name ?? `#${item.menu_item_id}`, quantity: item.quantity });
   }
   return lines;
 }
@@ -563,8 +565,26 @@ async function computeDailyPosRevenueTotals({ db, dateFrom, dateTo, outletId }) 
   return new Map([...amountsByDate.entries()].map(([date, amounts]) => [date, sumMoney(amounts)]));
 }
 
+/**
+ * What each outlet earned over the range, before tax, service charge and tips: the SAME standing settlements and
+ * the same `subtotal` as `computeDailyPosRevenueTotals`, grouped by outlet instead of by day, so the outlets add up
+ * to the POS revenue figure to the kobo. A tab charged to a room counts for the outlet that sold it. An outlet id
+ * of `null` (a settlement whose outlet cannot be resolved) is its own group.
+ */
+async function computeOutletRevenueTotals({ db, dateFrom, dateTo }) {
+  const settlements = await listStandingSettlements({ db, dateFrom, dateTo });
+  const amountsByOutlet = new Map();
+  for (const row of settlements) {
+    const key = row.outlet_id === null || row.outlet_id === undefined ? '' : String(row.outlet_id);
+    if (!amountsByOutlet.has(key)) amountsByOutlet.set(key, []);
+    amountsByOutlet.get(key).push(row.subtotal);
+  }
+  return new Map([...amountsByOutlet.entries()].map(([outlet, amounts]) => [outlet, sumMoney(amounts)]));
+}
+
 module.exports = {
   computeSalesReport,
+  computeOutletRevenueTotals,
   computeMenuItemSalesTotals,
   listSettledItemLines,
   computeDailyPosRevenueTotals,

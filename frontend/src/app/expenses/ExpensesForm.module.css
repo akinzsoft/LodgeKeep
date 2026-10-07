@@ -166,3 +166,26 @@
     display: block;
   }
 }
+
+.statementHead {
+  padding: var(--space-2) 0;
+  font-weight: var(--text-label-weight);
+  text-align: left;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.statementHead.statementAmount {
+  text-align: right;
+}
+
+.deptNote {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--text-caption-size);
+}
+
+.deptFlag {
+  display: block;
+  color: var(--state-warning);
+  font-size: var(--text-caption-size);
+}

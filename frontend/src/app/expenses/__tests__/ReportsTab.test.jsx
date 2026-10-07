@@ -26,7 +26,9 @@ vi.mock('../../../shared/api/index.js', async () => {
 vi.mock('../../../shared/download.js', () => ({ triggerDownload: vi.fn() }));
 
 const EMPTY_EXPENSE_REPORT = { totalExpenses: '0.00', byCategory: [], expenses: [] };
+const dept = (overrides) => ({ key: 'rooms', kind: 'rooms', outletId: null, name: 'Rooms', revenue: '0.00', costOfSales: '0.00', grossProfit: '0.00', marginPct: null, itemsSoldWithoutCost: 0, costIncomplete: false, costExceedsRevenue: false, ...overrides });
 const EMPTY_STATEMENT = {
+  departments: { rows: [dept()], totals: { revenue: '0.00', costOfSales: '0.00', grossProfit: '0.00' }, quietOutlets: [], reconciles: true },
   dateFrom: '2027-01-01',
   dateTo: '2027-01-01',
   revenue: { roomRevenue: '0.00', posRevenue: '0.00', totalRevenue: '0.00', roomRevenueFullyAudited: false },
@@ -49,6 +51,12 @@ describe('ReportsTab', () => {
     mocks.getProfitAndLoss.mockResolvedValue({
       ...EMPTY_STATEMENT,
       revenue: { roomRevenue: '100.00', posRevenue: '20.00', totalRevenue: '120.00', roomRevenueFullyAudited: true },
+      departments: {
+        rows: [dept({ revenue: '100.00', grossProfit: '100.00' }), dept({ key: 'outlet:1', kind: 'outlet', name: 'Bar', revenue: '20.00', costOfSales: '8.00', grossProfit: '12.00', marginPct: 60 })],
+        totals: { revenue: '120.00', costOfSales: '8.00', grossProfit: '112.00' },
+        quietOutlets: ['Pool Bar'],
+        reconciles: true,
+      },
       costOfSales: '8.00',
       grossProfit: '112.00',
       operatingExpenses: { byCategory: [{ categoryId: '1', categoryName: 'Utilities', total: '30.00' }], total: '30.00' },
@@ -58,11 +66,15 @@ describe('ReportsTab', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
 
-    expect(await screen.findByText('Room revenue')).toBeInTheDocument();
-    expect(screen.getByText('POS revenue')).toBeInTheDocument();
-    expect(screen.getByText('Total revenue')).toBeInTheDocument();
-    expect(screen.getByText('Cost of sales')).toBeInTheDocument();
-    expect(screen.getByText('Gross profit')).toBeInTheDocument();
+    expect(await screen.findByText('Rooms')).toBeInTheDocument();
+    expect(screen.getByText('Bar')).toBeInTheDocument();
+    expect(screen.getByText('Total gross profit')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Revenue' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Cost of sales' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Gross profit' })).toBeInTheDocument();
+    expect(screen.getByText('Less: operating expenses')).toBeInTheDocument();
+    expect(screen.getByText('60% margin')).toBeInTheDocument();
+    expect(screen.getByText(/No activity in this period: Pool Bar/)).toBeInTheDocument();
     expect(screen.getByText('Utilities')).toBeInTheDocument();
     expect(screen.getByText('Total operating expenses')).toBeInTheDocument();
     expect(screen.getByText('Net profit')).toBeInTheDocument();
@@ -110,7 +122,7 @@ describe('ReportsTab', () => {
     mocks.getProfitAndLoss.mockResolvedValue({ ...EMPTY_STATEMENT, costOfSales: '600.00', costOfSalesFromCostPrice: '600.00' });
     render(<ReportsTab activeProperty={activeProperty} />);
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
-    expect(await screen.findByText(/of which from item cost price/i)).toBeInTheDocument();
+    expect(await screen.findByText(/of which cost of sales from item cost price/i)).toBeInTheDocument();
   });
 
   it('omits the cost-price sub-line when none of cost of sales came from cost price', async () => {
@@ -118,8 +130,8 @@ describe('ReportsTab', () => {
     mocks.getProfitAndLoss.mockResolvedValue({ ...EMPTY_STATEMENT, costOfSalesFromCostPrice: '0.00' });
     render(<ReportsTab activeProperty={activeProperty} />);
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
-    await screen.findByText(/Gross profit/i);
-    expect(screen.queryByText(/of which from item cost price/i)).not.toBeInTheDocument();
+    await screen.findByText('Total gross profit');
+    expect(screen.queryByText(/of which cost of sales from item cost price/i)).not.toBeInTheDocument();
   });
 
   it('shows the two other-income lines only when folio adjustments exist', async () => {
@@ -127,6 +139,7 @@ describe('ReportsTab', () => {
     mocks.getProfitAndLoss.mockResolvedValue({
       ...EMPTY_STATEMENT,
       revenue: { ...EMPTY_STATEMENT.revenue, otherIncome: { fees: '500.00', discounts: '-120.00', total: '380.00' }, totalRevenue: '380.00' },
+      departments: { ...EMPTY_STATEMENT.departments, rows: [dept(), dept({ key: 'other_income', kind: 'other_income', name: 'Other income (fees and discounts)', revenue: '380.00', grossProfit: '380.00' })] },
     });
     render(<ReportsTab activeProperty={activeProperty} />);
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
@@ -142,7 +155,7 @@ describe('ReportsTab', () => {
     });
     render(<ReportsTab activeProperty={activeProperty} />);
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
-    await screen.findByText(/Gross profit/i);
+    await screen.findByText('Total gross profit');
     expect(screen.queryByText('Fees and other charges')).not.toBeInTheDocument();
   });
 
@@ -174,7 +187,7 @@ describe('ReportsTab', () => {
     });
     render(<ReportsTab activeProperty={activeProperty} />);
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
-    await screen.findByText(/Gross profit/i);
+    await screen.findByText('Total gross profit');
     expect(screen.queryByText('of which audited (actual)')).not.toBeInTheDocument();
   });
 
@@ -202,7 +215,7 @@ describe('ReportsTab', () => {
     });
     render(<ReportsTab activeProperty={activeProperty} />);
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
-    await screen.findByText(/Gross profit/i);
+    await screen.findByText('Total gross profit');
     expect(screen.queryByText(/differs from the room charges actually posted/)).not.toBeInTheDocument();
   });
 
@@ -232,7 +245,7 @@ describe('ReportsTab', () => {
     render(<ReportsTab activeProperty={activeProperty} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
-    await screen.findByText('Room revenue');
+    await screen.findByText('Total gross profit');
     expect(screen.queryByText(/no cost \(no recipe/i)).not.toBeInTheDocument();
   });
 
@@ -304,5 +317,88 @@ describe('ReportsTab', () => {
 
     expect(printSpy).toHaveBeenCalledTimes(1);
     printSpy.mockRestore();
+  });
+
+  describe('departments', () => {
+    const DEPARTMENTS = {
+      rows: [
+        dept({ revenue: '1000.00', grossProfit: '1000.00' }),
+        dept({ key: 'outlet:1', kind: 'outlet', name: 'Bar', revenue: '300.00', costOfSales: '90.00', grossProfit: '210.00', marginPct: 70 }),
+        dept({ key: 'outlet:2', kind: 'outlet', name: 'Restaurant', revenue: '110.00', costOfSales: '40.00', grossProfit: '70.00', marginPct: 63.6, itemsSoldWithoutCost: 2, costIncomplete: true }),
+        dept({ key: 'outlet:3', kind: 'outlet', name: 'Pub', revenue: '10.00', costOfSales: '50.00', grossProfit: '-40.00', costExceedsRevenue: true }),
+        dept({ key: 'outlet:4', kind: 'supermarket', name: 'Mini-mart', revenue: '50.00', costOfSales: '10.00', grossProfit: '40.00', marginPct: 80 }),
+        dept({ key: 'unmapped', kind: 'unmapped', name: 'Other / unmapped', revenue: '40.00', costOfSales: '10.00', grossProfit: '30.00' }),
+      ],
+      totals: { revenue: '1510.00', costOfSales: '200.00', grossProfit: '1310.00' },
+      quietOutlets: [],
+      reconciles: true,
+    };
+    const statement = (overrides = {}) => ({
+      ...EMPTY_STATEMENT,
+      revenue: { roomRevenue: '1000.00', posRevenue: '510.00', totalRevenue: '1510.00', roomRevenueFullyAudited: true },
+      costOfSales: '200.00',
+      grossProfit: '1310.00',
+      netProfit: '1310.00',
+      departments: DEPARTMENTS,
+      ...overrides,
+    });
+
+    async function run(value) {
+      mocks.getExpenseReport.mockResolvedValue(EMPTY_EXPENSE_REPORT);
+      mocks.getProfitAndLoss.mockResolvedValue(value);
+      render(<ReportsTab activeProperty={activeProperty} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run reports' }));
+      await screen.findByText('Total gross profit');
+    }
+
+    it('lists every department by name with its own revenue, cost of sales and gross profit, and the mini-mart as its own line', async () => {
+      await run(statement());
+      ['Rooms', 'Bar', 'Restaurant', 'Pub', 'Mini-mart', 'Other / unmapped'].forEach((name) => expect(screen.getByText(name)).toBeInTheDocument());
+      const barRow = screen.getByText('Bar').closest('tr');
+      expect(barRow.textContent).toMatch(/300\.00/);
+      expect(barRow.textContent).toMatch(/90\.00/);
+      expect(barRow.textContent).toMatch(/210\.00/);
+    });
+
+    it('shows no cost of sales for Rooms (a dash) and says the room line is room nights only', async () => {
+      await run(statement());
+      const rooms = screen.getByText('Rooms').closest('tr');
+      expect(rooms.textContent).toMatch(/—/);
+      expect(screen.getByText(/Room nights only\. Food and drink charged to a room counts in the outlet that sold it/)).toBeInTheDocument();
+    });
+
+    it('flags only the department whose gross profit is overstated by unpriced items, and the one whose cost exceeds its revenue', async () => {
+      await run(statement());
+      const alerts = screen.getAllByRole('alert').map((node) => node.textContent);
+      expect(alerts.some((text) => /2 item\(s\) sold with no cost/.test(text))).toBe(true);
+      expect(alerts.some((text) => /Cost of sales is higher than revenue/.test(text))).toBe(true);
+      expect(screen.getByText('Restaurant').closest('tr').textContent).toMatch(/2 item\(s\) sold with no cost/);
+      expect(screen.getByText('Bar').closest('tr').textContent).not.toMatch(/sold with no cost/);
+      expect(screen.getByText('Pub').closest('tr').textContent).toMatch(/higher than revenue/);
+    });
+
+    it('explains the unmapped line instead of assigning it to a department', async () => {
+      await run(statement());
+      expect(screen.getByText(/cannot be matched to a current outlet; not assigned to any department/)).toBeInTheDocument();
+    });
+
+    it('states the basis difference from the Business Summary', async () => {
+      await run(statement());
+      expect(screen.getByText(/Basis: earned, before tax, service charge and tips/)).toBeInTheDocument();
+      expect(screen.getByText(/Business Summary report shows gross money\s+collected/)).toBeInTheDocument();
+    });
+
+    it('warns loudly if the department lines ever fail to add up to the statement totals', async () => {
+      await run(statement({ departments: { ...DEPARTMENTS, reconciles: false } }));
+      expect(screen.getByText(/do not add up to the statement totals/)).toBeInTheDocument();
+    });
+
+    it('keeps the overall totals row identical to the statement, not the sum computed on screen', async () => {
+      await run(statement());
+      const totalRow = screen.getByText('Total gross profit').closest('tr');
+      expect(totalRow.textContent).toMatch(/1,510\.00/);
+      expect(totalRow.textContent).toMatch(/200\.00/);
+      expect(totalRow.textContent).toMatch(/1,310\.00/);
+    });
   });
 });

@@ -36,9 +36,10 @@ async function computeCostOfSales({ context, dateFrom, dateTo, outletId }) {
     .whereIn('type', ['sold', 'sale_reversal'])
     .whereBetween('business_date', [dateFrom, dateTo]);
   if (outletId) query = query.where({ outlet_id: outletId });
-  const rows = await query.select('stock_item_id', 'business_date', 'total_cost');
+  const rows = await query.select('stock_item_id', 'outlet_id', 'business_date', 'total_cost');
 
   const byItem = new Map();
+  const byOutlet = new Map();
   const byDay = new Map();
   for (const row of rows) {
     const cost = row.total_cost ?? '0.00';
@@ -46,6 +47,8 @@ async function computeCostOfSales({ context, dateFrom, dateTo, outletId }) {
     byItem.set(itemKey, sumMoney([byItem.get(itemKey) ?? '0.00', cost]));
     const dayKey = String(row.business_date);
     byDay.set(dayKey, sumMoney([byDay.get(dayKey) ?? '0.00', cost]));
+    const outletKey = String(row.outlet_id);
+    byOutlet.set(outletKey, sumMoney([byOutlet.get(outletKey) ?? '0.00', cost]));
   }
 
   // `stockItemId` stays a STRING throughout, matching ARCHITECTURE.md §10
@@ -62,7 +65,10 @@ async function computeCostOfSales({ context, dateFrom, dateTo, outletId }) {
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   const totalCost = negateMoney(sumMoney(rows.map((row) => row.total_cost ?? '0.00')));
 
-  return { dateFrom, dateTo, outletId: outletId ?? null, totalCost, byItem: byItemArray, byDay: byDayArray };
+  // The cost each outlet's own sales consumed (a `sold` movement carries the SELLING outlet); sums to `totalCost`.
+  const byOutletArray = [...byOutlet.entries()].map(([outlet, total]) => ({ outletId: outlet, cost: negateMoney(total) }));
+
+  return { dateFrom, dateTo, outletId: outletId ?? null, totalCost, byItem: byItemArray, byDay: byDayArray, byOutlet: byOutletArray };
 }
 
 /**
@@ -414,7 +420,7 @@ async function computeStockOverview({ context, dateFrom, dateTo, outletId }) {
 async function computeCostPriceFallback({ context, dateFrom, dateTo, outletId }) {
   const db = scopedDb().for(context);
   const lines = await listSettledItemLines({ db, dateFrom, dateTo, outletId });
-  if (lines.length === 0) return { totalCost: '0.00', byItem: [], itemsWithoutCost: 0 };
+  if (lines.length === 0) return { totalCost: '0.00', byItem: [], itemsWithoutCost: 0, byOutlet: [] };
 
   const settlementIds = [...new Set(lines.map((line) => line.settlementId))];
   const menuItemIds = [...new Set(lines.map((line) => line.menuItemId))];
@@ -446,6 +452,13 @@ async function computeCostPriceFallback({ context, dateFrom, dateTo, outletId })
 
   const byItem = new Map();
   const withoutCost = new Set();
+  // Per outlet (a settlement belongs to exactly one): the fallback cost and the items left without any cost.
+  const outletStats = new Map();
+  const statsFor = (outlet) => {
+    const key = outlet === null || outlet === undefined ? '' : String(outlet);
+    if (!outletStats.has(key)) outletStats.set(key, { outletId: key, costs: [], withoutCost: new Set() });
+    return outletStats.get(key);
+  };
   for (const [settlementKey, settlementLines] of linesBySettlement) {
     const moved = movedBySettlement.get(settlementKey) ?? new Set();
     const explained = new Set();
@@ -458,20 +471,24 @@ async function computeCostPriceFallback({ context, dateFrom, dateTo, outletId })
       if (recipe && [...recipe].some((id) => moved.has(id))) continue; // the stock ledger already carries this sale's cost
       if (!recipe && hasUnexplainedMovement) {
         withoutCost.add(itemKey); // possibly a since-removed recipe: do not guess
+        statsFor(line.outletId).withoutCost.add(itemKey);
         continue;
       }
       const costPrice = costPriceByMenuItem.get(itemKey);
       if (costPrice == null) {
         withoutCost.add(itemKey);
+        statsFor(line.outletId).withoutCost.add(itemKey);
         continue;
       }
+      statsFor(line.outletId).costs.push(multiplyMoneyByCount(costPrice, line.quantity));
       if (!byItem.has(itemKey)) byItem.set(itemKey, { menuItemId: line.menuItemId, name: line.name, unitCost: costPrice, quantity: 0 });
       byItem.get(itemKey).quantity += line.quantity;
     }
   }
 
   const rows = [...byItem.values()].map((row) => ({ ...row, cost: multiplyMoneyByCount(row.unitCost, row.quantity) }));
-  return { totalCost: sumMoney(rows.map((row) => row.cost)), byItem: rows, itemsWithoutCost: withoutCost.size };
+  const byOutlet = [...outletStats.values()].map((stats) => ({ outletId: stats.outletId, cost: sumMoney(stats.costs), itemsWithoutCost: stats.withoutCost.size }));
+  return { totalCost: sumMoney(rows.map((row) => row.cost)), byItem: rows, itemsWithoutCost: withoutCost.size, byOutlet };
 }
 
 module.exports = { computeCostPriceFallback, computeCostOfSales, computeStockVariance, computeCostOfSalesMargin, computeStockOverview };
