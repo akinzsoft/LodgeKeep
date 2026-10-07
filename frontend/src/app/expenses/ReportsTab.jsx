@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { DataTable, Button, Card, PrintLetterhead } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { expensesApi, ApiError } from '../../shared/api/index.js';
@@ -148,95 +148,126 @@ export function ReportsTab({ activeProperty }) {
           </div>
 
           <table className={formStyles.statementTable}>
-            <tbody>
+            <thead>
               <tr className={formStyles.statementSectionHeading}>
-                <td colSpan={2}>Revenue</td>
+                <th scope="col" className={formStyles.statementHead}>
+                  Department
+                </th>
+                <th scope="col" className={`${formStyles.statementHead} ${formStyles.statementAmount}`}>
+                  Revenue
+                </th>
+                <th scope="col" className={`${formStyles.statementHead} ${formStyles.statementAmount}`}>
+                  Cost of sales
+                </th>
+                <th scope="col" className={`${formStyles.statementHead} ${formStyles.statementAmount}`}>
+                  Gross profit
+                </th>
               </tr>
-              <tr className={formStyles.statementRow}>
-                <td className={formStyles.statementIndent}>Room revenue</td>
-                <td className={formStyles.statementAmount}>
-                  <Money amount={statement.revenue.roomRevenue} currencyCode={currency} />
-                </td>
-              </tr>
-              {(statement.revenue.roomRevenueEstimated ?? '0.00') !== '0.00' && (
-                <>
+            </thead>
+            <tbody>
+              {statement.departments.rows.map((department) => (
+                <Fragment key={department.key}>
                   <tr className={formStyles.statementRow}>
-                    <td className={`${formStyles.statementLabel} ${formStyles.statementIndent}`}>of which audited (actual)</td>
+                    <td className={formStyles.statementLabel}>
+                      {department.name}
+                      {department.kind === 'rooms' && <span className={formStyles.deptNote}>Room nights only. Food and drink charged to a room counts in the outlet that sold it.</span>}
+                      {department.kind === 'unmapped' && <span className={formStyles.deptNote}>Sales that cannot be matched to a current outlet; not assigned to any department.</span>}
+                      {department.costIncomplete && (
+                        <span className={formStyles.deptFlag} role="alert">
+                          {department.itemsSoldWithoutCost} item(s) sold with no cost, so this gross profit is overstated.
+                        </span>
+                      )}
+                      {department.costExceedsRevenue && (
+                        <span className={formStyles.deptFlag} role="alert">
+                          Cost of sales is higher than revenue. Check the stock costs and cost prices of what this department sold.
+                        </span>
+                      )}
+                    </td>
                     <td className={formStyles.statementAmount}>
-                      <Money amount={statement.revenue.roomRevenueAudited} currencyCode={currency} />
+                      <Money amount={department.revenue} currencyCode={currency} />
+                    </td>
+                    <td className={formStyles.statementAmount}>{department.kind === 'rooms' || department.kind === 'other_income' ? '—' : <Money amount={department.costOfSales} currencyCode={currency} />}</td>
+                    <td className={formStyles.statementAmount}>
+                      <Money amount={department.grossProfit} currencyCode={currency} />
+                      {department.marginPct !== null && department.kind !== 'rooms' && department.kind !== 'other_income' && <span className={formStyles.deptNote}>{department.marginPct}% margin</span>}
                     </td>
                   </tr>
-                  <tr className={formStyles.statementRow}>
-                    <td className={`${formStyles.statementLabel} ${formStyles.statementIndent}`}>of which open days (estimate from booked rates)</td>
-                    <td className={formStyles.statementAmount}>
-                      <Money amount={statement.revenue.roomRevenueEstimated} currencyCode={currency} />
-                    </td>
-                  </tr>
-                </>
-              )}
-              <tr className={formStyles.statementRow}>
-                <td className={formStyles.statementIndent}>POS revenue</td>
-                <td className={formStyles.statementAmount}>
-                  <Money amount={statement.revenue.posRevenue} currencyCode={currency} />
-                </td>
-              </tr>
-              {(statement.revenue.otherIncome?.fees ?? '0.00') !== '0.00' || (statement.revenue.otherIncome?.discounts ?? '0.00') !== '0.00' ? (
-                <>
-                  <tr className={formStyles.statementRow}>
-                    <td className={formStyles.statementIndent}>Fees and other charges</td>
-                    <td className={formStyles.statementAmount}>
-                      <Money amount={statement.revenue.otherIncome.fees} currencyCode={currency} />
-                    </td>
-                  </tr>
-                  <tr className={formStyles.statementRow}>
-                    <td className={formStyles.statementIndent}>Discounts and corrections (net)</td>
-                    <td className={formStyles.statementAmount}>
-                      <Money amount={statement.revenue.otherIncome.discounts} currencyCode={currency} />
-                    </td>
-                  </tr>
-                </>
-              ) : null}
+                  {department.kind === 'rooms' && (statement.revenue.roomRevenueEstimated ?? '0.00') !== '0.00' && (
+                    <>
+                      <tr className={formStyles.statementRow}>
+                        <td className={`${formStyles.statementLabel} ${formStyles.statementIndent}`}>of which audited (actual)</td>
+                        <td className={formStyles.statementAmount}>
+                          <Money amount={statement.revenue.roomRevenueAudited} currencyCode={currency} />
+                        </td>
+                        <td colSpan={2} />
+                      </tr>
+                      <tr className={formStyles.statementRow}>
+                        <td className={`${formStyles.statementLabel} ${formStyles.statementIndent}`}>of which open days (estimate from booked rates)</td>
+                        <td className={formStyles.statementAmount}>
+                          <Money amount={statement.revenue.roomRevenueEstimated} currencyCode={currency} />
+                        </td>
+                        <td colSpan={2} />
+                      </tr>
+                    </>
+                  )}
+                  {department.kind === 'other_income' && (statement.revenue.otherIncome?.fees ?? '0.00') !== '0.00' && (
+                    <tr className={formStyles.statementRow}>
+                      <td className={`${formStyles.statementLabel} ${formStyles.statementIndent}`}>Fees and other charges</td>
+                      <td className={formStyles.statementAmount}>
+                        <Money amount={statement.revenue.otherIncome.fees} currencyCode={currency} />
+                      </td>
+                      <td colSpan={2} />
+                    </tr>
+                  )}
+                  {department.kind === 'other_income' && (statement.revenue.otherIncome?.discounts ?? '0.00') !== '0.00' && (
+                    <tr className={formStyles.statementRow}>
+                      <td className={`${formStyles.statementLabel} ${formStyles.statementIndent}`}>Discounts and corrections (net)</td>
+                      <td className={formStyles.statementAmount}>
+                        <Money amount={statement.revenue.otherIncome.discounts} currencyCode={currency} />
+                      </td>
+                      <td colSpan={2} />
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
               <tr className={formStyles.statementSubtotal}>
-                <td>Total revenue</td>
+                <td>Total gross profit</td>
                 <td className={formStyles.statementAmount}>
                   <Money amount={statement.revenue.totalRevenue} currencyCode={currency} />
                 </td>
-              </tr>
-
-              <tr className={formStyles.statementRow}>
-                <td className={formStyles.statementLabel}>Cost of sales</td>
                 <td className={formStyles.statementAmount}>
                   <Money amount={statement.costOfSales} currencyCode={currency} />
                 </td>
-              </tr>
-              {statement.costOfSalesFromCostPrice !== undefined && statement.costOfSalesFromCostPrice !== '0.00' && (
-                <tr className={formStyles.statementRow}>
-                  <td className={`${formStyles.statementLabel} ${formStyles.statementIndent}`}>of which from item cost price (estimate)</td>
-                  <td className={formStyles.statementAmount}>
-                    <Money amount={statement.costOfSalesFromCostPrice} currencyCode={currency} />
-                  </td>
-                </tr>
-              )}
-              <tr className={formStyles.statementTotal}>
-                <td>Gross profit</td>
                 <td className={formStyles.statementAmount}>
                   <Money amount={statement.grossProfit} currencyCode={currency} />
                 </td>
               </tr>
+              {statement.costOfSalesFromCostPrice !== undefined && statement.costOfSalesFromCostPrice !== '0.00' && (
+                <tr className={formStyles.statementRow}>
+                  <td className={`${formStyles.statementLabel} ${formStyles.statementIndent}`}>of which cost of sales from item cost price (estimate)</td>
+                  <td />
+                  <td className={formStyles.statementAmount}>
+                    <Money amount={statement.costOfSalesFromCostPrice} currencyCode={currency} />
+                  </td>
+                  <td />
+                </tr>
+              )}
 
               <tr className={formStyles.statementSectionHeading}>
-                <td colSpan={2}>Operating expenses</td>
+                <td colSpan={4}>Less: operating expenses</td>
               </tr>
               {statement.operatingExpenses.byCategory.length === 0 ? (
                 <tr className={formStyles.statementRow}>
-                  <td className={formStyles.statementIndent} colSpan={2}>
+                  <td className={formStyles.statementIndent} colSpan={4}>
                     None recorded in this range.
                   </td>
                 </tr>
               ) : (
                 statement.operatingExpenses.byCategory.map((category) => (
                   <tr className={formStyles.statementRow} key={category.categoryId}>
-                    <td className={formStyles.statementIndent}>{category.categoryName}</td>
+                    <td className={formStyles.statementIndent} colSpan={3}>
+                      {category.categoryName}
+                    </td>
                     <td className={formStyles.statementAmount}>
                       <Money amount={category.total} currencyCode={currency} />
                     </td>
@@ -244,20 +275,27 @@ export function ReportsTab({ activeProperty }) {
                 ))
               )}
               <tr className={formStyles.statementSubtotal}>
-                <td>Total operating expenses</td>
+                <td colSpan={3}>Total operating expenses</td>
                 <td className={formStyles.statementAmount}>
                   <Money amount={statement.operatingExpenses.total} currencyCode={currency} />
                 </td>
               </tr>
 
               <tr className={formStyles.statementTotal}>
-                <td>Net profit</td>
+                <td colSpan={3}>Net profit</td>
                 <td className={formStyles.statementAmount}>
                   <Money amount={statement.netProfit} currencyCode={currency} />
                 </td>
               </tr>
             </tbody>
           </table>
+
+          {statement.departments.quietOutlets?.length > 0 && <p className={formStyles.hint}>No activity in this period: {statement.departments.quietOutlets.join(', ')}.</p>}
+          {!statement.departments.reconciles && (
+            <p className={formStyles.costWarningBanner} role="alert">
+              The department lines do not add up to the statement totals. Do not rely on the department split; the totals above are correct.
+            </p>
+          )}
 
           {statement.revenue.estimateVariance?.days?.length > 0 && (
             <p className={formStyles.costWarningBanner} role="alert">
@@ -289,6 +327,11 @@ export function ReportsTab({ activeProperty }) {
               : ''}{' '}
             for this range. Cost of sales, POS revenue, and operating expenses are always freshly computed,
             regardless.
+          </p>
+          <p className={formStyles.hint}>
+            Basis: earned, before tax, service charge and tips (room charges billed, sales made). The Business Summary report shows gross money
+            collected instead, so the two will differ by design: it counts tax, service and tips, counts rooms when paid rather than when charged, and
+            leaves out food and drink charged to a room until the folio is paid.
           </p>
 
           <div className={`${formStyles.actionsRow} ${formStyles.noPrint}`.trim()}>

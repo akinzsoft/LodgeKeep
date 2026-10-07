@@ -334,6 +334,15 @@ function flattenProfitAndLossForCsv(statement) {
   }
   rows.push({ line: 'Total operating expenses', amount: statement.operatingExpenses.total });
   rows.push({ line: 'Net profit', amount: statement.netProfit });
+  // The same totals regrouped by department (revenue, cost of sales, gross profit each), after the statement above.
+  rows.push({ line: 'Gross profit by department', amount: '' });
+  for (const department of statement.departments?.rows ?? []) {
+    rows.push({ line: `${department.name}: revenue`, amount: department.revenue });
+    rows.push({ line: `${department.name}: cost of sales`, amount: department.costOfSales });
+    rows.push({ line: `${department.name}: gross profit`, amount: department.grossProfit });
+    if (department.costIncomplete) rows.push({ line: `Note: ${department.name} sold ${department.itemsSoldWithoutCost} item(s) with no cost, so its gross profit is overstated`, amount: '' });
+    if (department.costExceedsRevenue) rows.push({ line: `Note: ${department.name} cost of sales is higher than its revenue; check its stock costs and cost prices`, amount: '' });
+  }
   return rows;
 }
 

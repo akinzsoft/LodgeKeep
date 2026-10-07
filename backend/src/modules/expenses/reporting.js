@@ -76,7 +76,8 @@
 const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
 const { computeRevenue } = require('../reporting/service');
-const { computeDailyPosRevenueTotals } = require('../pos/sales-report');
+const { computeDailyPosRevenueTotals, computeOutletRevenueTotals } = require('../pos/sales-report');
+const { isPointOfSaleOutlet, isSupermarketOutlet } = require('../../shared/outlet-types');
 const { listOtherFolioIncome, sumPostedRoomChargesByDate } = require('../cashiering/service');
 const { computeCostOfSales, computeCostPriceFallback } = require('../stock/reporting');
 
@@ -141,6 +142,121 @@ async function computeExpenseReport({ context, dateFrom, dateTo, categoryId }) {
   };
 }
 
+/** Gross margin as a display-only percentage with one decimal, or null when there is no revenue to divide by. */
+function marginPct(grossProfit, revenue) {
+  if (compareMoney(revenue, '0.00') <= 0) return null;
+  return Math.round((Number(grossProfit) / Number(revenue)) * 1000) / 10;
+}
+
+/**
+ * The statement regrouped by department (revenue centre): Rooms, then each selling outlet by name, then each
+ * supermarket outlet, then (only when non-zero) Other income and Other / unmapped. This only REGROUPS the numbers
+ * the statement already has, it never recomputes them: revenue per outlet is the same standing-settlement subtotal
+ * summed by outlet, cost per outlet is the same stock-ledger cost and `cost_price` fallback grouped by the selling
+ * outlet. A tab charged to a room counts for the outlet that sold it ("Rooms" is room-nights only). Anything that
+ * cannot be mapped to a current point-of-sale outlet (a missing outlet, a store, no outlet) is NOT forced into a
+ * department: it sits on its own "Other / unmapped" line, so `totals` always equals the statement's totals
+ * (`reconciles` says so).
+ *
+ * Per department: `itemsSoldWithoutCost` / `costIncomplete` (its gross profit is overstated by that department's
+ * unpriced items) and `costExceedsRevenue` (a cost price or stock cost worth checking). Rooms carry no cost of sales.
+ */
+function buildDepartments({ outlets, roomRevenue, outletRevenue, ledger, fallback, otherIncomeTotal, totals }) {
+  const outletById = new Map(outlets.map((outlet) => [String(outlet.id), outlet]));
+  const mappable = (key) => {
+    const outlet = outletById.get(key);
+    return outlet && isPointOfSaleOutlet(outlet) ? outlet : null;
+  };
+
+  // key -> { revenue, ledger, fallback, withoutCost }; key '' (or any unmappable id) collects into 'unmapped'.
+  const buckets = new Map();
+  const bucketFor = (rawKey) => {
+    const key = mappable(String(rawKey ?? '')) ? String(rawKey) : 'unmapped';
+    if (!buckets.has(key)) buckets.set(key, { revenue: [], ledger: [], fallback: [], withoutCost: 0 });
+    return buckets.get(key);
+  };
+  for (const [outletKey, amount] of outletRevenue) bucketFor(outletKey).revenue.push(amount);
+  for (const row of ledger.byOutlet) bucketFor(row.outletId).ledger.push(row.cost);
+  for (const row of fallback.byOutlet) {
+    const bucket = bucketFor(row.outletId);
+    bucket.fallback.push(row.cost);
+    bucket.withoutCost += row.itemsWithoutCost;
+  }
+
+  const rows = [];
+  const describe = (row) => {
+    const grossProfit = sumMoney([row.revenue, negateMoney(row.costOfSales)]);
+    return {
+      ...row,
+      grossProfit,
+      marginPct: marginPct(grossProfit, row.revenue),
+      costIncomplete: (row.itemsSoldWithoutCost ?? 0) > 0,
+      costExceedsRevenue: compareMoney(row.costOfSales, '0.00') > 0 && compareMoney(row.costOfSales, row.revenue) > 0,
+    };
+  };
+
+  rows.push(describe({ key: 'rooms', kind: 'rooms', outletId: null, name: 'Rooms', revenue: roomRevenue, costOfSales: '0.00', costOfSalesFromCostPrice: '0.00', itemsSoldWithoutCost: 0 }));
+
+  const outletRows = [];
+  for (const [key, bucket] of buckets) {
+    if (key === 'unmapped') continue;
+    const outlet = outletById.get(key);
+    outletRows.push(
+      describe({
+        key: `outlet:${key}`,
+        kind: isSupermarketOutlet(outlet) ? 'supermarket' : 'outlet',
+        outletId: key,
+        name: outlet.name,
+        outletStatus: outlet.status,
+        revenue: sumMoney(bucket.revenue),
+        costOfSales: sumMoney([...bucket.ledger, ...bucket.fallback]),
+        costOfSalesFromCostPrice: sumMoney(bucket.fallback),
+        itemsSoldWithoutCost: bucket.withoutCost,
+      })
+    );
+  }
+  const kindOrder = { outlet: 0, supermarket: 1 };
+  outletRows.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind] || a.name.localeCompare(b.name));
+  rows.push(...outletRows);
+
+  if (compareMoney(otherIncomeTotal, '0.00') !== 0) {
+    rows.push(describe({ key: 'other_income', kind: 'other_income', outletId: null, name: 'Other income (fees and discounts)', revenue: otherIncomeTotal, costOfSales: '0.00', costOfSalesFromCostPrice: '0.00', itemsSoldWithoutCost: 0 }));
+  }
+  const unmapped = buckets.get('unmapped');
+  if (unmapped) {
+    rows.push(
+      describe({
+        key: 'unmapped',
+        kind: 'unmapped',
+        outletId: null,
+        name: 'Other / unmapped',
+        revenue: sumMoney(unmapped.revenue),
+        costOfSales: sumMoney([...unmapped.ledger, ...unmapped.fallback]),
+        costOfSalesFromCostPrice: sumMoney(unmapped.fallback),
+        itemsSoldWithoutCost: unmapped.withoutCost,
+      })
+    );
+  }
+
+  const departmentTotals = {
+    revenue: sumMoney(rows.map((row) => row.revenue)),
+    costOfSales: sumMoney(rows.map((row) => row.costOfSales)),
+    grossProfit: sumMoney(rows.map((row) => row.grossProfit)),
+  };
+  const shown = new Set(outletRows.map((row) => row.outletId));
+  const quietOutlets = outlets.filter((outlet) => outlet.status === 'active' && isPointOfSaleOutlet(outlet) && !shown.has(String(outlet.id))).map((outlet) => outlet.name).sort((a, b) => a.localeCompare(b));
+
+  return {
+    rows,
+    totals: departmentTotals,
+    quietOutlets,
+    reconciles:
+      compareMoney(departmentTotals.revenue, totals.revenue) === 0 &&
+      compareMoney(departmentTotals.costOfSales, totals.costOfSales) === 0 &&
+      compareMoney(departmentTotals.grossProfit, totals.grossProfit) === 0,
+  };
+}
+
 /**
  * A proper P&L statement for ONE consolidated period — Revenue, Cost of
  * Sales, Gross Profit, Operating Expenses (itemized by category, largest
@@ -152,13 +268,15 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
   const db = scopedDb().for(context);
   const property = await db.table('properties').first('base_currency');
 
-  const [revenueDays, posRevenueByDate, ledgerCostOfSales, expenseRows, costPriceFallback, otherIncome] = await Promise.all([
+  const [revenueDays, posRevenueByDate, ledgerCostOfSales, expenseRows, costPriceFallback, otherIncome, outletRevenue, outlets] = await Promise.all([
     computeRevenue({ context, dateFrom, dateTo }),
     computeDailyPosRevenueTotals({ db, dateFrom, dateTo }),
     computeCostOfSales({ context, dateFrom, dateTo }),
     listExpenseRowsWithCategory({ db, dateFrom, dateTo }),
     computeCostPriceFallback({ context, dateFrom, dateTo }),
     listOtherFolioIncome({ db, dateFrom, dateTo, baseCurrency: property?.base_currency }),
+    computeOutletRevenueTotals({ db, dateFrom, dateTo }),
+    db.table('pos_outlets').select('id', 'name', 'type', 'status'),
   ]);
 
   const roomRevenue = sumMoney(revenueDays.map((day) => day.roomRevenue));
@@ -203,6 +321,16 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
 
   const netProfit = sumMoney([grossProfit, negateMoney(totalOperatingExpenses)]);
 
+  const departments = buildDepartments({
+    outlets,
+    roomRevenue,
+    outletRevenue,
+    ledger: ledgerCostOfSales,
+    fallback: costPriceFallback,
+    otherIncomeTotal: otherIncome.total,
+    totals: { revenue: totalRevenue, costOfSales: costOfSalesTotal, grossProfit },
+  });
+
   return {
     dateFrom,
     dateTo,
@@ -225,7 +353,8 @@ async function computeProfitAndLoss({ context, dateFrom, dateTo }) {
     grossProfit,
     operatingExpenses: { byCategory: operatingExpensesByCategory, total: totalOperatingExpenses },
     netProfit,
+    departments,
   };
 }
 
-module.exports = { computeExpenseReport, computeProfitAndLoss };
+module.exports = { computeExpenseReport, computeProfitAndLoss, buildDepartments };
