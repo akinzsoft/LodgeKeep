@@ -4,6 +4,7 @@ import { Money } from '../../shared/format/money.jsx';
 import { posApi, stockApi, ApiError } from '../../shared/api/index.js';
 import { formatQuantity } from './stockFormat.js';
 import { UNCATEGORIZED_LABEL } from './stockItemOptions.jsx';
+import { CostCheckCard } from './CostCheckCard.jsx';
 import formStyles from './POSForm.module.css';
 
 const MOVEMENT_LIMIT = 200;
@@ -133,6 +134,7 @@ export function StockReportsTab({ activeProperty }) {
 
   return (
     <div className={formStyles.form}>
+      <CostCheckCard activeProperty={activeProperty} />
       {error && (
         <p role="alert" className={formStyles.errorBanner}>
           {error}

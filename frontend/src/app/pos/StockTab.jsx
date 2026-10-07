@@ -72,7 +72,7 @@ export function StockTab({ activeProperty, isOffline = false, permissions, inten
       </div>
 
       <div className={styles.panel}>
-        {tab === 'items' && <StockItemsTab activeProperty={activeProperty} isOffline={isOffline} />}
+        {tab === 'items' && <StockItemsTab activeProperty={activeProperty} isOffline={isOffline} canEditCost={permissions ? permissions.has('pos.stock_cost_edit') : false} />}
         {tab === 'recipes' && <StockRecipesTab isOffline={isOffline} />}
         {tab === 'goods_received' && <StockGoodsReceivedTab activeProperty={activeProperty} isOffline={isOffline} />}
         {tab === 'takes' && <StockTakesTab isOffline={isOffline} />}

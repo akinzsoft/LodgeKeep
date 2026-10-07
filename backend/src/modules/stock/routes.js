@@ -79,6 +79,7 @@ function stockRouter() {
 
   router.get('/pos/stock/reports/cost-of-sales', requirePermission('pos.stock_manage'), controller.costOfSales);
   router.get('/pos/stock/reports/variance', requirePermission('pos.stock_manage'), controller.stockVariance);
+  router.get('/pos/stock/reports/cost-check', requirePermission('pos.stock_manage'), controller.costCheck);
   router.get('/pos/stock/reports/margin', requirePermission('pos.stock_manage'), controller.costOfSalesMargin);
   router.get('/pos/stock/reports/overview', requirePermission('pos.stock_manage'), controller.stockOverview);
 

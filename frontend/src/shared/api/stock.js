@@ -71,7 +71,7 @@ export function createStockItem({ outletId, name, unit, category, purchaseCost, 
 }
 
 /** With `outletId`, a `reorderLevel` change is that outlet's own; without, it is the item's default. */
-export function updateStockItem(id, { name, unit, category, supplier, reorderLevel, outletId } = {}) {
+export function updateStockItem(id, { name, unit, category, supplier, reorderLevel, outletId, purchaseCost, reason } = {}) {
   const body = {};
   if (outletId !== undefined && outletId !== null) body.outlet_id = outletId;
   if (name !== undefined) body.name = name;
@@ -79,6 +79,9 @@ export function updateStockItem(id, { name, unit, category, supplier, reorderLev
   if (category !== undefined) body.category = category;
   if (supplier !== undefined) body.supplier = supplier;
   if (reorderLevel !== undefined) body.reorder_level = reorderLevel;
+  // A cost correction needs pos.stock_cost_edit and a reason.
+  if (purchaseCost !== undefined) body.purchase_cost = purchaseCost;
+  if (reason !== undefined) body.reason = reason;
   return request(`/pos/stock/items/${id}`, { method: 'PATCH', body });
 }
 
@@ -313,4 +316,9 @@ export function getCostOfSalesMargin({ dateFrom, dateTo, outletId }) {
   const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
   if (outletId) params.set('outlet_id', outletId);
   return request(`/pos/stock/reports/margin?${params}`);
+}
+
+/** Menu items whose recipe cost is at or above their selling price (likely a wrong stock cost). */
+export function getCostCheck() {
+  return request('/pos/stock/reports/cost-check');
 }

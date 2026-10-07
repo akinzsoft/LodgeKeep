@@ -491,4 +491,49 @@ async function computeCostPriceFallback({ context, dateFrom, dateTo, outletId })
   return { totalCost: sumMoney(rows.map((row) => row.cost)), byItem: rows, itemsWithoutCost: withoutCost.size, byOutlet };
 }
 
-module.exports = { computeCostPriceFallback, computeCostOfSales, computeStockVariance, computeCostOfSalesMargin, computeStockOverview };
+/**
+ * Cost check: active Register menu items whose recipe cost (sum of component
+ * quantity x the stock item's CURRENT `purchase_cost`) is at or above their selling
+ * price — almost always a wrong stock cost (a mistyped delivery cost), since an item
+ * sold at a loss is rare. Only recipe-costed items; ordered worst first. Not date
+ * driven: it reads today's recipe, cost and price.
+ */
+async function computeCostCheck({ context }) {
+  const db = scopedDb().for(context);
+  const menuItems = await db.table('pos_menu_items').where({ status: 'active' }).select('id', 'name', 'category', 'price');
+  if (menuItems.length === 0) return { rows: [] };
+  const components = await db.table('pos_menu_item_components').whereIn('menu_item_id', menuItems.map((row) => row.id)).select('menu_item_id', 'stock_item_id', 'quantity');
+  const stockItems = await db.table('stock_items').whereIn('id', [...new Set(components.map((row) => row.stock_item_id))]).select('id', 'name', 'unit', 'purchase_cost');
+  const stockById = new Map(stockItems.map((row) => [String(row.id), row]));
+  const componentsByItem = new Map();
+  for (const component of components) {
+    const key = String(component.menu_item_id);
+    if (!componentsByItem.has(key)) componentsByItem.set(key, []);
+    componentsByItem.get(key).push(component);
+  }
+  const rows = [];
+  for (const item of menuItems) {
+    const recipe = componentsByItem.get(String(item.id));
+    if (!recipe) continue;
+    const lines = recipe.map((component) => {
+      const stock = stockById.get(String(component.stock_item_id));
+      const cost = extendedCost(stock?.purchase_cost ?? '0.00', component.quantity);
+      return { stockItemId: component.stock_item_id, name: stock?.name ?? null, unit: stock?.unit ?? null, quantity: component.quantity, purchaseCost: stock?.purchase_cost ?? '0.00', cost };
+    });
+    const unitCost = sumMoney(lines.map((line) => line.cost));
+    if (Number(unitCost) <= 0 || Number(unitCost) < Number(item.price)) continue;
+    rows.push({
+      menuItemId: item.id,
+      name: item.name,
+      category: item.category,
+      price: item.price,
+      unitCost,
+      ratio: Number(item.price) > 0 ? Number(unitCost) / Number(item.price) : null,
+      components: lines,
+    });
+  }
+  rows.sort((a, b) => (b.ratio ?? Infinity) - (a.ratio ?? Infinity));
+  return { rows };
+}
+
+module.exports = { computeCostCheck, computeCostPriceFallback, computeCostOfSales, computeStockVariance, computeCostOfSalesMargin, computeStockOverview };

@@ -18,6 +18,7 @@
 const { ok, notFound } = require('../../shared/response');
 const { ValidationError } = require('../../shared/errors');
 const { runIdempotentMutation } = require('../../shared/mutation');
+const { assertPermission } = require('../../auth');
 const service = require('./service');
 const reporting = require('./reporting');
 
@@ -165,8 +166,24 @@ async function updateStockItem(req, res, next) {
     const outletId = req.body?.outlet_id || req.query.outlet_id || undefined;
     const before = await service.getStockItem({ context: req.context, id: req.params.id, outletId });
     if (!before) return notFound(res);
-    const item = await service.updateStockItem({ context: req.context, id: req.params.id, changes: pickStockItemChanges(req.body), outletId });
-    await req.audit({ entityType: 'stock_items', entityId: req.params.id, action: 'update', beforeState: before, afterState: item });
+    const changes = pickStockItemChanges(req.body);
+    // A cost correction is its own, narrower permission and always carries a reason
+    // (the audit row). Past `sold` movements keep the cost they were recorded with.
+    let costReason;
+    if (req.body?.purchase_cost !== undefined) {
+      await assertPermission(req.context, 'pos.stock_cost_edit');
+      const raw = String(req.body.purchase_cost ?? '').trim();
+      if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
+        throw new ValidationError('INVALID_AMOUNT', '"purchase_cost" must be a non-negative amount with at most 2 decimal places.', [{ field: 'purchase_cost', issue: 'invalid' }]);
+      }
+      if (Number(raw) !== Number(before.purchase_cost)) {
+        costReason = String(req.body.reason ?? '').trim();
+        if (!costReason) throw new ValidationError('MISSING_FIELD', '"reason" is required to change a cost price.', [{ field: 'reason', issue: 'missing' }]);
+        changes.purchase_cost = raw;
+      }
+    }
+    const item = await service.updateStockItem({ context: req.context, id: req.params.id, changes, outletId });
+    await req.audit({ entityType: 'stock_items', entityId: req.params.id, action: costReason ? 'cost_correction' : 'update', beforeState: before, afterState: item, reason: costReason });
     res.status(200).json(ok(item));
   } catch (error) {
     next(error);
@@ -643,6 +660,14 @@ async function costOfSalesMargin(req, res, next) {
   }
 }
 
+async function costCheck(req, res, next) {
+  try {
+    res.status(200).json(ok(await reporting.computeCostCheck({ context: req.context })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function stockOverview(req, res, next) {
   try {
     const dateFrom = require_(req.query, 'date_from');
@@ -688,5 +713,6 @@ module.exports = {
   costOfSales,
   stockVariance,
   costOfSalesMargin,
+  costCheck,
   stockOverview,
 };
