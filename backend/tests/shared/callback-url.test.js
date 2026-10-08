@@ -98,4 +98,43 @@ describe('assertAllowedCallbackUrl', () => {
       assertAllowedCallbackUrl(dbFor(ctx.a), { callbackUrl: 'https://book.beta-resorts-group.example/confirm' })
     ).rejects.toMatchObject({ code: 'VALIDATION_INVALID_CALLBACK_URL' });
   });
+
+  describe('HTTPS-only in production', () => {
+    let originalEnv;
+    beforeEach(() => {
+      originalEnv = process.env.NODE_ENV;
+    });
+    afterEach(() => {
+      process.env.NODE_ENV = originalEnv;
+    });
+
+    it("rejects http:// on the tenant's own subdomain in production, and accepts https://", async () => {
+      process.env.NODE_ENV = 'production';
+      await expect(
+        assertAllowedCallbackUrl(dbFor(ctx.a), { callbackUrl: `http://${ctx.a.slug}.${process.env.APP_DOMAIN}/pay/done` })
+      ).rejects.toMatchObject({ code: 'VALIDATION_INVALID_CALLBACK_URL' });
+      await expect(
+        assertAllowedCallbackUrl(dbFor(ctx.a), { callbackUrl: `https://${ctx.a.slug}.${process.env.APP_DOMAIN}/pay/done` })
+      ).resolves.toBeUndefined();
+    });
+
+    it('rejects http:// on a verified custom domain in production, and accepts https://', async () => {
+      process.env.NODE_ENV = 'production';
+      await t.trx('tenant_domains').insert({ tenant_id: ctx.a.id, domain: 'book.https-only.example', verified_at: new Date() });
+      await expect(assertAllowedCallbackUrl(dbFor(ctx.a), { callbackUrl: 'http://book.https-only.example/confirm' })).rejects.toMatchObject({
+        code: 'VALIDATION_INVALID_CALLBACK_URL',
+      });
+      await expect(assertAllowedCallbackUrl(dbFor(ctx.a), { callbackUrl: 'https://book.https-only.example/confirm' })).resolves.toBeUndefined();
+    });
+
+    it('outside production http:// on an allowed host is still accepted (local dev), other protocols never are', async () => {
+      process.env.NODE_ENV = 'development';
+      await expect(
+        assertAllowedCallbackUrl(dbFor(ctx.a), { callbackUrl: `http://${ctx.a.slug}.${process.env.APP_DOMAIN}/pay/done` })
+      ).resolves.toBeUndefined();
+      await expect(assertAllowedCallbackUrl(dbFor(ctx.a), { callbackUrl: `ftp://${ctx.a.slug}.${process.env.APP_DOMAIN}/x` })).rejects.toMatchObject({
+        code: 'VALIDATION_INVALID_CALLBACK_URL',
+      });
+    });
+  });
 });
