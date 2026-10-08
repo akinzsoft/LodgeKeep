@@ -43,6 +43,8 @@
  * check. Only a genuinely DNS-verified custom domain, or the tenant's own
  * platform-issued default subdomain, is trusted now.
  *
+ * HTTPS-ONLY IN PRODUCTION (security audit): see the protocol check below.
+ *
  * Lives in `src/shared`, not any one module, since all three business
  * modules above need the identical check and none of them may depend on
  * another (CLAUDE.md's module-boundary rule).
@@ -71,7 +73,12 @@ async function assertAllowedCallbackUrl(db, { callbackUrl }) {
   } catch {
     throw invalidCallbackUrlError();
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+  // HTTPS only in production: the redirect carries the payment reference, so a cleartext
+  // hop lets a network observer read or alter it. `http:` is accepted outside production
+  // only, because local dev serves `http://{slug}.localhost` (the same production /
+  // non-production split the MFA dev bypass uses).
+  const httpAllowed = process.env.NODE_ENV !== 'production';
+  if (parsed.protocol !== 'https:' && !(httpAllowed && parsed.protocol === 'http:')) {
     throw invalidCallbackUrlError();
   }
 
