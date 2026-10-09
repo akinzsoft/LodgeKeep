@@ -27,35 +27,26 @@ const PROPERTY = {
   mfa_required_for_admin_roles: true,
 };
 
-describe('<PropertyTab> — MFA toggle (gap closure)', () => {
+describe('<PropertyTab> — the MFA switch lives on the Security tab', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.updateProperty.mockResolvedValue(PROPERTY);
   });
 
-  it('does not show the MFA checkbox on the create form', () => {
-    render(<PropertyTab properties={[]} onPropertiesChanged={vi.fn()} />);
-    expect(screen.queryByText(/require a verification code/i)).not.toBeInTheDocument();
-  });
-
-  it('shows the MFA checkbox, checked, when editing a property with it enabled (the default)', async () => {
+  it('has no verification-code checkbox on create or edit', async () => {
+    const { unmount } = render(<PropertyTab properties={[]} onPropertiesChanged={vi.fn()} />);
+    expect(screen.queryByText(/verification code/i)).not.toBeInTheDocument();
+    unmount();
     render(<PropertyTab properties={[PROPERTY]} onPropertiesChanged={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    expect(screen.getByRole('checkbox', { name: /require a verification code/i })).toBeChecked();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
   });
 
-  it('unchecking and saving sends mfa_required_for_admin_roles: false', async () => {
+  it('saving a property never sends mfa_required_for_admin_roles', async () => {
     render(<PropertyTab properties={[PROPERTY]} onPropertiesChanged={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    await userEvent.click(screen.getByRole('checkbox', { name: /require a verification code/i }));
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-
-    expect(mocks.updateProperty).toHaveBeenCalledWith('1', expect.objectContaining({ mfa_required_for_admin_roles: false }));
-  });
-
-  it('reflects an already-disabled property as unchecked', async () => {
-    render(<PropertyTab properties={[{ ...PROPERTY, mfa_required_for_admin_roles: false }]} onPropertiesChanged={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    expect(screen.getByRole('checkbox', { name: /require a verification code/i })).not.toBeChecked();
+    expect(mocks.updateProperty).toHaveBeenCalledTimes(1);
+    expect(mocks.updateProperty.mock.calls[0][1]).not.toHaveProperty('mfa_required_for_admin_roles');
   });
 });

@@ -226,6 +226,13 @@ const NOTIFICATION_EVENTS = Object.freeze([
     defaultRoles: ['manager', 'admin', 'super_admin'],
   },
   {
+    eventType: 'security.mfa_requirement_disabled',
+    group: 'Security',
+    label: 'Admin verification code switched off',
+    description: 'A super admin turned off the emailed verification code for admin and super admin sign-in at this property.',
+    defaultRoles: ['admin', 'super_admin'],
+  },
+  {
     eventType: 'night_audit.completed',
     group: 'Night audit',
     label: 'Night audit closed the day',
@@ -317,7 +324,7 @@ async function roleReceivesEvent({ db, eventType, userId }) {
  *
  * @returns {Promise<number>} rows actually written.
  */
-async function notifyStaff({ trx, eventType, payload, dedupKey = null, popup = false, outletIds = null, alsoUserIds = [] }) {
+async function notifyStaff({ trx, eventType, payload, dedupKey = null, popup = false, outletIds = null, alsoUserIds = [], excludeUserIds = [] }) {
   if (!NOTIFICATION_EVENTS_BY_TYPE.has(eventType)) {
     throw new Error(`notifyStaff: unknown staff notification type "${eventType}".`);
   }
@@ -331,6 +338,10 @@ async function notifyStaff({ trx, eventType, payload, dedupKey = null, popup = f
       .where({ 'users.status': 'active' })
       .select('users.id as user_id');
     userIds = [...new Set([...userIds, ...extra.map((row) => String(row.user_id))])];
+  }
+  if (excludeUserIds.length) {
+    const excluded = new Set(excludeUserIds.map(String));
+    userIds = userIds.filter((userId) => !excluded.has(String(userId)));
   }
   let written = 0;
   for (const userId of userIds) {

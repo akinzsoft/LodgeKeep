@@ -144,6 +144,11 @@ export function describeNotification(notification) {
         title: `Night audit overdue — ${p.businessDate ?? 'a business date'}`,
         detail: p.todayInPropertyTz ? `It's already ${p.todayInPropertyTz} and that date is still open.` : '',
       };
+    case 'security.mfa_requirement_disabled':
+      return {
+        title: 'Admin verification code switched off',
+        detail: join(`${p.actorName ?? 'A super admin'} turned it off`, p.reason ? `Reason: ${p.reason}` : ''),
+      };
     case 'approvals.pin_locked':
       return {
         title: `Approval PIN locked — ${p.approverName ?? 'a manager'}`,
@@ -161,6 +166,7 @@ export function notificationTarget(type) {
   if (type.startsWith('room.') || type.startsWith('housekeeping.')) return 'housekeeping';
   if (type.startsWith('door_access.')) return 'door_access';
   if (type.startsWith('night_audit.')) return 'night_audit';
+  if (type.startsWith('security.')) return 'setup';
   return null;
 }
 

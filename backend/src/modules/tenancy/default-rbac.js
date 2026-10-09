@@ -74,10 +74,11 @@ const ALL_PERMISSION_KEYS = Object.freeze([
   'supermarket.sales',
   'supermarket.report',
   'supermarket.manage',
+  'security.manage',
 ]);
 
 /** Every catalogue key except `room_types.update`/`reports.view_chain` — `admin`'s own exact exclusions (SECURITY.md §5): the two places this matrix's Admin `✓` genuinely diverges from Super-admin's `✓` on a single action. */
-const ADMIN_ONLY_EXCLUSIONS = ['room_types.update', 'reports.view_chain'];
+const ADMIN_ONLY_EXCLUSIONS = ['room_types.update', 'reports.view_chain', 'security.manage'];
 const ADMIN_PERMISSION_KEYS = ALL_PERMISSION_KEYS.filter((key) => !ADMIN_ONLY_EXCLUSIONS.includes(key));
 
 const DEFAULT_ROLE_PERMISSIONS = Object.freeze({

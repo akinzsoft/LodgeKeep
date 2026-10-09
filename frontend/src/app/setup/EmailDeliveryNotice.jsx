@@ -4,6 +4,7 @@ import formStyles from './SetupForm.module.css';
 
 const MESSAGES = {
   settings: 'Invitations, verification codes, password resets and booking confirmations from this property are only written to the server log. Set up an SMTP mailbox below, save, and send a test email.',
+  security: 'Admins who sign in cannot receive a verification code by email, so while the code is required they will be unable to sign in. Set up a mailbox in Setup → Email settings, or turn the requirement off only if you accept the risk.',
   invite: 'An invitation from this property will not reach the person you invite. Set up a mailbox in Setup → Email settings first, then send the invitation.',
 };
 
@@ -17,7 +18,7 @@ const MESSAGES = {
  * status cannot be read (a role without `setup.view`) — it only ever adds a
  * warning, never blocks anything.
  *
- * @param {'settings'|'invite'} where   Which screen, for the wording.
+ * @param {'settings'|'invite'|'security'} where   Which screen, for the wording.
  * @param {*} [refreshKey]   Change it to re-check (after saving settings).
  */
 export function EmailDeliveryNotice({ where, refreshKey }) {

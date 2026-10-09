@@ -163,6 +163,36 @@ async function updateProperty({ context, id, changes }) {
 }
 
 /**
+ * The property's security settings (today only the admin verification-code
+ * requirement). Read by anyone with `setup.view`; changed only through
+ * `setMfaRequirement` below.
+ */
+async function getSecuritySettings({ context, id }) {
+  const property = await getProperty({ context, id });
+  if (!property) return null;
+  return { mfaRequiredForAdminRoles: Boolean(property.mfa_required_for_admin_roles) };
+}
+
+/**
+ * Turns the emailed-verification-code requirement for admin/super_admin sign-in on or off.
+ * Locks the property row so two simultaneous changes can't both record themselves as the
+ * "before" state. Returns `{ changed, before, after }`; an unchanged value writes nothing.
+ * Platform-staff MFA (TOTP) never reads this column and is unaffected.
+ */
+async function setMfaRequirement({ context, id, required, onChange }) {
+  const db = scopedDb().for(context);
+  return db.transaction(async (trx) => {
+    const row = await trx.table('properties').where({ id }).forUpdate().first();
+    if (!row) return null;
+    const before = Boolean(row.mfa_required_for_admin_roles);
+    if (before === required) return { changed: false, before, after: required };
+    await trx.table('properties').where({ id }).update({ mfa_required_for_admin_roles: required });
+    if (onChange) await onChange(trx, { before, after: required });
+    return { changed: true, before, after: required };
+  });
+}
+
+/**
  * Stores a new logo for a property (shown on POS receipts and in every
  * email), replacing and deleting any previous uploaded one. The property row
  * is locked first so two uploads at once never leave an orphaned file — the
@@ -927,6 +957,8 @@ async function resolveTaxForDate({ context, taxCode, businessDate }) {
 }
 
 module.exports = {
+  getSecuritySettings,
+  setMfaRequirement,
   createProperty,
   updateProperty,
   setPropertyLogo,

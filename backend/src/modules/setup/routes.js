@@ -55,6 +55,9 @@ function setupRouter() {
   router.patch('/properties/:id', requirePermission('setup.manage'), controller.updateProperty);
   // The logo appears on receipts and every email — a Setup change like any
   // other, so `setup.manage`, unlike the bootstrap-only ungated routes above.
+  // Security settings: readable with setup.view, changed only with security.manage (super_admin).
+  router.get('/properties/:id/security', requirePermission('setup.view'), controller.getSecuritySettings);
+  router.put('/properties/:id/security', requirePermission('security.manage'), controller.setMfaRequirement);
   router.post('/properties/:id/logo', requirePermission('setup.manage'), receiveImage, controller.uploadPropertyLogo);
   router.delete('/properties/:id/logo', requirePermission('setup.manage'), controller.removePropertyLogo);
 
