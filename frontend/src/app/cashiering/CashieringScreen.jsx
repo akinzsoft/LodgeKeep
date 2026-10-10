@@ -3,6 +3,7 @@ import { Card, DataTable, Button, StatusPill, ConfirmDialog, PrintDocument } fro
 import { Money, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import { cashieringApi, arApi, profilesApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
+import { FolioSearchCard } from './FolioSearchCard.jsx';
 import { OutstandingBalancesTab } from './OutstandingBalancesTab.jsx';
 import { PrintedFolio } from './PrintedFolio.jsx';
 import { TerminalPaymentFields } from './TerminalPaymentFields.jsx';
@@ -128,7 +129,9 @@ export function CashieringScreen({ isOffline = false, activeProperty = null }) {
 
         {tab === 'lookup' && (
           <>
-            <Card title="Find a reservation's folio">
+            <FolioSearchCard isOffline={isOffline} onOpenFolio={handleViewFolio} />
+
+            <Card title="Or enter a reservation ID">
               <form className={formStyles.row} onSubmit={handleLookup}>
                 <label className={formStyles.field}>
                   <span className={formStyles.label}>Reservation ID</span>

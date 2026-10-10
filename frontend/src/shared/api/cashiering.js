@@ -39,6 +39,11 @@ export function listOutstandingBalances() {
   return request('/front-desk/outstanding-balances');
 }
 
+/** Find in-house / recently checked-out guests by name, phone or room number. */
+export function searchFolios(q) {
+  return request(`/front-desk/folio-search?q=${encodeURIComponent(q)}`);
+}
+
 export function getOutstandingBalancesCsv() {
   return requestBlob('/front-desk/outstanding-balances?format=csv');
 }

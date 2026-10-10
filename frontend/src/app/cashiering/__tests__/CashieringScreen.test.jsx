@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   billFolioToCompany: vi.fn(),
   verifyPayment: vi.fn(),
   listOutstandingBalances: vi.fn(),
+  searchFolios: vi.fn(),
   getOutstandingBalancesCsv: vi.fn(),
   openPaystackPopup: vi.fn(),
   listCompanyProfiles: vi.fn(),
@@ -374,6 +375,22 @@ describe('<CashieringScreen>', () => {
       expect(mocks.listFoliosForReservation).toHaveBeenCalledWith('9');
       expect(await screen.findByRole('tab', { name: 'Folio Lookup' })).toHaveAttribute('aria-selected', 'true');
       expect(await screen.findByText(/Folio F1 — Guest/)).toBeInTheDocument();
+    });
+
+    it('Folio Lookup: a name search that matches one guest opens their folio; the reservation ID box still works', async () => {
+      mocks.searchFolios.mockResolvedValue([{ id: '9', guest_first_name: 'Ada', guest_last_name: 'Obi', status: 'checked_in' }]);
+      mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+      render(<CashieringScreen />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Folio Lookup' }));
+      await userEvent.type(screen.getByLabelText(/guest name, phone number or room/i), 'ada');
+      await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+      expect(await screen.findByText(/Folio F1 — Guest/)).toBeInTheDocument();
+      expect(mocks.listFoliosForReservation).toHaveBeenCalledWith('9');
+
+      await userEvent.clear(screen.getByPlaceholderText('e.g. 42'));
+      await userEvent.type(screen.getByPlaceholderText('e.g. 42'), '42');
+      await userEvent.click(screen.getByRole('button', { name: 'Load folios' }));
+      expect(mocks.listFoliosForReservation).toHaveBeenCalledWith('42');
     });
 
     it('shows the empty-state message when every folio is settled', async () => {

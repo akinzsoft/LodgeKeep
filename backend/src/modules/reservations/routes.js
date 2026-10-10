@@ -123,6 +123,11 @@ function reservationsRouter() {
     controller.listOutstandingBalances
   );
 
+  // Cashiering Folio Lookup by guest name / phone / room number. Same gate and
+  // reasoning as outstanding-balances above: it only lets a holder of the
+  // existing folio-view right find the reservation, no new access.
+  router.get('/front-desk/folio-search', requirePermission('cashiering.post_charge'), controller.searchFolios);
+
   router.post('/reservations/:id/check-in', requirePermission('front_desk.manage'), controller.checkIn);
   router.post('/reservations/:id/check-out', requirePermission('front_desk.manage'), controller.checkOut);
   router.post('/reservations/:id/room-move', requirePermission('front_desk.manage'), controller.roomMove);
