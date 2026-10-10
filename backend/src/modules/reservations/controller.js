@@ -442,7 +442,7 @@ async function checkOut(req, res, next) {
           lateCheckoutFee: req.body?.late_checkout_fee,
           userId: req.context.userId,
         });
-        return { status: 200, body: ok(result.reservation, { fee: result.fee, arAccountOverLimit: result.arAccountOverLimit }) };
+        return { status: 200, body: ok(result.reservation, { fee: result.fee, arAccountOverLimit: result.arAccountOverLimit, ...(result.creditRemaining !== '0.00' ? { creditRemaining: result.creditRemaining } : {}) }) };
       },
     });
   } catch (error) {

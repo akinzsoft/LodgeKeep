@@ -1,0 +1,9 @@
+.owed {
+  color: var(--state-danger);
+  font-weight: var(--text-label-weight);
+}
+
+.credit {
+  color: var(--state-success);
+  font-weight: var(--text-label-weight);
+}

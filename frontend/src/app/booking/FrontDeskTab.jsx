@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Card, DataTable, Button, StatusPill } from '../../shared/components/index.js';
+import { Card, DataTable, Button, StatusPill, FolioBalance } from '../../shared/components/index.js';
 import { reservationsApi, ApiError } from '../../shared/api/index.js';
-import { Money } from '../../shared/format/money.jsx';
+import { Money, formatMoney, folioBalanceKind, absoluteBalance } from '../../shared/format/money.jsx';
 import { formatDate, nightsBetween } from '../../shared/format/dates.js';
 import { ConfirmationRef } from './ConfirmationRef.jsx';
 import formStyles from './BookingForm.module.css';
@@ -142,7 +142,12 @@ export function FrontDeskTab({ isOffline = false } = {}) {
       // reaches here now that `reservationsApi.checkOut` actually reads the
       // response envelope's `meta` (see that function's own header for the
       // pre-existing bug this also fixed, for `fee` too).
-      setCheckoutSuccess(result?.arAccountOverLimit ? `${feeMessage} Note: the billed company's AR account is over its credit limit.` : feeMessage);
+      const creditMessage =
+        result?.creditRemaining && folioBalanceKind(result.creditRemaining) === 'owed'
+          ? ` Credit of ${formatMoney(result.creditRemaining, result.currency ?? checkingOut.folio_currency)} remains on the folio — refund it to the guest in Cashiering.`
+          : '';
+      const withCredit = `${feeMessage}${creditMessage}`;
+      setCheckoutSuccess(result?.arAccountOverLimit ? `${withCredit} Note: the billed company's AR account is over its credit limit.` : withCredit);
       await reloadBoard();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not check out this reservation — the folio balance may not be settled.');
@@ -271,9 +276,7 @@ export function FrontDeskTab({ isOffline = false } = {}) {
                         {Number(row.folio_balance) !== 0 && <StatusPill tone="info" label="via AR" />}
                       </span>
                     ) : (
-                      <span className={Number(row.folio_balance) !== 0 ? formStyles.balanceOwing : undefined}>
-                        <Money amount={row.folio_balance} currencyCode={row.folio_currency} />
-                      </span>
+                      <FolioBalance amount={row.folio_balance} currencyCode={row.folio_currency} />
                     ),
                 },
               ]
@@ -428,10 +431,16 @@ export function FrontDeskTab({ isOffline = false } = {}) {
               Owing to {checkingOut.folio_billed_to} via Accounts Receivable — checkout is not blocked by this balance.
             </p>
           )}
-          {checkingOut.folio_balance != null && Number(checkingOut.folio_balance) !== 0 && !checkingOut.folio_company_profile_id && (
+          {!checkingOut.folio_company_profile_id && folioBalanceKind(checkingOut.folio_balance) === 'owed' && (
             <p role="alert" className={formStyles.errorBanner}>
               Outstanding balance of <Money amount={checkingOut.folio_balance} currencyCode={checkingOut.folio_currency} /> —
               checkout will be blocked until this is cleared (Cashiering).
+            </p>
+          )}
+          {!checkingOut.folio_company_profile_id && folioBalanceKind(checkingOut.folio_balance) === 'credit' && (
+            <p role="status" className={formStyles.disabledNotice}>
+              This guest is in credit by <Money amount={absoluteBalance(checkingOut.folio_balance)} currencyCode={checkingOut.folio_currency} /> —
+              checkout is allowed. The credit stays on the folio to be refunded to the guest (Cashiering).
             </p>
           )}
           {error && (

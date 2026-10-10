@@ -99,3 +99,23 @@ export function describeBalanceState(balance) {
   if (trimmed.startsWith('-')) return { tone: 'info', label: 'Credit balance' };
   return null;
 }
+
+/**
+ * Which side of zero a folio balance is on. Strings only, never a float
+ * (ARCHITECTURE.md §1): `owed` = the guest owes the hotel (positive balance),
+ * `credit` = the hotel owes the guest (negative, e.g. a deposit larger than
+ * the charges), `zero` = settled. A null/blank balance is `zero`-like unknown
+ * and returns `null`.
+ */
+export function folioBalanceKind(balance) {
+  if (balance == null) return null;
+  const trimmed = String(balance).trim();
+  if (trimmed === '') return null;
+  if (/^-?0+(\.0+)?$/.test(trimmed)) return 'zero';
+  return trimmed.startsWith('-') ? 'credit' : 'owed';
+}
+
+/** The absolute value of a balance string ("-20000.00" -> "20000.00"), without any arithmetic. */
+export function absoluteBalance(balance) {
+  return String(balance).trim().replace(/^-/, '');
+}

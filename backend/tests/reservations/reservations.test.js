@@ -1780,6 +1780,55 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       expect(closedSplitFolio.balance).toBe('80.00');
     });
 
+    it('check-out is allowed with a CREDIT balance (deposit larger than the charges), reports the credit, and leaves the folio balance unchanged; only a positive balance blocks', async () => {
+      const roomTypeId = await createRoomType(ctx.a, { code: 'CRFD' });
+      const creditRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'CRFD1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'CRFDRATE' });
+      const created = await t.request
+        .post('/api/v1/reservations')
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({
+          guest_id: String(ctx.a.guests[0].id),
+          room_type_id: String(roomTypeId),
+          rate_code_id: String(rateCodeId),
+          arrival_date: '2027-12-10',
+          departure_date: '2027-12-12',
+        });
+      const creditReservationId = created.body.data.id;
+      await t.request
+        .post(`/api/v1/reservations/${creditReservationId}/check-in`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({ room_id: String(creditRoomId) });
+      const folio = await t.trx('folios').where({ reservation_id: creditReservationId, status: 'open' }).first();
+
+      // A positive (owed) balance still blocks.
+      await t.trx('folios').where({ id: folio.id }).update({ balance: '0.01' });
+      const blocked = await t.request
+        .post(`/api/v1/reservations/${creditReservationId}/check-out`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({});
+      expect(blocked.status).toBe(422);
+      expect(blocked.body.error.code).toBe('BUSINESS_RULE_FOLIO_BALANCE_OWING');
+
+      // A credit (negative balance) does not.
+      await t.trx('folios').where({ id: folio.id }).update({ balance: '-20000.00' });
+      const res = await t.request
+        .post(`/api/v1/reservations/${creditReservationId}/check-out`)
+        .set('Authorization', `Bearer ${tokenFor()}`)
+        .set('Idempotency-Key', idemKey())
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('checked_out');
+      expect(res.body.meta.creditRemaining).toBe('20000.00');
+
+      const closed = await t.trx('folios').where({ id: folio.id }).first();
+      expect(closed.status).toBe('closed');
+      expect(closed.balance).toBe('-20000.00');
+    });
+
     it('FD-6/FD-5: an early or late checkout time posts the configured fee, and check-out completes', async () => {
       const res = await t.request
         .post(`/api/v1/reservations/${reservationId}/check-out`)

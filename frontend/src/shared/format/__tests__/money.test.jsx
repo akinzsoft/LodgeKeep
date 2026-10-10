@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { formatMoney, Money, isBalanceSettled, describeBalanceState } from '../money.jsx';
+import { formatMoney, Money, isBalanceSettled, describeBalanceState, folioBalanceKind, absoluteBalance } from '../money.jsx';
 
 describe('formatMoney', () => {
   it('formats a DECIMAL string with the correct currency symbol', () => {
@@ -67,5 +67,21 @@ describe('describeBalanceState', () => {
 
   it('returns null while a balance is still owing — no pill, the owing amount is its own signal', () => {
     expect(describeBalanceState('150.00')).toBeNull();
+  });
+});
+
+describe('folioBalanceKind / absoluteBalance', () => {
+  it('classifies a balance by which side of zero it is on, from the string', () => {
+    expect(folioBalanceKind('150.00')).toBe('owed');
+    expect(folioBalanceKind('0.01')).toBe('owed');
+    expect(folioBalanceKind('-20000.00')).toBe('credit');
+    expect(folioBalanceKind('0.00')).toBe('zero');
+    expect(folioBalanceKind('-0.00')).toBe('zero');
+    expect(folioBalanceKind(null)).toBeNull();
+  });
+
+  it('strips the sign without arithmetic', () => {
+    expect(absoluteBalance('-20000.00')).toBe('20000.00');
+    expect(absoluteBalance('20000.00')).toBe('20000.00');
   });
 });
