@@ -23,7 +23,7 @@
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { writeOutboxEvent } = require('../../shared/outbox');
-const { sumMoney } = require('../../shared/money');
+const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
 const {
   livePhysicalCount: sharedLivePhysicalCount,
   listFreeRoomsNow: sharedListFreeRoomsNow,
@@ -970,7 +970,9 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
     throw new ValidationError('FOLIO_NOT_FOUND', 'No open folio for this reservation.');
   }
   for (const openFolio of openFolios) {
-    if (!openFolio.company_profile_id && Number(openFolio.balance) !== 0) {
+    // Only a POSITIVE balance (the guest owes the hotel) blocks check-out. A negative balance is a credit the hotel
+    // owes back (a deposit larger than the charges): it does not block, and stays on the closed folio to be refunded.
+    if (!openFolio.company_profile_id && compareMoney(openFolio.balance, '0.00') > 0) {
       throw new FolioBalanceOwingError(openFolio.balance, openFolio.id);
     }
   }
@@ -1033,6 +1035,11 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
     openFolios.map((openFolio) => openFolio.id)
   );
   const finalBalance = sumMoney(closedFolios.map((closedFolio) => closedFolio.balance));
+  // The credit the hotel still owes the guest: the negative balances of the guest's own (non-AR) folios, as a
+  // positive amount. '0.00' when there is none. Informational: the folio balance itself is unchanged.
+  const creditRemaining = negateMoney(
+    sumMoney(closedFolios.filter((closedFolio) => !closedFolio.company_profile_id && compareMoney(closedFolio.balance, '0.00') < 0).map((closedFolio) => closedFolio.balance))
+  );
 
   const assignment = await trx.table('reservation_rooms').where({ reservation_id: id, effective_to: null }).first();
   // Lock the room before releasing it, the same order check-in and room move
@@ -1062,7 +1069,7 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
   await emitReservationEvent({ trx, eventType: 'guest.checked_out', reservation: updated, extra: { folioBalance: finalBalance } });
   await notifyReservationStaff({ trx, eventType: 'guest.checked_out', reservation: updated, extra: { folioBalance: finalBalance } });
 
-  return { reservation: updated, fee, arAccountOverLimit };
+  return { reservation: updated, fee, arAccountOverLimit, creditRemaining };
 }
 
 /**

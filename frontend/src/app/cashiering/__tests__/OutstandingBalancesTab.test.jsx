@@ -35,6 +35,9 @@ const ROW = {
  * outstanding balance of guest and there room no. recommended a standard
  * feature."
  */
+// FolioBalance renders "<label> <Money/>" as a text node plus a span; match on the combined text of the outer span.
+const balanceLabel = (pattern) => (_, element) => element.tagName === 'SPAN' && element.children.length === 1 && pattern.test(element.textContent.replace(/\s+/g, ' ').trim());
+
 describe('<OutstandingBalancesTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
@@ -53,7 +56,15 @@ describe('<OutstandingBalancesTab>', () => {
   it('shows the real empty-state message when nothing is outstanding', async () => {
     mocks.listOutstandingBalances.mockResolvedValue([]);
     render(<OutstandingBalancesTab onViewFolio={vi.fn()} />);
-    expect(await screen.findByText(/no outstanding balances — every in-house folio is settled/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no open balances — every in-house folio is settled/i)).toBeInTheDocument();
+  });
+
+  it('labels an owed balance "Outstanding" and a credit "Credit" (never as a debt)', async () => {
+    mocks.listOutstandingBalances.mockResolvedValue([ROW, { ...ROW, id: '10', confirmation_number: 'CONF10', folio_balance: '-20000.00' }]);
+    render(<OutstandingBalancesTab onViewFolio={vi.fn()} />);
+    expect(await screen.findByText(balanceLabel(/Outstanding\s+₦150\.00/))).toBeInTheDocument();
+    expect(screen.getByText(balanceLabel(/Credit\s+₦20,000\.00/))).toBeInTheDocument();
+    expect(screen.queryByText(balanceLabel(/Outstanding\s+₦20,000/))).not.toBeInTheDocument();
   });
 
   it('shows the real backend error when the list fails to load', async () => {

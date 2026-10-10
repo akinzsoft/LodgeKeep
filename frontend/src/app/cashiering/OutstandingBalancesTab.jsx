@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { DataTable, Button } from '../../shared/components/index.js';
-import { Money } from '../../shared/format/money.jsx';
+import { DataTable, Button, FolioBalance } from '../../shared/components/index.js';
 import { cashieringApi, ApiError } from '../../shared/api/index.js';
 import { triggerDownload } from '../../shared/download.js';
 import formStyles from './CashieringForm.module.css';
@@ -83,9 +82,9 @@ export function OutstandingBalancesTab({ isOffline = false, onViewFolio }) {
       </div>
 
       <DataTable
-        title="Outstanding balances"
+        title="Folio balances"
         state={rows === null ? 'loading' : rows.length === 0 ? 'empty' : 'success'}
-        emptyMessage="No outstanding balances — every in-house folio is settled."
+        emptyMessage="No open balances — every in-house folio is settled."
         columns={[
           { key: 'confirmation_number', label: 'Confirmation' },
           {
@@ -101,9 +100,7 @@ export function OutstandingBalancesTab({ isOffline = false, onViewFolio }) {
             label: 'Balance',
             align: 'right',
             render: (row) => (
-              <span className={Number(row.folio_balance) !== 0 ? formStyles.balanceOwing : undefined}>
-                <Money amount={row.folio_balance} currencyCode={row.folio_currency} />
-              </span>
+              <FolioBalance amount={row.folio_balance} currencyCode={row.folio_currency} />
             ),
           },
         ]}

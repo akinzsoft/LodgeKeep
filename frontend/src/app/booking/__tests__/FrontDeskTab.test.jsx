@@ -40,6 +40,9 @@ const RESERVATION = {
 };
 const FREE_ROOM = { id: '9', room_number: '101', floor: '1', housekeeping_reported_status: 'clean' };
 
+// FolioBalance renders "<label> <Money/>" as a text node plus a span; match on the combined text of the outer span.
+const balanceLabel = (pattern) => (_, element) => element.tagName === 'SPAN' && element.children.length === 1 && pattern.test(element.textContent.replace(/\s+/g, ' ').trim());
+
 describe('<FrontDeskTab>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
@@ -121,6 +124,32 @@ describe('<FrontDeskTab>', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Check Out' }));
 
     expect(await screen.findByText(/Outstanding balance of/)).toBeInTheDocument();
+  });
+
+  it('shows a credit (not an owing warning) in the check-out dialog, and labels it on the board', async () => {
+    mocks.listDepartures.mockResolvedValue([{ ...RESERVATION, status: 'checked_in', folio_balance: '-20000.00', folio_currency: 'NGN' }]);
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('tab', { name: 'Departures' }));
+    expect(await screen.findByText(balanceLabel(/Credit\s+₦20,000\.00/))).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Check Out' }));
+
+    expect(await screen.findByText(/in credit by/)).toBeInTheDocument();
+    expect(screen.getByText(/checkout is allowed/)).toBeInTheDocument();
+    expect(screen.queryByText(/Outstanding balance of/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('tells staff the credit remains to be refunded after a check-out that leaves one', async () => {
+    mocks.listDepartures.mockResolvedValue([{ ...RESERVATION, status: 'checked_in', folio_balance: '-20000.00', folio_currency: 'NGN' }]);
+    mocks.checkOut.mockResolvedValue({ id: '1', status: 'checked_out', fee: null, creditRemaining: '20000.00' });
+    render(<FrontDeskTab />);
+    await screen.findByText('ABC123');
+    await userEvent.click(screen.getByRole('tab', { name: 'Departures' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Check Out' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Confirm check-out' }));
+
+    expect(await screen.findByText(/Credit of ₦20,000\.00 remains on the folio/)).toBeInTheDocument();
   });
 
   it('shows no balance warning in the check-out dialog once the balance is zero', async () => {
