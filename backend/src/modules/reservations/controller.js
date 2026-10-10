@@ -370,6 +370,15 @@ async function listOutstandingBalances(req, res, next) {
   }
 }
 
+/** Cashiering Folio Lookup by guest name / phone / room — see `service.searchFolios`. */
+async function searchFolios(req, res, next) {
+  try {
+    res.status(200).json(ok(await service.searchFolios({ context: req.context, query: req.query?.q })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 /**
  * Gap closure: "which actual room numbers are free right now" — see
  * `service.listFreeRoomsNow`'s own header for why this is a distinct read
@@ -524,6 +533,7 @@ module.exports = {
   listDepartures,
   listInHouse,
   listOutstandingBalances,
+  searchFolios,
   listFreeRooms,
   checkIn,
   checkOut,

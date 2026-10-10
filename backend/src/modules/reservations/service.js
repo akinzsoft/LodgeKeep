@@ -1598,6 +1598,105 @@ async function listOutstandingBalances({ context }) {
 }
 
 /**
+ * Gap closure (user-reported): Cashiering's Folio Lookup only accepted a raw
+ * reservation id, which a cashier does not know. This finds the reservation
+ * by what they do know: guest NAME (partial, "first last" in any order),
+ * PHONE, or the ROOM NUMBER of a checked-in guest.
+ *
+ * `kind` is decided by `classifyFolioSearch` (pure, below). Scope, as agreed:
+ * - room: the CURRENT in-house guest of that room only.
+ * - name/phone: checked-in guests plus guests checked out in the last
+ *   `RECENT_CHECKOUT_DAYS` days (to settle late). A checked-out row has no
+ *   room and no open folio on this join, so room/balance read null there;
+ *   the folio is still opened by reservation id.
+ * Reuses `selectReservationWithGuestAndRoom`, so the balance shown is the
+ * one checkout gates on. A reservation with two open split folios appears
+ * once per folio (inherited, see `listOutstandingBalances`'s header).
+ * No new access: gated by the same `cashiering.post_charge` as the folio read.
+ */
+const FOLIO_SEARCH_MIN_LENGTH = 2;
+const FOLIO_SEARCH_LIMIT = 25;
+const RECENT_CHECKOUT_DAYS = 7;
+const PHONE_MIN_DIGITS = 7;
+
+function classifyFolioSearch(rawQuery) {
+  const q = String(rawQuery ?? '').trim();
+  // A single digit is a valid room number ("7"); anything else needs 2+ characters.
+  if (q.length < FOLIO_SEARCH_MIN_LENGTH && !/^\d$/.test(q)) return { kind: 'invalid', q };
+  const digits = q.replace(/\D/g, '');
+  if (/^[+\d\s().-]+$/.test(q) && digits.length >= PHONE_MIN_DIGITS) return { kind: 'phone', q, digits };
+  // Anything else may be a room number ("07", "B7", "FS07") and/or a name.
+  // Room numbers are free text, so a letters-and-digits query can be either;
+  // `searchFolios` tries the room first and, unless the query is all digits,
+  // the name too.
+  return { kind: 'text', q, couldBeName: !/^\d+$/.test(q) };
+}
+
+/** Digits with the national prefix removed, so 0801…, +234801… and 801… all match. */
+function phoneCore(digits) {
+  if (digits.startsWith('234') && digits.length > 10) return digits.slice(3);
+  if (digits.startsWith('0')) return digits.slice(1);
+  return digits;
+}
+
+function escapeLike(value) {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+async function searchFolios({ context, query, now = new Date() }) {
+  const db = scopedDb().for(context);
+  const { kind, q, digits, couldBeName } = classifyFolioSearch(query);
+  if (kind === 'invalid') return [];
+
+  const base = () => selectReservationWithGuestAndRoom(db.table('reservations'));
+  const cutoff = new Date(now.getTime() - RECENT_CHECKOUT_DAYS * 24 * 60 * 60 * 1000);
+  // Checked in, or checked out within the last RECENT_CHECKOUT_DAYS days.
+  const inScope = (query) =>
+    query.where((group) =>
+      group
+        .where('reservations.status', 'checked_in')
+        .orWhere((recent) =>
+          recent.where('reservations.status', 'checked_out').where('reservations.checked_out_at', '>=', cutoff)
+        )
+    );
+  // In-house first (checked_in sorts before checked_out), then by name.
+  const ordered = (query) =>
+    query.orderBy('reservations.status').orderBy('guests.last_name').orderBy('guests.first_name').orderBy('reservations.id');
+
+  if (kind === 'phone') {
+    // A wildcard between every digit matches regardless of spaces, dashes
+    // or a "+" in the stored number.
+    const pattern = `%${phoneCore(digits).split('').join('%')}%`;
+    return ordered(inScope(base()).where('guests.phone', 'like', pattern)).limit(FOLIO_SEARCH_LIMIT);
+  }
+
+  // Room: the CURRENT in-house guest of that room only. Leading zeros are
+  // ignored for digit-only numbers ("07" finds "7" and "07"); the database
+  // collation makes the comparison case-insensitive.
+  const stripped = /^\d+$/.test(q) ? q.replace(/^0+(?=\d)/, '') : q;
+  const roomCandidates = [...new Set([q, stripped, stripped.padStart(2, '0')])];
+  const roomRows = await base()
+    .where('reservations.status', 'checked_in')
+    .whereIn('rooms.room_number', roomCandidates)
+    .orderBy('reservations.id')
+    .limit(FOLIO_SEARCH_LIMIT);
+  if (!couldBeName) return roomRows;
+
+  // Name: every word must match the first or last name ("ada obi" / "obi ada").
+  let named = inScope(base());
+  for (const token of q.split(/\s+/).filter(Boolean)) {
+    const pattern = `%${escapeLike(token)}%`;
+    named = named.where((group) =>
+      group.where('guests.first_name', 'like', pattern).orWhere('guests.last_name', 'like', pattern)
+    );
+  }
+  const nameRows = await ordered(named).limit(FOLIO_SEARCH_LIMIT);
+
+  const seen = new Set(roomRows.map((r) => String(r.id)));
+  return [...roomRows, ...nameRows.filter((r) => !seen.has(String(r.id)))].slice(0, FOLIO_SEARCH_LIMIT);
+}
+
+/**
  * Gap closure: "which actual room numbers are free right now," for a room
  * type — a genuinely different question from `checkAvailability`'s
  * sellable-count-vs-threshold, and answerable only as of the property's
@@ -1849,6 +1948,8 @@ module.exports = {
   listDepartures,
   listInHouse,
   listOutstandingBalances,
+  searchFolios,
+  classifyFolioSearch,
   listDepartingWithOutstandingBalance,
   listFreeRoomsNow,
   listEligiblePreferredRooms,
