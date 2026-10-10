@@ -103,6 +103,16 @@ describe('describeNotification', () => {
   });
 });
 
+describe('security notifications', () => {
+  it('the verification-code-off alert names who and why, and opens Setup', () => {
+    expect(describeNotification({ type: 'security.mfa_requirement_disabled', payload: { actorName: 'Ada Bello', reason: 'Mailbox down' } })).toEqual({
+      title: 'Admin verification code switched off',
+      detail: 'Ada Bello turned it off · Reason: Mailbox down',
+    });
+    expect(notificationTarget('security.mfa_requirement_disabled')).toBe('setup');
+  });
+});
+
 describe('helpers', () => {
   it('parsePayload tolerates malformed JSON', () => {
     expect(parsePayload({ payload: '{bad' })).toEqual({});

@@ -281,7 +281,7 @@ describe('Setup module (PLAN.md Phase 1)', () => {
       expect(res.body.error.code).toBe('FORBIDDEN_NO_ACTIVE_PROPERTY');
     });
 
-    it('allows a caller with setup.manage (admin) to update the property, including the MFA toggle', async () => {
+    it('allows a caller with setup.manage (admin) to update the property but IGNORES the MFA toggle (it moves to PUT /properties/:id/security)', async () => {
       const propertyId = await seedSetupManageCaller({ tenant: ctx.a });
       const token = signAccessToken({ aud: 'staff', sub: String(ctx.a.users[0].id), tenant_id: String(ctx.a.id), property_id: String(propertyId) });
 
@@ -290,16 +290,12 @@ describe('Setup module (PLAN.md Phase 1)', () => {
         .set('Authorization', `Bearer ${token}`)
         .send({ mfa_required_for_admin_roles: false, name: 'Renamed by admin' });
       expect(res.status).toBe(200);
-      // The raw response carries MySQL's own TINYINT(1) representation
-      // (0/1), not a coerced JS boolean — matching how this column has
-      // always behaved (mysql2 returns a BOOLEAN column as a plain
-      // number), the same reason every other assertion against this
-      // field in this file wraps it in `Boolean(...)`.
-      expect(Boolean(res.body.data.mfa_required_for_admin_roles)).toBe(false);
       expect(res.body.data.name).toBe('Renamed by admin');
+      // Mutation-checked: putting the field back into pickPropertyChanges fails this.
+      expect(Boolean(res.body.data.mfa_required_for_admin_roles)).toBe(true);
 
       const row = await t.trx('properties').where({ id: propertyId }).first();
-      expect(Boolean(row.mfa_required_for_admin_roles)).toBe(false);
+      expect(Boolean(row.mfa_required_for_admin_roles)).toBe(true);
     });
 
     it('404s for a property belonging to a different tenant, not 403 — a setup.manage caller cannot reconfigure it either', async () => {

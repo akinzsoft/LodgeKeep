@@ -10,6 +10,7 @@ import { ReferenceDataTab } from './ReferenceDataTab.jsx';
 import { UsersTab } from './UsersTab.jsx';
 import { EmailSettingsTab } from './EmailSettingsTab.jsx';
 import { PaymentSubaccountTab } from './PaymentSubaccountTab.jsx';
+import { SecurityTab } from './SecurityTab.jsx';
 import { NotificationsTab } from './NotificationsTab.jsx';
 import { OutletTerminalAccountsCard } from '../pos/OutletTerminalAccountsCard.jsx';
 import { cashieringApi } from '../../shared/api/index.js';
@@ -67,6 +68,7 @@ const TABS = [
   { key: 'users', label: 'Users' },
   { key: 'email', label: 'Email' },
   { key: 'payments', label: 'Payments' },
+  { key: 'security', label: 'Security' },
   { key: 'notifications', label: 'Notifications' },
   { key: 'support-access', label: 'Support access' },
 ];
@@ -181,6 +183,7 @@ export function SetupScreen({ activePropertyId, isOffline = false, onPropertiesC
             />
           </>
         )}
+        {tab === 'security' && <SecurityTab activeProperty={activeProperty} isOffline={isOffline} />}
         {tab === 'notifications' && <NotificationsTab disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'support-access' && <ImpersonationHistory />}
       </div>

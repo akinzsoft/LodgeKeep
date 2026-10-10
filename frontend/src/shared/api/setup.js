@@ -23,6 +23,16 @@ export function updateProperty(id, body) {
   return request(`/properties/${id}`, { method: 'PATCH', body });
 }
 
+/** The property's security settings: `{ mfaRequiredForAdminRoles, canManage }`. Readable with setup.view. */
+export function getSecuritySettings(id) {
+  return request(`/properties/${id}/security`);
+}
+
+/** Turn the admin/super admin emailed verification code on or off (security.manage = super admin; a reason is required to turn it off). */
+export function setMfaRequirement(id, { required, reason }) {
+  return request(`/properties/${id}/security`, { method: 'PUT', body: { mfa_required_for_admin_roles: required, reason } });
+}
+
 /** The property's logo (JPG/PNG/WebP, ≤ 2 MB) — shown on POS receipts and in every email. Returns the updated property. */
 export function uploadPropertyLogo(id, file) {
   const formData = new FormData();

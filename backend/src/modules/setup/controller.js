@@ -7,6 +7,9 @@
 
 const { ok, notFound } = require('../../shared/response');
 const service = require('./service');
+const { assertPermission } = require('../../auth');
+const { PermissionDeniedError } = require('../../auth/errors');
+const { notifyStaff } = require('../notifications/staff-notifications');
 const roomManagement = require('./room-management');
 const { ValidationError } = require('../../shared/errors');
 
@@ -72,7 +75,8 @@ function pickPropertyChanges(body) {
   if (body?.base_currency !== undefined) changes.base_currency = body.base_currency;
   if (body?.address !== undefined) changes.address = body.address;
   if (body?.current_business_date !== undefined) changes.current_business_date = body.current_business_date;
-  if (body?.mfa_required_for_admin_roles !== undefined) changes.mfa_required_for_admin_roles = Boolean(body.mfa_required_for_admin_roles);
+  // `mfa_required_for_admin_roles` is deliberately NOT here: it is a security setting changed only
+  // through `PUT /properties/:id/security` (`security.manage`, a reason, an audit row, an alert).
   return changes;
 }
 
@@ -90,6 +94,65 @@ async function updateProperty(req, res, next) {
 }
 
 /** `POST /properties/:id/logo` (multipart field `image`, `setup.manage`) — see `shared/image-store.js` for validation and storage. */
+/** Only the ACTIVE property's settings are reachable — a super admin at property A cannot touch B. */
+function securityTargetId(req) {
+  return String(req.params.id) === String(req.context.propertyId) ? req.params.id : null;
+}
+
+async function getSecuritySettings(req, res, next) {
+  try {
+    const id = securityTargetId(req);
+    const settings = id ? await service.getSecuritySettings({ context: req.context, id }) : null;
+    if (!settings) return notFound(res);
+    const canManage = await holdsPermission(req.context, 'security.manage');
+    res.status(200).json(ok({ ...settings, canManage }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function setMfaRequirement(req, res, next) {
+  try {
+    const id = securityTargetId(req);
+    if (!id) return notFound(res);
+    const required = requireBoolean(req.body, 'mfa_required_for_admin_roles');
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (!required && !reason) {
+      throw new ValidationError('MISSING_FIELD', 'A reason is required to turn the verification code off.', [{ field: 'reason', issue: 'missing' }]);
+    }
+    const result = await service.setMfaRequirement({
+      context: req.context,
+      id,
+      required,
+      onChange: async (trx, { before, after }) => {
+        if (after) return;
+        const actor = await trx.table('users').where({ id: req.context.userId }).first('first_name', 'last_name', 'email');
+        const actorName = [actor?.first_name, actor?.last_name].filter(Boolean).join(' ') || actor?.email || 'A super admin';
+        await notifyStaff({
+          trx,
+          eventType: 'security.mfa_requirement_disabled',
+          payload: { actorName, reason },
+          excludeUserIds: [req.context.userId],
+        });
+      },
+    });
+    if (!result) return notFound(res);
+    if (result.changed) {
+      await req.audit({
+        entityType: 'properties',
+        entityId: id,
+        action: result.after ? 'mfa_requirement_enabled' : 'mfa_requirement_disabled',
+        beforeState: { mfa_required_for_admin_roles: result.before },
+        afterState: { mfa_required_for_admin_roles: result.after },
+        reason: reason || null,
+      });
+    }
+    res.status(200).json(ok({ mfaRequiredForAdminRoles: result.after, changed: result.changed, canManage: true }));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function uploadPropertyLogo(req, res, next) {
   try {
     const { id } = req.params;
@@ -920,7 +983,20 @@ async function resolveTax(req, res, next) {
   }
 }
 
+/** True when the caller holds `permissionKey` at the active property; never throws for a plain "no". */
+async function holdsPermission(context, permissionKey) {
+  try {
+    await assertPermission(context, permissionKey);
+    return true;
+  } catch (error) {
+    if (error instanceof PermissionDeniedError) return false;
+    throw error;
+  }
+}
+
 module.exports = {
+  getSecuritySettings,
+  setMfaRequirement,
   createProperty,
   updateProperty,
   uploadPropertyLogo,
