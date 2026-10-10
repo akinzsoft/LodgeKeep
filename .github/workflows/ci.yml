@@ -25,9 +25,18 @@ jobs:
     # scheduler is genuinely registered, which a mock cannot stand in for
     # either. `redis-connection.js`'s own default (127.0.0.1:6379) needs no
     # extra env vars here, matching this service's exposed port exactly.
+    #
+    # Service images are pulled by the runner BEFORE any step runs, so a
+    # docker/login-action step would be too late. `credentials:` makes the
+    # runner authenticate to Docker Hub for these pulls (unauthenticated pulls
+    # from shared runners hit "toomanyrequests"). The token is a read-only
+    # access token, stored as Actions AND Dependabot secrets.
     services:
       mysql:
         image: mysql:8
+        credentials:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
         env:
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: lodgekeep_dev
@@ -40,6 +49,9 @@ jobs:
           --health-retries=10
       redis:
         image: redis:7
+        credentials:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
         ports:
           - 6379:6379
         options: >-
