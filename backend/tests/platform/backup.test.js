@@ -21,7 +21,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 
 jest.mock('../../src/modules/notifications/email-adapter', () => {
   const actual = jest.requireActual('../../src/modules/notifications/email-adapter');
@@ -34,7 +34,21 @@ const { db } = require('../helpers/db');
 const { seedPlatformUser } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { dumpDatabaseSql } = require('../../src/db/dump');
-const { encryptForOpenssl, decryptFromOpenssl, PBKDF2_ITERATIONS } = require('../../src/modules/platform/backup');
+const { encryptForOpenssl, decryptFromOpenssl, encryptBackup, decryptBackup, PBKDF2_ITERATIONS } = require('../../src/modules/platform/backup');
+
+const DECRYPT_SCRIPT = path.join(__dirname, '../../scripts/decrypt-lodgekeep-backup.js');
+
+/** Runs the standalone restore script exactly as a recipient would. */
+function runScript(encrypted, passphrase) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lk-dec-'));
+  const input = path.join(dir, 'in.enc');
+  const output = path.join(dir, 'out.sql.gz');
+  fs.writeFileSync(input, encrypted);
+  const result = spawnSync(process.execPath, [DECRYPT_SCRIPT, input, output], { env: { ...process.env, LODGEKEEP_BACKUP_PASSPHRASE: passphrase }, encoding: 'utf8' });
+  const produced = fs.existsSync(output) ? fs.readFileSync(output) : null;
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { status: result.status, stderr: result.stderr, produced };
+}
 
 const PASSPHRASE = 'correct horse battery staple';
 
@@ -62,6 +76,104 @@ function wrongPassphraseRecovers(encrypted, plain, passphrase, iterations) {
     return false;
   }
 }
+
+describe('the v2 (AES-256-GCM) backup format', () => {
+  const plain = zlib.gzipSync(Buffer.from('SELECT 1; -- ünïcödé 🏨\n'.repeat(500)));
+  // Few iterations: these tests tamper with many positions.
+  const encrypted = encryptBackup(plain, PASSPHRASE, 1000);
+
+  test('round-trips, uses a fresh salt and IV every time, and starts with the version marker', () => {
+    expect(encrypted.subarray(0, 4).toString('ascii')).toBe('LKBK');
+    expect(encrypted[4]).toBe(2);
+    expect(decryptBackup(encrypted, PASSPHRASE).equals(plain)).toBe(true);
+    expect(encryptBackup(plain, PASSPHRASE, 1000).equals(encrypted)).toBe(false);
+  });
+
+  test('a wrong passphrase is always rejected (authenticated: no 1-in-256 quiet failure)', () => {
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      expect(() => decryptBackup(encrypted, `wrong-${attempt}`)).toThrow();
+    }
+  });
+
+  test('a flipped bit ANYWHERE in the file is rejected — header, salt, iterations, IV, ciphertext and tag', () => {
+    const positions = [0, 4, 5, 20, 21, 24, 25, 36, 37, 100, encrypted.length - 17, encrypted.length - 16, encrypted.length - 1];
+    for (const position of positions) {
+      const tampered = Buffer.from(encrypted);
+      tampered[position] ^= 0x01;
+      expect(() => decryptBackup(tampered, PASSPHRASE)).toThrow();
+    }
+  });
+
+  test('a truncated or extended file is rejected', () => {
+    expect(() => decryptBackup(encrypted.subarray(0, encrypted.length - 1), PASSPHRASE)).toThrow();
+    expect(() => decryptBackup(Buffer.concat([encrypted, Buffer.from([0])]), PASSPHRASE)).toThrow();
+    expect(() => decryptBackup(encrypted.subarray(0, 20), PASSPHRASE)).toThrow();
+  });
+
+  test('the standalone script opens it, and refuses (writing nothing) on tampering or a wrong passphrase', () => {
+    const ok = runScript(encrypted, PASSPHRASE);
+    expect(ok.status).toBe(0);
+    expect(ok.produced.equals(plain)).toBe(true);
+
+    const tampered = Buffer.from(encrypted);
+    tampered[60] ^= 0x01;
+    const bad = runScript(tampered, PASSPHRASE);
+    expect(bad.status).toBe(1);
+    expect(bad.produced).toBeNull();
+    expect(bad.stderr).toMatch(/tampered|corrupted/i);
+
+    const wrong = runScript(encrypted, 'definitely not it');
+    expect(wrong.status).toBe(1);
+    expect(wrong.produced).toBeNull();
+  });
+
+  test('the script bounds a hostile iteration count and rejects other files', () => {
+    const hostile = Buffer.from(encrypted);
+    hostile.writeUInt32BE(0xffffffff, 21);
+    const result = runScript(hostile, PASSPHRASE);
+    expect(result.status).toBe(1);
+    expect(result.produced).toBeNull();
+    expect(runScript(Buffer.from('hello world, not a backup at all......'), PASSPHRASE).status).toBe(1);
+  });
+});
+
+describe('legacy (v1, OpenSSL CBC) backups emailed before v2 still restore', () => {
+  const plain = zlib.gzipSync(Buffer.from('CREATE TABLE legacy (id int);\n'.repeat(300)));
+
+  test('the standalone script opens a v1 file made with the old code, and so does the stock openssl command', () => {
+    const legacy = encryptForOpenssl(plain, PASSPHRASE);
+    const viaScript = runScript(legacy, PASSPHRASE);
+    expect(viaScript.status).toBe(0);
+    expect(viaScript.produced.equals(plain)).toBe(true);
+
+    if (!hasOpenssl()) return;
+    const file = path.join(os.tmpdir(), `lk-legacy-${process.pid}.enc`);
+    fs.writeFileSync(file, legacy);
+    try {
+      const opened = execFileSync('openssl', ['enc', '-d', '-aes-256-cbc', '-pbkdf2', '-iter', String(PBKDF2_ITERATIONS), '-md', 'sha256', '-in', file, '-pass', `pass:${PASSPHRASE}`]);
+      expect(Buffer.from(opened).equals(plain)).toBe(true);
+    } finally {
+      fs.unlinkSync(file);
+    }
+  });
+
+  test('a v1 file whose contents are not a valid gzip (corrupted before encryption, or a quiet wrong-passphrase decrypt) is refused', () => {
+    const notGzip = encryptForOpenssl(Buffer.from('this decrypts fine but is not gzip data at all'), PASSPHRASE);
+    const result = runScript(notGzip, PASSPHRASE);
+    expect(result.status).toBe(1);
+    expect(result.produced).toBeNull();
+    expect(result.stderr).toMatch(/gzip/i);
+  });
+
+  test('a wrong passphrase on a v1 file never produces output (padding failure or invalid gzip)', () => {
+    const legacy = encryptForOpenssl(plain, PASSPHRASE, PBKDF2_ITERATIONS);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const result = runScript(legacy, `wrong-${attempt}`);
+      expect(result.status).toBe(1);
+      expect(result.produced).toBeNull();
+    }
+  });
+});
 
 describe('the backup file format', () => {
   test('encrypts in OpenSSL enc format: the real openssl binary opens it, and a wrong passphrase cannot', () => {
@@ -214,12 +326,18 @@ describe('POST/GET /api/v1/platform/backups', () => {
     expect(sent).toHaveLength(1);
     const [message] = sent;
     expect(message.to).toBe('owner@example.com');
-    expect(message.html).toContain('openssl enc -d -aes-256-cbc -pbkdf2');
+    expect(message.html).toContain('decrypt-lodgekeep-backup.js');
     expect(message.html).not.toContain(PASSPHRASE);
     const attachment = message.attachments[0];
     expect(attachment.filename).toBe(row.file_name);
     expect(Number(row.size_bytes)).toBe(attachment.content.length);
-    const sql = zlib.gunzipSync(decryptFromOpenssl(attachment.content, PASSPHRASE)).toString('utf8');
+    // The script attached to the email opens the attached backup, with nothing from LodgeKeep.
+    const script = message.attachments[1];
+    expect(script.filename).toBe('decrypt-lodgekeep-backup.js');
+    expect(script.content.toString('utf8')).toBe(fs.readFileSync(DECRYPT_SCRIPT, 'utf8'));
+    const opened = runScript(attachment.content, PASSPHRASE);
+    expect(opened.status).toBe(0);
+    const sql = zlib.gunzipSync(opened.produced).toString('utf8');
     expect(sql).toContain('CREATE TABLE `platform_backups`');
 
     // The passphrase is nowhere in the database.

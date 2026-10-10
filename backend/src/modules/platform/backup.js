@@ -15,10 +15,14 @@
  * such a row as failed after `STALE_AFTER_MS` rather than leaving it
  * "running" forever, and the admin simply clicks Backup again.
  *
- * The file: SQL (`src/db/dump.js`) → gzip → AES-256-CBC in OpenSSL's own
- * `enc` format with a PBKDF2-SHA256 key (salted), so it opens with a stock
- * command and no LodgeKeep code:
+ * The file: SQL (`src/db/dump.js`) → gzip → AES-256-GCM (v2, authenticated:
+ * see `encryptBackup`). It opens with the dependency-free
+ * `scripts/decrypt-lodgekeep-backup.js`, which is attached to the email. Backups
+ * emailed BEFORE v2 are OpenSSL AES-256-CBC files (no integrity check) and still
+ * open with that script or with the stock command:
  *   openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -in <file> -out backup.sql.gz
+ * `encryptForOpenssl`/`decryptFromOpenssl` are kept only to produce and read those
+ * legacy files in tests.
  *
  * It is sent through the SERVER's own mailbox (`EMAIL_PROVIDER`/`SMTP_*`),
  * never a hotel's Setup → Email settings: every hotel's data must not travel
@@ -31,6 +35,8 @@
  */
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const zlib = require('zlib');
 const { promisify } = require('util');
 const { scopedDb } = require('../../db');
@@ -41,7 +47,15 @@ const { AppError, ValidationError } = require('../../shared/errors');
 
 const gzip = promisify(zlib.gzip);
 
+// Legacy (v1, OpenSSL `enc`) iteration count — fixed, and still what opens old backups.
 const PBKDF2_ITERATIONS = 200000;
+// Current (v2, AES-256-GCM) — stored in each file's header, so it can change later.
+const V2_PBKDF2_ITERATIONS = 600000;
+const V2_MAGIC = Buffer.from('LKBK', 'ascii');
+const V2_VERSION = 2;
+const V2_HEADER_LENGTH = 4 + 1 + 16 + 4 + 12;
+const V2_TAG_LENGTH = 16;
+const DECRYPT_SCRIPT_NAME = 'decrypt-lodgekeep-backup.js';
 const MIN_PASSPHRASE_LENGTH = 12;
 const STALE_AFTER_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // most mailboxes refuse attachments over ~20-25 MB
@@ -68,7 +82,39 @@ function maxAttachmentBytes() {
   return Number.isFinite(value) && value > 0 ? value : DEFAULT_MAX_ATTACHMENT_BYTES;
 }
 
-/** OpenSSL `enc -aes-256-cbc -pbkdf2 -iter N -md sha256` format: "Salted__" + 8-byte salt + ciphertext. */
+/**
+ * v2 format (current): "LKBK" | 0x02 | salt(16) | iterations (uint32 BE) | IV(12) | ciphertext | GCM tag(16).
+ * AES-256-GCM with a PBKDF2-SHA256 key; the whole header is authenticated (AAD), so a changed byte anywhere
+ * is detected and nothing is returned. Opened with `scripts/decrypt-lodgekeep-backup.js` (no dependencies).
+ */
+function encryptBackup(plain, passphrase, iterations = V2_PBKDF2_ITERATIONS) {
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const iterationsBytes = Buffer.alloc(4);
+  iterationsBytes.writeUInt32BE(iterations);
+  const header = Buffer.concat([V2_MAGIC, Buffer.from([V2_VERSION]), salt, iterationsBytes, iv]);
+  const key = crypto.pbkdf2Sync(passphrase, salt, iterations, 32, 'sha256');
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  cipher.setAAD(header);
+  const ciphertext = Buffer.concat([cipher.update(plain), cipher.final()]);
+  return Buffer.concat([header, ciphertext, cipher.getAuthTag()]);
+}
+
+/** Opens a v2 file, verifying the tag before returning anything; throws on a wrong passphrase or any tampering. */
+function decryptBackup(file, passphrase) {
+  if (file.length < V2_HEADER_LENGTH + V2_TAG_LENGTH || !file.subarray(0, 4).equals(V2_MAGIC) || file[4] !== V2_VERSION) {
+    throw new Error('Not a LodgeKeep v2 backup.');
+  }
+  const header = file.subarray(0, V2_HEADER_LENGTH);
+  const iterations = header.readUInt32BE(21);
+  const key = crypto.pbkdf2Sync(passphrase, header.subarray(5, 21), iterations, 32, 'sha256');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, header.subarray(25, 37));
+  decipher.setAAD(header);
+  decipher.setAuthTag(file.subarray(file.length - V2_TAG_LENGTH));
+  return Buffer.concat([decipher.update(file.subarray(V2_HEADER_LENGTH, file.length - V2_TAG_LENGTH)), decipher.final()]);
+}
+
+/** LEGACY v1 — OpenSSL `enc -aes-256-cbc -pbkdf2 -iter N -md sha256` format: "Salted__" + 8-byte salt + ciphertext. */
 function encryptForOpenssl(plain, passphrase, iterations = PBKDF2_ITERATIONS) {
   const salt = crypto.randomBytes(8);
   const keyAndIv = crypto.pbkdf2Sync(passphrase, salt, iterations, 48, 'sha256');
@@ -102,10 +148,11 @@ function emailBody({ fileName, sizeBytes, tableCount, rowCount, takenAt, request
 Taken ${takenAt.toISOString().replace('T', ' ').slice(0, 19)} UTC by ${requestedBy}<br>
 ${tableCount} tables, ${rowCount} rows, ${formatBytes(sizeBytes)} encrypted.</p>
 <p>It is encrypted with the passphrase typed when the backup was started. The passphrase is not in this email and is not stored anywhere by LodgeKeep — without it the file cannot be opened.</p>
-<p><strong>To restore</strong> (into an empty database):</p>
-<pre>openssl enc -d -aes-256-cbc -pbkdf2 -iter ${PBKDF2_ITERATIONS} -md sha256 -in ${fileName} -out lodgekeep-backup.sql.gz
+<p><strong>To restore</strong> (into an empty database). <code>${DECRYPT_SCRIPT_NAME}</code> is attached — it needs only Node 18 or newer, nothing from LodgeKeep:</p>
+<pre>LODGEKEEP_BACKUP_PASSPHRASE='your passphrase' node ${DECRYPT_SCRIPT_NAME} ${fileName} lodgekeep-backup.sql.gz
 gunzip lodgekeep-backup.sql.gz
 mysql -u &lt;user&gt; -p &lt;empty_database&gt; &lt; lodgekeep-backup.sql</pre>
+<p>The file is authenticated: if it was corrupted or altered in transit, or the passphrase is wrong, the script refuses and writes nothing.</p>
 <p>This file holds every hotel's guest details and financial records. Keep it somewhere safe and delete copies you no longer need.</p>
 `;
 }
@@ -149,8 +196,9 @@ async function runBackup({ id, email, passphrase, adapter, requestedBy }) {
   try {
     const takenAt = new Date();
     const { sql, tableCount, rowCount } = await dumpDatabaseSql({ now: takenAt });
-    const encrypted = encryptForOpenssl(await gzip(Buffer.from(sql, 'utf8')), passphrase);
+    const encrypted = encryptBackup(await gzip(Buffer.from(sql, 'utf8')), passphrase);
     const fileName = `lodgekeep-backup-${stamp(takenAt)}.sql.gz.enc`;
+    const decryptScript = fs.readFileSync(path.join(__dirname, '../../../scripts', DECRYPT_SCRIPT_NAME));
     if (encrypted.length > maxAttachmentBytes()) {
       throw new Error(`The backup is ${formatBytes(encrypted.length)} — too big to email (limit ${formatBytes(maxAttachmentBytes())}).`);
     }
@@ -158,7 +206,10 @@ async function runBackup({ id, email, passphrase, adapter, requestedBy }) {
       to: email,
       subject: `LodgeKeep database backup — ${takenAt.toISOString().slice(0, 16).replace('T', ' ')} UTC`,
       html: emailBody({ fileName, sizeBytes: encrypted.length, tableCount, rowCount, takenAt, requestedBy }),
-      attachments: [{ filename: fileName, content: encrypted, contentType: 'application/octet-stream' }],
+      attachments: [
+        { filename: fileName, content: encrypted, contentType: 'application/octet-stream' },
+        { filename: DECRYPT_SCRIPT_NAME, content: decryptScript, contentType: 'text/javascript' },
+      ],
     });
     await platformTable(systemContext()).where({ id }).update({
       status: 'sent',
@@ -209,6 +260,9 @@ async function listBackups({ context }) {
 module.exports = {
   startBackup,
   listBackups,
+  encryptBackup,
+  decryptBackup,
+  V2_PBKDF2_ITERATIONS,
   encryptForOpenssl,
   decryptFromOpenssl,
   PBKDF2_ITERATIONS,
