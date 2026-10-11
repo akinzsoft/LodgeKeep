@@ -231,6 +231,14 @@ export function createTaxVersion(body) {
   return request('/taxes', { method: 'POST', body });
 }
 
+export function deactivateTax(taxCode, body) {
+  return request(`/taxes/${encodeURIComponent(taxCode)}/deactivate`, { method: 'POST', body });
+}
+
+export function deleteTax(taxCode, body) {
+  return request(`/taxes/${encodeURIComponent(taxCode)}/delete`, { method: 'POST', body });
+}
+
 // ---------------------------------------------------------------------
 // Market segments / booking sources / cancellation policies — PLAN.md
 // Phase 1 gap closure, PRODUCT_REQUIREMENTS.md §3.19. All three are the

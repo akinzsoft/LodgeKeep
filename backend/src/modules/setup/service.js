@@ -12,7 +12,7 @@
 const { scopedDb } = require('../../db');
 const imageStore = require('../../shared/image-store');
 const { withDuplicateMapping, ValidationError } = require('../../shared/errors');
-const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError } = require('./errors');
+const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError, TaxInUseError, TaxDeactivationError } = require('./errors');
 const { encrypt } = require('../../shared/encryption');
 const { resolveEmailAdapter, describeEmailDelivery, isUndeliverable, NoMailboxConfiguredError } = require('../notifications/email-adapter');
 const paystackAdapter = require('../cashiering/paystack-adapter');
@@ -922,6 +922,102 @@ async function createTaxVersion({ context, taxCode, name, rate, effectiveFrom, i
   });
 }
 
+
+function dayBefore(isoDate) {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function dayAfter(isoDate) {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** LIKE-escapes a tax code so `_` and `%` in it match literally (over-matching would only ever over-refuse, but exact is clearer). */
+function escapeLike(value) {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/**
+ * Conservative "has this tax possibly been applied" count across every
+ * version window of one tax code. Nothing stores a tax id — folio tax lines
+ * carry the text "<name> (<CODE>)", POS settlements and supermarket sales
+ * carry only a tax amount — so usage is inferred: a record dated inside a
+ * version's window that carries tax counts, even if another tax produced it.
+ * That can over-refuse; it can never under-count. A supermarket-only tax is
+ * checked against supermarket sales (every such sale is also a POS
+ * settlement); every other tax against folio tax lines plus POS settlements.
+ */
+async function countTaxUsage(trx, versions) {
+  const usage = { folioTaxLines: 0, posSettlements: 0, supermarketSales: 0 };
+  for (const version of versions) {
+    const from = version.effective_from;
+    const toExclusive = version.effective_to ? dayAfter(version.effective_to) : null;
+    const supermarketOnly = version.applies_to === 'supermarket_sale';
+    const dated = (query, column) => {
+      let q = query.where(column, '>=', from);
+      if (toExclusive) q = q.where(column, '<', toExclusive);
+      return q;
+    };
+    if (supermarketOnly) {
+      usage.supermarketSales += await dated(trx.table('supermarket_sales').where('tax_amount', '>', 0), 'created_at').count();
+    } else {
+      usage.folioTaxLines += await dated(
+        trx.table('folio_line_items').where({ type: 'tax' }).where('description', 'like', `%(${escapeLike(version.tax_code)})`),
+        'business_date'
+      ).count();
+      usage.posSettlements += await dated(trx.table('pos_order_settlements').where('tax_amount', '>', 0), 'settled_at').count();
+    }
+  }
+  return usage;
+}
+
+/**
+ * Deactivate a tax: stop it applying from `deactivateFrom` (the first day it
+ * no longer applies; default the business date). Closes the open version by
+ * setting `effective_to` to the day before — the field the engine already
+ * honours, so nothing about how any existing date resolves changes. Past
+ * dates are refused. Reactivating is a new version.
+ */
+async function deactivateTax({ context, taxCode, deactivateFrom }) {
+  const db = scopedDb().for(context);
+  return db.transaction(async (trx) => {
+    const property = await trx.table('properties').where({ id: context.propertyId }).first();
+    const businessDate = property?.current_business_date;
+    const versions = await trx.table('taxes').where({ tax_code: taxCode }).orderBy('effective_from', 'desc').forUpdate();
+    if (versions.length === 0) return null;
+    const from = deactivateFrom ?? (businessDate ? String(businessDate).slice(0, 10) : undefined);
+    if (!from || !/^\d{4}-\d{2}-\d{2}$/.test(String(from))) {
+      throw new TaxDeactivationError('VALIDATION_INVALID_DATE', 'A valid deactivation date (YYYY-MM-DD) is required.', 400);
+    }
+    const open = versions.find((v) => !v.effective_to);
+    if (!open) throw new TaxDeactivationError('CONFLICT_TAX_ALREADY_INACTIVE', `Tax "${taxCode}" is already inactive.`, 409);
+    if (businessDate && from < String(businessDate).slice(0, 10)) {
+      throw new TaxDeactivationError('BUSINESS_RULE_TAX_DEACTIVATION_IN_PAST', `A tax cannot be deactivated from a past date (the business date is ${String(businessDate).slice(0, 10)}).`, 422);
+    }
+    if (from <= open.effective_from) {
+      throw new TaxDeactivationError('BUSINESS_RULE_TAX_DEACTIVATION_BEFORE_START', `Tax "${taxCode}" only starts on ${open.effective_from}; choose a later date, or delete the tax if it has never been used.`, 422);
+    }
+    await trx.table('taxes').where({ id: open.id }).update({ effective_to: dayBefore(from) });
+    return { before: open, after: await trx.table('taxes').where({ id: open.id }).first() };
+  });
+}
+
+/** Delete a whole tax (every version) only when no record could have used it; otherwise refuse with counts. */
+async function deleteTax({ context, taxCode }) {
+  const db = scopedDb().for(context);
+  return db.transaction(async (trx) => {
+    const versions = await trx.table('taxes').where({ tax_code: taxCode }).orderBy('effective_from', 'desc').forUpdate();
+    if (versions.length === 0) return null;
+    const usage = await countTaxUsage(trx, versions);
+    if (usage.folioTaxLines + usage.posSettlements + usage.supermarketSales > 0) throw new TaxInUseError(taxCode, usage);
+    await trx.table('taxes').where({ tax_code: taxCode }).delete();
+    return { versions };
+  });
+}
+
 /** Every version of every tax the property has ever had, most recent first — the Taxes screen shows current AND historical versions (PRODUCT_REQUIREMENTS.md §3.19: "Show ... does not alter historical folios", which a user should be able to see for themselves). */
 async function listTaxes({ context }) {
   const db = scopedDb().for(context);
@@ -994,6 +1090,9 @@ module.exports = {
   resolveRateForDate,
   createTaxVersion,
   listTaxes,
+  deactivateTax,
+  deleteTax,
+  countTaxUsage,
   resolveEffectiveTax,
   resolveTaxForDate,
   createMarketSegment,

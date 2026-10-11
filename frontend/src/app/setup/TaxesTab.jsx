@@ -18,7 +18,7 @@ import formStyles from './SetupForm.module.css';
  * property should be able to see for itself that changing a rate created a
  * new version rather than rewriting history (ARCHITECTURE.md §12.1).
  */
-export function TaxesTab({ disabled, isOffline = false }) {
+export function TaxesTab({ disabled, isOffline = false, activeProperty = null }) {
   const [taxes, setTaxes] = useState(null);
   const [form, setForm] = useState({
     tax_code: '',
@@ -30,6 +30,9 @@ export function TaxesTab({ disabled, isOffline = false }) {
     applies_to: 'all',
   });
   const [confirming, setConfirming] = useState(false);
+  // { kind: 'deactivate' | 'delete', taxCode } while a tax-level action is being confirmed.
+  const [action, setAction] = useState(null);
+  const [deactivateFrom, setDeactivateFrom] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
@@ -82,6 +85,33 @@ export function TaxesTab({ disabled, isOffline = false }) {
     }
   }
 
+  async function handleAction(reason) {
+    setSubmitting(true);
+    setError(null);
+    try {
+      if (action.kind === 'deactivate') {
+        await setupApi.deactivateTax(action.taxCode, { reason, ...(deactivateFrom ? { deactivate_from: deactivateFrom } : {}) });
+      } else {
+        await setupApi.deleteTax(action.taxCode, { reason });
+      }
+      setAction(null);
+      await reload();
+    } catch (caught) {
+      // A refused delete explains itself (how many records use the tax, and to deactivate instead).
+      setError(caught instanceof ApiError ? caught.message : 'Could not complete that action.');
+      setAction(null);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function startAction(kind, taxCode) {
+    setDeactivateFrom('');
+    setAction({ kind, taxCode });
+  }
+
+  const businessDate = activeProperty?.current_business_date ? String(activeProperty.current_business_date).slice(0, 10) : '';
+
   return (
     <div className={styles.page}>
       <DataTable
@@ -104,6 +134,27 @@ export function TaxesTab({ disabled, isOffline = false }) {
               ) : (
                 <StatusPill tone="neutral" label="Historical" />
               ),
+          },
+          {
+            key: 'actions',
+            label: 'Actions',
+            render: (row) => {
+              // Actions apply to the whole tax, so they sit on its newest version only.
+              const isLatest = taxes.find((v) => v.tax_code === row.tax_code)?.id === row.id;
+              if (!isLatest) return null;
+              return (
+                <span className={formStyles.actionsRow}>
+                  {isCurrentlyOpen(row) && (
+                    <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('deactivate', row.tax_code)}>
+                      Deactivate
+                    </Button>
+                  )}
+                  <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('delete', row.tax_code)}>
+                    Delete
+                  </Button>
+                </span>
+              );
+            },
           },
         ]}
         rows={taxes ?? []}
@@ -220,6 +271,42 @@ export function TaxesTab({ disabled, isOffline = false }) {
           </div>
         </form>
       </Card>
+
+      {action?.kind === 'deactivate' && (
+        <ConfirmDialog
+          title={`Deactivate ${action.taxCode}`}
+          consequence={`"${action.taxCode}" stops applying to new charges from the date below. Folios, receipts and reports already recorded keep the tax they were charged. To bring it back later, add a new version.`}
+          requireReason
+          confirmLabel={submitting ? 'Saving…' : 'Deactivate'}
+          confirmDisabled={submitting || (deactivateFrom !== '' && businessDate !== '' && deactivateFrom < businessDate)}
+          onConfirm={handleAction}
+          onCancel={() => setAction(null)}
+        >
+          <label className={formStyles.field}>
+            <span className={formStyles.label}>Stops applying from</span>
+            <input
+              className={formStyles.input}
+              type="date"
+              value={deactivateFrom || businessDate}
+              min={businessDate || undefined}
+              onChange={(event) => setDeactivateFrom(event.target.value)}
+            />
+            <span className={formStyles.hint}>Defaults to the business date. Past dates are not allowed.</span>
+          </label>
+        </ConfirmDialog>
+      )}
+
+      {action?.kind === 'delete' && (
+        <ConfirmDialog
+          title={`Delete ${action.taxCode}`}
+          consequence={`This permanently deletes "${action.taxCode}" and every version of it. It is only allowed if no folio, POS sale or supermarket sale could have used it; otherwise you will be asked to deactivate it instead.`}
+          requireReason
+          confirmLabel={submitting ? 'Deleting…' : 'Delete tax'}
+          confirmDisabled={submitting}
+          onConfirm={handleAction}
+          onCancel={() => setAction(null)}
+        />
+      )}
 
       {confirming && (
         <ConfirmDialog
