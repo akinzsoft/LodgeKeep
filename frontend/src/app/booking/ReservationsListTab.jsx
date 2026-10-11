@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { DataTable, StatusPill, Button, ConfirmDialog } from '../../shared/components/index.js';
-import { Money } from '../../shared/format/money.jsx';
+import { DataTable, StatusPill, Button, ConfirmDialog, FolioBalance } from '../../shared/components/index.js';
 import { formatDate, nightsBetween } from '../../shared/format/dates.js';
 import { reservationsApi, ApiError } from '../../shared/api/index.js';
 import { statusTone, statusLabel } from './status.js';
@@ -166,7 +165,7 @@ export function ReservationsListTab({ isOffline = false } = {}) {
                 <span className={styles.subText}>No open folio</span>
               ) : (
                 <span className={styles.nowrap}>
-                  <Money amount={row.folio_balance} currencyCode={row.folio_currency} />
+                  <FolioBalance amount={row.folio_balance} currencyCode={row.folio_currency} />
                 </span>
               ),
           },

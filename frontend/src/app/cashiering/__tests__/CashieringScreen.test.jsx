@@ -278,6 +278,21 @@ describe('<CashieringScreen>', () => {
     expect(screen.getByText(/above what is owed will be kept as a credit/)).toHaveTextContent(/500\.00/);
   });
 
+  it('labels the folio header balance as a credit or outstanding, never a signed number', async () => {
+    mocks.listFoliosForReservation.mockResolvedValue([{ ...FOLIO, balance: '-20240.00' }]);
+    await loadReservation();
+    await screen.findByText('Room 101');
+    expect(screen.getByText((_, el) => /^Credit\s.*20,240\.00$/.test(el.textContent) && el.className.includes('credit'))).toBeInTheDocument();
+    expect(screen.queryByText(/-.*20,240\.00/)).not.toBeInTheDocument();
+  });
+
+  it('labels an owed folio header balance as Outstanding', async () => {
+    mocks.listFoliosForReservation.mockResolvedValue([{ ...FOLIO, balance: '100.00' }]);
+    await loadReservation();
+    await screen.findByText('Room 101');
+    expect(screen.getByText(/^Outstanding/)).toHaveTextContent(/100\.00/);
+  });
+
   it('on a credit folio shows the "Credit balance" pill and a whole new payment is deposit', async () => {
     mocks.listFoliosForReservation.mockResolvedValue([{ ...FOLIO, balance: '-20.00' }]);
     await loadReservation();

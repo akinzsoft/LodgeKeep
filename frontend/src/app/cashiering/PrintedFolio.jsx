@@ -1,4 +1,4 @@
-import { PrintLetterhead } from '../../shared/components/index.js';
+import { PrintLetterhead, FolioBalance } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { formatDate } from '../../shared/format/dates.js';
 import styles from './PrintedFolio.module.css';
@@ -60,7 +60,7 @@ export function PrintedFolio({ folio, lineItems, property }) {
           <tr className={styles.total}>
             <td colSpan={3}>Balance</td>
             <td className={styles.amount}>
-              <Money amount={folio.balance} currencyCode={folio.currency} />
+              <FolioBalance amount={folio.balance} currencyCode={folio.currency} />
             </td>
           </tr>
         </tfoot>

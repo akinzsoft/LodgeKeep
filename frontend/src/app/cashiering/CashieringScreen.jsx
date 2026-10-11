@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, DataTable, Button, StatusPill, ConfirmDialog, PrintDocument } from '../../shared/components/index.js';
+import { Card, DataTable, Button, StatusPill, ConfirmDialog, PrintDocument, FolioBalance } from '../../shared/components/index.js';
 import { Money, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import { cashieringApi, arApi, profilesApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
@@ -280,7 +280,7 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
         {folio.status === 'open' && balanceState && <StatusPill tone={balanceState.tone} label={balanceState.label} />}
         {arAccount?.is_over_limit && <StatusPill tone="danger" label="AR account over limit" />}
         <span className={styles.balance}>
-          Balance: <Money amount={folio.balance} currencyCode={folio.currency} />
+          <FolioBalance amount={folio.balance} currencyCode={folio.currency} />
         </span>
         <Button size="compact" variant="secondary" disabled={lineItems === null} onClick={() => setPrinting(true)}>
           Print folio
