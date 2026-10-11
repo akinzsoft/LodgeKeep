@@ -61,6 +61,13 @@ describe('<ReservationsListTab>', () => {
     expect(within(row).getByText(/15,000\.00/)).toBeInTheDocument();
   });
 
+  it('labels a credit balance as Credit, not a negative number', async () => {
+    mocks.searchReservations.mockResolvedValue(page([{ ...RESERVATION, folio_balance: '-20240.00' }]));
+    render(<ReservationsListTab />);
+    expect(await screen.findByText(/^Credit/)).toHaveTextContent(/20,240\.00/);
+    expect(screen.queryByText(/-.*20,240\.00/)).not.toBeInTheDocument();
+  });
+
   it('says "No open folio" rather than a zero when there is none', async () => {
     mocks.searchReservations.mockResolvedValue(page([{ ...RESERVATION, folio_balance: null, folio_currency: null }]));
     render(<ReservationsListTab />);

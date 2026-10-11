@@ -90,6 +90,18 @@ describe('<FolioSearchCard>', () => {
     expect(await screen.findByText('Checked out')).toBeInTheDocument();
   });
 
+  it('labels each result balance as Credit or Outstanding, never a signed number', async () => {
+    mocks.searchFolios.mockResolvedValue([
+      row({ id: '1', folio_balance: '-20240.00' }),
+      row({ id: '2', folio_balance: '150.00' }),
+    ]);
+    render(<FolioSearchCard onOpenFolio={vi.fn()} />);
+    await search('obi');
+    expect(await screen.findByText(/^Credit/)).toHaveTextContent(/20,240\.00/);
+    expect(screen.getByText(/^Outstanding/)).toHaveTextContent(/150\.00/);
+    expect(screen.queryByText(/-.*20,240\.00/)).not.toBeInTheDocument();
+  });
+
   it('says so when nothing matches', async () => {
     mocks.searchFolios.mockResolvedValue([]);
     render(<FolioSearchCard onOpenFolio={vi.fn()} />);

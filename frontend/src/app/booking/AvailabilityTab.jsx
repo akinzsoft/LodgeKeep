@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Card, Button, DataTable, StatusPill } from '../../shared/components/index.js';
+import { Card, Button, DataTable, StatusPill, FolioBalance } from '../../shared/components/index.js';
 import { setupApi, reservationsApi, cashieringApi, groupBlocksApi, ApiError } from '../../shared/api/index.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { filterRateCodesForStay, resolvePrimaryRateCodeForStay } from './rate-code-eligibility.js';
@@ -1066,7 +1066,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                     <StatusPill tone={describeBalanceState(folio.balance).tone} label={describeBalanceState(folio.balance).label} />
                   )}
                   <p className={formStyles.disabledNotice}>
-                    No balance due — <Money amount={folio.balance} currencyCode={folio.currency} />. Enter an amount below to take a deposit.
+                    No balance due — <FolioBalance amount={folio.balance} currencyCode={folio.currency} />. Enter an amount below to take a deposit.
                   </p>
                 </div>
               ) : (
