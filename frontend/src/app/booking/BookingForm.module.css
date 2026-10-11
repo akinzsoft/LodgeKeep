@@ -186,3 +186,10 @@
   font-size: var(--text-label-size);
   font-weight: var(--text-label-weight);
 }
+
+/* Inline problem under a field (the typed payment amount). */
+.fieldError {
+  color: var(--state-danger);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+}

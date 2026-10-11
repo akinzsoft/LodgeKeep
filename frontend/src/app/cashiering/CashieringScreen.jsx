@@ -7,6 +7,8 @@ import { FolioSearchCard } from './FolioSearchCard.jsx';
 import { OutstandingBalancesTab } from './OutstandingBalancesTab.jsx';
 import { PrintedFolio } from './PrintedFolio.jsx';
 import { TerminalPaymentFields } from './TerminalPaymentFields.jsx';
+import { PaymentAmountField } from './PaymentAmountField.jsx';
+import { defaultPaymentAmount, paymentAmountProblem } from './paymentAmount.js';
 import formStyles from './CashieringForm.module.css';
 import styles from './CashieringScreen.module.css';
 
@@ -198,6 +200,9 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [voidingLine, setVoidingLine] = useState(null);
   const [refundingPayment, setRefundingPayment] = useState(null);
+  // Blank = refund everything still refundable; a smaller amount refunds part of it (e.g. a deposit's leftover credit).
+  const [refundAmount, setRefundAmount] = useState('');
+  const refundAmountProblem = refundAmount.trim() ? paymentAmountProblem(refundAmount) : null;
   const [movingLine, setMovingLine] = useState(null);
   const [destinationFolioId, setDestinationFolioId] = useState('');
   const [checkoutUrl, setCheckoutUrl] = useState(null);
@@ -420,8 +425,11 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
                 Verify
               </Button>
             )}
-            {row.status === 'CAPTURED' && !row.parent_payment_id && (
-              <Button size="compact" variant="danger" disabled={isOffline || submitting} onClick={() => setRefundingPayment(row)}>
+            {(row.status === 'CAPTURED' || row.status === 'PARTIALLY_REFUNDED') && !row.parent_payment_id && (
+              <Button size="compact" variant="danger" disabled={isOffline || submitting} onClick={() => {
+                  setRefundAmount('');
+                  setRefundingPayment(row);
+                }}>
                 Refund
               </Button>
             )}
@@ -449,8 +457,8 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
           {folio.company_profile_id ? (
             <p className={formStyles.disabledNotice}>Billed to {folio.billed_to} — settled through Accounts Receivable.</p>
           ) : (
-            <Button variant="secondary" size="compact" disabled={isOffline || isSettled} onClick={() => setShowPaymentForm((v) => !v)}>
-              Capture a payment
+            <Button variant="secondary" size="compact" disabled={isOffline} onClick={() => setShowPaymentForm((v) => !v)}>
+              {isSettled ? 'Take a deposit' : 'Capture a payment'}
             </Button>
           )}
         </div>
@@ -482,7 +490,7 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
         />
       )}
 
-      {showPaymentForm && !isSettled && !folio.company_profile_id && (
+      {showPaymentForm && !folio.company_profile_id && (
         <PaymentForm
           currency={folio.currency}
           balance={folio.balance}
@@ -579,16 +587,41 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
       {refundingPayment && (
         <ConfirmDialog
           title="Refund payment"
-          consequence={`This refunds the full ${refundingPayment.amount} ${refundingPayment.currency} payment (${refundingPayment.provider}). It cannot be undone.`}
+          consequence={
+            refundAmount.trim() && !refundAmountProblem
+              ? `This refunds ${refundAmount.trim()} ${refundingPayment.currency} of the ${refundingPayment.amount} ${refundingPayment.currency} payment (${refundingPayment.provider}). It cannot be undone.`
+              : `This refunds everything still refundable of the ${refundingPayment.amount} ${refundingPayment.currency} payment (${refundingPayment.provider}). It cannot be undone.`
+          }
           requireReason
           confirmLabel="Confirm refund"
+          confirmDisabled={Boolean(refundAmountProblem)}
           onConfirm={async (reason) => {
-            await onAction(() => cashieringApi.refundPayment(refundingPayment.id, { reason }));
+            const partial = refundAmount.trim();
+            await onAction(() => cashieringApi.refundPayment(refundingPayment.id, partial ? { reason, amount: partial } : { reason }));
             setRefundingPayment(null);
             reload();
           }}
           onCancel={() => setRefundingPayment(null)}
-        />
+        >
+          <label className={formStyles.field}>
+            <span className={formStyles.label}>Amount to refund (optional)</span>
+            <input
+              className={formStyles.input}
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
+              placeholder="Leave blank to refund it all"
+              value={refundAmount}
+              onChange={(event) => setRefundAmount(event.target.value)}
+              aria-invalid={refundAmountProblem ? 'true' : undefined}
+            />
+            {refundAmountProblem && (
+              <span role="alert" className={formStyles.fieldError}>
+                {refundAmountProblem}
+              </span>
+            )}
+          </label>
+        </ConfirmDialog>
       )}
 
       {movingLine && (
@@ -753,14 +786,9 @@ function AdjustmentForm({ disabled, isArBilled = false, onSubmit, onCancel }) {
 }
 
 /**
- * Gap closure (user-reported): "the form textfield amt is editable pls
- * correct it." The Amount field is locked to the folio's own real balance
- * — there is no free-text local `amount` state to hold a different value,
- * since a payment capture here always pays the full outstanding balance
- * (confirmed with the user: no partial-payment capability is needed today;
- * `ChargeForm`/`AdjustmentForm` keep their own free-text amounts unchanged,
- * since a charge or adjustment is legitimately arbitrary, never "the
- * balance").
+ * The Amount defaults to the folio's balance but is editable: paying more than is owed is a DEPOSIT and the excess
+ * stays on the folio as a credit (a negative balance), and a settled folio can take a pure advance deposit. The
+ * server validates the amount (positive, 2 decimals, under the ceiling) and is the real guard.
  */
 function PaymentForm({ currency, balance, disabled, onCash, onTerminal, onPaystack, onCancel }) {
   const [method, setMethod] = useState('cash');
@@ -768,6 +796,8 @@ function PaymentForm({ currency, balance, disabled, onCash, onTerminal, onPaysta
   const [terminalAccounts, setTerminalAccounts] = useState([]);
   const [terminalAccountId, setTerminalAccountId] = useState('');
   const [terminalReference, setTerminalReference] = useState('');
+  const [amount, setAmount] = useState(() => defaultPaymentAmount(balance));
+  const amountProblem = paymentAmountProblem(amount);
 
   // The hotel's recorded terminal accounts (id, name, last 4). A failed load just means none is offered: the payment is still recordable.
   useEffect(() => {
@@ -788,9 +818,11 @@ function PaymentForm({ currency, balance, disabled, onCash, onTerminal, onPaysta
       className={formStyles.form}
       onSubmit={(event) => {
         event.preventDefault();
-        if (method === 'cash') onCash({ amount: balance, currency });
-        else if (method === 'terminal') onTerminal({ amount: balance, currency, accountId: terminalAccountId, reference: terminalReference });
-        else onPaystack({ amount: balance, currency, guestEmail });
+        if (amountProblem) return;
+        const paid = amount.trim();
+        if (method === 'cash') onCash({ amount: paid, currency });
+        else if (method === 'terminal') onTerminal({ amount: paid, currency, accountId: terminalAccountId, reference: terminalReference });
+        else onPaystack({ amount: paid, currency, guestEmail });
       }}
     >
       <div className={formStyles.row}>
@@ -802,15 +834,7 @@ function PaymentForm({ currency, balance, disabled, onCash, onTerminal, onPaysta
             <option value="paystack">Paystack (card/digital)</option>
           </select>
         </label>
-        <label className={formStyles.field}>
-          <span className={formStyles.label}>Amount</span>
-          <input
-            className={`${formStyles.input} ${formStyles.inputLocked}`}
-            value={balance}
-            readOnly
-            aria-readonly="true"
-          />
-        </label>
+        <PaymentAmountField styles={formStyles} value={amount} onChange={setAmount} balance={balance} currency={currency} disabled={disabled} />
         {method === 'terminal' && (
           <TerminalPaymentFields
             styles={formStyles}
@@ -835,7 +859,7 @@ function PaymentForm({ currency, balance, disabled, onCash, onTerminal, onPaysta
         )}
       </div>
       <div className={formStyles.actionsRow}>
-        <Button type="submit" disabled={disabled}>
+        <Button type="submit" disabled={disabled || Boolean(amountProblem)}>
           Capture payment
         </Button>
         <Button type="button" variant="ghost" onClick={onCancel}>

@@ -88,3 +88,14 @@ export function extendedCost(unitCost, quantity) {
   const roundedAbs = (absNumerator * 2n + denominator) / (2n * denominator);
   return fromCents(negative ? -roundedAbs : roundedAbs);
 }
+
+/** Compares two money strings exactly: -1, 0 or 1. */
+export function compareMoney(a, b) {
+  const diff = toCents(a) - toCents(b);
+  return diff < 0n ? -1 : diff > 0n ? 1 : 0;
+}
+
+/** `a - b`, exactly. */
+export function subtractMoney(a, b) {
+  return fromCents(toCents(a) - toCents(b));
+}
