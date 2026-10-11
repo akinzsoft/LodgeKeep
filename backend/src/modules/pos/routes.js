@@ -33,6 +33,7 @@ function posRouter() {
   router.get('/pos/outlets', requireAnyPermission(['pos.operate', 'pos.stock_view']), controller.listOutlets);
   router.post('/pos/outlets', requirePermission('pos.manage'), controller.createOutlet);
   router.patch('/pos/outlets/:id', requirePermission('pos.manage'), controller.updateOutlet);
+  router.put('/pos/outlets/:id/service-charge', requirePermission('pos.service_charge.manage'), controller.setOutletServiceCharge);
   router.post('/pos/outlets/:id/archive', requirePermission('pos.manage'), controller.archiveOutlet);
   // Recording which bank accounts an outlet's external terminals pay into is
   // Setup (admin / super_admin: `setup.manage`), not an outlet manager's call.

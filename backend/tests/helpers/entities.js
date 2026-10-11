@@ -2451,6 +2451,35 @@ const ENTITIES = [
   },
 
   {
+    table: 'pos_guest_order_service_charges',
+    // One frozen rate per tab; the fixture row sits on `posOrders[0]`.
+    uniqueKeys: [['tenant_id', 'property_id', 'pos_order_id']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      pos_order_id: t.posOrders[1].id,
+      service_charge_percent: '10.00',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      pos_order_id: t.posOrders[0].id,
+      service_charge_percent: '10.00',
+    }),
+    crossTenant: [
+      {
+        name: "freezes a rate against another tenant's pos_order",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          pos_order_id: other.posOrders[0].id,
+          service_charge_percent: '10.00',
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'pos_room_charge_otps',
     // No natural unique key — matching `mfa_login_codes`' own precedent
     // exactly: `code_hash` is deliberately NOT unique (a 6-digit code's

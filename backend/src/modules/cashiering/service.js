@@ -35,7 +35,7 @@ const { scopedDb, knex } = require('../../db');
 const { systemContext, workerContext } = require('../tenancy');
 const { ValidationError } = require('../../shared/errors');
 const { generateUlid } = require('../../shared/ulid');
-const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
+const { sumMoney, negateMoney, compareMoney, percentOfMoney } = require('../../shared/money');
 const { assertPaymentAmount } = require('../../shared/payment-amount');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('./tax-engine');
 const { taxChargeTypeForOutlet } = require('../../shared/outlet-types');
@@ -912,12 +912,16 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
   const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate: property?.current_business_date, chargeType: taxChargeTypeForOutlet(saleOutlet) });
   const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
   const taxAmount = sumMoney(taxLines.map((t) => t.amount));
+  // A QR order pays the service charge frozen when the guest placed it (null = none), worked out from the net.
+  const frozen = guestOrder ? await trx.table('pos_guest_order_service_charges').where({ pos_order_id: order.id }).first('service_charge_percent') : null;
+  const serviceCharge = frozen ? percentOfMoney(netAmount, String(frozen.service_charge_percent)) : '0.00';
 
   const [settlementId] = await trx.table('pos_order_settlements').insert({
     pos_order_id: order.id,
     method: 'card',
     subtotal: netAmount,
     tax_amount: taxAmount,
+    service_charge: serviceCharge,
     currency: payment.currency,
     payment_id: payment.id,
     tender: 'card',
@@ -957,7 +961,7 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
     userId: userId ?? null,
   });
 
-  const chargedTotal = sumMoney([netAmount, taxAmount]);
+  const chargedTotal = sumMoney([netAmount, taxAmount, serviceCharge]);
   if (!guestOrder) {
     await notifyStaff({
       trx,
@@ -983,7 +987,7 @@ async function finalizePosOrderCardCapture({ trx, payment, userId }) {
         aggregateType: 'pos_guest_orders',
         aggregateId: guestOrder.id,
         propertyId: order.property_id,
-        payload: { recipientEmail: guestOrder.guest_contact, amount: sumMoney([netAmount, taxAmount]), currency: payment.currency, propertyName: property?.name ?? '' },
+        payload: { recipientEmail: guestOrder.guest_contact, amount: chargedTotal, currency: payment.currency, propertyName: property?.name ?? '' },
       });
     }
   }

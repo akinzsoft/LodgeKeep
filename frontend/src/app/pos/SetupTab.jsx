@@ -7,6 +7,7 @@ import { MenuItemsTab } from './MenuItemsTab.jsx';
 import { OutletCategoriesCard } from './OutletCategoriesCard.jsx';
 import { OutletTerminalAccountsCard } from './OutletTerminalAccountsCard.jsx';
 import { OutletPayoutAccountCard } from './OutletPayoutAccountCard.jsx';
+import { OutletServiceChargeCard } from './OutletServiceChargeCard.jsx';
 import { STORE_OUTLET_TYPE, isStoreOutlet, canReceiveAt, receivingOutlets } from './outletTypes.js';
 
 /**
@@ -58,9 +59,10 @@ const OUTLET_SECTIONS = [
   { key: 'terminals', label: 'Terminals' },
   { key: 'accounts', label: 'Terminal accounts' },
   { key: 'payout', label: 'Online payout account' },
+  { key: 'service', label: 'Service charge' },
 ];
 
-export function SetupTab({ activeProperty, isOffline = false, canManageAccounts = true }) {
+export function SetupTab({ activeProperty, isOffline = false, canManageAccounts = true, canManageServiceCharge = true }) {
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState(null);
   const [selectedOutletId, setSelectedOutletId] = useState(null);
@@ -409,6 +411,10 @@ export function SetupTab({ activeProperty, isOffline = false, canManageAccounts 
             ) : (
               <OutletPayoutAccountCard outletId={selectedOutlet.id} outletName={selectedOutlet.name} isOffline={isOffline} canManage={canManageAccounts} />
             ))}
+
+          {outletSection === 'service' && (
+            <OutletServiceChargeCard outlet={selectedOutlet} isOffline={isOffline} canManage={canManageServiceCharge} onSaved={reload} />
+          )}
 
           {outletSection === 'terminals' && (
             <Card title={`Terminals — ${selectedOutlet.name}`}>

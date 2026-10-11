@@ -144,6 +144,47 @@ async function updateOutlet(req, res, next) {
   }
 }
 
+/**
+ * `PUT /pos/outlets/:id/service-charge` (`pos.service_charge.manage`) — the outlet's service charge rate and
+ * guest-QR mode. A real change needs a reason and is audited with before/after; an unchanged value writes
+ * nothing. The generic outlet PATCH ignores both fields.
+ */
+async function setOutletServiceCharge(req, res, next) {
+  try {
+    const percent = req.body?.service_charge_percent;
+    const qrMode = req.body?.qr_service_charge_mode;
+    if (percent === undefined && qrMode === undefined) {
+      throw new ValidationError('MISSING_FIELD', 'Send the service charge percent and/or the QR mode.', [{ field: 'service_charge_percent', issue: 'missing' }]);
+    }
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    const current = await service.getOutlet({ context: req.context, id: req.params.id });
+    if (!current) return notFound(res);
+    const result = await service.setOutletServiceCharge({
+      context: req.context,
+      id: req.params.id,
+      percent,
+      qrMode,
+      requireReason: () => {
+        if (!reason) throw new ValidationError('MISSING_FIELD', 'A reason is required to change the service charge.', [{ field: 'reason', issue: 'missing' }]);
+      },
+    });
+    if (!result) return notFound(res);
+    if (result.changed) {
+      await req.audit({
+        entityType: 'pos_outlets',
+        entityId: req.params.id,
+        action: 'service_charge_change',
+        beforeState: result.before,
+        afterState: result.after,
+        reason,
+      });
+    }
+    res.status(200).json(ok({ ...result.outlet, changed: result.changed }));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function listOutletTerminalAccounts(req, res, next) {
   try {
     res.status(200).json(ok(await service.listOutletTerminalAccounts({ context: req.context, outletId: req.params.id })));
@@ -1005,6 +1046,7 @@ module.exports = {
   listOutlets,
   createOutlet,
   updateOutlet,
+  setOutletServiceCharge,
   archiveOutlet,
   listTerminals,
   createTerminal,

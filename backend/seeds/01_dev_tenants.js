@@ -203,7 +203,7 @@ exports.seed = async function seed(knex) {
    * (`ensurePosOperatorRoleAccess` below).
    */
   async function ensureManagerPosAccess(tenantId) {
-    const keys = ['pos.operate', 'pos.manage'];
+    const keys = ['pos.operate', 'pos.manage', 'pos.service_charge.manage'];
     const permissions = await knex('permissions').whereIn('permission_key', keys).select('id', 'permission_key');
     if (permissions.length !== keys.length) return; // migrations not yet run — nothing to grant
     const managerRole = await knex('roles').where({ tenant_id: tenantId, code: 'manager' }).first('id');

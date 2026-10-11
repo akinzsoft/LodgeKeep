@@ -113,6 +113,8 @@ export function MenuScreen() {
       relative: 'path',
       state: {
         paymentMethod,
+        // The rate this outlet charges QR orders (null = none), so the checkout can show it before the guest confirms.
+        serviceChargePercent: menu?.outlet?.service_charge_percent ?? null,
         cart: cartLines.map((line) => ({ menuItemId: line.menuItemId, quantity: line.quantity, name: line.item.name, price: line.item.price })),
       },
     });

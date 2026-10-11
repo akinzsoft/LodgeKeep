@@ -27,11 +27,11 @@ function RoomChargeStub() {
   return <p>room-charge screen</p>;
 }
 
-function renderScreen({ cart = CART, paymentMethod = 'card' } = {}) {
+function renderScreen({ cart = CART, paymentMethod = 'card', serviceChargePercent = null } = {}) {
   return renderQrOrderScreen({
     element: <CheckoutScreen />,
     routePath: 'checkout',
-    initialPath: { pathname: `/qr-order/${TOKEN}/checkout`, state: { cart, paymentMethod } },
+    initialPath: { pathname: `/qr-order/${TOKEN}/checkout`, state: { cart, paymentMethod, serviceChargePercent } },
     otherRoutes: [
       { path: 'orders/:id/status', element: <StatusStub /> },
       { path: 'orders/:id/room-charge', element: <RoomChargeStub /> },
@@ -54,6 +54,19 @@ describe('<CheckoutScreen>', () => {
     renderScreen();
     expect(await screen.findByText('2 × Chapman')).toBeInTheDocument();
     expect(await screen.findAllByText(/40\.00/)).toHaveLength(2); // one line total, one grand total — same amount here since there's only one line
+  });
+
+  it('shows no service charge line when the outlet charges none on QR orders', async () => {
+    renderScreen();
+    await screen.findByText('2 × Chapman');
+    expect(screen.queryByText(/Service charge/)).not.toBeInTheDocument();
+  });
+
+  it('shows the service charge line and a total that includes it before the guest confirms', async () => {
+    renderScreen({ serviceChargePercent: '7.50' });
+    expect(await screen.findByText('Service charge (7.50%)')).toBeInTheDocument();
+    expect(screen.getByText('Service charge (7.50%)').closest('div')).toHaveTextContent(/3\.00$/); // 7.5% of 40.00
+    expect(screen.getByText('Total').closest('div')).toHaveTextContent(/43\.00$/);
   });
 
   it('places a card order and opens the real embedded Paystack popup with the real access code, then goes to the status screen', async () => {

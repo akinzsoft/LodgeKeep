@@ -49,6 +49,14 @@ export function updateOutlet(id, changes) {
   return request(`/pos/outlets/${id}`, { method: 'PATCH', body: changes });
 }
 
+/** Changes an outlet's service charge rate and/or guest-QR mode (`pos.service_charge.manage`, reason required). */
+export function setOutletServiceCharge(id, { percent, qrMode, reason }) {
+  return request(`/pos/outlets/${id}/service-charge`, {
+    method: 'PUT',
+    body: { service_charge_percent: percent, qr_service_charge_mode: qrMode, reason },
+  });
+}
+
 export function archiveOutlet(id) {
   return request(`/pos/outlets/${id}/archive`, { method: 'POST', body: {} });
 }

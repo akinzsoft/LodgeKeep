@@ -155,6 +155,7 @@ describe('<MenuScreen>', () => {
     const state = JSON.parse((await screen.findByTestId('checkout-state')).textContent);
     expect(state).toEqual({
       paymentMethod: 'room_charge',
+      serviceChargePercent: null,
       cart: [
         { menuItemId: '10', quantity: 2, name: 'Chapman', price: '20.00' },
         { menuItemId: '11', quantity: 1, name: 'Suya', price: '15.00' },

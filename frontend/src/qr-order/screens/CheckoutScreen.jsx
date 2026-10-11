@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { Card, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
-import { sumMoney, multiplyMoney } from '../../shared/money.js';
+import { sumMoney, multiplyMoney, percentOfMoney } from '../../shared/money.js';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { clearCart } from '../cartStorage.js';
 import { qrOrderingApi, ApiError } from '../../shared/api/index.js';
@@ -62,6 +62,7 @@ export function CheckoutScreen() {
   const location = useLocation();
   const cart = location.state?.cart;
   const initialPaymentMethod = location.state?.paymentMethod;
+  const serviceChargePercent = location.state?.serviceChargePercent ?? null;
 
   const [guestContact, setGuestContact] = useState('');
   const [guestName, setGuestName] = useState('');
@@ -89,7 +90,10 @@ export function CheckoutScreen() {
     );
   }
 
-  const total = sumMoney(cart.map((line) => multiplyMoney(line.price, line.quantity)));
+  const itemsTotal = sumMoney(cart.map((line) => multiplyMoney(line.price, line.quantity)));
+  // Shown so the guest sees it before confirming; the server works out the amount actually charged.
+  const serviceCharge = serviceChargePercent === null ? null : percentOfMoney(itemsTotal, serviceChargePercent);
+  const total = serviceCharge === null ? itemsTotal : sumMoney([itemsTotal, serviceCharge]);
 
   /**
    * The actual order-creation call plus its outcome handling — shared by
@@ -242,6 +246,12 @@ export function CheckoutScreen() {
             </div>
           ))}
         </div>
+        {serviceCharge !== null && (
+          <div className={styles.summaryRow}>
+            <span>Service charge ({serviceChargePercent}%)</span>
+            <Money amount={serviceCharge} currencyCode="NGN" />
+          </div>
+        )}
         <div className={`${styles.summaryRow} ${styles.cartSummaryRow}`.trim()}>
           <span>Total</span>
           <Money amount={total} currencyCode="NGN" />
