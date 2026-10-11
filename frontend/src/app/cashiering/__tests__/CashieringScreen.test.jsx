@@ -172,11 +172,8 @@ describe('<CashieringScreen>', () => {
     expect(mocks.captureTerminalPayment).toHaveBeenCalledWith('1', { amount: '100.00', currency: 'NGN', accountId: '', reference: '' });
   });
 
-  /**
-   * Gap closure (user-reported): "the form textfield amt is editable pls
-   * correct it."
-   */
-  it('renders the payment Amount field as read-only, locked to the real balance', async () => {
+  /** A deposit: the Amount defaults to the balance but can be changed; more than is owed is kept as a credit. */
+  it('defaults the payment Amount to the balance, editable, and says how much of a larger amount becomes credit', async () => {
     mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
     await loadReservation();
     await screen.findByText('Room 101');
@@ -184,34 +181,112 @@ describe('<CashieringScreen>', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Capture a payment' }));
 
     const amountInput = screen.getByLabelText('Amount');
-    expect(amountInput).toHaveAttribute('readonly');
+    expect(amountInput).not.toHaveAttribute('readonly');
     expect(amountInput).toHaveValue('100.00');
+    expect(screen.queryByText(/kept as a credit/)).not.toBeInTheDocument();
+
+    await userEvent.clear(amountInput);
+    await userEvent.type(amountInput, '150.00');
+    expect(screen.getByText(/above what is owed will be kept as a credit/)).toHaveTextContent(/50\.00/);
   });
 
-  /**
-   * Gap closure (user-reported): "wen payment is done disable the ...
-   * payment buttons." `folio.status` never reflects a zero balance, so the
-   * disable is driven purely by the balance the parent's refreshed `folios`
-   * list carries.
-   */
-  it('disables "Capture a payment" and shows a "Paid in full" pill once the folio balance is zero', async () => {
-    const SETTLED_FOLIO = { ...FOLIO, balance: '0.00' };
-    mocks.listFoliosForReservation.mockResolvedValue([SETTLED_FOLIO]);
+  it('sends the typed amount, not the balance, for a cash deposit', async () => {
+    mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+    mocks.captureCashPayment.mockResolvedValue({ id: 'p1', status: 'CAPTURED' });
     await loadReservation();
     await screen.findByText('Room 101');
 
-    expect(screen.getByRole('button', { name: 'Capture a payment' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Capture a payment' }));
+    const amountInput = screen.getByLabelText('Amount');
+    await userEvent.clear(amountInput);
+    await userEvent.type(amountInput, '250.50');
+    await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
+
+    expect(mocks.captureCashPayment).toHaveBeenCalledWith('1', { amount: '250.50', currency: 'NGN' });
+  });
+
+  it.each([['-5.00'], ['0'], ['1.234'], ['abc'], ['10000000.01']])('blocks submitting the invalid amount %s and explains why', async (bad) => {
+    mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+    await loadReservation();
+    await screen.findByText('Room 101');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Capture a payment' }));
+    const amountInput = screen.getByLabelText('Amount');
+    await userEvent.clear(amountInput);
+    await userEvent.type(amountInput, bad);
+
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Capture payment' })).toBeDisabled();
+    expect(mocks.captureCashPayment).not.toHaveBeenCalled();
+  });
+
+  describe('refunding part of a payment (e.g. a deposit)', () => {
+    const CASH = { id: '70', provider: 'cash', status: 'CAPTURED', amount: '500.00', currency: 'NGN', parent_payment_id: null };
+    async function openRefund() {
+      mocks.getFolio.mockResolvedValue({ ...FOLIO, balance: '-300.00', lineItems: [LINE_ITEM], payments: [CASH] });
+      mocks.listFoliosForReservation.mockResolvedValue([{ ...FOLIO, balance: '-300.00' }]);
+      await loadReservation();
+      await screen.findByText('Room 101');
+      await userEvent.click(await screen.findByRole('button', { name: 'Refund' }));
+    }
+
+    it('sends the typed partial amount with the reason', async () => {
+      mocks.refundPayment.mockResolvedValue({ id: '71' });
+      await openRefund();
+      await userEvent.type(screen.getByLabelText('Amount to refund (optional)'), '200.00');
+      await userEvent.type(screen.getByLabelText(/reason/i), 'Guest took part of the deposit back');
+      await userEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+      expect(mocks.refundPayment).toHaveBeenCalledWith('70', { reason: 'Guest took part of the deposit back', amount: '200.00' });
+    });
+
+    it('leaving the amount blank refunds it all (no amount sent)', async () => {
+      mocks.refundPayment.mockResolvedValue({ id: '71' });
+      await openRefund();
+      await userEvent.type(screen.getByLabelText(/reason/i), 'Whole refund');
+      await userEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+      expect(mocks.refundPayment).toHaveBeenCalledWith('70', { reason: 'Whole refund' });
+    });
+
+    it('blocks an invalid refund amount', async () => {
+      await openRefund();
+      await userEvent.type(screen.getByLabelText('Amount to refund (optional)'), '-5');
+      await userEvent.type(screen.getByLabelText(/reason/i), 'x');
+      expect(screen.getByRole('button', { name: 'Confirm refund' })).toBeDisabled();
+    });
+
+    it('offers Refund again on a partially refunded payment', async () => {
+      mocks.getFolio.mockResolvedValue({ ...FOLIO, lineItems: [LINE_ITEM], payments: [{ ...CASH, status: 'PARTIALLY_REFUNDED' }] });
+      mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+      await loadReservation();
+      expect(await screen.findByRole('button', { name: 'Refund' })).toBeInTheDocument();
+    });
+  });
+
+  /** A settled or credit folio can still take a deposit: the button stays and the form starts empty. */
+  it('shows the "Paid in full" pill on a zero-balance folio but still offers "Take a deposit", with an empty Amount', async () => {
+    mocks.listFoliosForReservation.mockResolvedValue([{ ...FOLIO, balance: '0.00' }]);
+    await loadReservation();
+    await screen.findByText('Room 101');
+
     expect(screen.getByText('Paid in full')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Take a deposit' }));
+    expect(screen.getByLabelText('Amount')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Capture payment' })).toBeDisabled();
+
+    await userEvent.type(screen.getByLabelText('Amount'), '500.00');
+    expect(screen.getByRole('button', { name: 'Capture payment' })).toBeEnabled();
+    expect(screen.getByText(/above what is owed will be kept as a credit/)).toHaveTextContent(/500\.00/);
   });
 
-  it('treats a negative (credit) balance as settled too — "Credit balance" pill, "Capture a payment" disabled', async () => {
-    const CREDIT_FOLIO = { ...FOLIO, balance: '-20.00' };
-    mocks.listFoliosForReservation.mockResolvedValue([CREDIT_FOLIO]);
+  it('on a credit folio shows the "Credit balance" pill and a whole new payment is deposit', async () => {
+    mocks.listFoliosForReservation.mockResolvedValue([{ ...FOLIO, balance: '-20.00' }]);
     await loadReservation();
     await screen.findByText('Room 101');
 
-    expect(screen.getByRole('button', { name: 'Capture a payment' })).toBeDisabled();
     expect(screen.getByText('Credit balance')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Take a deposit' }));
+    await userEvent.type(screen.getByLabelText('Amount'), '30.00');
+    expect(screen.getByText(/above what is owed will be kept as a credit/)).toHaveTextContent(/30\.00/);
   });
 
   /**

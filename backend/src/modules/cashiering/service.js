@@ -36,6 +36,7 @@ const { systemContext, workerContext } = require('../tenancy');
 const { ValidationError } = require('../../shared/errors');
 const { generateUlid } = require('../../shared/ulid');
 const { sumMoney, negateMoney, compareMoney } = require('../../shared/money');
+const { assertPaymentAmount } = require('../../shared/payment-amount');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('./tax-engine');
 const { taxChargeTypeForOutlet } = require('../../shared/outlet-types');
 const paystack = require('./paystack-adapter');
@@ -549,17 +550,23 @@ async function voidLineItem({ trx, lineItemId, reason, userId }) {
  * Accounts Receivable instead. Allowing both would create two disagreeing
  * notions of what the company owes with no clean reconciliation rule.
  */
-async function assertFolioOpenForPayment({ trx, folioId }) {
+async function assertFolioOpenForPayment({ trx, folioId, amount, currency }) {
+  // The amount is checked first and on every path, so a bad one is refused before anything is read or written.
+  const checkedAmount = assertPaymentAmount(amount);
   const folio = await trx.table('folios').where({ id: folioId }).first();
   if (!folio) throw new ValidationError('FOLIO_NOT_FOUND', 'The specified folio does not exist.');
   if (folio.status !== 'open') throw new FolioClosedError(folioId);
   if (folio.company_profile_id) throw new CannotPayArBilledFolioDirectlyError(folioId);
-  return folio;
+  if (currency !== folio.currency) {
+    throw new ValidationError('CURRENCY_MISMATCH', `A payment on this folio must be in ${folio.currency}.`, [{ field: 'currency', issue: 'mismatch' }]);
+  }
+  return { ...folio, checkedAmount };
 }
 
 /** No external gateway involved — cash is already physically collected by the time this is called, so capture is real and immediate, not a stub. */
 async function captureCashPayment({ trx, folioId, amount, currency, idempotencyKey, userId, businessDate }) {
-  const folio = await assertFolioOpenForPayment({ trx, folioId });
+  const folio = await assertFolioOpenForPayment({ trx, folioId, amount, currency });
+  amount = folio.checkedAmount;
   const effectiveBusinessDate = businessDate ?? (await propertyBusinessDate({ trx, propertyId: folio.property_id }));
   const reference = generateUlid();
   const now = new Date();
@@ -608,7 +615,8 @@ async function captureTerminalPayment({ trx, folioId, amount, currency, idempote
   if (reference.length > MAX_TERMINAL_REFERENCE) {
     throw new ValidationError('INVALID_TERMINAL_REFERENCE', `"reference" must be at most ${MAX_TERMINAL_REFERENCE} characters.`, [{ field: 'reference', issue: 'too_long' }]);
   }
-  const folio = await assertFolioOpenForPayment({ trx, folioId });
+  const folio = await assertFolioOpenForPayment({ trx, folioId, amount, currency });
+  amount = folio.checkedAmount;
   const snapshot = terminal.accountId ? await terminalAccounts.snapshotAccount({ trx, accountId: terminal.accountId }) : null;
   const effectiveBusinessDate = businessDate ?? (await propertyBusinessDate({ trx, propertyId: folio.property_id }));
 
@@ -653,7 +661,8 @@ async function captureTerminalPayment({ trx, folioId, amount, currency, idempote
 
 /** Phase 1 of 2 — the local intent row only, fully transactional. See file header for why the external call is NOT in here. */
 async function initiatePaystackPaymentIntent({ trx, folioId, amount, currency, idempotencyKey }) {
-  await assertFolioOpenForPayment({ trx, folioId });
+  const folio = await assertFolioOpenForPayment({ trx, folioId, amount, currency });
+  amount = folio.checkedAmount;
   const reference = generateUlid();
   const [paymentId] = await trx.table('payments').insert({
     folio_id: folioId,
@@ -1436,7 +1445,9 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
 
   const alreadyRefunded = await refundedSoFar({ trx: db, paymentId });
   const available = sumMoney([original.amount, negateMoney(alreadyRefunded)]);
-  const refundAmount = amount ?? available;
+  // A supplied refund amount gets the same validation as a payment (positive, 2 decimals); omitted means the full remainder.
+  const amountSupplied = !(amount === undefined || amount === null || amount === '');
+  const refundAmount = amountSupplied ? assertPaymentAmount(amount) : available;
   if (compareMoney(refundAmount, available) > 0) {
     throw new RefundExceedsCapturedAmountError(paymentId, refundAmount, available);
   }
@@ -1499,7 +1510,7 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
   // Paystack — the real external call, outside a transaction (§6.4).
   if (approve) await db.transaction((trx) => approve(trx, original));
   const { adapter } = await paystack.resolveAdapterForCurrency(db, original.currency);
-  const gatewayResult = await adapter.refundTransaction({ reference: original.provider_reference, amount: amount ?? undefined });
+  const gatewayResult = await adapter.refundTransaction({ reference: original.provider_reference, amount: amountSupplied ? refundAmount : undefined });
   const processed = gatewayResult.status === 'processed' || gatewayResult.status === 'success';
   // A Register payment reverses the same way a guest QR order's does: void
   // the settlement it funded. Neither has a folio to post a refund line to.

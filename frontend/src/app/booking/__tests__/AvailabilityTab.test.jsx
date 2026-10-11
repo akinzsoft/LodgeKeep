@@ -895,15 +895,35 @@ describe('<AvailabilityTab>', () => {
      */
     expect(await screen.findByText('Paid in full')).toBeInTheDocument();
     expect(screen.getByText(/No balance due/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Cash' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Card' })).not.toBeInTheDocument();
+    // A settled folio can still take a deposit, so the payment buttons stay, with an empty Amount to fill in.
+    expect(screen.getByLabelText('Amount')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Cash' })).toBeDisabled();
   });
 
-  /**
-   * Gap closure (user-reported): "the form textfield amt is editable pls
-   * correct it."
-   */
-  it('renders the payment Amount field as read-only, locked to the real balance', async () => {
+  /** A deposit: the Amount defaults to the balance and can be changed; the extra becomes a credit. */
+  it('defaults the payment Amount to the balance, editable, and sends a larger typed amount as a deposit', async () => {
+    mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
+    mocks.openBookingFolio.mockResolvedValue({ id: '20', balance: '150.00', currency: 'NGN', status: 'open' });
+    mocks.captureCashPayment.mockResolvedValue({ id: '30', status: 'CAPTURED' });
+    mocks.getFolio.mockResolvedValue({ id: '20', balance: '-50.00', currency: 'NGN', status: 'open' });
+
+    await searchAndBook();
+    await screen.findByText(/₦150\.00/);
+
+    const amountInput = screen.getByLabelText('Amount');
+    expect(amountInput).not.toHaveAttribute('readonly');
+    expect(amountInput).toHaveValue('150.00');
+
+    await userEvent.clear(amountInput);
+    await userEvent.type(amountInput, '200.00');
+    expect(screen.getByText(/above what is owed will be kept as a credit/)).toHaveTextContent(/50\.00/);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cash' }));
+    expect(mocks.captureCashPayment).toHaveBeenCalledWith('20', { amount: '200.00', currency: 'NGN' });
+    expect(await screen.findByText('Credit balance')).toBeInTheDocument();
+  });
+
+  it('disables every payment button while the typed amount is invalid', async () => {
     mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
     mocks.openBookingFolio.mockResolvedValue({ id: '20', balance: '150.00', currency: 'NGN', status: 'open' });
 
@@ -911,8 +931,13 @@ describe('<AvailabilityTab>', () => {
     await screen.findByText(/₦150\.00/);
 
     const amountInput = screen.getByLabelText('Amount');
-    expect(amountInput).toHaveAttribute('readonly');
-    expect(amountInput).toHaveValue('150.00');
+    await userEvent.clear(amountInput);
+    await userEvent.type(amountInput, '-10');
+    expect(screen.getByRole('alert', { name: '' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Cash' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Card (terminal)' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Card' })).toBeDisabled();
+    expect(mocks.captureCashPayment).not.toHaveBeenCalled();
   });
 
   it('disables the Card button when the selected guest has no email on file', async () => {
@@ -962,6 +987,42 @@ describe('<AvailabilityTab>', () => {
       'https://paystack.test/pay/abc'
     );
     expect(screen.queryByText('https://paystack.test/pay/abc')).not.toBeInTheDocument();
+  });
+
+  it('starts a Paystack checkout for the typed deposit amount, not the balance', async () => {
+    mocks.createReservation.mockResolvedValue({ id: '10', status: 'confirmed', confirmation_number: 'ABC123' });
+    mocks.openBookingFolio.mockResolvedValue({ id: '20', balance: '150.00', currency: 'NGN', status: 'open' });
+    mocks.capturePaystackPayment.mockResolvedValue({ id: '31', authorizationUrl: 'https://paystack.test/pay/abc' });
+
+    mocks.checkAvailability.mockResolvedValue({
+      roomTypeId: '1',
+      physicalCount: 5,
+      minSellable: 3,
+      nights: [{ stayDate: '2027-01-01', physicalCount: 5, roomsSold: 2, threshold: 5, sellable: 3 }],
+    });
+    render(<AvailabilityTab />);
+    await screen.findByText('Deluxe (DLX)');
+    await userEvent.selectOptions(screen.getByLabelText('Room type'), '1');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2027-01-01');
+    await userEvent.type(dateInputs[1], '2027-01-02');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('Fri 1 Jan 2027');
+    await userEvent.selectOptions(screen.getByLabelText('Guest'), '2'); // GUEST_WITH_EMAIL
+    await userEvent.selectOptions(screen.getByLabelText('Rate code'), '1');
+    await userEvent.click(screen.getByRole('button', { name: 'Book' }));
+    await screen.findByText(/₦150\.00/);
+
+    const amountInput = screen.getByLabelText('Amount');
+    await userEvent.clear(amountInput);
+    await userEvent.type(amountInput, '400.00');
+    await userEvent.click(screen.getByRole('button', { name: 'Card' }));
+
+    expect(mocks.capturePaystackPayment).toHaveBeenCalledWith('20', {
+      amount: '400.00',
+      currency: 'NGN',
+      guestEmail: 'sam@example.com',
+    });
   });
 
   /**

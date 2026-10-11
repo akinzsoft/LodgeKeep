@@ -1829,6 +1829,37 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       expect(closed.balance).toBe('-20000.00');
     });
 
+    it('a real cash DEPOSIT larger than the charges leaves a credit, check-out succeeds with it, and the leftover is partly refunded afterwards', async () => {
+      const roomTypeId = await createRoomType(ctx.a, { code: 'DEPF' });
+      const depRoomId = await createRoom(ctx.a, { roomTypeId, roomNumber: 'DEPF1' });
+      const rateCodeId = await createRateCode(ctx.a, { code: 'DEPFRATE' });
+      const auth = () => ({ Authorization: `Bearer ${tokenFor()}` });
+      const created = await t.request
+        .post('/api/v1/reservations')
+        .set(auth())
+        .set('Idempotency-Key', idemKey())
+        .send({ guest_id: String(ctx.a.guests[0].id), room_type_id: String(roomTypeId), rate_code_id: String(rateCodeId), arrival_date: '2027-12-14', departure_date: '2027-12-16' });
+      const id = created.body.data.id;
+      await t.request.post(`/api/v1/reservations/${id}/check-in`).set(auth()).set('Idempotency-Key', idemKey()).send({ room_id: String(depRoomId) });
+      const folio = await t.trx('folios').where({ reservation_id: id, status: 'open' }).first();
+
+      // Owe 100.00, pay 400.00 in cash through the real endpoint: a 300.00 credit.
+      await t.trx('folios').where({ id: folio.id }).update({ balance: '100.00' });
+      await t.trx('folio_line_items').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, folio_id: folio.id, type: 'adjustment', description: 'Charge', amount: '100.00', currency: folio.currency, business_date: '2027-12-14' });
+      const paid = await t.request.post(`/api/v1/cashiering/folios/${folio.id}/payments/cash`).set(auth()).set('Idempotency-Key', idemKey()).send({ amount: '400.00', currency: folio.currency, business_date: '2027-12-14' });
+      expect(paid.status).toBe(201);
+      expect((await t.trx('folios').where({ id: folio.id }).first()).balance).toBe('-300.00');
+
+      const out = await t.request.post(`/api/v1/reservations/${id}/check-out`).set(auth()).set('Idempotency-Key', idemKey()).send({});
+      expect(out.status).toBe(200);
+      expect(out.body.meta.creditRemaining).toBe('300.00');
+
+      await t.trx('properties').where({ id: ctx.a.properties[0].id }).update({ current_business_date: '2027-12-15' });
+      const refund = await t.request.post(`/api/v1/cashiering/payments/${paid.body.data.id}/refund`).set(auth()).set('Idempotency-Key', idemKey()).send({ amount: '250.00', reason: 'Return part of the deposit' });
+      expect(refund.status).toBe(201);
+      expect((await t.trx('folios').where({ id: folio.id }).first()).balance).toBe('-50.00');
+    });
+
     it('FD-6/FD-5: an early or late checkout time posts the configured fee, and check-out completes', async () => {
       const res = await t.request
         .post(`/api/v1/reservations/${reservationId}/check-out`)

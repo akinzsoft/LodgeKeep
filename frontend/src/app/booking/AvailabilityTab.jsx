@@ -7,6 +7,8 @@ import { Money, formatMoney, isBalanceSettled, describeBalanceState } from '../.
 import { multiplyMoney } from '../../shared/money.js';
 import { addDays, formatDate } from '../../shared/format/dates.js';
 import { RoomKeypad } from './RoomKeypad.jsx';
+import { PaymentAmountField } from '../cashiering/PaymentAmountField.jsx';
+import { defaultPaymentAmount, paymentAmountProblem } from '../cashiering/paymentAmount.js';
 import { TerminalPaymentFields } from '../cashiering/TerminalPaymentFields.jsx';
 import formStyles from './BookingForm.module.css';
 import styles from './BookingScreen.module.css';
@@ -307,6 +309,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     // boundary that starts a new, independent booking cycle — clearing the
     // previous cycle's payment/folio state here is what allows that.
     setFolio(null);
+    setTypedAmount(null);
     setCheckoutUrl(null);
     setCheckoutAccessCode(null);
     setCheckoutPaymentId(null);
@@ -406,6 +409,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     setBookError(null);
     setBookSuccess(null);
     setFolio(null);
+    setTypedAmount(null);
     setCheckoutUrl(null);
     setPaymentError(null);
     setPaymentSuccess(null);
@@ -493,6 +497,11 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     };
   }
   const isFolioSettled = folio ? isBalanceSettled(folio.balance) : false;
+  // The payment Amount: the balance owed unless staff typed another (paying more is a deposit and leaves a credit).
+  // `null` = untouched, so it follows the folio's balance as it changes.
+  const [typedAmount, setTypedAmount] = useState(null);
+  const payAmount = typedAmount ?? defaultPaymentAmount(folio?.balance);
+  const payAmountProblem = paymentAmountProblem(payAmount);
 
   // "Card (terminal)": the payment is recorded like cash (the physical terminal did the charge), with the account it was taken on.
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -517,9 +526,10 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     setPaymentError(null);
     setPaymentSuccess(null);
     try {
-      await cashieringApi.captureTerminalPayment(folio.id, { amount: folio.balance, currency: folio.currency, accountId: terminalAccountId, reference: terminalReference });
+      await cashieringApi.captureTerminalPayment(folio.id, { amount: payAmount.trim(), currency: folio.currency, accountId: terminalAccountId, reference: terminalReference });
       setFolio(await cashieringApi.getFolio(folio.id));
       setPaymentSuccess('Card (terminal) payment recorded.');
+      setTypedAmount(null);
       setTerminalOpen(false);
       setTerminalAccountId('');
       setTerminalReference('');
@@ -535,10 +545,11 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     setPaymentError(null);
     setPaymentSuccess(null);
     try {
-      await cashieringApi.captureCashPayment(folio.id, { amount: folio.balance, currency: folio.currency });
+      await cashieringApi.captureCashPayment(folio.id, { amount: payAmount.trim(), currency: folio.currency });
       const refreshed = await cashieringApi.getFolio(folio.id);
       setFolio(refreshed);
       setPaymentSuccess('Cash payment captured.');
+      setTypedAmount(null);
     } catch (caught) {
       setPaymentError(caught instanceof ApiError ? caught.message : 'Could not capture the cash payment.');
     } finally {
@@ -564,7 +575,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     setCheckoutPaymentId(null);
     try {
       const result = await cashieringApi.capturePaystackPayment(folio.id, {
-        amount: folio.balance,
+        amount: payAmount.trim(),
         currency: folio.currency,
         guestEmail: selectedGuest?.email,
       });
@@ -1047,26 +1058,22 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
             </p>
           )}
 
-          {isFolioSettled ? (
-            /* Gap closure (user-reported): "disable the book button and
-               payment buttons" once payment is done — a positive-state
-               summary in place of the now-pointless form controls, rather
-               than leaving disabled buttons with no explanation
-               (DESIGN_SYSTEM.md §1: status is never colour alone). */
-            <div className={formStyles.paymentSettled}>
-              {describeBalanceState(folio.balance) && (
-                <StatusPill tone={describeBalanceState(folio.balance).tone} label={describeBalanceState(folio.balance).label} />
-              )}
-              <p className={formStyles.disabledNotice}>
-                No balance due — <Money amount={folio.balance} currencyCode={folio.currency} />. Booking and payment for this stay are complete.
-              </p>
-            </div>
-          ) : (
-            <>
+          <>
               {paymentSuccess && <p className={formStyles.disabledNotice}>{paymentSuccess}</p>}
-              <p className={formStyles.disabledNotice}>
-                Balance due: <Money amount={folio.balance} currencyCode={folio.currency} className={formStyles.balanceOwing} />
-              </p>
+              {isFolioSettled ? (
+                <div className={formStyles.paymentSettled}>
+                  {describeBalanceState(folio.balance) && (
+                    <StatusPill tone={describeBalanceState(folio.balance).tone} label={describeBalanceState(folio.balance).label} />
+                  )}
+                  <p className={formStyles.disabledNotice}>
+                    No balance due — <Money amount={folio.balance} currencyCode={folio.currency} />. Enter an amount below to take a deposit.
+                  </p>
+                </div>
+              ) : (
+                <p className={formStyles.disabledNotice}>
+                  Balance due: <Money amount={folio.balance} currencyCode={folio.currency} className={formStyles.balanceOwing} />
+                </p>
+              )}
 
               {/* Gap closure (user-reported): "make it more profeesional and
                   standard form with the payment button" — one deliberate
@@ -1087,15 +1094,9 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                 </div>
               )}
 
-              {/* Gap closure (user-reported): "the form textfield amt is
-                  editable pls correct it" — locked to the folio's real
-                  balance; Cash/Card always pay it in full (confirmed with
-                  the user: no partial-payment capability needed today). */}
+              {/* The Amount defaults to the balance and can be changed: paying more is a deposit, kept as a credit. */}
               <div className={formStyles.row}>
-                <label className={formStyles.field}>
-                  <span className={formStyles.label}>Amount</span>
-                  <input className={`${formStyles.input} ${formStyles.inputLocked}`} value={folio.balance} readOnly aria-readonly="true" />
-                </label>
+                <PaymentAmountField styles={formStyles} value={payAmount} onChange={setTypedAmount} balance={folio.balance} currency={folio.currency} disabled={isOffline || capturingPayment} />
               </div>
 
               {isOffline && (
@@ -1105,19 +1106,19 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
               )}
 
               <div className={formStyles.actionsRow}>
-                <Button type="button" loading={capturingPayment} disabled={isOffline} onClick={handleCashPayment}>
+                <Button type="button" loading={capturingPayment} disabled={isOffline || Boolean(payAmountProblem)} onClick={handleCashPayment}>
                   Cash
                 </Button>
                 <Button
                   type="button"
                   variant="secondary"
                   loading={capturingPayment}
-                  disabled={isOffline || !selectedGuest?.email}
+                  disabled={isOffline || !selectedGuest?.email || Boolean(payAmountProblem)}
                   onClick={handleCardPayment}
                 >
                   Card
                 </Button>
-                <Button type="button" variant="secondary" disabled={isOffline || capturingPayment} onClick={openTerminalPayment}>
+                <Button type="button" variant="secondary" disabled={isOffline || capturingPayment || Boolean(payAmountProblem)} onClick={openTerminalPayment}>
                   Card (terminal)
                 </Button>
               </div>
@@ -1135,7 +1136,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                     />
                   </div>
                   <div className={formStyles.actionsRow}>
-                    <Button type="submit" loading={capturingPayment} disabled={isOffline}>
+                    <Button type="submit" loading={capturingPayment} disabled={isOffline || Boolean(payAmountProblem)}>
                       Record terminal payment
                     </Button>
                     <Button type="button" variant="ghost" onClick={() => setTerminalOpen(false)}>
@@ -1150,8 +1151,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
               <p className={formStyles.disabledNotice}>
                 Or leave it — the balance simply stays owing, to be settled later via Cashiering or at check-out.
               </p>
-            </>
-          )}
+          </>
         </Card>
       )}
     </div>

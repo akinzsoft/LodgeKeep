@@ -21,6 +21,8 @@ const { runIdempotentMutation, requireIdempotencyKey } = require('../../shared/m
 const { scopedDb } = require('../../db');
 const { hasPermission } = require('../../auth/rbac');
 const { PermissionDeniedError } = require('../../auth/errors');
+const { assertPaymentAmount } = require('../../shared/payment-amount');
+const { compareMoney } = require('../../shared/money');
 const service = require('./service');
 const terminalAccounts = require('./terminal-accounts');
 const { claimApproval } = require('../approvals');
@@ -220,15 +222,29 @@ async function voidLineItem(req, res, next) {
 // Payments
 // ---------------------------------------------------------------------
 
+/** True when a payment of `amount` is more than the folio currently owes, i.e. part of it is a deposit that becomes a credit. A malformed amount is left to the service's own validation. */
+async function exceedsFolioBalance(trx, folioId, amount) {
+  try {
+    const folio = await trx.table('folios').where({ id: folioId }).first();
+    return Boolean(folio) && compareMoney(assertPaymentAmount(amount), folio.balance) > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function captureCashPayment(req, res, next) {
   try {
     const amount = require_(req.body, 'amount');
     const currency = require_(req.body, 'currency');
+    let deposit = false;
     await runIdempotentMutation(req, res, {
       operationType: 'cashiering.capture_cash_payment',
       entityType: 'payments',
       action: 'capture_cash',
+      // Only a real deposit adds the flag, so an ordinary payment's audit row is exactly what it always was.
+      auditExtras: () => ({ afterState: deposit ? { deposit: true } : undefined }),
       handler: async (trx) => {
+        deposit = await exceedsFolioBalance(trx, req.params.folioId, amount);
         const payment = await service.captureCashPayment({
           trx,
           folioId: req.params.folioId,
@@ -251,11 +267,15 @@ async function captureTerminalPayment(req, res, next) {
   try {
     const amount = require_(req.body, 'amount');
     const currency = require_(req.body, 'currency');
+    let deposit = false;
     await runIdempotentMutation(req, res, {
       operationType: 'cashiering.capture_terminal_payment',
       entityType: 'payments',
       action: 'capture_terminal',
+      // Only a real deposit adds the flag, so an ordinary payment's audit row is exactly what it always was.
+      auditExtras: () => ({ afterState: deposit ? { deposit: true } : undefined }),
       handler: async (trx) => {
+        deposit = await exceedsFolioBalance(trx, req.params.folioId, amount);
         const payment = await service.captureTerminalPayment({
           trx,
           folioId: req.params.folioId,
@@ -341,6 +361,7 @@ async function capturePaystackPayment(req, res, next) {
     const currency = require_(req.body, 'currency');
     const guestEmail = require_(req.body, 'guest_email');
     const key = requireIdempotencyKey(req);
+    let deposit = false;
 
     const intentOutcome = await withIdempotency({
       context: req.context,
@@ -348,13 +369,14 @@ async function capturePaystackPayment(req, res, next) {
       key,
       payload: req.body,
       handler: async (trx) => {
+        deposit = await exceedsFolioBalance(trx, req.params.folioId, amount);
         const payment = await service.initiatePaystackPaymentIntent({ trx, folioId: req.params.folioId, amount, currency, idempotencyKey: key });
         return { status: 201, body: ok(payment) };
       },
     });
     const intentResult = intentOutcome.body.data;
     if (!intentOutcome.replayed) {
-      await req.audit({ entityType: 'payments', entityId: intentResult.id, action: 'initiate_paystack_payment', afterState: intentResult });
+      await req.audit({ entityType: 'payments', entityId: intentResult.id, action: 'initiate_paystack_payment', afterState: deposit ? { ...intentResult, deposit: true } : intentResult });
     }
 
     try {
