@@ -122,6 +122,7 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'guest_password_resets',
   'user_invitations',
   'pos_guest_orders',
+  'pos_guest_order_service_charges',
   'pos_room_charge_otps',
   'pos_order_tokens',
   // door access

@@ -1112,6 +1112,21 @@ describe('<RegisterTab>', () => {
     expect(screen.queryByText('Rare Steak')).not.toBeInTheDocument();
   });
 
+  it("shows the outlet's own service charge rate from the server, not a fixed 7.5%", async () => {
+    mocks.getSettlementPreview.mockResolvedValue({ ...SINGLE_ITEM_PREVIEW, serviceChargePercent: '10.00' });
+    await openNewTab([orderItem()]);
+    expect(await screen.findByText('Service (10.00%)')).toBeInTheDocument();
+    expect(screen.queryByText('Service (7.5%)')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/2\.00/).length).toBeGreaterThan(0); // 10% of 20.00
+  });
+
+  it('hides the service line entirely at a 0% outlet', async () => {
+    mocks.getSettlementPreview.mockResolvedValue({ ...SINGLE_ITEM_PREVIEW, serviceChargePercent: '0.00' });
+    await openNewTab([orderItem()]);
+    expect(await screen.findByText('Subtotal')).toBeInTheDocument();
+    expect(screen.queryByText(/^Service \(/)).not.toBeInTheDocument();
+  });
+
   it('layout pass: the checkout panel shows a real subtotal/tax/service (fixed 7.5%, no tip or editable %) and submits the computed amount', async () => {
     const order = await openNewTab([orderItem()]);
     mocks.settleOrder.mockResolvedValue({ order: { ...order, status: 'settled' }, settlements: [] });

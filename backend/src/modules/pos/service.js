@@ -61,7 +61,8 @@ const { sumMoney, negateMoney, compareMoney, percentOfMoney } = require('../../s
 // per-item pricing computation to price a guest's cart before an order
 // even exists — re-exported below so no existing import of this module
 // breaks.
-const { computeItemLineTotal, POS_SERVICE_CHARGE_PERCENT } = require('../../shared/pos-pricing');
+const { computeItemLineTotal } = require('../../shared/pos-pricing');
+const { registerServiceChargePercent, serviceChargeApplies, parseServiceChargePercent, parseQrMode } = require('../../shared/service-charge');
 const { resolveOrderLine, normalizeModifierCatalogue, modifiersForInsert } = require('../../shared/pos-line-input');
 const { outletScopeForUser, scopeCovers, usersCoveringOutlets } = require('../../shared/outlet-assignments');
 const { hasPermission } = require('../../auth/rbac');
@@ -106,6 +107,7 @@ const {
   MenuCategoryInUseError,
   StoreOutletNotAPointOfSaleError,
   StoreOutletConversionBlockedError,
+  ServiceChargeNotApplicableError,
 } = require('./errors');
 const { STORE_OUTLET_TYPE, isPointOfSaleOutlet, isSupermarketOutlet, taxChargeTypeForOutlet } = require('../../shared/outlet-types');
 const { assertRegisterOutlet } = require('./outlet-guards');
@@ -156,6 +158,34 @@ async function updateOutlet({ context, id, changes }) {
     }
     await trx.table('pos_outlets').where({ id }).update(changes);
     return trx.table('pos_outlets').where({ id }).first();
+  });
+}
+
+/**
+ * Changes an outlet's service charge rate and/or its QR mode. The outlet row is locked so two edits can't
+ * both record themselves as the "before". Supermarkets and stores never carry a service charge, so they are
+ * refused. Returns `{ changed, before, after, outlet }`; an unchanged value writes nothing. The caller
+ * (controller) requires a reason for a real change and writes the audit row.
+ */
+async function setOutletServiceCharge({ context, id, percent, qrMode, requireReason }) {
+  const db = scopedDb().for(context);
+  const nextPercent = percent === undefined ? undefined : parseServiceChargePercent(percent);
+  const nextMode = qrMode === undefined ? undefined : parseQrMode(qrMode);
+  return db.transaction(async (trx) => {
+    const row = await trx.table('pos_outlets').where({ id }).forUpdate().first();
+    if (!row) return null;
+    if (!serviceChargeApplies(row)) throw new ServiceChargeNotApplicableError(row.type);
+    const before = { service_charge_percent: String(row.service_charge_percent), qr_service_charge_mode: row.qr_service_charge_mode };
+    const after = {
+      service_charge_percent: nextPercent ?? before.service_charge_percent,
+      qr_service_charge_mode: nextMode ?? before.qr_service_charge_mode,
+    };
+    const changed = before.service_charge_percent !== after.service_charge_percent || before.qr_service_charge_mode !== after.qr_service_charge_mode;
+    if (changed) {
+      if (requireReason) requireReason();
+      await trx.table('pos_outlets').where({ id }).update(after);
+    }
+    return { changed, before, after, outlet: changed ? await trx.table('pos_outlets').where({ id }).first() : row };
   });
 }
 
@@ -1229,8 +1259,9 @@ async function previewSettlement({ context, orderId }) {
   const property = await db.table('properties').where({ id: order.property_id }).first('current_business_date', 'base_currency');
   const businessDate = property?.current_business_date;
   const allTaxRows = await db.table('taxes');
-  const saleOutlet = await db.table('pos_outlets').where({ id: order.outlet_id }).first('type');
+  const saleOutlet = await db.table('pos_outlets').where({ id: order.outlet_id }).first('type', 'service_charge_percent');
   const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType: taxChargeTypeForOutlet(saleOutlet) });
+  const serviceChargePercent = registerServiceChargePercent(saleOutlet);
 
   const groupKeys = [...new Set(items.map((item) => groupKey(item.split_group)))];
   const groups = groupKeys.map((key) => {
@@ -1239,11 +1270,14 @@ async function previewSettlement({ context, orderId }) {
     const baseAmount = sumMoney(groupItems.map(computeItemLineTotal));
     const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
     const taxAmount = sumMoney(taxLines.map((t) => t.amount));
-    const serviceCharge = percentOfMoney(netAmount, POS_SERVICE_CHARGE_PERCENT);
+    const serviceCharge = percentOfMoney(netAmount, serviceChargePercent);
     return { splitGroup, subtotal: netAmount, taxAmount, serviceCharge, total: sumMoney([netAmount, taxAmount, serviceCharge]) };
   });
 
-  return { orderId: order.id, currency: property?.base_currency, groups };
+  // Sent only when it differs from the long-standing 7.50, so an ordinary outlet's response is unchanged;
+  // the Register treats a missing rate as 7.5.
+  const rateField = Number(serviceChargePercent) === 7.5 ? {} : { serviceChargePercent };
+  return { orderId: order.id, currency: property?.base_currency, groups, ...rateField };
 }
 
 /** Methods `settleOrder` accepts. `terminal` = a card sale taken on the hotel's own physical terminal (no gateway). */
@@ -1368,7 +1402,11 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
     const groupItems = items.filter((item) => groupKey(item.split_group) === groupKey(settlement.splitGroup));
     const baseAmount = sumMoney(groupItems.map(computeItemLineTotal));
     const tipAmount = settlement.tipAmount ?? '0.00';
-    const serviceCharge = settlement.serviceCharge ?? '0.00';
+    // The Register sends the amount it showed the cashier; a guest QR settlement instead passes
+    // `serviceChargePercent` (the rate frozen when the guest placed the order, never anything from a
+    // request body) and the server works the amount out from the net below.
+    const serverRate = settlement.serviceChargePercent ?? null;
+    let serviceCharge = settlement.serviceCharge ?? '0.00';
 
     const fields = {
       pos_order_id: orderId,
@@ -1419,6 +1457,10 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
         businessDate,
         userId: settledByUserId,
       });
+      if (serverRate !== null) {
+        serviceCharge = percentOfMoney(chargeLine.amount, serverRate);
+        fields.service_charge = serviceCharge;
+      }
 
       // Tip/service charge post as a SEPARATE, untaxed adjustment — folded
       // into the main charge's own taxed base would tax the tip, and this
@@ -1456,6 +1498,10 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
       const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType: saleTaxChargeType });
       const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
       const taxAmount = sumMoney(taxLines.map((t) => t.amount));
+      if (serverRate !== null) {
+        serviceCharge = percentOfMoney(netAmount, serverRate);
+        fields.service_charge = serviceCharge;
+      }
       Object.assign(fields, {
         subtotal: netAmount,
         tax_amount: taxAmount,
@@ -1597,10 +1643,10 @@ async function prepareRegisterPayment({ trx, orderId, splitGroup, tender, idempo
   }
 
   const property = await trx.table('properties').where({ id: order.property_id }).first('current_business_date', 'base_currency');
-  const saleOutlet = await trx.table('pos_outlets').where({ id: order.outlet_id }).first('type');
+  const saleOutlet = await trx.table('pos_outlets').where({ id: order.outlet_id }).first('type', 'service_charge_percent');
   const taxVersions = resolveApplicableTaxVersions({ allTaxRows: await trx.table('taxes'), businessDate: property?.current_business_date, chargeType: taxChargeTypeForOutlet(saleOutlet) });
   const { netAmount, taxLines } = computeChargeWithTax({ baseAmount: sumMoney(groupItems.map(computeItemLineTotal)), taxVersions });
-  const amount = sumMoney([netAmount, ...taxLines.map((t) => t.amount), percentOfMoney(netAmount, POS_SERVICE_CHARGE_PERCENT)]);
+  const amount = sumMoney([netAmount, ...taxLines.map((t) => t.amount), percentOfMoney(netAmount, registerServiceChargePercent(saleOutlet))]);
 
   const existing = (await listUnsettledRegisterPayments({ db: trx, orderId })).filter((p) => groupKey(p.split_group) === groupKey(splitGroup));
   const captured = existing.find((p) => p.status === 'CAPTURED');
@@ -1862,6 +1908,7 @@ module.exports = {
   getOutlet,
   createOutlet,
   updateOutlet,
+  setOutletServiceCharge,
   archiveOutlet,
   listTerminals,
   getTerminal,

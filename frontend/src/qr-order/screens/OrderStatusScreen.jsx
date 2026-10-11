@@ -194,6 +194,12 @@ export function OrderStatusScreen() {
                 </div>
               </>
             )}
+            {order.service_charge != null && order.service_charge !== '0.00' && (
+              <div className={styles.summaryRow}>
+                <span>Service charge{order.service_charge_percent != null ? ` (${order.service_charge_percent}%)` : ''}</span>
+                <Money amount={order.service_charge} currencyCode={currencyCode} />
+              </div>
+            )}
             <div className={styles.summaryRow}>
               <strong>Total</strong>
               <strong>

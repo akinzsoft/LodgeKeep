@@ -126,7 +126,7 @@ class RegisterPaymentInvalidError extends AppError {
       wrong_check: 'That Paystack payment belongs to a different check.',
       not_captured: 'Paystack has not confirmed this payment yet.',
       already_used: 'That Paystack payment has already been used to settle a check.',
-      amount_mismatch: "The amount paid does not match this check's total — the check changed after payment. Refund the payment or restore the check.",
+      amount_mismatch: "The service charge or the check changed after this payment was started, so the amount paid no longer matches the total. Restart the payment (refund the captured one if money was taken).",
       currency_mismatch: "The payment's currency does not match this property's currency.",
     };
     super('BUSINESS_RULE_POS_REGISTER_PAYMENT_INVALID', messages[reason] ?? messages.not_found, 422, { reason, ...details });
@@ -201,6 +201,13 @@ class StoreOutletNotAPointOfSaleError extends AppError {
   }
 }
 
+/** Supermarkets and stores never carry a service charge, so its settings cannot be changed there. */
+class ServiceChargeNotApplicableError extends AppError {
+  constructor(type) {
+    super('BUSINESS_RULE_SERVICE_CHARGE_NOT_APPLICABLE', `A ${type} outlet has no service charge.`, 422);
+  }
+}
+
 /** A supermarket sells only from the Supermarket screen: the Register and guest QR ordering refuse it. */
 class SupermarketOutletNotARegisterError extends AppError {
   constructor(outletName) {
@@ -231,6 +238,7 @@ class StoreOutletConversionBlockedError extends AppError {
 module.exports = {
   TabOverrideReasonRequiredError,
   StoreOutletNotAPointOfSaleError,
+  ServiceChargeNotApplicableError,
   SupermarketOutletNotARegisterError,
   StoreOutletConversionBlockedError,
   OrderNotOpenError,

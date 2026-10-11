@@ -1685,6 +1685,13 @@ async function seedTwoTenants(trx) {
       token_id: t.posOrderTokens[0].id,
     });
 
+    await insertReturningId(trx, 'pos_guest_order_service_charges', {
+      tenant_id: t.id,
+      property_id: property.id,
+      pos_order_id: order.id,
+      service_charge_percent: '7.50',
+    });
+
     t.posRoomChargeOtps.push({
       id: await insertReturningId(trx, 'pos_room_charge_otps', {
         tenant_id: t.id,
@@ -2108,6 +2115,7 @@ async function seedTwoTenants(trx) {
     ['night_audit.run', 'night_audit'],
     ['pos.operate', 'pos'],
     ['pos.manage', 'pos'],
+    ['pos.service_charge.manage', 'pos'],
     ['room_types.update', 'setup'],
     ['ar.view', 'ar'],
     ['ar.manage', 'ar'],
@@ -2300,10 +2308,13 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.pos_operator, permission_id: permissions['pos.operate'] },
       { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['pos.operate'] },
       { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['pos.manage'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['pos.service_charge.manage'] },
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.operate'] },
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.manage'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['pos.service_charge.manage'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.operate'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.service_charge.manage'] },
     ]);
   }
 

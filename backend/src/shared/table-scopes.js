@@ -267,6 +267,7 @@ const TABLE_SCOPES = Object.freeze({
   pos_order_tokens: { scope: SCOPES.PROPERTY },
   pos_guest_orders: { scope: SCOPES.PROPERTY },
   pos_room_charge_otps: { scope: SCOPES.PROPERTY },
+  pos_guest_order_service_charges: { scope: SCOPES.PROPERTY },
 
   // Accounts Receivable — PLAN.md Phase 4, 20260918090000_create_company_profiles
   // through 20260918097000_alter_folios_for_ar.

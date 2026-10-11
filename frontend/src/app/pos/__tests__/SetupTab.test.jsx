@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   setOutletPayoutAccount: vi.fn(),
   clearOutletPayoutAccount: vi.fn(),
   verifyOutletPayoutAccount: vi.fn(),
+  setOutletServiceCharge: vi.fn(),
 }));
 
 const stockMocks = vi.hoisted(() => ({
@@ -206,6 +207,62 @@ describe('<SetupTab>', () => {
       await openPayout({ canManageAccounts: false });
       expect(screen.getByText(/Only an administrator/i)).toBeInTheDocument();
       expect(mocks.getOutletPayoutAccount).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('service charge', () => {
+    const BAR = { ...OUTLET, service_charge_percent: '7.50', qr_service_charge_mode: 'none' };
+    async function openService(props = {}) {
+      render(<SetupTab activeProperty={{ base_currency: 'NGN' }} {...props} />);
+      await userEvent.click(screen.getByRole('tab', { name: 'Outlets' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+      await userEvent.click(await screen.findByRole('tab', { name: 'Service charge' }));
+    }
+
+    it('shows the current rate and QR mode and saves a change with a reason', async () => {
+      mocks.listOutlets.mockResolvedValue([BAR]);
+      mocks.setOutletServiceCharge.mockResolvedValue({ ...BAR, service_charge_percent: '10.00', qr_service_charge_mode: 'charge', changed: true });
+      await openService();
+      const rate = await screen.findByLabelText('Register service charge (%)');
+      expect(rate).toHaveValue('7.50');
+      expect(screen.getByLabelText('Guest QR orders')).toHaveValue('none');
+      expect(screen.getByRole('button', { name: 'Save service charge' })).toBeDisabled(); // nothing changed yet
+
+      await userEvent.clear(rate);
+      await userEvent.type(rate, '10');
+      await userEvent.selectOptions(screen.getByLabelText('Guest QR orders'), 'charge');
+      await userEvent.click(screen.getByRole('button', { name: 'Save service charge' }));
+      await userEvent.type(await screen.findByLabelText(/reason/i), 'House policy');
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+      expect(mocks.setOutletServiceCharge).toHaveBeenCalledWith('1', { percent: '10', qrMode: 'charge', reason: 'House policy' });
+    });
+
+    it('refuses a rate above 30 or with too many decimals before asking the server', async () => {
+      mocks.listOutlets.mockResolvedValue([BAR]);
+      await openService();
+      const rate = await screen.findByLabelText('Register service charge (%)');
+      for (const bad of ['31', '5.555', 'abc']) {
+        await userEvent.clear(rate);
+        await userEvent.type(rate, bad);
+        expect(screen.getByRole('button', { name: 'Save service charge' })).toBeDisabled();
+        expect(screen.getByText(/from 0 to 30 with at most 2 decimals/)).toBeInTheDocument();
+      }
+      expect(mocks.setOutletServiceCharge).not.toHaveBeenCalled();
+    });
+
+    it('is read-only without the permission', async () => {
+      mocks.listOutlets.mockResolvedValue([BAR]);
+      await openService({ canManageServiceCharge: false });
+      expect(await screen.findByText(/Only someone allowed to manage service charges/)).toBeInTheDocument();
+      expect(screen.queryByLabelText('Register service charge (%)')).not.toBeInTheDocument();
+    });
+
+    it('says a supermarket has none instead of offering a form', async () => {
+      mocks.listOutlets.mockResolvedValue([{ ...BAR, type: 'supermarket' }]);
+      await openService();
+      expect(await screen.findByText(/supermarket has no service charge/)).toBeInTheDocument();
+      expect(screen.queryByLabelText('Register service charge (%)')).not.toBeInTheDocument();
     });
   });
 

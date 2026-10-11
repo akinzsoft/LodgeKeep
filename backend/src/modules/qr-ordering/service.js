@@ -56,7 +56,8 @@ const { withImageUrl } = require('../pos/menu-images');
 const outletMenu = require('../../shared/outlet-menu');
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
-const { sumMoney, compareMoney } = require('../../shared/money');
+const { sumMoney, compareMoney, percentOfMoney } = require('../../shared/money');
+const { qrServiceChargePercent } = require('../../shared/service-charge');
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
 const { resolveOrderLine, normalizeQuantity, modifiersForInsert } = require('../../shared/pos-line-input');
 const { resolveApplicableTaxVersions, computeChargeWithTax } = require('../cashiering/tax-engine');
@@ -121,6 +122,12 @@ function minutesFromNow(minutes) {
 // Guest-facing — menu, order creation, payment
 // ---------------------------------------------------------------------
 
+/** The rate frozen when this QR order was placed ('7.50'), or null when it carries no service charge. */
+async function frozenServiceChargePercent(db, posOrderId) {
+  const row = await db.table('pos_guest_order_service_charges').where({ pos_order_id: posOrderId }).first('service_charge_percent');
+  return row ? String(row.service_charge_percent) : null;
+}
+
 async function getMenuForToken({ context, token }) {
   const db = scopedDb().for(context);
   const outlet = await db.table('pos_outlets').where({ id: token.outlet_id }).first();
@@ -128,7 +135,8 @@ async function getMenuForToken({ context, token }) {
   // What this outlet sells from the shared catalogue, at its own prices,
   // leaving out anything switched off there.
   const items = (await outletMenu.menuItemsForOutlet(db, token.outlet_id)).filter((item) => item.is_available);
-  return { outlet: { id: outlet.id, name: outlet.name, type: outlet.type }, items: items.map(withImageUrl) };
+  // `service_charge_percent` is the rate a QR order here is charged (null = none), shown before the guest confirms.
+  return { outlet: { id: outlet.id, name: outlet.name, type: outlet.type, service_charge_percent: qrServiceChargePercent(outlet) }, items: items.map(withImageUrl) };
 }
 
 /**
@@ -287,6 +295,13 @@ async function createGuestOrder({ context, token, cart, paymentMethod, guestCont
         payment_method: paymentMethod,
       });
 
+      // Frozen now: a later rate or mode change never alters what this guest was shown or pays.
+      // Written only in 'charge' mode, so an ordinary QR order is stored exactly as before.
+      const qrRate = qrServiceChargePercent(outlet);
+      if (qrRate !== null) {
+        await trx.table('pos_guest_order_service_charges').insert({ pos_order_id: orderId, service_charge_percent: qrRate });
+      }
+
       // A card order's payment intent is created in the SAME transaction
       // as the order itself — no separate "initiate checkout" step or
       // second idempotency key is ever exposed to the guest (the
@@ -301,7 +316,8 @@ async function createGuestOrder({ context, token, cart, paymentMethod, guestCont
         const allTaxRows = await trx.table('taxes');
         const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate: property?.current_business_date, chargeType: 'pos_charge' });
         const { netAmount, taxLines } = computeChargeWithTax({ baseAmount: cartTotal, taxVersions });
-        const total = sumMoney([netAmount, sumMoney(taxLines.map((t) => t.amount))]);
+        const serviceCharge = qrRate === null ? '0.00' : percentOfMoney(netAmount, qrRate);
+        const total = sumMoney([netAmount, sumMoney(taxLines.map((t) => t.amount)), serviceCharge]);
         await cashieringService.initiatePosOrderPaystackPaymentIntent({
           trx,
           posOrderId: orderId,
@@ -349,11 +365,15 @@ async function getGuestOrderDetails({ context, guestOrder }) {
   }));
   const itemsSubtotal = sumMoney(items.map((item) => item.line_total));
 
+  const frozenRate = await frozenServiceChargePercent(db, guestOrder.pos_order_id);
   const settlements = await db.table('pos_order_settlements').where({ pos_order_id: guestOrder.pos_order_id }).whereNull('voided_at');
   if (settlements.length > 0) {
     const subtotal = sumMoney(settlements.map((s) => s.subtotal));
     const taxAmount = sumMoney(settlements.map((s) => s.tax_amount));
-    return { items, subtotal, tax_amount: taxAmount, total: sumMoney([subtotal, taxAmount]), currency: settlements[0].currency };
+    const serviceCharge = sumMoney(settlements.map((s) => s.service_charge));
+    // Service fields only when this order carries a service charge, so an ordinary order's response is unchanged.
+    const serviceFields = frozenRate === null ? {} : { service_charge: serviceCharge, service_charge_percent: frozenRate };
+    return { items, subtotal, tax_amount: taxAmount, ...serviceFields, total: sumMoney([subtotal, taxAmount, serviceCharge]), currency: settlements[0].currency };
   }
 
   const payment = guestOrder.payment_method === 'card' ? await getLatestPaymentForOrder({ context, posOrderId: guestOrder.pos_order_id }) : null;
@@ -362,6 +382,7 @@ async function getGuestOrderDetails({ context, guestOrder }) {
     items,
     subtotal: itemsSubtotal,
     tax_amount: null,
+    ...(frozenRate === null ? {} : { service_charge: null, service_charge_percent: frozenRate }),
     total: payment ? payment.amount : itemsSubtotal,
     currency: payment?.currency ?? property?.base_currency ?? null,
   };
@@ -508,6 +529,7 @@ async function verifyRoomChargeOtpAndSettle({ context, guestOrder, code }) {
   // time — a guest could linger with an unpaid order across a check-out.
   if (!reservation || reservation.status !== 'checked_in') throw new NoInHouseReservationError();
 
+  const frozenRate = await frozenServiceChargePercent(db, guestOrder.pos_order_id);
   const settled = await db.transaction((trx) =>
     posService.settleOrder({
       trx,
@@ -516,6 +538,8 @@ async function verifyRoomChargeOtpAndSettle({ context, guestOrder, code }) {
       settlements: [
         {
           method: 'room_charge',
+          // Worked out by the server from the rate frozen at order time; null charges nothing.
+          serviceChargePercent: frozenRate,
           roomCharge: {
             reservationId: reservation.id,
             authMethod: 'guest_otp',

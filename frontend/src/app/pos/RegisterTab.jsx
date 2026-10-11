@@ -53,7 +53,6 @@ const ZERO = '0.00';
 // simply never sends a `tipAmount`, and the backend's own `settleOrder`
 // already defaults a missing one to "0.00" (confirmed by reading
 // `pos/service.js` directly), so this is not a breaking payload change.
-const SERVICE_CHARGE_PERCENT = '7.5';
 
 /** Groups unvoided order items by (menu item, split group) so repeated taps on the same tile show one line reading "×3", not three separate "×1" rows underneath. Each group remembers its own rows in insertion order, since "remove one" targets the most recently added row, not an arbitrary one. */
 function groupOrderItems(items) {
@@ -213,6 +212,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const [paymentStage, setPaymentStage] = useState(null);
   const [settlementForms, setSettlementForms] = useState(null);
   const [settlementPreview, setSettlementPreview] = useState(null);
+  // The outlet's own service charge rate, from the server's preview (null until it arrives).
+  const [serviceChargePercent, setServiceChargePercent] = useState(null);
   const [previewError, setPreviewError] = useState(null);
   const [voidingRow, setVoidingRow] = useState(null);
   // Gap closure — the stock-out override guard. `{ kind: 'addItem',
@@ -659,6 +660,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       const preview = await posApi.getSettlementPreview(orderId);
       if (previewRequestIdRef.current !== requestId) return; // superseded — a later fetch started, or the order changed
       setSettlementPreview(preview.groups);
+      // An older server sends no rate: keep the long-standing 7.5 rather than silently charging none.
+      setServiceChargePercent(preview.serviceChargePercent ?? '7.5');
     } catch (caught) {
       if (previewRequestIdRef.current !== requestId) return;
       setPreviewError(caught instanceof ApiError ? caught.message : 'Could not compute the real settlement total.');
@@ -834,6 +837,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       subtotal: sumMoney(rows.map((row) => row.subtotal)),
       tax: sumMoney(rows.map((row) => row.tax_amount)),
       serviceCharge: sumMoney(rows.map((row) => row.service_charge)),
+      serviceChargePercent,
       tips: sumMoney(rows.map((row) => row.tip_amount)),
       currencyCode: activeProperty.base_currency,
       items: groupOrderItems(unvoidedItems).map((group) => ({
@@ -976,7 +980,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   /** The real, fixed 7.5% service-charge amount for one group, computed against that group's own real, server-verified subtotal. Factored out (code-review fix) since this exact computation was being repeated at three separate call sites. */
   function serviceAmountForGroup(splitGroup) {
     const preview = previewForGroup(splitGroup);
-    return preview ? percentOfMoney(preview.subtotal, SERVICE_CHARGE_PERCENT) : null;
+    return preview && serviceChargePercent !== null ? percentOfMoney(preview.subtotal, serviceChargePercent) : null;
   }
 
   function grandTotalFor(form) {
@@ -1338,6 +1342,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                             form={singleSettlementForm}
                             preview={previewForGroup(singleSettlementForm.splitGroup)}
                             serviceAmount={serviceAmountForGroup(singleSettlementForm.splitGroup)}
+                            serviceChargePercent={serviceChargePercent}
                             grandTotal={grandTotalFor(singleSettlementForm)}
                             currencyCode={activeProperty.base_currency}
                             isOffline={isOffline}
@@ -1428,6 +1433,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                       form={form}
                       preview={previewForGroup(form.splitGroup)}
                       serviceAmount={serviceAmountForGroup(form.splitGroup)}
+                      serviceChargePercent={serviceChargePercent}
                       grandTotal={grandTotalFor(form)}
                       currencyCode={activeProperty.base_currency}
                       isOffline={isOffline}
@@ -1643,7 +1649,7 @@ function PrintableReceipt({ receipt }) {
       )}
       {receipt.serviceCharge !== ZERO && (
         <p className={styles.printRow}>
-          <span>Service ({SERVICE_CHARGE_PERCENT}%)</span>
+          <span>Service ({receipt.serviceChargePercent}%)</span>
           <Money amount={receipt.serviceCharge} currencyCode={currencyCode} />
         </p>
       )}
@@ -1860,11 +1866,11 @@ function PreviewErrorBanner({ message, onRetry }) {
  *
  * Layout pass (user-reported): no Tip input, no editable Service % input —
  * just Subtotal, (Tax when nonzero,) Service at the fixed
- * `SERVICE_CHARGE_PERCENT`, Total. See `defaultSettlementForm`'s own header
+ * the outlet's own rate, Total. See `defaultSettlementForm`'s own header
  * for why `form` still carries no `tipAmount` field at all rather than a
  * dead one nothing ever sets.
  */
-function SettlementFields({ terminalAccounts = [], form, preview, serviceAmount, grandTotal, currencyCode, isOffline, onPatch, onGuestSearch }) {
+function SettlementFields({ terminalAccounts = [], form, preview, serviceAmount, serviceChargePercent, grandTotal, currencyCode, isOffline, onPatch, onGuestSearch }) {
   return (
     <>
       {preview ? (
@@ -1887,10 +1893,12 @@ function SettlementFields({ terminalAccounts = [], form, preview, serviceAmount,
               <Money amount={preview.taxAmount} currencyCode={currencyCode} />
             </div>
           )}
-          <div className={styles.settlementLine}>
-            <span>Service ({SERVICE_CHARGE_PERCENT}%)</span>
-            <Money amount={serviceAmount} currencyCode={currencyCode} />
-          </div>
+          {serviceAmount !== ZERO && (
+            <div className={styles.settlementLine}>
+              <span>Service ({serviceChargePercent}%)</span>
+              <Money amount={serviceAmount} currencyCode={currencyCode} />
+            </div>
+          )}
         </>
       ) : (
         <p className={formStyles.disabledNotice}>Calculating subtotal and tax…</p>
