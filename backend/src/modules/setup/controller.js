@@ -772,6 +772,30 @@ async function createTaxVersion(req, res, next) {
   }
 }
 
+async function deactivateTax(req, res, next) {
+  try {
+    const reason = requireReason(req.body);
+    const result = await service.deactivateTax({ context: req.context, taxCode: req.params.taxCode, deactivateFrom: req.body?.deactivate_from });
+    if (!result) return notFound(res);
+    await req.audit({ entityType: 'taxes', entityId: result.after.id, action: 'deactivate', beforeState: result.before, afterState: result.after, reason });
+    res.status(200).json(ok(result.after));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function deleteTax(req, res, next) {
+  try {
+    const reason = requireReason(req.body);
+    const result = await service.deleteTax({ context: req.context, taxCode: req.params.taxCode });
+    if (!result) return notFound(res);
+    await req.audit({ entityType: 'taxes', entityId: result.versions[0].id, action: 'delete_tax', beforeState: { tax_code: req.params.taxCode, versions: result.versions }, reason });
+    res.status(200).json(ok({ tax_code: req.params.taxCode, deleted_versions: result.versions.length }));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function listTaxes(req, res, next) {
   try {
     res.status(200).json(ok(await service.listTaxes({ context: req.context })));
@@ -1035,6 +1059,8 @@ module.exports = {
   resolveRate,
   createTaxVersion,
   listTaxes,
+  deactivateTax,
+  deleteTax,
   resolveTax,
   createMarketSegment,
   updateMarketSegment,

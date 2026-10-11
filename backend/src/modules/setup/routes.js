@@ -134,6 +134,8 @@ function setupRouter() {
   router.get('/taxes', requirePermission('setup.view'), controller.listTaxes);
   router.get('/taxes/resolve', requirePermission('setup.view'), controller.resolveTax);
   router.post('/taxes', requirePermission('setup.manage'), controller.createTaxVersion);
+  router.post('/taxes/:taxCode/deactivate', requirePermission('setup.manage'), controller.deactivateTax);
+  router.post('/taxes/:taxCode/delete', requirePermission('setup.manage'), controller.deleteTax);
 
   return router;
 }
