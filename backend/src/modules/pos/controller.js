@@ -797,7 +797,6 @@ async function settleOrder(req, res, next) {
             terminal: { provider: s.terminal_provider, reference: s.terminal_reference },
             terminalAccountId: s.terminal_account_id,
             tipAmount: s.tip_amount,
-            serviceCharge: s.service_charge,
             roomCharge: s.room_charge
               ? { reservationId: s.room_charge.reservation_id, authMethod: s.room_charge.auth_method, authReference: s.room_charge.auth_reference }
               : undefined,

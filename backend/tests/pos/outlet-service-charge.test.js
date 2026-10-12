@@ -223,6 +223,91 @@ describe('Per-outlet service charge', () => {
     });
   });
 
+  describe('the staff Register works the service charge out itself (a client value is never used)', () => {
+    let folioId;
+
+    beforeAll(async () => {
+      // No room assignment: the staff room charge names the reservation directly, and a second in-house
+      // reservation in a room would steal the QR room-charge tests' room lookup below.
+      const suffix = `${Date.now()}`;
+      const [reservationId] = await t.trx('reservations').insert({
+        tenant_id: ctx.a.id, property_id: propertyId, guest_id: ctx.a.guests[0].id, room_type_id: ctx.a.roomTypes[0].id, rate_code_id: ctx.a.rateCodes[0].id,
+        arrival_date: '2027-09-01', departure_date: '2027-09-05', adults: 1, children: 0, status: 'checked_in', confirmation_number: `SCST${suffix}`.toUpperCase().slice(0, 26), checked_in_at: new Date(),
+      });
+      [folioId] = await t.trx('folios').insert({ tenant_id: ctx.a.id, property_id: propertyId, reservation_id: reservationId, folio_number: `SCSTF${suffix}`.toUpperCase().slice(0, 26), status: 'open', balance: '0.00', currency: 'NGN' });
+      ctx.reservationId = reservationId;
+    });
+
+    const body = (method, serviceCharge, splitGroup = null) => {
+      const s = { method, split_group: splitGroup };
+      if (serviceCharge !== undefined) s.service_charge = serviceCharge;
+      if (method === 'room_charge') s.room_charge = { reservation_id: ctx.reservationId, auth_method: 'pin', auth_reference: 'ok' };
+      return s;
+    };
+    const settle = (orderId, settlements) => as(operatorId).post(`/api/v1/pos/orders/${orderId}/settle`).set('Idempotency-Key', idemKey()).send({ settlements });
+    const settlementsOf = (orderId) => t.trx('pos_order_settlements').where({ pos_order_id: orderId }).orderBy('id');
+
+    describe.each(['cash', 'terminal', 'room_charge'])('%s', (method) => {
+      it.each([['zero', '0.00'], ['a tampered high value', '99.00'], ['a negative value', '-5.00'], ['omitted', undefined]])('%s: the default 7.50% is still charged (1.50 on 20.00)', async (_label, sent) => {
+        const outlet = await makeOutlet();
+        const orderId = await openTab(outlet);
+        const res = await settle(orderId, [body(method, sent)]);
+        expect(res.status).toBe(200);
+        const [row] = await settlementsOf(orderId);
+        expect(row).toMatchObject({ subtotal: '20.00', tax_amount: '1.50', service_charge: '1.50' });
+      });
+
+      it('uses the outlet rate (10% = 2.00), whatever the client sent', async () => {
+        const outlet = await makeOutlet({ percent: '10.00' });
+        const orderId = await openTab(outlet);
+        const res = await settle(orderId, [body(method, '0.00')]);
+        expect(res.status).toBe(200);
+        expect((await settlementsOf(orderId))[0].service_charge).toBe('2.00');
+      });
+
+      it('a 0% outlet charges nothing even if the client sends a value', async () => {
+        const outlet = await makeOutlet({ percent: '0.00' });
+        const orderId = await openTab(outlet);
+        const res = await settle(orderId, [body(method, '50.00')]);
+        expect(res.status).toBe(200);
+        expect((await settlementsOf(orderId))[0].service_charge).toBe('0.00');
+      });
+
+      it('each split group is charged on its own net', async () => {
+        const outlet = await makeOutlet({ percent: '10.00' });
+        const orderId = await openTab(outlet);
+        const added = await as(operatorId).post(`/api/v1/pos/orders/${orderId}/items`).send({ menu_item_id: outlet.menuItemId, quantity: 2 }).expect(200);
+        const [first, second] = added.body.data.items;
+        await as(operatorId).post(`/api/v1/pos/orders/${orderId}/items/${first.id}/split-group`).send({ split_group: 1 }).expect(200);
+        await as(operatorId).post(`/api/v1/pos/orders/${orderId}/items/${second.id}/split-group`).send({ split_group: 2 }).expect(200);
+        const res = await settle(orderId, [body(method, '0.00', 1), body(method, '99.00', 2)]);
+        expect(res.status).toBe(200);
+        const rows = await settlementsOf(orderId);
+        expect(rows.map((r) => [r.split_group, r.subtotal, r.service_charge])).toEqual([[1, '20.00', '2.00'], [2, '40.00', '4.00']]);
+      });
+    });
+
+    it('a room charge posts the server-computed service charge to the folio (23.00 on 20.00 + tax), not the client value', async () => {
+      const outlet = await makeOutlet();
+      const orderId = await openTab(outlet);
+      const before = Number((await t.trx('folios').where({ id: folioId }).first()).balance);
+      const res = await settle(orderId, [body('room_charge', '0.00')]);
+      expect(res.status).toBe(200);
+      const after = Number((await t.trx('folios').where({ id: folioId }).first()).balance);
+      expect(Math.round((after - before) * 100) / 100).toBe(23);
+    });
+
+    it('card: a tampered value cannot lower the total the captured payment is matched against', async () => {
+      const outlet = await makeOutlet();
+      const orderId = await openTab(outlet);
+      const started = await as(operatorId).post(`/api/v1/pos/orders/${orderId}/paystack-checkout`).set('Idempotency-Key', idemKey()).send({ tender: 'card' });
+      await t.trx('payments').where({ id: started.body.data.id }).update({ status: 'CAPTURED', captured_at: new Date() });
+      const res = await settle(orderId, [{ method: 'card', service_charge: '0.00', payment_id: started.body.data.id }]);
+      expect(res.status).toBe(200);
+      expect((await settlementsOf(orderId))[0].service_charge).toBe('1.50');
+    });
+  });
+
   describe('guest QR card orders', () => {
     async function qrTable(outlet) {
       const res = await as(managerId).post('/api/v1/pos/qr-tokens').send({ outlet_id: outlet.outletId, type: 'table', table_label: `Q${(counter += 1)}`, base_url: 'https://alpha-hotels.test/qr-order' });

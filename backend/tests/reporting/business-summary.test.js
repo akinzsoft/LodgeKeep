@@ -99,19 +99,19 @@ describe('Business summary', () => {
 
     // Rooms: a cash folio payment.
     await folioCash('70.00');
-    // Bar: cash with service charge, a card, a bank-transfer-channel card, and an NQR sale.
-    const cashTab = await openTab([[bar.beerId, 2]]); // 80.00 + 4.00 service
-    expect((await settle(cashTab, [{ method: 'cash', service_charge: '4.00' }])).status).toBe(200);
+    // Bar: cash (the server adds the outlet's 7.5% service charge to each sale), a card, a bank-transfer-channel card, and an NQR sale.
+    const cashTab = await openTab([[bar.beerId, 2]]); // 80.00 + 6.00 service
+    expect((await settle(cashTab, [{ method: 'cash' }])).status).toBe(200);
     const cardTab = await openTab([[bar.beerId, 1]]);
-    expect((await settle(cardTab, [{ method: 'card', service_charge: '3.00', payment_id: await capturedPayment(cardTab, 'card') }])).status).toBe(200);
+    expect((await settle(cardTab, [{ method: 'card', payment_id: await capturedPayment(cardTab, 'card') }])).status).toBe(200);
     const transferTab = await openTab([[bar.beerId, 1]]);
-    expect((await settle(transferTab, [{ method: 'card', service_charge: '3.00', payment_id: await capturedPayment(transferTab, 'card', 'bank_transfer') }])).status).toBe(200);
+    expect((await settle(transferTab, [{ method: 'card', payment_id: await capturedPayment(transferTab, 'card', 'bank_transfer') }])).status).toBe(200);
     const nqrTab = await openTab([[bar.beerId, 1]]);
-    expect((await settle(nqrTab, [{ method: 'card', service_charge: '3.00', payment_id: await capturedPayment(nqrTab, 'nqr') }])).status).toBe(200);
+    expect((await settle(nqrTab, [{ method: 'card', payment_id: await capturedPayment(nqrTab, 'nqr') }])).status).toBe(200);
 
     // Terminal sale, and a captured card payment whose tab was voided (an unsettled capture reconciliation still lists).
     const terminalTab = await openTab([[bar.beerId, 1]]);
-    expect((await settle(terminalTab, [{ method: 'terminal', service_charge: '3.00' }])).status).toBe(200);
+    expect((await settle(terminalTab, [{ method: 'terminal' }])).status).toBe(200);
     const strayTab = await openTab([[bar.beerId, 1]]);
     const strayPayment = await capturedPayment(strayTab, 'card');
     await t.trx('payments').where({ id: strayPayment }).update({ captured_at: new Date(`${DAY}T12:00:00Z`) });
@@ -170,7 +170,7 @@ describe('Business summary', () => {
     const summary = (await get(range)).body.data;
     expect(row(summary, 'Rooms').breakdown).toBeNull();
     const bar = row(summary, 'Summary Bar');
-    expect(bar.breakdown).toMatchObject({ net: '240.00', service: '16.00', tips: '0.00' });
+    expect(bar.breakdown).toMatchObject({ net: '240.00', service: '18.00', tips: '0.00' });
     expect(Number(bar.breakdown.other)).toBeGreaterThan(0); // the unsettled capture has no settlement breakdown
     const parts = ['net', 'tax', 'service', 'tips', 'other'].reduce((sum, k) => sum + Math.round(Number(bar.breakdown[k]) * 100), 0);
     expect(parts).toBe(Math.round(Number(bar.grossCollected) * 100));
@@ -179,7 +179,7 @@ describe('Business summary', () => {
   it('keeps charge-to-room as a memo that is NOT in any total, and bridges to the POS Sales report', async () => {
     const summary = (await get(range)).body.data;
     const barRow = row(summary, 'Summary Bar');
-    expect(barRow.chargedToRooms).toBe('43.00') // 40.00 + the fixture VAT;
+    expect(barRow.chargedToRooms).toBe('46.00'); // 40.00 + the fixture VAT + 3.00 service charge
     const posReport = await computeSalesReport({ context: contextFromSession({ tenantId: ctx.a.id, propertyId, userId: ctx.a.users[0].id }), dateFrom: DAY, dateTo: DAY, outletId: bar.outletId });
     const posBar = posReport.byOutlet.find((o) => o.name === 'Summary Bar');
     // POS Sales total = what the settlements collected (collected less refund/unsettled lines, which have no sale) + charged to rooms.
