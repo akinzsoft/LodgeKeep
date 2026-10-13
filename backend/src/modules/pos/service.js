@@ -1377,7 +1377,8 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
   const property = await trx.table('properties').where({ id: order.property_id }).first('current_business_date', 'base_currency');
   const businessDate = property?.current_business_date;
   const allTaxRows = await trx.table('taxes');
-  const saleOutlet = await trx.table('pos_outlets').where({ id: order.outlet_id }).first('type');
+  const saleOutlet = await trx.table('pos_outlets').where({ id: order.outlet_id }).first('type', 'service_charge_percent');
+  const registerRate = registerServiceChargePercent(saleOutlet);
   const saleTaxChargeType = taxChargeTypeForOutlet(saleOutlet);
 
   // Cash-up attribution: record which shift was open on this terminal when
@@ -1402,11 +1403,11 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
     const groupItems = items.filter((item) => groupKey(item.split_group) === groupKey(settlement.splitGroup));
     const baseAmount = sumMoney(groupItems.map(computeItemLineTotal));
     const tipAmount = settlement.tipAmount ?? '0.00';
-    // The Register sends the amount it showed the cashier; a guest QR settlement instead passes
-    // `serviceChargePercent` (the rate frozen when the guest placed the order, never anything from a
-    // request body) and the server works the amount out from the net below.
-    const serverRate = settlement.serviceChargePercent ?? null;
-    let serviceCharge = settlement.serviceCharge ?? '0.00';
+    // The server always works the service charge out from the net below; nothing the client sends is
+    // used. A guest QR settlement passes `serviceChargePercent` (the rate frozen when the guest placed
+    // the order, null for none); every other settlement uses the outlet's staff Register rate.
+    const serverRate = 'serviceChargePercent' in settlement ? settlement.serviceChargePercent : registerRate;
+    let serviceCharge = '0.00';
 
     const fields = {
       pos_order_id: orderId,

@@ -320,7 +320,7 @@ async function createSale({ trx, context, userId, outletId, lines, method, termi
     trx,
     orderId,
     settledByUserId: userId,
-    settlements: [{ splitGroup: null, method, terminal: terminal ?? {}, terminalAccountId, tipAmount: undefined, serviceCharge: undefined }],
+    settlements: [{ splitGroup: null, method, terminal: terminal ?? {}, terminalAccountId, tipAmount: undefined }],
     stockOverrideReason,
   });
   const saleId = await recordReceiptedSale(trx, { outlet, orderId, settlement: settlements[0], userId, method, itemRows });

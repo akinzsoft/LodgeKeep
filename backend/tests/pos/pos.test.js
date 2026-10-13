@@ -722,8 +722,8 @@ describe('POS (PLAN.md Phase 4)', () => {
       expect(String(roomSettlement.folio_id)).toBe(String(guest.folioId));
 
       const folio = await t.trx('folios').where({ id: guest.folioId }).first();
-      // 20.00 charge + 1.50 tax = 21.50 posted to the folio.
-      expect(folio.balance).toBe('21.50');
+      // 20.00 charge + 1.50 tax + 1.50 service charge (the server's 7.5% of the net) = 23.00 posted to the folio.
+      expect(folio.balance).toBe('23.00');
     });
 
     it('rejects a settlement request that leaves a split group uncovered', async () => {
@@ -798,13 +798,13 @@ describe('POS (PLAN.md Phase 4)', () => {
       const settlement = res.body.data.settlements[0];
       expect(settlement.tip_service_charge_line_item_id).not.toBeNull();
 
-      // 20.00 charge + 1.50 tax + 5.00 tip = 26.50 actually posted to the folio — the tip is not just recorded, it's billed.
+      // 20.00 charge + 1.50 tax + 5.00 tip + 1.50 service charge (the server's 7.5% of the net) = 28.00 actually posted to the folio — the tip is not just recorded, it's billed.
       const folio = await t.trx('folios').where({ id: guest.folioId }).first();
-      expect(folio.balance).toBe('26.50');
+      expect(folio.balance).toBe('28.00');
 
       const tipLine = await t.trx('folio_line_items').where({ id: settlement.tip_service_charge_line_item_id }).first();
       expect(tipLine.type).toBe('adjustment');
-      expect(tipLine.amount).toBe('5.00');
+      expect(tipLine.amount).toBe('6.50');
 
       // Voiding the settlement voids the tip line too — no orphaned tip left on the folio.
       const voidToken = tokenFor({ userId: ctx.a.users[0].id });
@@ -980,9 +980,9 @@ describe('POS (PLAN.md Phase 4)', () => {
         .set('Idempotency-Key', idemKey())
         .send({ counted_cash: '119.50' });
       expect(close.status).toBe(200);
-      // opening 100.00 + (20.00 subtotal + 1.50 tax) cash taken = 121.50 expected.
-      expect(close.body.data.expected_cash).toBe('121.50');
-      expect(close.body.data.variance).toBe('-2.00');
+      // opening 100.00 + (20.00 subtotal + 1.50 tax + 1.50 server-computed service charge) cash taken = 123.00 expected.
+      expect(close.body.data.expected_cash).toBe('123.00');
+      expect(close.body.data.variance).toBe('-3.50');
 
       // Closing again is a real conflict, never a silent no-op.
       const closeAgain = await t.request
@@ -1026,7 +1026,7 @@ describe('POS (PLAN.md Phase 4)', () => {
       const shiftA = await openShiftFor(token, setup.terminalId);
       const sale = await cashSale(token, setup);
       expect(String(sale.pos_shift_id)).toBe(String(shiftA.id));
-      expect((await closeShiftReq(token, shiftA.id, '121.50')).body.data.variance).toBe('0.00');
+      expect((await closeShiftReq(token, shiftA.id, '123.00')).body.data.variance).toBe('0.00');
 
       // The next cashier opens in the very same second the last sale settled —
       // pinned explicitly, so this never depends on how fast the test runs.
