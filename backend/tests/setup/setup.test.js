@@ -732,6 +732,11 @@ describe('Setup module (PLAN.md Phase 1)', () => {
   // Taxes — effective-dating, end to end through the real HTTP endpoints
   // ====================================================================
   describe('taxes', () => {
+    // Creating a tax version needs `tax.manage`, which only super_admin holds.
+    beforeAll(async () => {
+      await grantRoleToUser({ tenant: ctx.a, userIndex: 1, propertyIndex: 0, role: 'super_admin' });
+    });
+
     const token = () =>
       signAccessToken({
         aud: 'staff',

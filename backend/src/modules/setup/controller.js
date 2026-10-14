@@ -784,6 +784,18 @@ async function deactivateTax(req, res, next) {
   }
 }
 
+async function reactivateTax(req, res, next) {
+  try {
+    const reason = requireReason(req.body);
+    const result = await service.reactivateTax({ context: req.context, taxCode: req.params.taxCode, reactivateFrom: req.body?.reactivate_from });
+    if (!result) return notFound(res);
+    await req.audit({ entityType: 'taxes', entityId: result.after.id, action: 'reactivate', beforeState: result.before, afterState: result.after, reason });
+    res.status(201).json(ok(result.after));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function deleteTax(req, res, next) {
   try {
     const reason = requireReason(req.body);
@@ -1060,6 +1072,7 @@ module.exports = {
   createTaxVersion,
   listTaxes,
   deactivateTax,
+  reactivateTax,
   deleteTax,
   resolveTax,
   createMarketSegment,

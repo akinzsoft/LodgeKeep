@@ -31,7 +31,7 @@ import formStyles from './SetupForm.module.css';
  * step is the one action here that changes what `activeProperty` even is
  * for every later step.
  */
-export function SetupWizard({ properties, activeProperty, onPropertiesChanged, isOffline = false }) {
+export function SetupWizard({ properties, activeProperty, onPropertiesChanged, isOffline = false, canManageTaxes = false }) {
   const [progress, setProgress] = useState(null);
   const [error, setError] = useState(null);
   const [stepIndex, setStepIndex] = useState(0);
@@ -114,7 +114,7 @@ export function SetupWizard({ properties, activeProperty, onPropertiesChanged, i
       {currentStep.key === 'room-types' && <RoomTypesTab activeProperty={activeProperty} disabled={disabled} />}
       {currentStep.key === 'rooms' && <RoomsTab disabled={disabled} isOffline={isOffline} />}
       {currentStep.key === 'rate-codes' && <RateCodesTab activeProperty={activeProperty} disabled={disabled} />}
-      {currentStep.key === 'taxes' && <TaxesTab activeProperty={activeProperty} disabled={disabled} isOffline={isOffline} />}
+      {currentStep.key === 'taxes' && <TaxesTab activeProperty={activeProperty} disabled={disabled} isOffline={isOffline} canManage={canManageTaxes} />}
       {currentStep.key === 'users' && <UsersTab disabled={disabled} isOffline={isOffline} />}
 
       <div className={formStyles.actionsRow}>

@@ -111,8 +111,15 @@ class TaxDeactivationError extends AppError {
   }
 }
 
+class TaxReactivationError extends AppError {
+  constructor(code, message, status = 422, details) {
+    super(code, message, status, details);
+  }
+}
+
 module.exports = {
   TaxInUseError,
+  TaxReactivationError,
   TaxDeactivationError,
   DuplicateEntryError,
   InvalidBulkRangeError,

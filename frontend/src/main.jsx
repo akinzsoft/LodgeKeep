@@ -404,7 +404,12 @@ function Demo() {
       {accessDenied ? (
         <NoAccessScreen onGoHome={() => setActiveItemKey('home')} />
       ) : screenKey === 'setup' ? (
-        <SetupScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} onPropertiesChanged={reloadProperties} />
+        <SetupScreen
+          activePropertyId={user.activePropertyId}
+          isOffline={!isOnline}
+          onPropertiesChanged={reloadProperties}
+          canManageTaxes={Boolean(grantedPermissions?.has('tax.manage'))}
+        />
       ) : screenKey === 'booking' ? (
         <BookingScreen activePropertyId={user.activePropertyId} isOffline={!isOnline} />
       ) : screenKey === 'housekeeping' ? (

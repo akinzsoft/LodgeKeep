@@ -18,7 +18,7 @@ import formStyles from './SetupForm.module.css';
  * property should be able to see for itself that changing a rate created a
  * new version rather than rewriting history (ARCHITECTURE.md §12.1).
  */
-export function TaxesTab({ disabled, isOffline = false, activeProperty = null }) {
+export function TaxesTab({ disabled, isOffline = false, activeProperty = null, canManage = false }) {
   const [taxes, setTaxes] = useState(null);
   const [form, setForm] = useState({
     tax_code: '',
@@ -30,7 +30,7 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null })
     applies_to: 'all',
   });
   const [confirming, setConfirming] = useState(false);
-  // { kind: 'deactivate' | 'delete', taxCode } while a tax-level action is being confirmed.
+  // { kind: 'deactivate' | 'reactivate' | 'delete', taxCode } while a tax-level action is being confirmed.
   const [action, setAction] = useState(null);
   const [deactivateFrom, setDeactivateFrom] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -91,6 +91,8 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null })
     try {
       if (action.kind === 'deactivate') {
         await setupApi.deactivateTax(action.taxCode, { reason, ...(deactivateFrom ? { deactivate_from: deactivateFrom } : {}) });
+      } else if (action.kind === 'reactivate') {
+        await setupApi.reactivateTax(action.taxCode, { reason, ...(deactivateFrom ? { reactivate_from: deactivateFrom } : {}) });
       } else {
         await setupApi.deleteTax(action.taxCode, { reason });
       }
@@ -112,8 +114,21 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null })
 
   const businessDate = activeProperty?.current_business_date ? String(activeProperty.current_business_date).slice(0, 10) : '';
 
+  // A version is live while it is open or its end date has not passed; a hotel tax with none charges nothing on new bills.
+  const isLive = (version) => !version.effective_to || (businessDate !== '' && String(version.effective_to).slice(0, 10) >= businessDate);
+  const taxesOff = (taxes ?? [])
+    .filter((v) => v.applies_to === 'all' || v.applies_to === undefined)
+    .map((v) => v.tax_code)
+    .filter((code, index, all) => all.indexOf(code) === index)
+    .filter((code) => !(taxes ?? []).some((v) => v.tax_code === code && isLive(v)));
+
   return (
     <div className={styles.page}>
+      {taxesOff.map((code) => (
+        <p key={code} role="status" className={formStyles.errorBanner}>
+          {code} is off: new bills carry no tax
+        </p>
+      ))}
       <DataTable
         title="Taxes (every version)"
         state={taxes === null ? 'loading' : taxes.length === 0 ? 'empty' : 'success'}
@@ -141,12 +156,18 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null })
             render: (row) => {
               // Actions apply to the whole tax, so they sit on its newest version only.
               const isLatest = taxes.find((v) => v.tax_code === row.tax_code)?.id === row.id;
-              if (!isLatest) return null;
+              if (!isLatest || !canManage) return null;
               return (
                 <span className={formStyles.actionsRow}>
-                  {isCurrentlyOpen(row) && (
-                    <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('deactivate', row.tax_code)}>
-                      Deactivate
+                  {isLive(row) ? (
+                    isCurrentlyOpen(row) && (
+                      <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('deactivate', row.tax_code)}>
+                        Deactivate
+                      </Button>
+                    )
+                  ) : (
+                    <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('reactivate', row.tax_code)}>
+                      Reactivate
                     </Button>
                   )}
                   <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('delete', row.tax_code)}>
@@ -161,6 +182,11 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null })
         rowKey={(row) => row.id}
       />
 
+      {!canManage ? (
+        <Card title="Add a tax or change a rate">
+          <p className={formStyles.disabledNotice}>Only a super admin can add a tax, change a rate, or reactivate, deactivate or delete a tax.</p>
+        </Card>
+      ) : (
       <Card title="Add a tax or change a rate">
         {error && (
           <p role="alert" className={formStyles.errorBanner}>
@@ -271,6 +297,7 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null })
           </div>
         </form>
       </Card>
+      )}
 
       {action?.kind === 'deactivate' && (
         <ConfirmDialog
@@ -284,6 +311,30 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null })
         >
           <label className={formStyles.field}>
             <span className={formStyles.label}>Stops applying from</span>
+            <input
+              className={formStyles.input}
+              type="date"
+              value={deactivateFrom || businessDate}
+              min={businessDate || undefined}
+              onChange={(event) => setDeactivateFrom(event.target.value)}
+            />
+            <span className={formStyles.hint}>Defaults to the business date. Past dates are not allowed.</span>
+          </label>
+        </ConfirmDialog>
+      )}
+
+      {action?.kind === 'reactivate' && (
+        <ConfirmDialog
+          title={`Reactivate ${action.taxCode}`}
+          consequence={`"${action.taxCode}" starts applying again from the date below, with the same rate and settings as its last version. Bills dated before that date, including any in the gap, stay untaxed.`}
+          requireReason
+          confirmLabel={submitting ? 'Saving…' : 'Reactivate'}
+          confirmDisabled={submitting || (deactivateFrom !== '' && businessDate !== '' && deactivateFrom < businessDate)}
+          onConfirm={handleAction}
+          onCancel={() => setAction(null)}
+        >
+          <label className={formStyles.field}>
+            <span className={formStyles.label}>Applies again from</span>
             <input
               className={formStyles.input}
               type="date"
