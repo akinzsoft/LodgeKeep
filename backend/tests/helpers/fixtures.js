@@ -2127,6 +2127,7 @@ async function seedTwoTenants(trx) {
     ['migration.manage', 'migration'],
     ['reports.view_chain', 'reports'],
     ['security.manage', 'setup'],
+    ['tax.manage', 'setup'],
     ['reports.view_business', 'reports'],
     ['pos.stock_view', 'pos'],
     ['pos.stock_manage', 'pos'],
@@ -2293,6 +2294,7 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['reports.view_financial'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['reports.view_chain'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['security.manage'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['tax.manage'] },
     ]);
   }
 

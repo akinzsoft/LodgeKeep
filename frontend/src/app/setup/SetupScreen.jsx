@@ -73,7 +73,7 @@ const TABS = [
   { key: 'support-access', label: 'Support access' },
 ];
 
-export function SetupScreen({ activePropertyId, isOffline = false, onPropertiesChanged }) {
+export function SetupScreen({ activePropertyId, isOffline = false, onPropertiesChanged, canManageTaxes = false }) {
   const [tab, setTab] = useState('wizard');
   const [properties, setProperties] = useState(null);
   const [error, setError] = useState(null);
@@ -141,6 +141,7 @@ export function SetupScreen({ activePropertyId, isOffline = false, onPropertiesC
             activeProperty={activeProperty}
             onPropertiesChanged={reloadProperties}
             isOffline={isOffline}
+            canManageTaxes={canManageTaxes}
           />
         )}
         {tab === 'property' && (
@@ -168,7 +169,7 @@ export function SetupScreen({ activePropertyId, isOffline = false, onPropertiesC
         {tab === 'room-types' && <RoomTypesTab activeProperty={activeProperty} disabled={!activeProperty} />}
         {tab === 'rooms' && <RoomsTab activeProperty={activeProperty} disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'rate-codes' && <RateCodesTab activeProperty={activeProperty} disabled={!activeProperty} />}
-        {tab === 'taxes' && <TaxesTab activeProperty={activeProperty} disabled={!activeProperty} isOffline={isOffline} />}
+        {tab === 'taxes' && <TaxesTab activeProperty={activeProperty} disabled={!activeProperty} isOffline={isOffline} canManage={canManageTaxes} />}
         {tab === 'reference-data' && <ReferenceDataTab disabled={!activeProperty} />}
         {tab === 'users' && <UsersTab disabled={!activeProperty} isOffline={isOffline} />}
         {tab === 'email' && <EmailSettingsTab disabled={!activeProperty} isOffline={isOffline} />}

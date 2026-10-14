@@ -235,6 +235,10 @@ export function deactivateTax(taxCode, body) {
   return request(`/taxes/${encodeURIComponent(taxCode)}/deactivate`, { method: 'POST', body });
 }
 
+export function reactivateTax(taxCode, body) {
+  return request(`/taxes/${encodeURIComponent(taxCode)}/reactivate`, { method: 'POST', body });
+}
+
 export function deleteTax(taxCode, body) {
   return request(`/taxes/${encodeURIComponent(taxCode)}/delete`, { method: 'POST', body });
 }

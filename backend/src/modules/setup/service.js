@@ -12,7 +12,7 @@
 const { scopedDb } = require('../../db');
 const imageStore = require('../../shared/image-store');
 const { withDuplicateMapping, ValidationError } = require('../../shared/errors');
-const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError, TaxInUseError, TaxDeactivationError } = require('./errors');
+const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError, TaxInUseError, TaxDeactivationError, TaxReactivationError } = require('./errors');
 const { encrypt } = require('../../shared/encryption');
 const { resolveEmailAdapter, describeEmailDelivery, isUndeliverable, NoMailboxConfiguredError } = require('../notifications/email-adapter');
 const paystackAdapter = require('../cashiering/paystack-adapter');
@@ -891,12 +891,11 @@ async function createTaxVersion({ context, taxCode, name, rate, effectiveFrom, i
       if (previous.effective_to && previous.effective_to >= effectiveFrom) {
         throw new TaxEffectiveDateOverlapError(taxCode);
       }
-      const dayBefore = new Date(effectiveFrom);
-      dayBefore.setUTCDate(dayBefore.getUTCDate() - 1);
-      await trx
-        .table('taxes')
-        .where({ id: previous.id })
-        .update({ effective_to: dayBefore.toISOString().slice(0, 10) });
+      // Only an OPEN previous version is closed. One already closed (a deactivation) keeps its own end date, so the
+      // days between it and this version stay untaxed instead of being backfilled with the old rate.
+      if (!previous.effective_to) {
+        await trx.table('taxes').where({ id: previous.id }).update({ effective_to: dayBefore(effectiveFrom) });
+      }
     }
 
     return withDuplicateMapping(
@@ -1005,6 +1004,46 @@ async function deactivateTax({ context, taxCode, deactivateFrom }) {
   });
 }
 
+/**
+ * Reactivate a deactivated tax: a NEW version copying the last version's rate, settings and `applies_to`,
+ * effective from `reactivateFrom` (default the business date; past dates refused). The previous version is
+ * never touched, so a gap between the two stays untaxed — nothing is backfilled. Refused while the tax still
+ * has a live version (open, or closed only from a date that has not arrived yet).
+ */
+async function reactivateTax({ context, taxCode, reactivateFrom }) {
+  const db = scopedDb().for(context);
+  return db.transaction(async (trx) => {
+    const property = await trx.table('properties').where({ id: context.propertyId }).first();
+    const businessDate = property?.current_business_date ? String(property.current_business_date).slice(0, 10) : undefined;
+    const versions = await trx.table('taxes').where({ tax_code: taxCode }).orderBy('effective_from', 'desc').forUpdate();
+    if (versions.length === 0) return null;
+    const from = reactivateFrom ?? businessDate;
+    if (!from || !/^\d{4}-\d{2}-\d{2}$/.test(String(from))) {
+      throw new TaxReactivationError('VALIDATION_INVALID_DATE', 'A valid reactivation date (YYYY-MM-DD) is required.', 400);
+    }
+    const live = versions.find((v) => !v.effective_to || (businessDate && String(v.effective_to).slice(0, 10) >= businessDate));
+    if (live) throw new TaxReactivationError('CONFLICT_TAX_ALREADY_ACTIVE', `Tax "${taxCode}" is already active; there is nothing to reactivate.`, 409);
+    if (businessDate && from < businessDate) {
+      throw new TaxReactivationError('BUSINESS_RULE_TAX_REACTIVATION_IN_PAST', `A tax cannot be reactivated from a past date (the business date is ${businessDate}).`, 422);
+    }
+    const last = versions[0];
+    const [id] = await trx.table('taxes').insert({
+      tax_code: last.tax_code,
+      name: last.name,
+      rate: last.rate,
+      effective_from: from,
+      is_inclusive: last.is_inclusive,
+      calculation_method: last.calculation_method,
+      priority: last.priority,
+      is_compound: last.is_compound,
+      rounding_method: last.rounding_method,
+      jurisdiction: last.jurisdiction,
+      applies_to: last.applies_to,
+    });
+    return { before: last, after: await trx.table('taxes').where({ id }).first() };
+  });
+}
+
 /** Delete a whole tax (every version) only when no record could have used it; otherwise refuse with counts. */
 async function deleteTax({ context, taxCode }) {
   const db = scopedDb().for(context);
@@ -1091,6 +1130,7 @@ module.exports = {
   createTaxVersion,
   listTaxes,
   deactivateTax,
+  reactivateTax,
   deleteTax,
   countTaxUsage,
   resolveEffectiveTax,
