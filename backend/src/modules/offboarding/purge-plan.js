@@ -33,6 +33,7 @@
  *   subscription_webhook_events   raw provider events, attributed to the tenant id only
  *   platform_users                not tenant data
  *   platform_backups              the platform's own log of whole-database backups; no tenant column
+ *   landing_content_versions      Planmsys's own marketing page content; no tenant column
  *   tenant_purges                 the record that a purge happened
  *   tenant_data_exports           kept as evidence an export was handed over; the file is
  *                                 deleted and `file_path` / `requested_by_user_id` cleared
@@ -65,6 +66,7 @@ const RETAINED_TABLES = Object.freeze([
   'subscription_webhook_events',
   'platform_users',
   'platform_backups',
+  'landing_content_versions',
   'tenant_purges',
   'tenant_data_exports',
 ]);

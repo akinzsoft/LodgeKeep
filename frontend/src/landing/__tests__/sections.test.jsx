@@ -1,6 +1,13 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, within, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+const mocks = vi.hoisted(() => ({ getPublicLandingContent: vi.fn() }));
+
+vi.mock('../../shared/api/index.js', async () => {
+  const actual = await vi.importActual('../../shared/api/index.js');
+  return { ...actual, landingApi: mocks };
+});
+
 import { content as realContent } from '../landingContent.js';
 import { Contact, FindCompany, Gallery, Pricing, Testimonials, VideoSection, Hero, Header, Footer } from '../sections.jsx';
 import { buildContactLinks } from '../contactLinks.js';
@@ -11,8 +18,11 @@ const withContent = (patch) => ({ ...realContent, ...patch });
 afterEach(cleanup);
 
 describe('landing page sections', () => {
-  it('the whole page renders every section, once, with one h1', () => {
+  beforeEach(() => mocks.getPublicLandingContent.mockResolvedValue({ overrides: {} }));
+
+  it('the whole page renders every section, once, with one h1', async () => {
     render(<LandingApp />);
+    await screen.findByRole('heading', { level: 1 });
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/hotel, bar and mini.mart from one system/i);
     for (const title of [/Hotel PMS and booking/, /POS for your bar and restaurant/, /A supermarket till that scans/, /Reports you can trust/, /Every way your customers pay/, /See it in action/, /two-minute walkthrough/, /What our customers say/, /Simple, honest pricing/, /Already a customer\?/, /Talk to us or request a demo/]) {
@@ -22,15 +32,17 @@ describe('landing page sections', () => {
     expect(document.querySelector('meta[name="description"]').getAttribute('content')).toBe(realContent.pageDescription);
   });
 
-  it('every call to action goes to the existing signup', () => {
+  it('every call to action goes to the existing signup', async () => {
     render(<LandingApp />);
+    await screen.findByRole('heading', { level: 1 });
     const trial = screen.getAllByRole('link', { name: /start free trial/i });
     expect(trial.length).toBeGreaterThanOrEqual(3);
     for (const link of trial) expect(link).toHaveAttribute('href', '/signup');
   });
 
-  it('the hero and header never offer a login of their own — "Sign in" jumps to the find-your-company form', () => {
+  it('the hero and header never offer a login of their own — "Sign in" jumps to the find-your-company form', async () => {
     render(<LandingApp />);
+    await screen.findByRole('heading', { level: 1 });
     expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument();
     for (const link of screen.getAllByRole('link', { name: /^sign in$/i })) expect(link).toHaveAttribute('href', '#sign-in');
   });
@@ -47,8 +59,9 @@ describe('landing page sections', () => {
     expect(screen.getByRole('link', { name: /start free trial/i })).toHaveAttribute('href', '/signup');
   });
 
-  it('claims nothing the app does not do', () => {
+  it('claims nothing the app does not do', async () => {
     render(<LandingApp />);
+    await screen.findByRole('heading', { level: 1 });
     const text = document.body.textContent;
     for (const bannedClaim of [/channel manager/i, /\bOTA\b/, /booking\.com/i, /loyalty/i, /dynamic pricing/i, /iphone/i, /\bISO\b/, /GDPR|NDPA/, /99\.\d+%/, /uptime/i, /works offline/i, /unlimited/i]) {
       expect(text).not.toMatch(bannedClaim);

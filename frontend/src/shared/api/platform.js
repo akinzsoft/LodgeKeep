@@ -115,3 +115,25 @@ export async function listBackups() {
 export function startBackup({ recipientEmail, passphrase }) {
   return request('/platform/backups', { method: 'POST', body: { recipient_email: recipientEmail, passphrase } });
 }
+
+// ---------------------------------------------------------------------
+// Landing page content (marketing page edited from the console)
+// ---------------------------------------------------------------------
+
+/** `{current, versions, monthly, trialDays}`; `monthly` and `trialDays` are the live, read-only facts the page quotes. */
+export function getLandingContent() {
+  return request('/platform/landing-content');
+}
+
+/** @param {object} content The overrides to save (only fields that differ from the page defaults). */
+export function saveLandingContent(content) {
+  return request('/platform/landing-content', { method: 'PUT', body: { content } });
+}
+
+export function resetLandingContent() {
+  return request('/platform/landing-content/reset', { method: 'POST' });
+}
+
+export function restoreLandingContentVersion(versionId) {
+  return request(`/platform/landing-content/versions/${versionId}/restore`, { method: 'POST' });
+}

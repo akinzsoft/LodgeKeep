@@ -1,18 +1,23 @@
 import { useEffect } from 'react';
-import { content } from './landingContent.js';
+import { content as defaultContent } from './landingContent.js';
+import { useLandingContent } from './useLandingContent.js';
 import { Header, Hero, FindCompany, TrustStrip, Features, Payments, Gallery, VideoSection, Testimonials, Pricing, Contact, Footer } from './sections.jsx';
 import styles from './Landing.module.css';
 
 /**
  * The marketing landing page — rendered ONLY at the exact bare app domain's
- * `/` (see `selectEntryTree.js`), never on a tenant subdomain. A static,
- * public page: it calls no API, holds no session and loads no third-party
- * script, so it needs no `<AuthProvider>`. The "Start free trial" buttons go
- * to the existing `/signup`; "Sign in" sends a customer to their own address.
- *
- * All words, images and contact details live in `landingContent.js`.
+ * `/` (see `selectEntryTree.js`), never on a tenant subdomain. A public page:
+ * it holds no session and loads no third-party script, so it needs no
+ * `<AuthProvider>`. Its one API call is the public, tenant-free
+ * `GET /public/landing-content`: the platform console's saved text, plus the live
+ * monthly fee and trial length. If that fails the built-in defaults in
+ * `landingContent.js` are shown, so the page never depends on the API.
+ * The "Start free trial" buttons go to the existing `/signup`; "Sign in" sends a
+ * customer to their own address.
  */
 export default function LandingApp() {
+  const { content, ready } = useLandingContent(defaultContent);
+
   useEffect(() => {
     document.title = content.pageTitle;
     let meta = document.querySelector('meta[name="description"]');
@@ -22,7 +27,16 @@ export default function LandingApp() {
       document.head.appendChild(meta);
     }
     meta.setAttribute('content', content.pageDescription);
-  }, []);
+  }, [content]);
+
+  if (!ready) {
+    return (
+      <div className={styles.root}>
+        <Header content={content} />
+        <div className={styles.loading} role="status" aria-label="Loading" />
+      </div>
+    );
+  }
 
   return (
     <div className={styles.root}>

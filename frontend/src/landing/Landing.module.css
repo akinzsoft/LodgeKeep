@@ -37,6 +37,10 @@
   text-align: center;
 }
 
+.loading {
+  min-height: 60vh;
+}
+
 .skipLink {
   background: var(--accent);
   border-radius: var(--radius-md);
