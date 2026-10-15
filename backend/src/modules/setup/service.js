@@ -973,6 +973,8 @@ async function countTaxUsage(trx, versions) {
   return usage;
 }
 
+const usageTotal = (usage) => usage.folioTaxLines + usage.posSettlements + usage.supermarketSales;
+
 /**
  * Deactivate a tax: stop it applying from `deactivateFrom` (the first day it
  * no longer applies; default the business date). Closes the open version by
@@ -1051,7 +1053,7 @@ async function deleteTax({ context, taxCode }) {
     const versions = await trx.table('taxes').where({ tax_code: taxCode }).orderBy('effective_from', 'desc').forUpdate();
     if (versions.length === 0) return null;
     const usage = await countTaxUsage(trx, versions);
-    if (usage.folioTaxLines + usage.posSettlements + usage.supermarketSales > 0) throw new TaxInUseError(taxCode, usage);
+    if (usageTotal(usage) > 0) throw new TaxInUseError(taxCode, usage);
     await trx.table('taxes').where({ tax_code: taxCode }).delete();
     return { versions };
   });
@@ -1060,7 +1062,23 @@ async function deleteTax({ context, taxCode }) {
 /** Every version of every tax the property has ever had, most recent first — the Taxes screen shows current AND historical versions (PRODUCT_REQUIREMENTS.md §3.19: "Show ... does not alter historical folios", which a user should be able to see for themselves). */
 async function listTaxes({ context }) {
   const db = scopedDb().for(context);
-  return db.table('taxes').orderBy(['tax_code', { column: 'effective_from', order: 'desc' }]);
+  return db.transaction(async (trx) => {
+    const rows = await trx.table('taxes').orderBy(['tax_code', { column: 'effective_from', order: 'desc' }]);
+    // Read-only usage per tax code (the same count delete uses), attached to every version row so the screen can
+    // show Delete only when it would be allowed. `deletable` mirrors deleteTax's refusal rule exactly.
+    const byCode = new Map();
+    for (const row of rows) {
+      if (!byCode.has(row.tax_code)) byCode.set(row.tax_code, []);
+      byCode.get(row.tax_code).push(row);
+    }
+    const usageByCode = new Map();
+    for (const [code, versions] of byCode) {
+      const usage = await countTaxUsage(trx, versions);
+      const total = usageTotal(usage);
+      usageByCode.set(code, { ...usage, total, deletable: total === 0 });
+    }
+    return rows.map((row) => ({ ...row, usage: usageByCode.get(row.tax_code) }));
+  });
 }
 
 /**
