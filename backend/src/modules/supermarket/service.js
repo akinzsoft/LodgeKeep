@@ -18,6 +18,7 @@
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { sumMoney, toCents, fromCents } = require('../../shared/money');
+const { applyDiscounts } = require('../../shared/discount-pricing');
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
 const { resolveOrderLine } = require('../../shared/pos-line-input');
 const outletMenu = require('../../shared/outlet-menu');
@@ -25,6 +26,7 @@ const { isSupermarketOutlet } = require('../../shared/outlet-types');
 const { allocateLineNetAndTax } = require('../../shared/line-allocation');
 const { outletScopeForUser, scopeCovers } = require('../../shared/outlet-assignments');
 const posService = require('../pos/service');
+const discounts = require('../discounts/service');
 const stockService = require('../stock/service');
 const errors = require('./errors');
 
@@ -245,7 +247,16 @@ async function openQuickSaleOrder(trx, { outlet, userId, terminalId = null, rows
 /** Takes the gapless receipt number and writes the sale and its line snapshot. Returns the sale id. */
 async function recordReceiptedSale(trx, { outlet, orderId, settlement, userId, method, itemRows }) {
   const lineTotals = itemRows.map((row) => computeItemLineTotal({ unit_price: row.unit_price, quantity: row.quantity, modifiers: [] }));
-  const split = allocateLineNetAndTax({ lineTotals, subtotal: settlement.subtotal, taxAmount: settlement.tax_amount });
+  // A discounted sale splits its net and tax over what each line is worth AFTER the discount; the receipt's line_total
+  // stays the shelf price, and the discount itself is listed from the settlement.
+  const discountRows = await trx.table('discounts').where({ pos_order_id: orderId, status: 'applied' });
+  const lineWeights = discountRows.length
+    ? (() => {
+        const pricing = applyDiscounts({ items: itemRows.map((row) => ({ id: row.id, menu_item_id: row.menu_item_id, unit_price: row.unit_price, quantity: row.quantity, split_group: null, modifiers: [] })), discounts: discountRows });
+        return itemRows.map((row) => pricing.lines[String(row.id)].base);
+      })()
+    : lineTotals;
+  const split = allocateLineNetAndTax({ lineTotals: lineWeights, subtotal: settlement.subtotal, taxAmount: settlement.tax_amount });
   const receiptNumber = await takeReceiptNumber(trx, outlet);
   const total = sumMoney([settlement.subtotal, settlement.tax_amount]);
   const [saleId] = await trx.table('supermarket_sales').insert({
@@ -281,7 +292,7 @@ async function recordReceiptedSale(trx, { outlet, orderId, settlement, userId, m
  * `trx`-based, called from `runIdempotentMutation`. `lines`: `[{barcode | menu_item_id, quantity}]`.
  * Opens the tab, adds the lines, settles it and records the receipt, all in the caller's transaction.
  */
-async function createSale({ trx, context, userId, outletId, lines, method, terminalId = null, terminal, terminalAccountId, confirmOversell = false, approve = null }) {
+async function createSale({ trx, context, userId, outletId, lines, method, terminalId = null, terminal, terminalAccountId, confirmOversell = false, approve = null, discountIds = [] }) {
   if (!Array.isArray(lines) || lines.length === 0) throw new ValidationError('MISSING_FIELD', 'At least one item is required.', [{ field: 'items', issue: 'missing' }]);
   if (lines.length > MAX_LINES) throw new ValidationError('CART_TOO_LARGE', `A sale may have at most ${MAX_LINES} lines.`, [{ field: 'items', issue: 'too_many' }]);
   if (!SALE_METHODS.includes(method)) {
@@ -316,6 +327,9 @@ async function createSale({ trx, context, userId, outletId, lines, method, termi
     rows: resolved.map((line) => ({ menu_item_id: line.menuItem.id, quantity: line.quantity, unit_price: line.menuItem.price, item_name: line.menuItem.name, barcode: line.barcode })),
   });
 
+  // The discounts asked for at the till attach to this sale now (once each), and `settleOrder` prices them.
+  await discounts.claimCartDiscounts({ trx, grantIds: discountIds, userId, outletId: outlet.id, orderId, itemRows });
+
   const { settlements } = await posService.settleOrder({
     trx,
     orderId,
@@ -337,8 +351,18 @@ async function getSaleWith(db, saleId) {
   // An online (Paystack) sale: which channel paid it, and whether it has been refunded.
   const settlement = await db.table('pos_order_settlements').where({ id: sale.settlement_id }).first('payment_id');
   const payment = settlement?.payment_id ? await db.table('payments').where({ id: settlement.payment_id }).first('id', 'provider_channel', 'status') : null;
+  // The discounts given on this sale, only when there were any (a receipt without one keeps its old shape).
+  const given = await db.table('settlement_discounts').where({ settlement_id: sale.settlement_id }).orderBy('id', 'asc');
+  const discountView = given.length
+    ? {
+        gross: sumMoney(lines.map((line) => line.line_total)),
+        discounts: given.map((row) => ({ kind: row.kind, reason: row.reason_name, amount: String(row.amount) })),
+        discount_total: sumMoney(given.map((row) => row.amount)),
+      }
+    : {};
   return {
     ...sale,
+    ...discountView,
     payment_id: payment ? payment.id : null,
     payment_channel: payment ? payment.provider_channel : null,
     payment_status: payment ? payment.status : null,

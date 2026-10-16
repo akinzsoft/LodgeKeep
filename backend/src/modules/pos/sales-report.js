@@ -26,6 +26,7 @@ const { sumMoney, negateMoney, compareMoney, toCents, fromCents } = require('../
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
 const { isPointOfSaleOutlet, SUPERMARKET_OUTLET_TYPE } = require('../../shared/outlet-types');
 const { allocateLineNetAndTax } = require('../../shared/line-allocation');
+const { applyDiscounts } = require('../../shared/discount-pricing');
 
 const TENDERS = ['cash', 'card', 'nqr', 'terminal', 'room_charge'];
 const TOP_ITEMS_LIMIT = 20;
@@ -241,6 +242,40 @@ async function buildOutletRows({ db, settlements, outletId }) {
     .sort((a, b) => compareMoney(b.total, a.total) || a.name.localeCompare(b.name));
 }
 
+/**
+ * Scales item lines to their settlement so item rows add up to the summary. Two kinds of sale need it: a supermarket
+ * sale (an item's own price is gross of an inclusive VAT row, the settlement's subtotal is net of it; only when
+ * `includeSupermarket`) and any sale that carried a discount (the settlement is net of the discount, the item prices
+ * are not). Sets `item.netLineTotal`. A sale with neither keeps its item amounts exactly as before.
+ */
+async function attachNetLineTotals({ db, settlements, items, orderIds, includeSupermarket }) {
+  const appliedDiscounts = orderIds.length === 0 ? [] : await db.table('discounts').whereIn('pos_order_id', orderIds).where({ status: 'applied' });
+  const discountsByOrder = new Map();
+  for (const row of appliedDiscounts) {
+    const list = discountsByOrder.get(String(row.pos_order_id)) ?? [];
+    list.push(row);
+    discountsByOrder.set(String(row.pos_order_id), list);
+  }
+  const pricingByOrder = new Map();
+  for (const [orderId, rows] of discountsByOrder) {
+    pricingByOrder.set(orderId, applyDiscounts({ items: items.filter((item) => String(item.pos_order_id) === orderId), discounts: rows }));
+  }
+  const scaledGroups = new Map();
+  for (const row of settlements) {
+    if ((includeSupermarket && row.outlet_type === SUPERMARKET_OUTLET_TYPE) || pricingByOrder.has(String(row.pos_order_id))) {
+      scaledGroups.set(`${row.pos_order_id}|${groupKey(row.split_group)}`, { subtotal: row.subtotal, taxAmount: row.tax_amount, items: [] });
+    }
+  }
+  for (const item of items) scaledGroups.get(`${item.pos_order_id}|${groupKey(item.split_group)}`)?.items.push(item);
+  for (const group of scaledGroups.values()) {
+    const weight = (item) => pricingByOrder.get(String(item.pos_order_id))?.lines[String(item.id)]?.base ?? computeItemLineTotal(item);
+    const split = allocateLineNetAndTax({ lineTotals: group.items.map(weight), subtotal: group.subtotal, taxAmount: group.taxAmount });
+    group.items.forEach((item, index) => {
+      item.netLineTotal = split[index].net;
+    });
+  }
+}
+
 async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCostByMenuItem }) {
   // Profit is only computed when the caller supplies each menu item's unit
   // cost (the controller takes it from the stock margin report — this file
@@ -312,6 +347,7 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
       .whereIn('pos_order_items.pos_order_id', [...tabs.values()].map((tab) => tab.orderId))
       .whereNull('pos_order_items.voided_at')
       .select(
+        'pos_order_items.id as id',
         'pos_order_items.pos_order_id as pos_order_id',
         'pos_order_items.menu_item_id as menu_item_id',
         'pos_order_items.split_group as split_group',
@@ -321,21 +357,7 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
         'pos_menu_items.name as name'
       );
 
-  // Supermarket sales only: an item's own price is gross of an inclusive VAT row, while the
-  // settlement's subtotal is net of it. Scale each line to the settlement so the item rows add
-  // up to the summary (and profit is measured on the net). Hotel outlets keep their item
-  // amounts exactly as before.
-  const supermarketGroups = new Map();
-  for (const row of settlements) {
-    if (row.outlet_type === SUPERMARKET_OUTLET_TYPE) supermarketGroups.set(`${row.pos_order_id}|${groupKey(row.split_group)}`, { subtotal: row.subtotal, taxAmount: row.tax_amount, items: [] });
-  }
-  for (const item of items) supermarketGroups.get(`${item.pos_order_id}|${groupKey(item.split_group)}`)?.items.push(item);
-  for (const group of supermarketGroups.values()) {
-    const split = allocateLineNetAndTax({ lineTotals: group.items.map(computeItemLineTotal), subtotal: group.subtotal, taxAmount: group.taxAmount });
-    group.items.forEach((item, index) => {
-      item.netLineTotal = split[index].net;
-    });
-  }
+  await attachNetLineTotals({ db, settlements, items, orderIds: [...tabs.values()].map((tab) => tab.orderId), includeSupermarket: true });
 
   const itemTotals = new Map();
   for (const item of items) {
@@ -398,6 +420,16 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
     }
   }
 
+  // Discounts and comps given on these checks, from the amounts frozen on each settlement. Only present when there were
+  // any, so a report without discounts keeps its old shape.
+  const frozenDiscounts = settlements.length ? await db.table('settlement_discounts').whereIn('settlement_id', settlements.map((row) => row.id)) : [];
+  const orderOfSettlement = new Map(settlements.map((row) => [String(row.id), String(row.pos_order_id)]));
+  const discountByOrder = new Map();
+  for (const row of frozenDiscounts) {
+    const orderKey = orderOfSettlement.get(String(row.settlement_id));
+    discountByOrder.set(orderKey, [...(discountByOrder.get(orderKey) ?? []), row.amount]);
+  }
+
   const tenderRows = [...byTender.values()].map(({ tender, checks, amounts }) => ({ tender, checks, total: sumMoney(amounts) }));
 
   return {
@@ -413,13 +445,16 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
       serviceCharge: sumMoney(settlements.map((row) => row.service_charge)),
       tips: sumMoney(settlements.map((row) => row.tip_amount)),
       total: sumMoney(tenderRows.map((row) => row.total)),
+      ...(frozenDiscounts.length
+        ? { discounts: { count: frozenDiscounts.length, total: sumMoney(frozenDiscounts.map((row) => row.amount)), comps: sumMoney(frozenDiscounts.filter((row) => row.kind === 'comp').map((row) => row.amount)) } }
+        : {}),
       ...(withProfit ? { profit: profitSummary } : {}),
     },
     byTender: tenderRows,
     byOutlet: await buildOutletRows({ db, settlements, outletId }),
     topItems,
     tabs: [...tabs.values()].map(({ amounts, groups, itemCount, knownRevenue, costs, unknownCostLines, ...tab }) => {
-      const row = { ...tab, itemCount: itemCount ?? 0, total: sumMoney(amounts) };
+      const row = { ...tab, itemCount: itemCount ?? 0, total: sumMoney(amounts), ...(discountByOrder.has(String(tab.orderId)) ? { discountTotal: sumMoney(discountByOrder.get(String(tab.orderId))) } : {}) };
       if (withProfit) {
         // Profit on the items whose cost is known; `costComplete` says whether that was every item on the tab.
         // A tab with NO priced item has an unknown profit (null), not a false zero.
@@ -472,6 +507,7 @@ async function computeMenuItemSalesTotals({ db, dateFrom, dateTo, outletId }) {
     .whereIn('pos_order_items.pos_order_id', orderIds)
     .whereNull('pos_order_items.voided_at')
     .select(
+      'pos_order_items.id as id',
       'pos_order_items.pos_order_id as pos_order_id',
       'pos_order_items.menu_item_id as menu_item_id',
       'pos_order_items.split_group as split_group',
@@ -481,6 +517,9 @@ async function computeMenuItemSalesTotals({ db, dateFrom, dateTo, outletId }) {
       'pos_menu_items.name as name'
     );
 
+  // A discounted sale's revenue is its net, not the shelf price (nothing changes for a sale with no discount).
+  await attachNetLineTotals({ db, settlements, items, orderIds, includeSupermarket: false });
+
   const itemTotals = new Map();
   for (const item of items) {
     const groups = standingGroupsByOrder.get(String(item.pos_order_id));
@@ -489,7 +528,7 @@ async function computeMenuItemSalesTotals({ db, dateFrom, dateTo, outletId }) {
     if (!itemTotals.has(key)) itemTotals.set(key, { menuItemId: item.menu_item_id, name: item.name ?? `#${item.menu_item_id}`, quantity: 0, amounts: [] });
     const entry = itemTotals.get(key);
     entry.quantity += item.quantity;
-    entry.amounts.push(computeItemLineTotal(item));
+    entry.amounts.push(item.netLineTotal ?? computeItemLineTotal(item));
   }
 
   return [...itemTotals.values()].map(({ menuItemId, name, quantity, amounts }) => ({ menuItemId, name, quantity, revenue: sumMoney(amounts) }));

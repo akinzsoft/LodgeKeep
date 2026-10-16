@@ -45,6 +45,18 @@ const APPROVAL_ACTIONS = Object.freeze({
     targetRequired: true,
     label: 'Refund an online payment',
   },
+  'pos.discount_approval': {
+    permission: 'discount.approve',
+    targetType: 'discounts',
+    targetRequired: true,
+    label: 'Approve a discount or comp',
+  },
+  'supermarket.discount_approval': {
+    permission: 'discount.approve',
+    targetType: 'discounts',
+    targetRequired: true,
+    label: 'Approve a discount or comp',
+  },
   'supermarket.oversell': {
     permission: 'supermarket.manage',
     targetType: null,

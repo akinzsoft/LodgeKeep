@@ -117,6 +117,10 @@ async function seedTwoTenants(trx) {
     mfaLoginCodes: [],
     approvalPins: [],
     managerApprovals: [],
+    discountReasons: [],
+    discountLimits: [],
+    discounts: [],
+    settlementDiscounts: [],
     mfaDevices: [],
     invitations: [],
     auditLog: [],
@@ -1985,6 +1989,71 @@ async function seedTwoTenants(trx) {
     });
   }
 
+  // Discounts and comps: one reason, one role limit and one applied discount frozen into the fixture settlement per
+  // tenant, so the isolation suite's interleaved-id assumptions hold. The discount is `applied`, which pricing ignores.
+  for (const t of both) {
+    const property = t.properties[0];
+    const reasonId = await insertReturningId(trx, 'discount_reasons', { tenant_id: t.id, property_id: property.id, code: 'FIXTURE', name: 'Fixture reason', kind: 'both' });
+    t.discountReasons.push({ id: reasonId, property_id: property.id });
+    t.discountLimits.push({
+      id: await insertReturningId(trx, 'discount_limits', { tenant_id: t.id, property_id: property.id, role_code: 'pos_operator', max_percent: '5.00' }),
+      property_id: property.id,
+    });
+    const discountId = await insertReturningId(trx, 'discounts', {
+      tenant_id: t.id,
+      property_id: property.id,
+      outlet_id: t.posOutlets[0].id,
+      pos_order_id: t.posOrders[0].id,
+      scope: 'order',
+      kind: 'discount',
+      type: 'percent',
+      value: '10.00',
+      reason_id: reasonId,
+      status: 'applied',
+      applied_by_user_id: t.users[0].id,
+    });
+    t.discounts.push({ id: discountId, property_id: property.id, outlet_id: t.posOutlets[0].id, pos_order_id: t.posOrders[0].id });
+    // A second, removed discount, so the isolation suite can freeze a NEW row against the same settlement.
+    t.discounts.push({
+      id: await insertReturningId(trx, 'discounts', {
+        tenant_id: t.id,
+        property_id: property.id,
+        outlet_id: t.posOutlets[0].id,
+        pos_order_id: t.posOrders[0].id,
+        scope: 'order',
+        kind: 'discount',
+        type: 'fixed',
+        value: '1.00',
+        reason_id: reasonId,
+        status: 'removed',
+        applied_by_user_id: t.users[0].id,
+      }),
+      property_id: property.id,
+      outlet_id: t.posOutlets[0].id,
+      pos_order_id: t.posOrders[0].id,
+    });
+    t.settlementDiscounts.push({
+      id: await insertReturningId(trx, 'settlement_discounts', {
+        tenant_id: t.id,
+        property_id: property.id,
+        settlement_id: t.posOrderSettlements[0].id,
+        discount_id: discountId,
+        outlet_id: t.posOutlets[0].id,
+        scope: 'order',
+        kind: 'discount',
+        type: 'percent',
+        value: '10.00',
+        base_before: '22.22',
+        amount: '2.22',
+        reason_id: reasonId,
+        reason_name: 'Fixture reason',
+        applied_by_user_id: t.users[0].id,
+        currency: 'NGN',
+      }),
+      property_id: property.id,
+    });
+  }
+
   // mfa_devices: user 0 confirmed, user 1 mid-enrolment. Both TOTP, which the
   // UNIQUE(tenant_id, user_id, type) constraint allows because they belong to
   // different users — and which lets a test assert the constraint bites on the
@@ -2117,6 +2186,11 @@ async function seedTwoTenants(trx) {
     ['pos.operate', 'pos'],
     ['pos.manage', 'pos'],
     ['pos.service_charge.manage', 'pos'],
+    ['discount.apply', 'discount'],
+    ['discount.approve', 'discount'],
+    ['discount.comp', 'discount'],
+    ['discount.manage', 'discount'],
+    ['reports.view_discounts', 'reports'],
     ['room_types.update', 'setup'],
     ['ar.view', 'ar'],
     ['ar.manage', 'ar'],
@@ -2322,6 +2396,21 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.manage'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['pos.service_charge.manage'] },
     ]);
+  }
+
+  // Discounts and comps: pos_operator gives discounts within its limit; manager/admin/super_admin also approve, comp,
+  // manage reasons and limits, and read the report.
+  for (const t of both) {
+    const grantRows = [];
+    for (const [role, keys] of [
+      ['pos_operator', ['discount.apply']],
+      ['manager', ['discount.apply', 'discount.approve', 'discount.comp', 'discount.manage', 'reports.view_discounts']],
+      ['admin', ['discount.apply', 'discount.approve', 'discount.comp', 'discount.manage', 'reports.view_discounts']],
+      ['super_admin', ['discount.apply', 'discount.approve', 'discount.comp', 'discount.manage', 'reports.view_discounts']],
+    ]) {
+      for (const key of keys) grantRows.push({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions[key] });
+    }
+    await trx('role_permissions').insert(grantRows);
   }
 
   // POS inventory & stock control (PLAN.md Phase 6) — this session's

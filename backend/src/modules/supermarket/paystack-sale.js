@@ -48,7 +48,8 @@
 
 const QRCode = require('qrcode');
 const { scopedDb } = require('../../db');
-const { ValidationError } = require('../../shared/errors');
+const { ValidationError, AppError } = require('../../shared/errors');
+const discounts = require('../discounts/service');
 const { sumMoney, compareMoney } = require('../../shared/money');
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
 const { generateUlid } = require('../../shared/ulid');
@@ -87,12 +88,20 @@ const UNPAID_STATUSES = ['INITIATED', 'PENDING'];
 // ---------------------------------------------------------------- pricing
 
 /** Net + tax for a frozen cart at the outlet, with the tax rows in force on the property's business date. */
-async function priceCart(trx, outlet, rows) {
+async function priceCart(trx, outlet, rows, { discountIds = [], userId = null } = {}) {
   const property = await trx.table('properties').where({ id: outlet.property_id }).first('current_business_date', 'base_currency');
   const taxVersions = resolveApplicableTaxVersions({ allTaxRows: await trx.table('taxes'), businessDate: property?.current_business_date, chargeType: taxChargeTypeForOutlet(outlet) });
-  const baseAmount = sumMoney(rows.map((row) => computeItemLineTotal({ unit_price: row.unit_price, quantity: row.quantity, modifiers: [] })));
+  // Manual discounts the cashier asked for come off the base before tax (a voucher is not allowed on this path).
+  const pricing = discountIds.length ? await discounts.priceCartWithGrants({ trx, cartLines: rows, grantIds: discountIds, userId, outletId: outlet.id }) : null;
+  const baseAmount = pricing ? pricing.baseTotal : sumMoney(rows.map((row) => computeItemLineTotal({ unit_price: row.unit_price, quantity: row.quantity, modifiers: [] })));
   const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
   return { total: sumMoney([netAmount, ...taxLines.map((line) => line.amount)]), currency: property?.base_currency };
+}
+
+function parseDiscountIds(intent) {
+  const raw = intent.discount_ids_json;
+  if (!raw) return [];
+  return typeof raw === 'string' ? JSON.parse(raw) : raw;
 }
 
 function parseLines(intent) {
@@ -167,7 +176,7 @@ async function listOnlineSalesNeedingReview({ context, outletId }) {
  * Local half, inside the request's idempotency transaction. `lines` are the
  * same `[{barcode | menu_item_id, quantity}]` a cash sale takes.
  */
-async function startOnlineSale({ trx, context, userId, outletId, lines, tender, confirmOversell = false, approve = null, customerEmail, idempotencyKey }) {
+async function startOnlineSale({ trx, context, userId, outletId, lines, tender, confirmOversell = false, approve = null, customerEmail, idempotencyKey, discountIds = [] }) {
   if (!Object.hasOwn(ONLINE_TENDERS, tender ?? '')) {
     throw new ValidationError('INVALID_TENDER', '"tender" must be "online".', [{ field: 'tender', issue: 'invalid' }]);
   }
@@ -191,7 +200,7 @@ async function startOnlineSale({ trx, context, userId, outletId, lines, tender, 
   if (shortfalls.length > 0 && approve) await approve(trx);
 
   const frozen = resolved.map((line) => ({ menu_item_id: String(line.menuItem.id), item_name: line.menuItem.name, barcode: line.barcode, quantity: line.quantity, unit_price: line.menuItem.price }));
-  const { total, currency } = await priceCart(trx, outlet, frozen);
+  const { total, currency } = await priceCart(trx, outlet, frozen, { discountIds, userId });
   if (compareMoney(total, '0.00') <= 0) throw new ValidationError('NOTHING_TO_PAY', 'This sale has nothing to pay online.', [{ field: 'items', issue: 'zero_total' }]);
 
   const [paymentId] = await trx.table('payments').insert({
@@ -214,6 +223,7 @@ async function startOnlineSale({ trx, context, userId, outletId, lines, tender, 
     expected_total: total,
     currency,
     confirm_oversell: shortfalls.length > 0,
+    discount_ids_json: discountIds.length ? JSON.stringify(discountIds) : null,
     customer_email: email || null,
     expires_at: new Date(Date.now() + INTENT_LIFETIME_MINUTES * 60_000),
   });
@@ -365,7 +375,18 @@ async function finalizeCapturedOnlineSale({ trx, payment, lateCapture }) {
 
   const outlet = await trx.table('pos_outlets').where({ id: intent.outlet_id }).first();
   const frozen = parseLines(intent);
-  const { total, currency } = await priceCart(trx, outlet, frozen);
+  const discountIds = parseDiscountIds(intent);
+  let priced;
+  try {
+    priced = await priceCart(trx, outlet, frozen, { discountIds, userId: intent.created_by_user_id });
+  } catch (error) {
+    // A discount that can no longer be used (expired, or spent on another sale meanwhile) cannot complete this sale:
+    // keep the money and flag it for a refund, like any other change in the amount due.
+    if (!(error instanceof AppError)) throw error;
+    await markNeedsReview(trx, { intent, payment, reason: `a discount on this sale can no longer be used (${error.message})` });
+    return;
+  }
+  const { total, currency } = priced;
   if (currency !== payment.currency || compareMoney(total, payment.amount) !== 0) {
     await markNeedsReview(trx, { intent, payment, reason: `the amount due changed after the payment started (${payment.amount} paid, ${total} due now)` });
     return;
@@ -377,6 +398,7 @@ async function finalizeCapturedOnlineSale({ trx, payment, lateCapture }) {
 
   const userId = intent.created_by_user_id;
   const { orderId, itemRows } = await service.openQuickSaleOrder(trx, { outlet, userId, rows: frozen });
+  await discounts.claimCartDiscounts({ trx, grantIds: discountIds, userId, outletId: outlet.id, orderId, itemRows });
   await trx.table('payments').where({ id: payment.id }).update({ pos_order_id: orderId });
   const { settlements } = await posService.settleOrder({
     trx,

@@ -36,6 +36,7 @@ async function startOnlineSale(req, res, next) {
           approve: approvalConsumer(req, 'supermarket.oversell'),
           customerEmail: req.body?.customer_email,
           idempotencyKey: key,
+          discountIds: Array.isArray(req.body?.discount_ids) ? req.body.discount_ids.map(String).filter((id) => /^\d+$/.test(id)) : [],
         });
         return { status: 201, body: ok(intent) };
       },

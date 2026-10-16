@@ -39,6 +39,11 @@ async function lookup(req, res, next) {
   }
 }
 
+/** The discount requests a sale names (`discount_ids`), as a plain list of ids; anything else is ignored. */
+function discountIdsFrom(body) {
+  return Array.isArray(body?.discount_ids) ? body.discount_ids.map(String).filter((id) => /^\d+$/.test(id)) : [];
+}
+
 async function createSale(req, res, next) {
   try {
     await runIdempotentMutation(req, res, {
@@ -58,6 +63,7 @@ async function createSale(req, res, next) {
           terminalAccountId: req.body?.terminal_account_id,
           confirmOversell: req.body?.confirm_oversell === true,
           approve: approvalConsumer(req, 'supermarket.oversell'),
+          discountIds: discountIdsFrom(req.body),
         });
         return { status: 201, body: ok(sale) };
       },
