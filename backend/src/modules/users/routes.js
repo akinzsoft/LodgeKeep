@@ -25,6 +25,8 @@ function usersRouter() {
   router.get('/users', requirePermission('setup.view'), controller.listUsers);
   router.get('/users/pending-invitations', requirePermission('setup.view'), controller.listPendingInvitations);
   router.post('/users/invite', requirePermission('setup.manage'), controller.inviteUser);
+  router.post('/users/invitations/:id/resend', requirePermission('setup.manage'), controller.resendInvitation);
+  router.post('/users/invitations/:id/revoke', requirePermission('setup.manage'), controller.revokeInvitation);
   router.post('/users/:id/deactivate', requirePermission('setup.manage'), controller.deactivateUser);
   router.patch('/users/:id/role', requirePermission('setup.manage'), controller.changeUserRole);
   router.put('/users/:id/outlets', requirePermission('setup.manage'), controller.setUserOutlets);

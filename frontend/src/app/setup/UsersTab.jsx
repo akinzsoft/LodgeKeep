@@ -4,6 +4,7 @@ import { usersApi, posApi, ApiError } from '../../shared/api/index.js';
 import styles from './SetupScreen.module.css';
 import formStyles from './SetupForm.module.css';
 import { EmailDeliveryNotice } from './EmailDeliveryNotice.jsx';
+import { formatDateTime } from '../../shared/format/dates.js';
 
 /**
  * No `GET /roles` endpoint exists yet — `src/auth/roles.js`'s own header
@@ -40,6 +41,11 @@ export function UsersTab({ disabled, isOffline = false }) {
   const [inviteForm, setInviteForm] = useState({ email: '', role: 'front_desk' });
   const [inviteSubmitting, setInviteSubmitting] = useState(false);
   const [inviteResult, setInviteResult] = useState(null);
+
+  // Pending invitations: which one has a request in flight, the result message, and the one awaiting delete confirmation.
+  const [busyInvitationId, setBusyInvitationId] = useState(null);
+  const [invitationNotice, setInvitationNotice] = useState(null); // {ok, text, devToken}
+  const [revoking, setRevoking] = useState(null);
 
   const [deactivating, setDeactivating] = useState(null);
   const [roleChangingId, setRoleChangingId] = useState(null);
@@ -91,6 +97,41 @@ export function UsersTab({ disabled, isOffline = false }) {
       setError(caught instanceof ApiError ? caught.message : 'Could not send the invitation.');
     } finally {
       setInviteSubmitting(false);
+    }
+  }
+
+  async function handleResendInvitation(row) {
+    setBusyInvitationId(row.id);
+    setInvitationNotice(null);
+    try {
+      const result = await usersApi.resendInvitation(row.id);
+      const { status, reason } = result.email;
+      if (status === 'sent') setInvitationNotice({ ok: true, text: `A new invitation was sent to ${row.email}. The old link no longer works.`, devToken: result.dev_only_token });
+      else if (status === 'queued')
+        setInvitationNotice({ ok: true, text: `A new invitation for ${row.email} is queued. If it does not arrive shortly, check the delivery log.`, devToken: result.dev_only_token });
+      else
+        setInvitationNotice({ ok: false, text: `A new invitation was created for ${row.email}, but the email could not be sent: ${reason}`, devToken: result.dev_only_token });
+      await reload();
+    } catch (caught) {
+      setInvitationNotice({ ok: false, text: caught instanceof ApiError ? caught.message : 'Could not resend the invitation.' });
+    } finally {
+      setBusyInvitationId(null);
+    }
+  }
+
+  async function handleRevokeInvitation() {
+    const row = revoking;
+    setRevoking(null);
+    setBusyInvitationId(row.id);
+    setInvitationNotice(null);
+    try {
+      await usersApi.revokeInvitation(row.id);
+      setInvitationNotice({ ok: true, text: `The invitation for ${row.email} was deleted. Its link no longer works.` });
+      await reload();
+    } catch (caught) {
+      setInvitationNotice({ ok: false, text: caught instanceof ApiError ? caught.message : 'Could not delete the invitation.' });
+    } finally {
+      setBusyInvitationId(null);
     }
   }
 
@@ -266,6 +307,18 @@ export function UsersTab({ disabled, isOffline = false }) {
         </form>
       </Card>
 
+      {invitationNotice && (
+        <p role={invitationNotice.ok ? 'status' : 'alert'} className={invitationNotice.ok ? formStyles.disabledNotice : formStyles.errorBanner}>
+          {invitationNotice.text}
+          {invitationNotice.devToken && (
+            <>
+              {' '}
+              Dev-only token (never present in production): <code>{invitationNotice.devToken}</code>
+            </>
+          )}
+        </p>
+      )}
+
       <DataTable
         title="Pending invitations"
         state={invitations === null ? 'loading' : invitations.length === 0 ? 'empty' : 'success'}
@@ -278,7 +331,21 @@ export function UsersTab({ disabled, isOffline = false }) {
             label: 'Status',
             render: (row) => <StatusPill tone={row.status === 'pending' ? 'warning' : 'neutral'} label={row.status} />,
           },
-          { key: 'expires_at', label: 'Expires' },
+          { key: 'expires_at', label: 'Expires', render: (row) => formatDateTime(row.expires_at) },
+          {
+            key: 'actions',
+            label: 'Actions',
+            render: (row) => (
+              <div className={formStyles.actionsRow}>
+                <Button size="compact" variant="secondary" disabled={isOffline || busyInvitationId !== null} loading={busyInvitationId === row.id} onClick={() => handleResendInvitation(row)}>
+                  Resend
+                </Button>
+                <Button size="compact" variant="secondary" disabled={isOffline || busyInvitationId !== null} onClick={() => setRevoking(row)}>
+                  Delete
+                </Button>
+              </div>
+            ),
+          },
         ]}
         rows={invitations ?? []}
         rowKey={(row) => row.id}
@@ -313,6 +380,16 @@ export function UsersTab({ disabled, isOffline = false }) {
             ))}
           </fieldset>
         </ConfirmDialog>
+      )}
+
+      {revoking && (
+        <ConfirmDialog
+          title="Delete invitation"
+          consequence={`The invitation for ${revoking.email} (${revoking.role}) will stop working immediately and disappear from this list. To invite them again later, send a new invitation.`}
+          confirmLabel="Delete invitation"
+          onConfirm={handleRevokeInvitation}
+          onCancel={() => setRevoking(null)}
+        />
       )}
 
       {deactivating && (

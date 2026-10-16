@@ -41,6 +41,7 @@ const { writeAuthEvent } = require('./events');
 const { rejectMutationDuringImpersonation } = require('./impersonation-guard');
 const { rejectMutationForTenantLifecycle } = require('./tenant-lifecycle-guard');
 const { issueStaffSession } = require('./service');
+const { roleOutranksOrEquals } = require('./roles');
 const { hashPassword, validatePassword } = require('./password');
 const { setRefreshTokenCookie, refreshTokenMaxAgeMs } = require('./refresh-cookie');
 const { REFRESH_TTL_HOURS } = require('./tokens');
@@ -59,6 +60,7 @@ module.exports = {
   rejectMutationDuringImpersonation,
   rejectMutationForTenantLifecycle,
   issueStaffSession,
+  roleOutranksOrEquals,
   hashPassword,
   validatePassword,
   setRefreshTokenCookie,

@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   listUsers: vi.fn(),
   listPendingInvitations: vi.fn(),
   inviteUser: vi.fn(),
+  resendInvitation: vi.fn(),
+  revokeInvitation: vi.fn(),
   deactivateUser: vi.fn(),
   changeUserRole: vi.fn(),
   setUserOutlets: vi.fn(),
@@ -23,6 +25,8 @@ vi.mock('../../../shared/api/index.js', async () => {
       listUsers: mocks.listUsers,
       listPendingInvitations: mocks.listPendingInvitations,
       inviteUser: mocks.inviteUser,
+      resendInvitation: mocks.resendInvitation,
+      revokeInvitation: mocks.revokeInvitation,
       deactivateUser: mocks.deactivateUser,
       changeUserRole: mocks.changeUserRole,
       setUserOutlets: mocks.setUserOutlets,
@@ -115,6 +119,83 @@ describe('<UsersTab>', () => {
     render(<UsersTab disabled />);
     expect(screen.getByText(/create a property first/i)).toBeInTheDocument();
     expect(mocks.listUsers).not.toHaveBeenCalled();
+  });
+
+  describe('pending invitations', () => {
+    const PENDING = { id: '9', email: 'new@example.com', role: 'front_desk', status: 'pending', expires_at: '2026-10-20T14:30:00' };
+    const EXPIRED = { id: '10', email: 'late@example.com', role: 'cashier', status: 'expired', expires_at: '2026-10-01T09:05:00' };
+
+    beforeEach(() => {
+      mocks.listUsers.mockResolvedValue([]);
+      mocks.listPendingInvitations.mockResolvedValue([PENDING, EXPIRED]);
+    });
+
+    it('shows a readable expiry, an expired pill, and Resend and Delete on every row', async () => {
+      render(<UsersTab disabled={false} />);
+      expect(await screen.findByText('20 Oct 2026, 14:30')).toBeInTheDocument();
+      expect(screen.getByText('1 Oct 2026, 09:05')).toBeInTheDocument();
+      expect(screen.queryByText(/2026-10-20T/)).not.toBeInTheDocument();
+      expect(screen.getByText('expired')).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Resend' })).toHaveLength(2);
+      expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(2);
+    });
+
+    it('resends, disables every action while the request is in flight, and says the old link is dead', async () => {
+      let finish;
+      mocks.resendInvitation.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+      render(<UsersTab disabled={false} />);
+      await userEvent.click((await screen.findAllByRole('button', { name: 'Resend' }))[0]);
+      expect(mocks.resendInvitation).toHaveBeenCalledWith('9');
+      expect(screen.getAllByRole('button', { name: 'Delete' })[0]).toBeDisabled();
+      expect(screen.getAllByRole('button', { name: 'Delete' })[1]).toBeDisabled();
+      // the in-flight row's own button shows its loading state; the other row's Resend is disabled too
+      expect(screen.getByRole('button', { name: 'Resend' })).toBeDisabled();
+      finish({ invitation: PENDING, email: { status: 'sent', reason: null }, dev_only_token: null });
+      expect(await screen.findByText(/new invitation was sent to new@example.com. The old link no longer works/i)).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Delete' })[0]).toBeEnabled();
+    });
+
+    it('shows the scrubbed failure reason when the email could not be sent, and a queued message when slow', async () => {
+      mocks.resendInvitation.mockResolvedValueOnce({ invitation: PENDING, email: { status: 'failed', reason: 'Not sent: the platform email service is not configured on this server.' } });
+      render(<UsersTab disabled={false} />);
+      await userEvent.click((await screen.findAllByRole('button', { name: 'Resend' }))[0]);
+      expect(await screen.findByRole('alert')).toHaveTextContent(/could not be sent: Not sent: the platform email service is not configured/);
+
+      mocks.resendInvitation.mockResolvedValueOnce({ invitation: PENDING, email: { status: 'queued', reason: null } });
+      await userEvent.click(screen.getAllByRole('button', { name: 'Resend' })[0]);
+      expect(await screen.findByText(/is queued\. If it does not arrive shortly, check the delivery log/i)).toBeInTheDocument();
+    });
+
+    it('shows a server refusal such as the role-escalation block or the rate limit', async () => {
+      mocks.resendInvitation.mockRejectedValue(new ApiError({ status: 403, code: 'FORBIDDEN_ROLE_ESCALATION', message: 'You cannot manage an invitation for the "super_admin" role: it ranks above your own role.' }));
+      render(<UsersTab disabled={false} />);
+      await userEvent.click((await screen.findAllByRole('button', { name: 'Resend' }))[0]);
+      expect(await screen.findByRole('alert')).toHaveTextContent(/ranks above your own role/);
+    });
+
+    it('asks for confirmation before deleting, and does nothing if cancelled', async () => {
+      render(<UsersTab disabled={false} />);
+      await userEvent.click((await screen.findAllByRole('button', { name: 'Delete' }))[0]);
+      expect(screen.getByText(/will stop working immediately/i)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
+      expect(mocks.revokeInvitation).not.toHaveBeenCalled();
+    });
+
+    it('deletes after confirmation, refreshes the list and confirms', async () => {
+      mocks.revokeInvitation.mockResolvedValue({ invitation: { ...PENDING, status: 'revoked' } });
+      render(<UsersTab disabled={false} />);
+      await userEvent.click((await screen.findAllByRole('button', { name: 'Delete' }))[0]);
+      await userEvent.click(screen.getByRole('button', { name: 'Delete invitation' }));
+      expect(mocks.revokeInvitation).toHaveBeenCalledWith('9');
+      expect(await screen.findByText(/invitation for new@example.com was deleted/i)).toBeInTheDocument();
+      expect(mocks.listPendingInvitations).toHaveBeenCalledTimes(2);
+    });
+
+    it('disables both actions while offline', async () => {
+      render(<UsersTab disabled={false} isOffline />);
+      const buttons = await screen.findAllByRole('button', { name: /^(Resend|Delete)$/ });
+      buttons.forEach((button) => expect(button).toBeDisabled());
+    });
   });
 
   it('lists users, showing "Never" for a null last login', async () => {

@@ -43,14 +43,30 @@ describe('dispatch with no mailbox configured', () => {
     return workerContext({ tenantId: ctx.a.id, propertyId: ctx.a.properties[0].id });
   }
 
+  /** A real, live invitation row behind the event, as the invite endpoint creates it (a Resend refuses a dead link). */
+  async function liveInvitation(email, token) {
+    const crypto = require('crypto');
+    const [id] = await t.trx('user_invitations').insert({
+      tenant_id: ctx.a.id,
+      property_id: ctx.a.properties[0].id,
+      email,
+      role: 'front_desk',
+      token_hash: crypto.createHash('sha256').update(token).digest('hex'),
+      expires_at: new Date(Date.now() + 86400000),
+      invited_by_user_id: ctx.a.users[0].id,
+    });
+    return id;
+  }
+
   async function queueInvitation(email) {
+    const invitationId = await liveInvitation(email, `tok-${email}`);
     return writeOutboxEvent({
       trx: scopedDb().for(context()),
       eventType: 'staff.invited',
       aggregateType: 'user_invitations',
-      aggregateId: 1,
+      aggregateId: invitationId,
       propertyId: ctx.a.properties[0].id,
-      payload: { guestEmail: email, invitationUrl: 'https://example.com/invite', role: 'front_desk', propertyName: 'Alpha' },
+      payload: { guestEmail: email, invitationUrl: `https://example.com/?invite_token=tok-${email}`, role: 'front_desk', propertyName: 'Alpha' },
     });
   }
 
