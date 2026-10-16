@@ -53,6 +53,34 @@ describe('<ShiftsTab>', () => {
     expect(resultLabel).toBeDefined();
   });
 
+  it('lists the discounts and comps given on the shift only when there were some', async () => {
+    mocks.listShifts.mockResolvedValue([{ id: '5', opened_at: '2027-01-01', opening_float: '100.00', currency: 'NGN', closed_at: null }]);
+    mocks.closeShift.mockResolvedValue({
+      counted_cash: '119.50',
+      expected_cash: '121.50',
+      variance: '-2.00',
+      currency: 'NGN',
+      discounts: { count: 3, total: '60.00', discounts: '40.00', comps: '20.00', compCount: 1 },
+    });
+    render(<ShiftsTab />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Close (blind count)' }));
+    await userEvent.type(screen.getByLabelText('Counted cash'), '119.50');
+    await userEvent.click(screen.getByRole('button', { name: 'Submit count' }));
+    expect((await screen.findByText('Discounts given')).nextElementSibling).toHaveTextContent(/40\.00/);
+    expect(screen.getByText('Comps given (1)').nextElementSibling).toHaveTextContent(/20\.00/);
+  });
+
+  it('shows no discount lines for a shift that gave none', async () => {
+    mocks.listShifts.mockResolvedValue([{ id: '5', opened_at: '2027-01-01', opening_float: '100.00', currency: 'NGN', closed_at: null }]);
+    mocks.closeShift.mockResolvedValue({ counted_cash: '119.50', expected_cash: '121.50', variance: '-2.00', currency: 'NGN' });
+    render(<ShiftsTab />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Close (blind count)' }));
+    await userEvent.type(screen.getByLabelText('Counted cash'), '119.50');
+    await userEvent.click(screen.getByRole('button', { name: 'Submit count' }));
+    await screen.findByText(/121\.50/);
+    expect(screen.queryByText('Discounts given')).not.toBeInTheDocument();
+  });
+
   it('disables opening and closing while offline', async () => {
     mocks.listShifts.mockResolvedValue([{ id: '5', opened_at: '2027-01-01', opening_float: '100.00', currency: 'NGN', closed_at: null }]);
     render(<ShiftsTab isOffline />);

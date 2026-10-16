@@ -66,6 +66,7 @@ async function computeDiscountReport({ db, dateFrom, dateTo, outletId = null }) 
   const total = sumMoney(rows.map((row) => row.amount));
   const comps = rows.filter((row) => row.kind === 'comp');
   const lines = rows.map((row) => ({
+    id: String(row.id),
     settlement_id: String(row.settlement_id),
     order_id: String(row.order_id),
     business_date: row.business_date instanceof Date ? row.business_date.toISOString().slice(0, 10) : String(row.business_date ?? ''),

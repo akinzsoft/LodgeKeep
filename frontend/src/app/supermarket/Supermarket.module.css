@@ -1000,3 +1000,21 @@
 .salesByMethodRow > :first-child {
   min-width: 11rem;
 }
+
+/* Asks for a discount or a comp on the cart. */
+.discountButton {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  cursor: pointer;
+}
+
+.discountButton:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}

@@ -44,6 +44,18 @@ describe('<ReportingScreen>', () => {
     });
   });
 
+  it('offers the Discounts & comps tab only to someone who may view it', async () => {
+    const { unmount } = render(<ReportingScreen activePropertyId="1" />);
+    await screen.findByRole('tab', { name: 'Occupancy' });
+    expect(screen.queryByRole('tab', { name: 'Discounts & comps' })).not.toBeInTheDocument();
+    unmount();
+
+    render(<ReportingScreen activePropertyId="1" canViewDiscounts />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Discounts & comps' }));
+    expect(screen.getByRole('button', { name: 'Run report' })).toBeInTheDocument();
+    expect(screen.getAllByText('Choose a date range and run the report.').length).toBeGreaterThan(0);
+  });
+
   it('runs the occupancy report and shows the resulting rows', async () => {
     mocks.getOccupancyReport.mockResolvedValue([{ date: '2027-01-01', physicalCount: 5, roomsSold: 2, occupancyPct: 40 }]);
     render(<ReportingScreen activePropertyId="1" />);

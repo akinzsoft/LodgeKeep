@@ -30,13 +30,21 @@ const mocks = vi.hoisted(() => ({
   verifyPaystackPayment: vi.fn(),
 }));
 
+const discountMocks = vi.hoisted(() => ({
+  listReasons: vi.fn(),
+  listOrderDiscounts: vi.fn(),
+  createOrderDiscount: vi.fn(),
+  approveDiscount: vi.fn(),
+  removeDiscount: vi.fn(),
+}));
+
 const paystackMocks = vi.hoisted(() => ({ openPaystackPopup: vi.fn() }));
 // Selling past recorded stock needs a manager's PIN approval (ManagerApprovalDialog).
 const approvalMocks = vi.hoisted(() => ({ listApprovers: vi.fn(), requestApproval: vi.fn() }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
-  return { ...actual, posApi: mocks, approvalsApi: approvalMocks };
+  return { ...actual, posApi: mocks, approvalsApi: approvalMocks, discountsApi: discountMocks };
 });
 
 vi.mock('../../../shared/paystack.js', () => paystackMocks);
@@ -87,6 +95,12 @@ describe('<RegisterTab>', () => {
     approvalMocks.listApprovers.mockResolvedValue(TEST_APPROVERS);
     approvalMocks.requestApproval.mockResolvedValue({ token: TEST_APPROVAL_TOKEN });
     Object.values(mocks).forEach((fn) => fn.mockReset());
+    Object.values(discountMocks).forEach((fn) => fn.mockReset());
+    discountMocks.listOrderDiscounts.mockResolvedValue([]);
+    discountMocks.listReasons.mockResolvedValue([
+      { id: '1', name: 'Promotion', kind: 'discount' },
+      { id: '2', name: 'Staff meal', kind: 'comp' },
+    ]);
     paystackMocks.openPaystackPopup.mockReset();
     window.print = vi.fn();
     mocks.getMyOutlets.mockResolvedValue({ restricted: false, outletIds: null });
@@ -1542,6 +1556,148 @@ describe('<RegisterTab>', () => {
       render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
       await screen.findByRole('option', { name: 'Main Bar' });
       expect(screen.queryByRole('button', { name: 'Refresh menu' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('discounts and comps', () => {
+    const DISCOUNTED_PREVIEW = {
+      orderId: '9',
+      currency: 'NGN',
+      groups: [
+        {
+          splitGroup: null,
+          subtotal: '18.00',
+          taxAmount: '1.35',
+          gross: '20.00',
+          discountTotal: '2.00',
+          discounts: [{ discountId: '51', kind: 'discount', scope: 'order', reason: 'Promotion', amount: '2.00' }],
+        },
+      ],
+    };
+    const LIVE = { id: '51', scope: 'order', kind: 'discount', type: 'percent', value: '10.00', status: 'active', reason_name: 'Promotion', amount: '2.00', menu_item_id: null };
+
+    async function openWithDiscountRights(props = {}) {
+      const order = { id: '9', table_label: '', status: 'open' };
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} canDiscount {...props} />);
+      await selectStation();
+      mocks.openOrder.mockResolvedValue(order);
+      mocks.getOrder.mockResolvedValueOnce({ order, items: [orderItem()], settlements: [] });
+      await clickNewTab();
+      await screen.findByText('Order Ticket');
+      return order;
+    }
+
+    it('shows no discount control to someone who may not give discounts', async () => {
+      await openNewTab([orderItem()]);
+      await screen.findByText('Subtotal');
+      expect(screen.queryByRole('button', { name: 'Discount or comp' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Discount House Cocktail' })).not.toBeInTheDocument();
+    });
+
+    it('shows the items, each discount and the net subtotal, with service charge worked out on the net', async () => {
+      mocks.getSettlementPreview.mockResolvedValue(DISCOUNTED_PREVIEW);
+      discountMocks.listOrderDiscounts.mockResolvedValue([LIVE]);
+      await openWithDiscountRights();
+      expect(await screen.findByText('Items')).toBeInTheDocument();
+      expect(screen.getByText(/Discount · Promotion/)).toBeInTheDocument();
+      expect(screen.getByText('Subtotal').parentElement).toHaveTextContent(/18\.00/);
+      expect(screen.getByText(/Service/).parentElement).toHaveTextContent(/1\.35/); // 7.5% of 18.00
+      expect(screen.getByText('Total').parentElement).toHaveTextContent(/20\.70/); // 18.00 + 1.35 + 1.35
+      expect(screen.getByRole('list', { name: 'Discounts on this sale' })).toBeInTheDocument();
+    });
+
+    it('asks for a discount (type, value, reason only), then asks the server for the new totals', async () => {
+      discountMocks.createOrderDiscount.mockResolvedValue({ ...LIVE, approvalRequired: false, approvalAction: null });
+      await openWithDiscountRights();
+      await userEvent.click(await screen.findByRole('button', { name: 'Discount or comp' }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText('Percent off'), '10');
+      await userEvent.selectOptions(within(dialog).getByLabelText('Reason'), '1');
+      const previewCallsBefore = mocks.getSettlementPreview.mock.calls.length;
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Apply discount' }));
+
+      expect(discountMocks.createOrderDiscount).toHaveBeenCalledWith('9', { scope: 'order', kind: 'discount', type: 'percent', value: '10', reasonId: '1', itemId: undefined, overrideReason: undefined });
+      await waitFor(() => expect(mocks.getSettlementPreview.mock.calls.length).toBeGreaterThan(previewCallsBefore));
+      expect(discountMocks.listOrderDiscounts.mock.calls.length).toBeGreaterThan(1);
+    });
+
+    it('a line has its own discount button that targets that line', async () => {
+      discountMocks.createOrderDiscount.mockResolvedValue({ ...LIVE, scope: 'line', approvalRequired: false });
+      await openWithDiscountRights();
+      await userEvent.click(await screen.findByRole('button', { name: 'Discount House Cocktail' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByLabelText('Applies to')).toHaveValue('line:1');
+      await userEvent.type(within(dialog).getByLabelText('Percent off'), '5');
+      await userEvent.selectOptions(within(dialog).getByLabelText('Reason'), '1');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Apply discount' }));
+      expect(discountMocks.createOrderDiscount).toHaveBeenCalledWith('9', expect.objectContaining({ scope: 'line', itemId: '1' }));
+    });
+
+    it('above the limit a manager approves with a PIN, bound to that discount', async () => {
+      const pending = { ...LIVE, id: '52', status: 'pending_approval', approvalRequired: true, approvalAction: 'pos.discount_approval' };
+      discountMocks.createOrderDiscount.mockResolvedValue(pending);
+      discountMocks.approveDiscount.mockResolvedValue({ ...pending, status: 'active' });
+      await openWithDiscountRights();
+      await userEvent.click(await screen.findByRole('button', { name: 'Discount or comp' }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText('Percent off'), '30');
+      await userEvent.selectOptions(within(dialog).getByLabelText('Reason'), '1');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Apply discount' }));
+
+      await approveInDialog({ reason: 'regular customer', confirmLabel: 'Approve' });
+      expect(approvalMocks.requestApproval).toHaveBeenCalledWith(expect.objectContaining({ action: 'pos.discount_approval', targetId: '52' }));
+      await waitFor(() => expect(discountMocks.approveDiscount).toHaveBeenCalledWith('52', TEST_APPROVAL_TOKEN));
+    });
+
+    it('a waiting discount can be approved later from the list, and a live one removed with a reason', async () => {
+      discountMocks.listOrderDiscounts.mockResolvedValue([{ ...LIVE, id: '60', status: 'pending_approval', amount: null }, { ...LIVE, id: '61' }]);
+      discountMocks.approveDiscount.mockResolvedValue({});
+      discountMocks.removeDiscount.mockResolvedValue({});
+      await openWithDiscountRights();
+      const list = await screen.findByRole('list', { name: 'Discounts on this sale' });
+      expect(within(list).getByText(/Waiting for a manager/)).toBeInTheDocument();
+
+      await userEvent.click(within(list).getByRole('button', { name: 'Approve' }));
+      await approveInDialog({ reason: 'ok', confirmLabel: 'Approve' });
+      await waitFor(() => expect(discountMocks.approveDiscount).toHaveBeenCalledWith('60', TEST_APPROVAL_TOKEN));
+
+      const removeButtons = await screen.findAllByRole('button', { name: 'Remove the Promotion discount' });
+      await userEvent.click(removeButtons[1]);
+      const confirm = await screen.findByRole('alertdialog');
+      await userEvent.type(within(confirm).getByLabelText('Reason'), 'wrong table');
+      await userEvent.click(within(confirm).getByRole('button', { name: 'Remove' }));
+      await waitFor(() => expect(discountMocks.removeDiscount).toHaveBeenCalledWith('61', 'wrong table', { overrideReason: undefined }));
+    });
+
+    it('puts the discount lines on the receipt, from the amounts the server froze', async () => {
+      mocks.getSettlementPreview.mockResolvedValue(DISCOUNTED_PREVIEW);
+      discountMocks.listOrderDiscounts.mockResolvedValue([LIVE]);
+      const order = await openWithDiscountRights();
+      mocks.settleOrder.mockResolvedValue({
+        order: { ...order, status: 'settled' },
+        settlements: [settlementRow({ subtotal: '18.00', tax_amount: '1.35', service_charge: '1.35' })],
+        discounts: [{ settlementId: '1', splitGroup: null, gross: '20.00', discountTotal: '2.00', discounts: [{ discountId: '51', kind: 'discount', scope: 'order', reason: 'Promotion', amount: '2.00' }] }],
+      });
+      await screen.findByText('Subtotal');
+      await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+      const receipt = await screen.findByRole('region', { name: 'Sale receipt' });
+      expect(within(receipt).getByText(/Discount · Promotion/)).toBeInTheDocument();
+      const printed = screen.getByTestId('printable-receipt');
+      expect(within(printed).getByText('Items').parentElement).toHaveTextContent(/20\.00/);
+      expect(within(printed).getByText(/Discount · Promotion/).parentElement).toHaveTextContent(/2\.00/);
+    });
+
+    it('is disabled while offline', async () => {
+      const order = { id: '9', table_label: '', status: 'open' };
+      const view = (offline) => <RegisterTab activeProperty={{ base_currency: 'NGN' }} canDiscount isOffline={offline} />;
+      const { rerender } = render(view(false));
+      await selectStation();
+      mocks.openOrder.mockResolvedValue(order);
+      mocks.getOrder.mockResolvedValue({ order, items: [orderItem()], settlements: [] });
+      await clickNewTab();
+      await screen.findByRole('button', { name: 'Discount or comp' });
+      rerender(view(true));
+      expect(screen.getByRole('button', { name: 'Discount or comp' })).toBeDisabled();
     });
   });
 });

@@ -26,3 +26,4 @@ export * as reconciliationApi from './reconciliation.js';
 export { fetchDeployedBuildId } from './version.js';
 export * as supermarketApi from './supermarket.js';
 export * as approvalsApi from './approvals.js';
+export * as discountsApi from './discounts.js';

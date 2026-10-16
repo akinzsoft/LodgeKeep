@@ -125,9 +125,9 @@ describe('a line discount by product', () => {
     expect(result.discounts).toEqual([{ discountId: 'l', scope: 'line', amount: '10.00', baseBefore: '300.00' }]);
     const g1 = result.groups[groupKeyOf(1)];
     const g2 = result.groups[groupKeyOf(2)];
-    expect(g1.discount).toBe('3.33');
-    expect(g2.discount).toBe('6.67');
-    expect(g2.parts).toEqual([{ discountId: 'l', amount: '6.67', baseBefore: '200.00' }]);
+    expect(g1.discount).toBe('3.34'); // a tie in the leftover cent goes to the earlier row
+    expect(g2.discount).toBe('6.66');
+    expect(g2.parts).toEqual([{ discountId: 'l', amount: '6.66', baseBefore: '200.00' }]);
     expect(result.lines['4'].base).toBe('40.00'); // the snack is untouched
   });
 

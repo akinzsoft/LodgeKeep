@@ -3,7 +3,9 @@ import { ConfirmDialog } from '../../shared/components/index.js';
 import { ManagerApprovalDialog } from '../approvals/ManagerApprovalDialog.jsx';
 import { Money } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney, percentOfMoney } from '../../shared/money.js';
-import { posApi, ApiError } from '../../shared/api/index.js';
+import { posApi, discountsApi, ApiError } from '../../shared/api/index.js';
+import { DiscountDialog } from '../discounts/DiscountDialog.jsx';
+import { DiscountList } from '../discounts/DiscountList.jsx';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { CategoryIcon, AllCategoriesIcon, PaymentMethodIcon, TrashIcon } from './registerCategoryIcons.jsx';
 import { EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
@@ -55,6 +57,16 @@ const ZERO = '0.00';
 // `pos/service.js` directly), so this is not a breaking payload change.
 
 /** Groups unvoided order items by (menu item, split group) so repeated taps on the same tile show one line reading "×3", not three separate "×1" rows underneath. Each group remembers its own rows in insertion order, since "remove one" targets the most recently added row, not an arbitrary one. */
+/** The receipt's discount figures from the settle response, or nothing when the sale had none. */
+function discountsOnReceipt(settled) {
+  if (!settled || settled.length === 0) return {};
+  return {
+    grossTotal: sumMoney(settled.map((group) => group.gross)),
+    discountTotal: sumMoney(settled.map((group) => group.discountTotal)),
+    discounts: settled.flatMap((group) => group.discounts.map((discount) => ({ key: `${group.settlementId}:${discount.discountId}`, kind: discount.kind, reason: discount.reason, amount: discount.amount }))),
+  };
+}
+
 function groupOrderItems(items) {
   const order = [];
   const byKey = new Map();
@@ -164,7 +176,7 @@ function defaultSettlementForm(splitGroup) {
  * (a stale-response race and an empty-preview-response gap), both fixed
  * and covered by dedicated regression tests.
  */
-export function RegisterTab({ activeProperty, isOffline = false, currentUserLabel, currentUserId, canManageTabs = false }) {
+export function RegisterTab({ activeProperty, isOffline = false, currentUserLabel, currentUserId, canManageTabs = false, canDiscount = false }) {
   // An open tab belongs to its owner (whoever it was last handed to, else its
   // opener): only they add to, split, settle, rename, void or hand it over —
   // the server's rule (`assertCanChangeTab`). A manager (`pos.manage`) may
@@ -232,6 +244,12 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const [tabNameDialog, setTabNameDialog] = useState(null);
   // Shift handover: {orders, candidates (null while loading), toUserId, submitting}.
   const [handover, setHandover] = useState(null);
+  // Discounts and comps on the active check (the SERVER prices them; this only lists them and asks for new ones).
+  const [discounts, setDiscounts] = useState([]);
+  const [discountDialog, setDiscountDialog] = useState(null); // { lineId }
+  const [approvingDiscount, setApprovingDiscount] = useState(null);
+  const [removingDiscount, setRemovingDiscount] = useState(null);
+  const discountsRequestIdRef = useRef(0);
   // Bug fix (code-review pass on the settlement-preview fix): a preview
   // fetch has no natural cancellation — a cashier can switch tabs (or an
   // item change can fire a new fetch) while a slow fetch is still in
@@ -652,6 +670,45 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
    * this function), not only once behind a separate "Settle" click, so
    * the always-visible ticket panel's totals stay live as items change.
    */
+  /** The check's live discounts; a stale answer (the order changed meanwhile) is dropped. */
+  async function loadDiscounts(orderId) {
+    const requestId = ++discountsRequestIdRef.current;
+    try {
+      const rows = await discountsApi.listOrderDiscounts(orderId);
+      if (discountsRequestIdRef.current === requestId) setDiscounts(rows);
+    } catch {
+      if (discountsRequestIdRef.current === requestId) setDiscounts([]);
+    }
+  }
+
+  /** After any change to a discount the totals are asked for again, never adjusted here. */
+  async function discountsChanged() {
+    await loadDiscounts(activeOrderId);
+    fetchSettlementPreview(activeOrderId);
+  }
+
+  async function handleRemoveDiscount(reason) {
+    const target = removingDiscount;
+    setRemovingDiscount(null);
+    try {
+      await discountsApi.removeDiscount(target.id, reason, { overrideReason: overrideReasonOf(activeOrderId) });
+      await discountsChanged();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not remove the discount.');
+    }
+  }
+
+  async function handleApproveDiscount(token) {
+    const target = approvingDiscount;
+    setApprovingDiscount(null);
+    try {
+      await discountsApi.approveDiscount(target.id, token);
+      await discountsChanged();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not apply the approved discount.');
+    }
+  }
+
   async function fetchSettlementPreview(orderId) {
     const requestId = ++previewRequestIdRef.current;
     setSettlementPreview(null);
@@ -848,6 +905,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       })),
       settlements,
       grandTotal: sumMoney(settlements.map((settlement) => settlement.total)),
+      // Discounts and comps given, from the amounts the server froze on the sale (absent when there were none).
+      ...discountsOnReceipt(result.discounts),
     };
   }
 
@@ -910,6 +969,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   // item's own (id, quantity, split_group) instead changes on every add/
   // void/split-group-assign, exactly the set of mutations that can move
   // the real total.
+  // The products on the check a line discount can target (one entry per product; the server covers every row of it).
+  const discountLineOptions = [...new Map(unvoidedItems.map((item) => [String(item.menu_item_id), { id: String(item.id), label: menuItemName(item.menu_item_id) }])).values()];
   const orderContentsKey = JSON.stringify(unvoidedItems.map((item) => [item.id, item.quantity, item.split_group ?? null]));
 
   /**
@@ -950,6 +1011,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       setSettlementForms(null);
       setSettlementPreview(null);
       setPreviewError(null);
+      discountsRequestIdRef.current += 1;
+      setDiscounts([]);
       return;
     }
     setSettlementForms((prev) => {
@@ -957,6 +1020,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       return distinctGroups.map((group) => prevByGroup.get(group) ?? defaultSettlementForm(group));
     });
     if (distinctGroups.length > 0) fetchSettlementPreview(activeOrderId);
+    loadDiscounts(activeOrderId);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- orderContentsKey is the intentional, stable summary of unvoidedItems' real content; that array's own identity changes every render regardless of content
   }, [activeOrderId, orderLoaded, orderContentsKey]);
 
@@ -1291,6 +1355,17 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                           <button type="button" className={styles.stepperButton} onClick={() => handleAddItem(group.menuItemId)} disabled={isOffline || !activeTabWorkable} aria-label={`Add another ${menuItemName(group.menuItemId)}`}>
                             +
                           </button>
+                          {canDiscount && canChangeTab(activeOrder.order) && activeTabWorkable && (
+                            <button
+                              type="button"
+                              className={styles.stepperButton}
+                              onClick={() => setDiscountDialog({ lineId: String(lastRow.id) })}
+                              disabled={isOffline}
+                              aria-label={`Discount ${menuItemName(group.menuItemId)}`}
+                            >
+                              %
+                            </button>
+                          )}
                           {canChangeTab(activeOrder.order) && (
                             <button
                               type="button"
@@ -1308,6 +1383,20 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                   })}
                   {unvoidedItems.length === 0 && <p className={styles.ticketEmpty}>Tap a menu item to add it to this ticket.</p>}
                 </div>
+
+                {canDiscount && unvoidedItems.length > 0 && canChangeTab(activeOrder.order) && activeTabWorkable && (
+                  <button type="button" className={styles.manageSplitButton} onClick={() => setDiscountDialog({ lineId: null })} disabled={isOffline || settling}>
+                    Discount or comp
+                  </button>
+                )}
+                <DiscountList
+                  discounts={discounts}
+                  currencyCode={activeProperty.base_currency}
+                  lineLabel={(discount) => menuItemName(discount.menu_item_id)}
+                  disabled={isOffline || settling || !canChangeTab(activeOrder.order)}
+                  onApprove={setApprovingDiscount}
+                  onRemove={setRemovingDiscount}
+                />
 
                 {/* Bug fix (code-review pass, high severity, always reproducible
                     — not just a race): this used to render regardless of
@@ -1582,6 +1671,47 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
             />
           )}
 
+          {discountDialog && (
+            <DiscountDialog
+              lines={discountLineOptions}
+              initialLineId={discountDialog.lineId}
+              isOffline={isOffline}
+              create={({ scope, kind, type, value, reasonId, lineId }) =>
+                discountsApi.createOrderDiscount(activeOrderId, { scope, kind, type, value, reasonId, itemId: lineId, overrideReason: overrideReasonOf(activeOrderId) })
+              }
+              onDone={async () => {
+                setDiscountDialog(null);
+                await discountsChanged();
+              }}
+              onPending={() => discountsChanged()}
+              onCancel={() => setDiscountDialog(null)}
+            />
+          )}
+
+          {approvingDiscount && (
+            <ManagerApprovalDialog
+              action="pos.discount_approval"
+              targetId={approvingDiscount.id}
+              title={approvingDiscount.kind === 'comp' ? 'Approve a comp' : 'Approve a discount'}
+              consequence={approvingDiscount.kind === 'comp' ? 'The whole amount will be given away.' : 'This discount is above what the cashier may give on their own.'}
+              confirmLabel="Approve"
+              isOffline={isOffline}
+              onApproved={handleApproveDiscount}
+              onCancel={() => setApprovingDiscount(null)}
+            />
+          )}
+
+          {removingDiscount && (
+            <ConfirmDialog
+              title="Remove this discount?"
+              consequence="The check goes back to its full price. To give it again, ask for it again; a discount above your limit needs a manager each time."
+              requireReason
+              confirmLabel="Remove"
+              onConfirm={handleRemoveDiscount}
+              onCancel={() => setRemovingDiscount(null)}
+            />
+          )}
+
           {/* Gap closure — the stock-out override guard. Allowed, never
               blocked outright, but a manager must approve it with their PIN
               and give a reason. */}
@@ -1637,6 +1767,24 @@ function PrintableReceipt({ receipt }) {
       ))}
 
       <hr className={styles.printRule} />
+      {receipt.discountTotal && (
+        <>
+          <p className={styles.printRow}>
+            <span>Items</span>
+            <Money amount={receipt.grossTotal} currencyCode={currencyCode} />
+          </p>
+          {receipt.discounts.map((discount) => (
+            <p key={discount.key} className={styles.printRow}>
+              <span>
+                {discount.kind === 'comp' ? 'Comp' : 'Discount'} · {discount.reason}
+              </span>
+              <span>
+                −<Money amount={discount.amount} currencyCode={currencyCode} />
+              </span>
+            </p>
+          ))}
+        </>
+      )}
       <p className={styles.printRow}>
         <span>Subtotal</span>
         <Money amount={receipt.subtotal} currencyCode={currencyCode} />
@@ -1779,6 +1927,21 @@ function SettlementReceipt({ receipt, onNewSale }) {
         ))}
       </div>
 
+      {receipt.discountTotal && (
+        <div className={styles.receiptLines}>
+          {receipt.discounts.map((discount) => (
+            <div key={discount.key} className={styles.settlementLine}>
+              <span>
+                {discount.kind === 'comp' ? 'Comp' : 'Discount'} · {discount.reason}
+              </span>
+              <span>
+                −<Money amount={discount.amount} currencyCode={receipt.currencyCode} />
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className={styles.receiptLines}>
         {receipt.settlements.map((settlement) => (
           <div key={settlement.splitGroup ?? 'all'} className={styles.settlementLine}>
@@ -1875,6 +2038,24 @@ function SettlementFields({ terminalAccounts = [], form, preview, serviceAmount,
     <>
       {preview ? (
         <>
+          {preview.discountTotal && (
+            <>
+              <div className={styles.settlementLine}>
+                <span>Items</span>
+                <Money amount={preview.gross} currencyCode={currencyCode} />
+              </div>
+              {preview.discounts.map((discount) => (
+                <div key={discount.discountId} className={styles.settlementLine}>
+                  <span>
+                    {discount.kind === 'comp' ? 'Comp' : 'Discount'} · {discount.reason}
+                  </span>
+                  <span>
+                    −<Money amount={discount.amount} currencyCode={currencyCode} />
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
           <div className={styles.settlementLine}>
             <span>Subtotal</span>
             <Money amount={preview.subtotal} currencyCode={currencyCode} />

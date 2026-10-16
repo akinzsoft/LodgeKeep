@@ -8,6 +8,7 @@ import { OutletCategoriesCard } from './OutletCategoriesCard.jsx';
 import { OutletTerminalAccountsCard } from './OutletTerminalAccountsCard.jsx';
 import { OutletPayoutAccountCard } from './OutletPayoutAccountCard.jsx';
 import { OutletServiceChargeCard } from './OutletServiceChargeCard.jsx';
+import { DiscountsCard } from './DiscountsCard.jsx';
 import { STORE_OUTLET_TYPE, isStoreOutlet, canReceiveAt, receivingOutlets } from './outletTypes.js';
 
 /**
@@ -62,12 +63,13 @@ const OUTLET_SECTIONS = [
   { key: 'service', label: 'Service charge' },
 ];
 
-export function SetupTab({ activeProperty, isOffline = false, canManageAccounts = true, canManageServiceCharge = true }) {
+export function SetupTab({ activeProperty, isOffline = false, canManageAccounts = true, canManageServiceCharge = true, canManageDiscounts = true }) {
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState(null);
   const [selectedOutletId, setSelectedOutletId] = useState(null);
   const [view, setView] = useState('catalogue');
   const [outletSection, setOutletSection] = useState('categories');
+  const [discountsOpen, setDiscountsOpen] = useState(false);
 
   const [outletForm, setOutletForm] = useState({ code: '', name: '', type: 'bar' });
   const [outletSubmitting, setOutletSubmitting] = useState(false);
@@ -298,6 +300,16 @@ export function SetupTab({ activeProperty, isOffline = false, canManageAccounts 
           </>
         )}
       />
+
+      {discountsOpen ? (
+        <DiscountsCard isOffline={isOffline} canManage={canManageDiscounts} />
+      ) : (
+        <div>
+          <Button type="button" variant="secondary" onClick={() => setDiscountsOpen(true)}>
+            Discounts, comps and limits
+          </Button>
+        </div>
+      )}
 
       {editingOutletId !== null && (
         <Card title="Edit outlet">

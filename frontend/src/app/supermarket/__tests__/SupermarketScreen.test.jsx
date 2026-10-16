@@ -36,6 +36,13 @@ const mocks = vi.hoisted(() => ({
   refundOnlineSale: vi.fn(),
 }));
 
+const discountMocks = vi.hoisted(() => ({
+  listReasons: vi.fn(),
+  createCartDiscount: vi.fn(),
+  approveDiscount: vi.fn(),
+  removeDiscount: vi.fn(),
+}));
+
 const posMocks = vi.hoisted(() => ({
   listMenuItems: vi.fn(),
   listMenuCategories: vi.fn(),
@@ -69,7 +76,7 @@ const approvalMocks = vi.hoisted(() => ({ listApprovers: vi.fn(), requestApprova
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
-  return { ...actual, supermarketApi: mocks, posApi: posMocks, approvalsApi: approvalMocks };
+  return { ...actual, supermarketApi: mocks, posApi: posMocks, approvalsApi: approvalMocks, discountsApi: discountMocks };
 });
 
 const PROPERTY = { name: 'Alpha Hotels', base_currency: 'NGN' };
@@ -100,6 +107,12 @@ describe('<SupermarketScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     Object.values(posMocks).forEach((fn) => fn.mockReset());
+    Object.values(discountMocks).forEach((fn) => fn.mockReset());
+    discountMocks.listReasons.mockResolvedValue([
+      { id: '1', name: 'Promotion', kind: 'discount' },
+      { id: '2', name: 'Staff meal', kind: 'comp' },
+      { id: '3', name: "Manager's gift", kind: 'both' },
+    ]);
     approvalMocks.listApprovers.mockResolvedValue(TEST_APPROVERS);
     approvalMocks.requestApproval.mockResolvedValue({ token: TEST_APPROVAL_TOKEN });
     // By default the full-menu call fails, so these tests exercise the scan/search fallback.
@@ -895,6 +908,136 @@ describe('<SupermarketScreen>', () => {
       await approveInDialog({ reason: 'Paid after cancel', confirmLabel: 'Refund customer' });
       expect(approvalMocks.requestApproval).toHaveBeenCalledWith(expect.objectContaining({ action: 'supermarket.refund_online', targetId: '44' }));
       expect(mocks.refundOnlineSale).toHaveBeenCalledWith('44', 'Paid after cancel', TEST_APPROVAL_TOKEN);
+    });
+  });
+
+  describe('discounts and comps', () => {
+    const DISCOUNT_SELLER = new Set(['supermarket.sales', 'discount.apply']);
+    const ACTIVE = { id: '41', scope: 'order', kind: 'discount', type: 'percent', value: '5.00', status: 'active', reason_id: '1', amount: '5.38', approvalRequired: false, approvalAction: null, menu_item_id: null };
+
+    async function cartWithRice() {
+      mocks.lookupBarcode.mockResolvedValue(RICE);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={DISCOUNT_SELLER} />);
+      await userEvent.type(await screen.findByLabelText(/scan a barcode/i), '6001{Enter}');
+      return screen.findByRole('button', { name: 'Discount or comp' });
+    }
+
+    it('offers the button only to someone who may give discounts', async () => {
+      mocks.lookupBarcode.mockResolvedValue(RICE);
+      render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+      await userEvent.type(await screen.findByLabelText(/scan a barcode/i), '6001{Enter}');
+      await screen.findByRole('button', { name: 'Complete sale' });
+      expect(screen.queryByRole('button', { name: 'Discount or comp' })).not.toBeInTheDocument();
+    });
+
+    it('asks the server to price the discount against the cart, lists it, and sends its id with the sale', async () => {
+      discountMocks.createCartDiscount.mockResolvedValue(ACTIVE);
+      mocks.createSale.mockResolvedValue({ ...SALE, gross: '107.50', discount_total: '5.38', discounts: [{ kind: 'discount', reason: 'Promotion', amount: '5.38' }] });
+      await userEvent.click(await cartWithRice());
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText('Percent off'), '5');
+      await userEvent.selectOptions(within(dialog).getByLabelText('Reason'), '1');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Apply discount' }));
+
+      expect(discountMocks.createCartDiscount).toHaveBeenCalledWith({ outletId: '5', items: [{ menu_item_id: '11', quantity: 1 }], scope: 'order', kind: 'discount', type: 'percent', value: '5', reasonId: '1', menuItemId: undefined });
+      const list = await screen.findByRole('list', { name: 'Discounts on this sale' });
+      expect(within(list).getByText(/Promotion/)).toBeInTheDocument();
+      expect(within(list).getByText(/Applied/)).toBeInTheDocument();
+      expect(screen.getByText('After discounts')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
+      expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ discountIds: ['41'] }));
+      const receipt = await screen.findByTestId('supermarket-receipt');
+      expect(within(receipt).getByText(/Discount · Promotion/)).toBeInTheDocument();
+    });
+
+    it('never sends an amount the client worked out, only the type, the value and the reason', async () => {
+      discountMocks.createCartDiscount.mockResolvedValue(ACTIVE);
+      await userEvent.click(await cartWithRice());
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Amount' }));
+      await userEvent.type(within(dialog).getByLabelText('Amount off'), '12.50');
+      await userEvent.selectOptions(within(dialog).getByLabelText('Reason'), '1');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Apply discount' }));
+      const sent = discountMocks.createCartDiscount.mock.calls[0][0];
+      expect(Object.keys(sent).sort()).toEqual(['items', 'kind', 'menuItemId', 'outletId', 'reasonId', 'scope', 'type', 'value']);
+      expect(sent).toMatchObject({ type: 'fixed', value: '12.50' });
+    });
+
+    it('a comp needs a manager: the PIN dialog opens, and the approval applies it', async () => {
+      const pending = { ...ACTIVE, id: '42', kind: 'comp', type: 'percent', value: '100.00', status: 'pending_approval', reason_id: '2', approvalRequired: true, approvalAction: 'supermarket.discount_approval' };
+      discountMocks.createCartDiscount.mockResolvedValue(pending);
+      discountMocks.approveDiscount.mockResolvedValue({ ...pending, status: 'active' });
+      await userEvent.click(await cartWithRice());
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Comp' }));
+      expect(within(dialog).queryByLabelText('Percent off')).not.toBeInTheDocument();
+      expect(within(dialog).queryByRole('option', { name: 'Promotion' })).not.toBeInTheDocument(); // not a comp reason
+      await userEvent.selectOptions(within(dialog).getByLabelText('Reason'), '2');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Ask for approval' }));
+
+      await approveInDialog({ reason: 'staff lunch', confirmLabel: 'Approve' });
+      expect(approvalMocks.requestApproval).toHaveBeenCalledWith(expect.objectContaining({ action: 'supermarket.discount_approval', targetId: '42' }));
+      await waitFor(() => expect(discountMocks.approveDiscount).toHaveBeenCalledWith('42', TEST_APPROVAL_TOKEN));
+      expect(await screen.findByText(/Comp \(100%\) · Staff meal/)).toBeInTheDocument();
+    });
+
+    it('a request left waiting is not sent with the sale and says so', async () => {
+      const pending = { ...ACTIVE, id: '43', status: 'pending_approval', approvalRequired: true, approvalAction: 'supermarket.discount_approval' };
+      discountMocks.createCartDiscount.mockResolvedValue(pending);
+      mocks.createSale.mockResolvedValue(SALE);
+      await userEvent.click(await cartWithRice());
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText('Percent off'), '10');
+      await userEvent.selectOptions(within(dialog).getByLabelText('Reason'), '1');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Apply discount' }));
+      await userEvent.click(await within(await screen.findByRole('dialog')).findByRole('button', { name: 'Cancel' }));
+
+      expect(await screen.findByText(/Until it is approved/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
+      expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ discountIds: [] }));
+    });
+
+    it('changing the cart drops a discount that was priced for the old one', async () => {
+      discountMocks.createCartDiscount.mockResolvedValue(ACTIVE);
+      mocks.createSale.mockResolvedValue(SALE);
+      await userEvent.click(await cartWithRice());
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText('Percent off'), '5');
+      await userEvent.selectOptions(within(dialog).getByLabelText('Reason'), '1');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Apply discount' }));
+      await screen.findByRole('list', { name: 'Discounts on this sale' });
+
+      await userEvent.click(screen.getByRole('button', { name: 'More Rice 5kg' }));
+      expect(screen.queryByRole('list', { name: 'Discounts on this sale' })).not.toBeInTheDocument();
+      expect(screen.getByText(/discounts were cleared/i)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
+      expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ discountIds: [] }));
+    });
+
+    it('removing a discount asks for a reason and calls the server', async () => {
+      discountMocks.createCartDiscount.mockResolvedValue(ACTIVE);
+      discountMocks.removeDiscount.mockResolvedValue({});
+      await userEvent.click(await cartWithRice());
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText('Percent off'), '5');
+      await userEvent.selectOptions(within(dialog).getByLabelText('Reason'), '1');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Apply discount' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Remove the Promotion discount' }));
+      const confirm = await screen.findByRole('alertdialog');
+      await userEvent.type(within(confirm).getByLabelText('Reason'), 'changed mind');
+      await userEvent.click(within(confirm).getByRole('button', { name: 'Remove' }));
+      await waitFor(() => expect(discountMocks.removeDiscount).toHaveBeenCalledWith('41', 'changed mind'));
+      expect(screen.queryByRole('list', { name: 'Discounts on this sale' })).not.toBeInTheDocument();
+    });
+
+    it('is disabled while offline', async () => {
+      mocks.lookupBarcode.mockResolvedValue(RICE);
+      const { rerender } = render(<SupermarketScreen activeProperty={PROPERTY} permissions={DISCOUNT_SELLER} />);
+      await userEvent.type(await screen.findByLabelText(/scan a barcode/i), '6001{Enter}');
+      await screen.findByRole('button', { name: 'Discount or comp' });
+      rerender(<SupermarketScreen activeProperty={PROPERTY} permissions={DISCOUNT_SELLER} isOffline />);
+      expect(screen.getByRole('button', { name: 'Discount or comp' })).toBeDisabled();
     });
   });
 });
