@@ -43,4 +43,22 @@ function roleRequiresMfa(role) {
   return role === 'admin' || role === 'super_admin';
 }
 
-module.exports = { listPropertyAccess, roleAtProperty, roleRequiresMfa };
+/**
+ * Rank used to stop privilege escalation: someone may grant, resend or revoke
+ * an invitation only for a role at or below their own. Every non-listed role
+ * (front desk, cashier, housekeeping, POS, storekeeper, custom roles) ranks
+ * lowest; the three management roles are what actually need ordering.
+ */
+const ROLE_RANK = { super_admin: 100, admin: 90, manager: 50 };
+const DEFAULT_ROLE_RANK = 10;
+
+function roleRank(role) {
+  return ROLE_RANK[role] ?? DEFAULT_ROLE_RANK;
+}
+
+/** True when `callerRole` ranks at or above `targetRole`. An unknown caller role ranks lowest. */
+function roleOutranksOrEquals(callerRole, targetRole) {
+  return roleRank(callerRole) >= roleRank(targetRole);
+}
+
+module.exports = { listPropertyAccess, roleAtProperty, roleRequiresMfa, roleRank, roleOutranksOrEquals };

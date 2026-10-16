@@ -118,4 +118,33 @@ async function platformUsageToday({ tenantId, now = new Date() }) {
   }
 }
 
-module.exports = { CAPPED_EVENT_TYPES, classifyEvent, reservePlatformSend, platformUsageToday, EmailLimitError, limits };
+/**
+ * Resending one invitation: at most one per minute and a small daily cap, so the
+ * button cannot be used to spam an address. Returns null when allowed, else a
+ * message. Env: INVITATION_RESEND_MIN_INTERVAL_SECONDS (60), INVITATION_RESEND_DAILY_CAP (5).
+ * Fails open if Redis is down (logged).
+ */
+async function reserveInvitationResend({ tenantId, invitationId, now = new Date() }) {
+  const interval = Number(process.env.INVITATION_RESEND_MIN_INTERVAL_SECONDS ?? 60);
+  const dailyCap = intFromEnv('INVITATION_RESEND_DAILY_CAP', 5);
+  try {
+    const redis = rateLimitRedisConnection();
+    if (interval > 0) {
+      const first = await redis.set(`invresend:min:${tenantId}:${invitationId}`, '1', 'EX', interval, 'NX');
+      if (first === null) return `This invitation was resent a moment ago. Wait about ${interval >= 60 ? 'a minute' : `${interval} seconds`} before resending it again.`;
+    }
+    const key = `invresend:day:${tenantId}:${invitationId}:${now.toISOString().slice(0, 10)}`;
+    const count = await bump(redis, key, 60 * 60 * 48);
+    if (count > dailyCap) {
+      await redis.decr(key);
+      return `This invitation has been resent the maximum number of times today (${dailyCap}). Try again tomorrow, or delete it and invite the person again.`;
+    }
+    return null;
+  } catch (error) {
+    console.error('[invitation-resend] Redis unavailable; the resend limit was not applied:', error?.message);
+    return null;
+  }
+}
+
+module.exports = {
+  reserveInvitationResend, CAPPED_EVENT_TYPES, classifyEvent, reservePlatformSend, platformUsageToday, EmailLimitError, limits };

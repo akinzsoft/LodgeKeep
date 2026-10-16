@@ -79,6 +79,7 @@ describe('Email modes: platform and custom SMTP', () => {
     for (const tenant of [ctx.a, ctx.b]) {
       await t.trx('outbox_events').where({ tenant_id: tenant.id }).del();
       await t.trx('notification_log').where({ tenant_id: tenant.id }).del();
+      await t.trx('user_invitations').where({ tenant_id: tenant.id }).del();
       await t.trx('email_settings').where({ tenant_id: tenant.id, property_id: tenant.properties[1].id }).del();
       await t.trx('properties').where({ id: tenant.properties[1].id }).update({ name: 'Grand Palm Hotel' });
     }
@@ -106,12 +107,29 @@ describe('Email modes: platform and custom SMTP', () => {
   function ctxFor(tenant, propertyIndex = 1) {
     return workerContext({ tenantId: tenant.id, propertyId: tenant.properties[propertyIndex].id });
   }
+  /** Staff-invitation events need a live invitation row behind their link (a Resend refuses a dead link). */
+  async function liveInvitationFor(tenant, email, url, propertyIndex) {
+    const token = /invite_token=([^&#]+)/.exec(url ?? '')?.[1];
+    if (!token) return 1;
+    const [id] = await t.trx('user_invitations').insert({
+      tenant_id: tenant.id,
+      property_id: tenant.properties[propertyIndex].id,
+      email,
+      role: 'front_desk',
+      token_hash: require('crypto').createHash('sha256').update(token).digest('hex'),
+      expires_at: new Date(Date.now() + 86400000),
+      invited_by_user_id: tenant.users[0].id,
+    });
+    return id;
+  }
+
   async function queue(tenant, eventType, email, payload = {}, propertyIndex = 1) {
+    const aggregateId = eventType === 'staff.invited' ? await liveInvitationFor(tenant, email, payload.invitationUrl, propertyIndex) : 1;
     return writeOutboxEvent({
       trx: scopedDb().for(ctxFor(tenant, propertyIndex)),
       eventType,
-      aggregateType: 'test',
-      aggregateId: 1,
+      aggregateType: eventType === 'staff.invited' ? 'user_invitations' : 'test',
+      aggregateId,
       propertyId: tenant.properties[propertyIndex].id,
       payload: { guestEmail: email, guestName: 'Guest', ...payload },
     });
@@ -419,7 +437,7 @@ describe('Email modes: platform and custom SMTP', () => {
     });
 
     it('fails the send, never marks it sent, never falls back to the console, and shows the reason', async () => {
-      const id = await queue(ctx.a, 'staff.invited', 'revana-invitee@x.example', { invitationUrl: 'https://x.example/accept?t=abc', role: 'front_desk' });
+      const id = await queue(ctx.a, 'staff.invited', 'revana-invitee@x.example', { invitationUrl: 'https://x.example/?invite_token=abc', role: 'front_desk' });
       await dispatch();
       const event = await t.trx('outbox_events').where({ id }).first();
       expect(event.status).toBe('failed');
@@ -439,20 +457,20 @@ describe('Email modes: platform and custom SMTP', () => {
     });
 
     it('Resend of the failed invitation works once the server is configured, with the original link', async () => {
-      await queue(ctx.a, 'staff.invited', 'resend-me@x.example', { invitationUrl: 'https://x.example/accept?t=abc', role: 'front_desk', propertyName: 'Grand Palm' });
+      await queue(ctx.a, 'staff.invited', 'resend-me@x.example', { invitationUrl: 'https://x.example/?invite_token=abc', role: 'front_desk', propertyName: 'Grand Palm' });
       await dispatch();
       const log = await t.trx('notification_log').where({ recipient_email: 'resend-me@x.example' }).first();
       process.env.SMTP_HOST = PLATFORM_ENV.SMTP_HOST; // the platform administrator fixes .env.production
       const resent = await resendNotification({ context: ctxFor(ctx.a), id: log.id });
       expect(resent.status).toBe('sent');
       expect(sent).toHaveLength(1);
-      expect(decoded(sent[0])).toContain('https://x.example/accept?t=abc');
+      expect(decoded(sent[0])).toContain('https://x.example/?invite_token=abc');
     });
 
     it('Resend also repairs an OLD invitation that was recorded as sent into the log (no event link on the row)', async () => {
       process.env.NODE_ENV = 'development';
       process.env.EMAIL_PROVIDER = 'console';
-      await queue(ctx.a, 'staff.invited', 'old-revana@x.example', { invitationUrl: 'https://x.example/accept?t=old', role: 'front_desk' });
+      await queue(ctx.a, 'staff.invited', 'old-revana@x.example', { invitationUrl: 'https://x.example/?invite_token=old', role: 'front_desk' });
       await dispatch(); // console adapter: logged and "sent", like production before this fix
       const log = await t.trx('notification_log').where({ recipient_email: 'old-revana@x.example' }).first();
       expect(log.status).toBe('sent');
@@ -461,7 +479,7 @@ describe('Email modes: platform and custom SMTP', () => {
       process.env.NODE_ENV = 'production';
       const resent = await resendNotification({ context: ctxFor(ctx.a), id: log.id });
       expect(resent.status).toBe('sent');
-      expect(decoded(sent[0])).toContain('https://x.example/accept?t=old');
+      expect(decoded(sent[0])).toContain('https://x.example/?invite_token=old');
     });
   });
 

@@ -24,7 +24,10 @@ const crypto = require('crypto');
 const { scopedDb } = require('../../db');
 const { ValidationError } = require('../../shared/errors');
 const { writeOutboxEvent } = require('../../shared/outbox');
-const { writeAuthEvent } = require('../../auth');
+const { writeAuthEvent, roleOutranksOrEquals } = require('../../auth');
+const notifications = require('../notifications/service');
+const { reserveInvitationResend } = require('../../shared/email-quota');
+const { RoleEscalationError, InvitationNotPendingError, InvitationResendLimitError } = require('./errors');
 const { describeEmailDelivery } = require('../notifications/email-adapter');
 
 const INVITATION_TTL_DAYS = 7;
@@ -67,12 +70,45 @@ async function getUserAtActiveProperty({ context, id }) {
   return rows.find((row) => String(row.id) === String(id)) ?? null;
 }
 
-/** Outstanding invitations at the active property — `expired` is computed here rather than stored, since `expires_at` alone is the actual truth and a separate status column would be a second copy of it. */
+const INVITATION_LIST_COLUMNS = ['id', 'email', 'role', 'expires_at', 'accepted_at', 'revoked_at', 'invited_by_user_id', 'created_at'];
+
+/** Strips the token hash (a credential) and adds the derived status. Used for every invitation that leaves this module. */
+function publicInvitation(row) {
+  if (!row) return row;
+  const { token_hash: _tokenHash, ...rest } = row;
+  const state = rest.accepted_at ? 'accepted' : rest.revoked_at ? 'revoked' : new Date(rest.expires_at) <= new Date() ? 'expired' : 'pending';
+  return { ...rest, status: state };
+}
+
+/** Outstanding invitations at the active property: pending and expired (an expired one can be resent to renew it). Accepted and revoked ones are not listed. The token hash is never returned. */
 async function listPendingInvitations({ context }) {
   const db = scopedDb().for(context);
-  const rows = await db.table('user_invitations').whereNull('accepted_at').orderBy('created_at', 'desc');
-  const now = new Date();
-  return rows.map((row) => ({ ...row, status: new Date(row.expires_at) <= now ? 'expired' : 'pending' }));
+  const rows = await db.table('user_invitations').whereNull('accepted_at').whereNull('revoked_at').orderBy('created_at', 'desc').select(...INVITATION_LIST_COLUMNS);
+  return rows.map(publicInvitation);
+}
+
+function newInvitationToken() {
+  const token = crypto.randomBytes(32).toString('base64url');
+  return { token, tokenHash: crypto.createHash('sha256').update(token).digest('hex') };
+}
+
+/**
+ * Blanks the raw-token link in the email event(s) of invitations that no longer
+ * work (resent, replaced or revoked), so a dead token does not linger in the
+ * database and the delivery log can never re-send it.
+ */
+async function blankInvitationLinks(trx, invitationIds) {
+  if (!invitationIds.length) return;
+  const events = await trx
+    .table('outbox_events')
+    .where({ event_type: 'staff.invited', aggregate_type: 'user_invitations' })
+    .whereIn('aggregate_id', invitationIds.map(String));
+  for (const event of events) {
+    const payload = typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
+    if (payload?.invitationUrl) {
+      await trx.table('outbox_events').where({ id: event.id }).update({ payload: JSON.stringify({ ...payload, invitationUrl: null }) });
+    }
+  }
 }
 
 /**
@@ -88,8 +124,9 @@ async function listPendingInvitations({ context }) {
  * real template, the same way every other lifecycle event this codebase
  * emits already works.
  */
-async function inviteUser({ context, email, role, invitedByUserId }) {
+async function inviteUser({ context, email, role, invitedByUserId, actorRole }) {
   const db = scopedDb().for(context);
+  if (!roleOutranksOrEquals(actorRole, role)) throw new RoleEscalationError(role);
 
   const roleRow = await db.table('roles').where({ code: role, status: 'active' }).first();
   if (!roleRow) {
@@ -97,10 +134,12 @@ async function inviteUser({ context, email, role, invitedByUserId }) {
   }
 
   return db.transaction(async (trx) => {
-    await trx.table('user_invitations').where({ email }).whereNull('accepted_at').delete();
+    // Supersede the live invitation(s) for this address. Revoked ones are kept as history.
+    const superseded = await trx.table('user_invitations').where({ email }).whereNull('accepted_at').whereNull('revoked_at').select('id');
+    await blankInvitationLinks(trx, superseded.map((row) => row.id));
+    await trx.table('user_invitations').where({ email }).whereNull('accepted_at').whereNull('revoked_at').delete();
 
-    const token = crypto.randomBytes(32).toString('base64url');
-    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const { token, tokenHash } = newInvitationToken();
 
     const [id] = await trx.table('user_invitations').insert({
       email,
@@ -150,7 +189,83 @@ async function inviteUser({ context, email, role, invitedByUserId }) {
     // with no mailbox only writes it to the server log (user-reported), so
     // the invite screen warns instead of implying it was sent.
     const emailDelivery = await describeEmailDelivery({ db: trx, propertyId: context.propertyId });
-    return { invitation: await trx.table('user_invitations').where({ id }).first(), devOnlyToken, emailDelivery };
+    return { invitation: publicInvitation(await trx.table('user_invitations').where({ id }).first()), devOnlyToken, emailDelivery };
+  });
+}
+
+/** Loads and locks one invitation at the active property (another property or tenant is simply not found), refusing anything accepted or revoked, and a role above the caller's own. */
+async function lockActionableInvitation(trx, { id, actorRole }) {
+  const invitation = await trx.table('user_invitations').where({ id }).forUpdate().first();
+  if (!invitation) return null;
+  if (invitation.accepted_at) throw new InvitationNotPendingError('accepted');
+  if (invitation.revoked_at) throw new InvitationNotPendingError('revoked');
+  if (!roleOutranksOrEquals(actorRole, invitation.role)) throw new RoleEscalationError(invitation.role);
+  return invitation;
+}
+
+/**
+ * Resend: a NEW token replaces the old one on the same row (the old link stops
+ * working at once), the expiry restarts at the normal lifetime (so an expired
+ * invitation is renewed), the old email's link is blanked, and a new email goes
+ * out. The send is attempted right away and reported (`sent`, `failed` with the
+ * scrubbed reason, or `queued` if the mailer takes longer than the wait limit).
+ * Returns null when there is no such invitation at this property.
+ */
+async function resendInvitation({ context, id, actorRole }) {
+  const db = scopedDb().for(context);
+  const outcome = await db.transaction(async (trx) => {
+    const invitation = await lockActionableInvitation(trx, { id, actorRole });
+    if (!invitation) return null;
+    const limited = await reserveInvitationResend({ tenantId: context.tenantId, invitationId: invitation.id });
+    if (limited) throw new InvitationResendLimitError(limited);
+
+    const { token, tokenHash } = newInvitationToken();
+    await trx.table('user_invitations').where({ id }).update({ token_hash: tokenHash, expires_at: daysFromNow(INVITATION_TTL_DAYS) });
+    await blankInvitationLinks(trx, [invitation.id]);
+
+    const property = await trx.table('properties').where({ id: context.propertyId }).first('name');
+    const tenant = await trx.table('tenants').first('slug');
+    const eventId = await writeOutboxEvent({
+      trx,
+      eventType: 'staff.invited',
+      aggregateType: 'user_invitations',
+      aggregateId: invitation.id,
+      propertyId: context.propertyId,
+      payload: {
+        guestEmail: invitation.email,
+        role: invitation.role,
+        propertyName: property?.name ?? null,
+        invitationUrl: tenant?.slug ? `http://${tenant.slug}.${process.env.APP_DOMAIN}/?invite_token=${token}` : null,
+      },
+    });
+    return {
+      invitation: publicInvitation(await trx.table('user_invitations').where({ id }).first()),
+      eventId,
+      devOnlyToken: process.env.NODE_ENV !== 'production' ? token : null,
+    };
+  });
+  if (!outcome) return null;
+  const email = await notifications.dispatchOutboxEventNow({ context, eventId: outcome.eventId });
+  return { invitation: outcome.invitation, devOnlyToken: outcome.devOnlyToken, email };
+}
+
+/**
+ * Delete (revoke): the invitation stays as history with `revoked_at`, and its
+ * token is replaced by a hash of random bytes, so the old link is dead even for
+ * a code path that forgot to check `revoked_at`. The old email's link is blanked.
+ */
+async function revokeInvitation({ context, id, actorRole, actorUserId }) {
+  const db = scopedDb().for(context);
+  return db.transaction(async (trx) => {
+    const invitation = await lockActionableInvitation(trx, { id, actorRole });
+    if (!invitation) return null;
+    await trx.table('user_invitations').where({ id }).update({
+      revoked_at: new Date(),
+      revoked_by_user_id: actorUserId ?? null,
+      token_hash: crypto.createHash('sha256').update(crypto.randomBytes(32)).digest('hex'),
+    });
+    await blankInvitationLinks(trx, [invitation.id]);
+    return publicInvitation(await trx.table('user_invitations').where({ id }).first());
   });
 }
 
@@ -222,4 +337,14 @@ async function setUserOutlets({ context, id, outletIds }) {
   return getUserAtActiveProperty({ context, id });
 }
 
-module.exports = { listUsers, getUserAtActiveProperty, listPendingInvitations, inviteUser, deactivateUser, changeUserRole, setUserOutlets };
+module.exports = {
+  listUsers,
+  getUserAtActiveProperty,
+  listPendingInvitations,
+  inviteUser,
+  resendInvitation,
+  revokeInvitation,
+  deactivateUser,
+  changeUserRole,
+  setUserOutlets,
+};

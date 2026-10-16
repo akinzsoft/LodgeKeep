@@ -42,11 +42,40 @@ async function inviteUser(req, res, next) {
       email,
       role,
       invitedByUserId: req.context.userId,
+      actorRole: req.role,
     });
-    await req.audit({ entityType: 'user_invitations', entityId: invitation.id, action: 'create', afterState: invitation });
+    await req.audit({ entityType: 'user_invitations', entityId: invitation.id, action: 'create', afterState: invitationAudit(invitation) });
     // dev_only_token: never present outside development/test — the exact
     // shape `POST /auth/password/forgot`'s response already established.
     res.status(201).json(ok({ ...invitation, dev_only_token: devOnlyToken, email_delivery: emailDelivery }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** Audit state for an invitation: who/what/when, never a token or its hash. */
+function invitationAudit(invitation) {
+  return { email: invitation.email, role: invitation.role, status: invitation.status, expires_at: invitation.expires_at };
+}
+
+async function resendInvitation(req, res, next) {
+  try {
+    const result = await service.resendInvitation({ context: req.context, id: req.params.id, actorRole: req.role });
+    if (!result) return notFound(res);
+    await req.audit({ entityType: 'user_invitations', entityId: result.invitation.id, action: 'resend', afterState: invitationAudit(result.invitation) });
+    // dev_only_token: only outside production, the same precedent as the invite response.
+    res.status(200).json(ok({ invitation: result.invitation, email: result.email, dev_only_token: result.devOnlyToken }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function revokeInvitation(req, res, next) {
+  try {
+    const invitation = await service.revokeInvitation({ context: req.context, id: req.params.id, actorRole: req.role, actorUserId: req.context.userId });
+    if (!invitation) return notFound(res);
+    await req.audit({ entityType: 'user_invitations', entityId: invitation.id, action: 'revoke', afterState: invitationAudit(invitation) });
+    res.status(200).json(ok({ invitation }));
   } catch (error) {
     next(error);
   }
@@ -96,4 +125,4 @@ async function setUserOutlets(req, res, next) {
   }
 }
 
-module.exports = { listUsers, listPendingInvitations, inviteUser, deactivateUser, changeUserRole, setUserOutlets };
+module.exports = { listUsers, listPendingInvitations, inviteUser, resendInvitation, revokeInvitation, deactivateUser, changeUserRole, setUserOutlets };

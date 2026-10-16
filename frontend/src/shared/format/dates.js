@@ -45,3 +45,15 @@ export function nightsBetween(arrival, departure) {
   const diff = (Date.UTC(d.year, d.month - 1, d.day) - Date.UTC(a.year, a.month - 1, a.day)) / 86400000;
   return diff > 0 ? diff : 0;
 }
+
+/**
+ * An instant (an ISO timestamp such as an invitation's expiry) as a readable
+ * date and time in the viewer's own timezone: "16 Oct 2026, 14:30".
+ * Anything unreadable comes back unchanged ('—' for none).
+ */
+export function formatDateTime(value) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return value ? String(value) : '—';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getDate()} ${MONTHS[date.getMonth()]} ${date.getFullYear()}, ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}

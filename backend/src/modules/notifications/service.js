@@ -15,7 +15,9 @@
  * shape `src/modules/reservations/service.js` already established.
  */
 
+const crypto = require('crypto');
 const { scopedDb } = require('../../db');
+const { AppError } = require('../../shared/errors');
 const { workerContext } = require('../tenancy');
 const { resolveEmailAdapter, isUndeliverable, undeliverableReason, safeErrorText, NoMailboxConfiguredError, EmailSendFailedError } = require('./email-adapter');
 const { reservePlatformSend, classifyEvent, EmailLimitError } = require('../../shared/email-quota');
@@ -453,6 +455,39 @@ async function dispatchOne({ tenantDb, propertyDb, event }) {
 }
 
 /**
+ * Sends one pending outbox event right now and reports the outcome, waiting at
+ * most `waitMs` (default INVITATION_SEND_WAIT_MS, 10 s) for the mailer. If the
+ * mailer is slower, the send carries on in the background and the answer is
+ * `queued`. `reason` is already scrubbed of secrets (it comes from the delivery
+ * path that scrubs).
+ */
+async function dispatchOutboxEventNow({ context, eventId, waitMs }) {
+  const limit = waitMs ?? (Number(process.env.INVITATION_SEND_WAIT_MS) || 10000);
+  const tenantDb = scopedDb().for(context);
+  const event = await tenantDb.table('outbox_events').where({ id: eventId }).first();
+  if (!event) return { status: 'queued', reason: null };
+  if (event.status === 'pending') {
+    const propertyDb = event.property_id ? scopedDb().for(workerContext({ tenantId: context.tenantId, propertyId: event.property_id })) : null;
+    const work = dispatchOne({ tenantDb, propertyDb, event }).catch((error) => {
+      console.error('[outbox] inline dispatch failed:', error?.message);
+    });
+    let timer;
+    const timedOut = await Promise.race([
+      work.then(() => false),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(true), limit);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (timedOut) return { status: 'queued', reason: null };
+  }
+  const after = await tenantDb.table('outbox_events').where({ id: eventId }).first();
+  if (after.status === 'sent') return { status: 'sent', reason: null };
+  if (after.status === 'failed') return { status: 'failed', reason: after.last_error ?? 'The email could not be sent.' };
+  return { status: 'queued', reason: after.last_error ?? null };
+}
+
+/**
  * Processes up to `limit` pending events for one tenant — ARCHITECTURE.md
  * §14: "every job carries tenant_id," so a dispatch run is always scoped to
  * one tenant, never a cross-tenant sweep through the accessor (there is no
@@ -536,7 +571,9 @@ async function resendNotification({ context, id }) {
   // number): a resend then sends the same content, not a reservation-shaped
   // approximation. Older log rows carry no event link, so the newest event for
   // the same template and recipient is used.
-  const payload = await findOutboxPayloadForLogEntry({ db, failed, propertyId: context.propertyId });
+  const found = await findOutboxEventForLogEntry({ db, failed, propertyId: context.propertyId });
+  const payload = found?.payload ?? null;
+  if (failed.template_key === 'staff_invitation') await assertInvitationLinkAlive({ db, payload });
 
   let variables;
   let reservationId = failed.reservation_id;
@@ -592,21 +629,43 @@ function eventTypeForTemplate(templateKey) {
   return Object.keys(EVENT_TEMPLATE_KEYS).find((eventType) => EVENT_TEMPLATE_KEYS[eventType] === templateKey) ?? null;
 }
 
-async function findOutboxPayloadForLogEntry({ db, failed, propertyId }) {
+async function findOutboxEventForLogEntry({ db, failed, propertyId }) {
   const parse = (value) => (typeof value === 'string' ? JSON.parse(value) : value);
   if (failed.outbox_event_id) {
     const event = await db.table('outbox_events').where({ id: failed.outbox_event_id }).first();
-    return event ? parse(event.payload) : null;
+    return event ? { event, payload: parse(event.payload) } : null;
   }
   const eventType = eventTypeForTemplate(failed.template_key);
   if (!eventType) return null;
+  // Older log rows carry no event link: the newest event for the same recipient.
   const candidates = await db.table('outbox_events').where({ event_type: eventType, property_id: propertyId }).orderBy('id', 'desc').limit(100);
   for (const candidate of candidates) {
     const payload = parse(candidate.payload);
     const recipient = payload?.recipientEmail ?? payload?.guestEmail;
-    if (recipient && String(recipient).toLowerCase() === String(failed.recipient_email).toLowerCase()) return payload;
+    if (recipient && String(recipient).toLowerCase() === String(failed.recipient_email).toLowerCase()) return { event: candidate, payload };
   }
   return null;
+}
+
+class InvitationLinkDeadError extends AppError {
+  constructor() {
+    super('CONFLICT_INVITATION_LINK_DEAD', 'This invitation was replaced or revoked, use Users → Pending invitations.', 409);
+  }
+}
+
+/**
+ * A staff invitation email may be re-sent from the delivery log only while its
+ * link is still the live one: the stored link must still be present and must
+ * match an invitation that is not accepted, revoked or expired. Anything else
+ * (resent, revoked, accepted, expired, deleted) would re-email a dead link.
+ */
+async function assertInvitationLinkAlive({ db, payload }) {
+  const match = /invite_token=([^&#\s]+)/.exec(payload?.invitationUrl ?? '');
+  if (!match) throw new InvitationLinkDeadError();
+  const hash = crypto.createHash('sha256').update(decodeURIComponent(match[1])).digest('hex');
+  const invitation = await db.table('user_invitations').where({ token_hash: hash }).first();
+  const expired = invitation?.expires_at && new Date(invitation.expires_at) <= new Date();
+  if (!invitation || invitation.accepted_at || invitation.revoked_at || expired) throw new InvitationLinkDeadError();
 }
 
 // ---------------------------------------------------------------------
@@ -681,6 +740,8 @@ async function isEmailDeliveryReal({ db, propertyId } = {}) {
 
 module.exports = {
   composeEmail,
+  dispatchOutboxEventNow,
+  InvitationLinkDeadError,
   EVENT_TEMPLATE_KEYS,
   dispatchPendingOutboxEventsForTenant,
   isEmailDeliveryReal,

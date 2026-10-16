@@ -1109,6 +1109,7 @@ async function acceptInvitation({ tenantId, token, firstName, lastName, password
   if (!invitation) return reject('token_unknown');
   if (invitation.expires_at && new Date(invitation.expires_at) <= new Date()) return reject('token_expired');
   if (invitation.accepted_at) return reject('token_already_used');
+  if (invitation.revoked_at) return reject('token_unknown');
 
   const existingUser = await scoped.table('users').where({ email: invitation.email }).first();
   if (existingUser) return reject('token_already_used');
@@ -1120,6 +1121,7 @@ async function acceptInvitation({ tenantId, token, firstName, lastName, password
     .table('user_invitations')
     .where({ id: invitation.id })
     .whereNull('accepted_at')
+    .whereNull('revoked_at')
     .update({ accepted_at: new Date() });
   if (claimed === 0) return reject('token_already_used');
 
