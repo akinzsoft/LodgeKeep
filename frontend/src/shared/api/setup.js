@@ -53,17 +53,18 @@ export function getSetupProgress() {
 // Email settings — gap closure: "add the mail setup on in SETUP menu"
 // ---------------------------------------------------------------------
 
-/** @returns {Promise<null | {provider: string, smtp_host: string|null, smtp_port: number|null, smtp_user: string|null, smtp_from: string|null, smtp_from_name: string|null, smtp_password_set: boolean}>} `null` when the property has never configured this. */
+/** @returns {Promise<null | {mode: 'platform'|'custom'|'console', smtp_host: string|null, smtp_port: number|null, smtp_security: string|null, smtp_user: string|null, smtp_from: string|null, smtp_from_name: string|null, reply_to: string|null, smtp_password_set: boolean}>} `null` when the property has never saved this (it then uses the platform mailbox). */
 export function getEmailSettings() {
   return request('/email-settings');
 }
 
 /**
- * Whether this property's emails actually get sent: `source` is `property`
- * (its own SMTP mailbox), `server` (the server's default) or `none` (emails
- * only reach the server log).
+ * Whether this property's emails actually get sent, and how: `mode` is
+ * `platform`, `custom` or (development only) `console`; `usage` is the
+ * platform-mode daily count; `lastTest` the last test email result. Never
+ * contains credentials.
  *
- * @returns {Promise<{sendsEmail: boolean, source: 'property'|'server'|'none'}>}
+ * @returns {Promise<{sendsEmail: boolean, source: 'platform'|'custom'|'none', mode: string, platformConfigured: boolean, consoleAllowed: boolean, usage: null|{sentToday: number|null, dailyCap: number}, lastTest: null|{at: string, ok: boolean, error: string|null}}>}
  */
 export function getEmailDeliveryStatus() {
   return request('/email-settings/status');
@@ -73,9 +74,9 @@ export function updateEmailSettings(body) {
   return request('/email-settings', { method: 'PUT', body });
 }
 
-/** @returns {Promise<{sent: true, provider: string, providerRef: string}>} Throws (real ApiError) on a genuine send failure. */
-export function sendTestEmail(to) {
-  return request('/email-settings/test', { method: 'POST', body: { to } });
+/** Sends a test email to the SIGNED-IN user's own address. @returns {Promise<{sent: true, mode: string, to: string, providerRef: string}>} Throws (real ApiError) on a genuine send failure. */
+export function sendTestEmail() {
+  return request('/email-settings/test', { method: 'POST', body: {} });
 }
 
 // ---------------------------------------------------------------------

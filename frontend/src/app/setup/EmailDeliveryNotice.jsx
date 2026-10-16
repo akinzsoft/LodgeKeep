@@ -3,7 +3,7 @@ import { setupApi } from '../../shared/api/index.js';
 import formStyles from './SetupForm.module.css';
 
 const MESSAGES = {
-  settings: 'Invitations, verification codes, password resets and booking confirmations from this property are only written to the server log. Set up an SMTP mailbox below, save, and send a test email.',
+  settings: 'Choose "Platform email" or enter your own SMTP below, save, and send a test email.',
   security: 'Admins who sign in cannot receive a verification code by email, so while the code is required they will be unable to sign in. Set up a mailbox in Setup → Email settings, or turn the requirement off only if you accept the risk.',
   invite: 'An invitation from this property will not reach the person you invite. Set up a mailbox in Setup → Email settings first, then send the invitation.',
 };
@@ -43,7 +43,10 @@ export function EmailDeliveryNotice({ where, refreshKey }) {
   return (
     <div className={formStyles.warningBanner} role="alert">
       <strong>Emails from this property are not being sent.</strong>
-      No mailbox is set up for it, and the server has no default one. {MESSAGES[where]}
+      {status.mode === 'platform'
+        ? ' The platform email service is not configured on this server, so nothing can be sent until the platform administrator sets it up (or you switch to your own SMTP in Setup → Email).'
+        : ' No working mailbox is set up for this property.'}{' '}
+      {MESSAGES[where]}
     </div>
   );
 }

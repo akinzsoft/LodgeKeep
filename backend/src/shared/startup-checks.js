@@ -74,4 +74,22 @@ function validateStartupConfig() {
   }
 }
 
-module.exports = { validateStartupConfig };
+/**
+ * The platform mailbox (EMAIL_PROVIDER=smtp + SMTP_*) is what every tenant on
+ * the default "platform" email mode sends through. In production a missing or
+ * incomplete one does not stop the app (tenants on their own SMTP still work),
+ * but it must be impossible to miss: logged as an error at boot, and every send
+ * through it fails visibly in the delivery log instead of being logged away.
+ * Returns the problem text, or null.
+ */
+function warnAboutPlatformEmail(env = process.env, log = console.error) {
+  if (env.NODE_ENV !== 'production') return null;
+  const { platformSmtpStatus } = require('../modules/notifications/email-adapter');
+  const status = platformSmtpStatus(env);
+  if (status.configured) return null;
+  const message = `PLATFORM EMAIL IS NOT CONFIGURED — missing/invalid: ${status.missing.join(', ')}. Invitations, password resets and verification codes for every tenant on the platform mailbox will FAIL (recorded in the delivery log) until this is fixed in .env.production.`;
+  log(message);
+  return message;
+}
+
+module.exports = { validateStartupConfig, warnAboutPlatformEmail };

@@ -24,6 +24,8 @@ const { useTestApp } = require('../helpers/app');
 const { seedTwoTenants } = require('../helpers/fixtures');
 const { signAccessToken } = require('../../src/auth/tokens');
 const { decrypt } = require('../../src/shared/encryption');
+const dns = require('dns').promises;
+const nodemailer = require('nodemailer');
 
 describe('Email settings (gap closure: mail setup in Setup menu)', () => {
   const t = useTestApp();
@@ -41,6 +43,14 @@ describe('Email settings (gap closure: mail setup in Setup menu)', () => {
         .where({ user_id: tenant.users[0].id, property_id: tenant.properties[1].id })
         .update({ role: 'manager' });
     }
+  });
+
+  beforeEach(() => {
+    // Custom hosts are vetted by DNS; a stable public answer keeps these tests offline.
+    jest.spyOn(dns, 'lookup').mockResolvedValue([{ address: '203.0.114.9', family: 4 }]);
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   function tokenFor({ tenant, userIndex = 0, propertyId }) {
@@ -159,7 +169,7 @@ describe('Email settings (gap closure: mail setup in Setup menu)', () => {
     it('says emails are not sent when neither the property nor the server has a mailbox', async () => {
       const res = await t.request.get('/api/v1/email-settings/status').set('Authorization', `Bearer ${tokenFor({ tenant: ctx.b })}`);
       expect(res.status).toBe(200);
-      expect(res.body.data).toEqual({ sendsEmail: false, source: 'none' });
+      expect(res.body.data).toMatchObject({ sendsEmail: false, source: 'none' });
     });
 
     it("reports the property's own SMTP mailbox once it is set up", async () => {
@@ -169,17 +179,22 @@ describe('Email settings (gap closure: mail setup in Setup menu)', () => {
         .set('Authorization', `Bearer ${token}`)
         .send({ provider: 'smtp', smtp_host: 'mail.example.com', smtp_port: 587, smtp_user: 'u', smtp_password: 'p', smtp_from: 'hotel@example.com' });
       const res = await t.request.get('/api/v1/email-settings/status').set('Authorization', `Bearer ${token}`);
-      expect(res.body.data).toEqual({ sendsEmail: true, source: 'property' });
+      expect(res.body.data).toMatchObject({ sendsEmail: true, source: 'custom', mode: 'custom' });
     });
 
     it("reports the server's default mailbox when the property has none of its own", async () => {
-      const original = process.env.EMAIL_PROVIDER;
+      const original = { ...process.env };
       process.env.EMAIL_PROVIDER = 'smtp';
+      process.env.SMTP_HOST = 'smtp.platform.example';
+      process.env.SMTP_USER = 'noreply@platform.example';
+      process.env.SMTP_PASSWORD = 'platform-secret';
       try {
         const res = await t.request.get('/api/v1/email-settings/status').set('Authorization', `Bearer ${tokenFor({ tenant: ctx.b })}`);
-        expect(res.body.data).toEqual({ sendsEmail: true, source: 'server' });
+        expect(res.body.data).toMatchObject({ sendsEmail: true, source: 'platform', mode: 'platform' });
+        expect(JSON.stringify(res.body)).not.toContain('platform-secret');
+        expect(JSON.stringify(res.body)).not.toContain('smtp.platform.example');
       } finally {
-        process.env.EMAIL_PROVIDER = original;
+        process.env = original;
       }
     });
   });
@@ -199,10 +214,10 @@ describe('Email settings (gap closure: mail setup in Setup menu)', () => {
       const res = await t.request
         .post('/api/v1/email-settings/test')
         .set('Authorization', `Bearer ${tokenFor({ tenant: ctx.b, userIndex: 1 })}`)
-        .send({ to: 'someone@example.com' });
+        .send({});
       expect(res.status).toBe(422);
       expect(res.body.error.code).toBe('BUSINESS_RULE_EMAIL_NO_MAILBOX');
-      expect(res.body.error.message).toMatch(/Setup → Email settings/);
+      expect(res.body.error.message).toMatch(/not configured on this server/);
     });
   });
 
@@ -211,7 +226,7 @@ describe('Email settings (gap closure: mail setup in Setup menu)', () => {
       const res = await t.request
         .post('/api/v1/email-settings/test')
         .set('Authorization', `Bearer ${tokenFor({ tenant: ctx.a })}`)
-        .send({ to: 'someone@example.com' });
+        .send({});
       expect(res.status).toBe(403);
     });
 
@@ -219,21 +234,30 @@ describe('Email settings (gap closure: mail setup in Setup menu)', () => {
       await grantRoleToUser({ tenant: ctx.b, userIndex: 1, propertyIndex: 1, role: 'admin' });
       const token = tokenFor({ tenant: ctx.b, userIndex: 1 });
 
-      const res = await t.request.post('/api/v1/email-settings/test').set('Authorization', `Bearer ${token}`).send({ to: 'someone@example.com' });
+      const res = await t.request.post('/api/v1/email-settings/test').set('Authorization', `Bearer ${token}`).send({});
       expect(res.status).toBe(200);
       expect(res.body.data).toMatchObject({ sent: true, provider: 'console' });
     });
 
-    it('surfaces a real send failure as a real 400, not a bare 500, when the configured host does not resolve', async () => {
+    it('surfaces a send failure as a real 400 with the secrets scrubbed out of the message', async () => {
       const token = await adminToken();
       await t.request
         .put('/api/v1/email-settings')
         .set('Authorization', `Bearer ${token}`)
-        .send({ provider: 'smtp', smtp_host: 'this-host-genuinely-does-not-exist.invalid', smtp_user: 'a@example.com', smtp_password: 'x' });
+        .send({ mode: 'custom', smtp_host: 'mail.example.com', smtp_port: 587, smtp_user: 'a@example.com', smtp_password: 'hunter2-secret' });
+      jest.spyOn(nodemailer, 'createTransport').mockReturnValue({
+        sendMail: jest.fn().mockRejectedValue(new Error('535 5.7.8 Authentication failed for a@example.com password=hunter2-secret')),
+        close: jest.fn(),
+      });
 
-      const res = await t.request.post('/api/v1/email-settings/test').set('Authorization', `Bearer ${token}`).send({ to: 'someone@example.com' });
+      const res = await t.request.post('/api/v1/email-settings/test').set('Authorization', `Bearer ${token}`).send({});
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe('VALIDATION_EMAIL_TEST_SEND_FAILED');
-    }, 15000);
+      expect(res.body.error.message).toMatch(/Authentication failed/);
+      expect(JSON.stringify(res.body)).not.toContain('hunter2-secret');
+      const row = await t.trx('email_settings').where({ property_id: ctx.a.properties[1].id }).first();
+      expect(row.last_test_ok).toBe(0);
+      expect(row.last_test_error).not.toContain('hunter2-secret');
+    });
   });
 });
