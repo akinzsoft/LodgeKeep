@@ -784,6 +784,18 @@ async function deactivateTax(req, res, next) {
   }
 }
 
+async function changeTaxEndDate(req, res, next) {
+  try {
+    const reason = requireReason(req.body);
+    const result = await service.changeTaxEndDate({ context: req.context, taxCode: req.params.taxCode, endFrom: req.body?.end_from });
+    if (!result) return notFound(res);
+    await req.audit({ entityType: 'taxes', entityId: result.after.id, action: 'change_end_date', beforeState: result.before, afterState: result.after, reason });
+    res.status(200).json(ok(result.after));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function reactivateTax(req, res, next) {
   try {
     const reason = requireReason(req.body);
@@ -1072,6 +1084,7 @@ module.exports = {
   createTaxVersion,
   listTaxes,
   deactivateTax,
+  changeTaxEndDate,
   reactivateTax,
   deleteTax,
   resolveTax,

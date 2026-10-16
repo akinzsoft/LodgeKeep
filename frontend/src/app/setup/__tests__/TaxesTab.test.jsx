@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TaxesTab } from '../TaxesTab.jsx';
 
@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   listTaxes: vi.fn(),
   createTaxVersion: vi.fn(),
   deactivateTax: vi.fn(),
+  changeTaxEndDate: vi.fn(),
   reactivateTax: vi.fn(),
   deleteTax: vi.fn(),
 }));
@@ -15,7 +16,7 @@ vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return {
     ...actual,
-    setupApi: { listTaxes: mocks.listTaxes, createTaxVersion: mocks.createTaxVersion, deactivateTax: mocks.deactivateTax, reactivateTax: mocks.reactivateTax, deleteTax: mocks.deleteTax },
+    setupApi: { listTaxes: mocks.listTaxes, createTaxVersion: mocks.createTaxVersion, deactivateTax: mocks.deactivateTax, changeTaxEndDate: mocks.changeTaxEndDate, reactivateTax: mocks.reactivateTax, deleteTax: mocks.deleteTax },
   };
 });
 
@@ -235,11 +236,67 @@ describe('<TaxesTab>', () => {
       render(<TaxesTab canManage disabled={false} activeProperty={property} />);
       expect(await screen.findByText('Current')).toBeInTheDocument();
       expect(screen.getByText('Scheduled to end')).toBeInTheDocument();
-      expect(screen.getByText(/Ends 2026-12-31/)).toBeInTheDocument();
+      expect(screen.getByText(/No tax from 2027-01-01/)).toBeInTheDocument();
       expect(screen.getByText('Inactive')).toBeInTheDocument();
       // Only the open tax can be deactivated, only the inactive one reactivated, a scheduled one neither.
       expect(screen.getAllByRole('button', { name: 'Deactivate' })).toHaveLength(1);
       expect(screen.getAllByRole('button', { name: 'Reactivate' })).toHaveLength(1);
+      // Only the scheduled one can change its end date.
+      expect(screen.getAllByRole('button', { name: 'Change end date' })).toHaveLength(1);
+    });
+
+    describe('change end date', () => {
+      const ENDING = () => [V({ id: '2', tax_code: 'B', name: 'B', rate: '1.0000', effective_from: '2026-01-01', effective_to: '2026-12-31', usage: UNUSED })];
+
+      it('opens pre-filled with the current first untaxed day, needs a reason, and sends end_from', async () => {
+        mocks.listTaxes.mockResolvedValue(ENDING());
+        mocks.changeTaxEndDate.mockResolvedValue({});
+        render(<TaxesTab canManage disabled={false} activeProperty={property} />);
+        await userEvent.click(await screen.findByRole('button', { name: 'Change end date' }));
+        const dialog = screen.getByRole('alertdialog');
+        const date = within(dialog).getByDisplayValue('2027-01-01');
+        fireEvent.change(date, { target: { value: '2026-11-15' } });
+        expect(within(dialog).getByRole('button', { name: 'Change end date' })).toBeDisabled();
+        await userEvent.type(within(dialog).getByRole('textbox'), 'Contract extended');
+        await userEvent.click(within(dialog).getByRole('button', { name: 'Change end date' }));
+        expect(mocks.changeTaxEndDate).toHaveBeenCalledWith('B', { reason: 'Contract extended', end_from: '2026-11-15' });
+        expect(mocks.listTaxes).toHaveBeenCalledTimes(2);
+      });
+
+      it('allows the business date itself but blocks an earlier day and a day not after the start', async () => {
+        mocks.listTaxes.mockResolvedValue(ENDING());
+        render(<TaxesTab canManage disabled={false} activeProperty={property} />);
+        await userEvent.click(await screen.findByRole('button', { name: 'Change end date' }));
+        const dialog = screen.getByRole('alertdialog');
+        await userEvent.type(within(dialog).getByRole('textbox'), 'x');
+        const confirm = within(dialog).getByRole('button', { name: 'Change end date' });
+        const date = within(dialog).getByDisplayValue('2027-01-01');
+        fireEvent.change(date, { target: { value: '2026-10-10' } });
+        expect(confirm).not.toBeDisabled();
+        fireEvent.change(date, { target: { value: '2026-10-09' } });
+        expect(confirm).toBeDisabled();
+      });
+
+      it('shows a server refusal as an error', async () => {
+        mocks.listTaxes.mockResolvedValue(ENDING());
+        const { ApiError } = await import('../../../shared/api/index.js');
+        mocks.changeTaxEndDate.mockRejectedValue(new ApiError({ code: 'BUSINESS_RULE_TAX_END_DATE_UNCHANGED', message: 'Tax "B" already stops applying from 2027-01-01.', status: 422 }));
+        render(<TaxesTab canManage disabled={false} activeProperty={property} />);
+        await userEvent.click(await screen.findByRole('button', { name: 'Change end date' }));
+        await userEvent.type(within(screen.getByRole('alertdialog')).getByRole('textbox'), 'x');
+        await userEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Change end date' }));
+        expect(await screen.findByText(/already stops applying/)).toBeInTheDocument();
+      });
+
+      it('is not offered to non-holders or while offline', async () => {
+        mocks.listTaxes.mockResolvedValue(ENDING());
+        const { unmount } = render(<TaxesTab canManage={false} disabled={false} activeProperty={property} />);
+        await screen.findByText('Scheduled to end');
+        expect(screen.queryByRole('button', { name: 'Change end date' })).not.toBeInTheDocument();
+        unmount();
+        render(<TaxesTab canManage disabled={false} isOffline activeProperty={property} />);
+        expect(await screen.findByRole('button', { name: 'Change end date' })).toBeDisabled();
+      });
     });
 
     it('History is collapsed by default and expands to every version with its dates and rate', async () => {
