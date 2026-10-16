@@ -65,6 +65,8 @@ function resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType }) 
   for (const versions of versionsByCode.values()) {
     const version = resolveEffectiveTax(versions, businessDate);
     if (!version) continue;
+    // A tax switched off is not charged on any new bill. Rows without the field (older callers, fixtures) count as on.
+    if (version.enabled === 0 || version.enabled === false) continue;
     if (EXACT_MATCH_CHARGE_TYPES.has(chargeType)) {
       if (version.applies_to !== chargeType) continue;
     } else if (version.applies_to !== 'all' && version.applies_to !== chargeType) continue;

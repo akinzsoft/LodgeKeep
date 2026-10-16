@@ -189,6 +189,23 @@ describe('supermarket quick sale', () => {
       expect(res.body.data.lines[0]).toMatchObject({ line_total: '20.00', line_net: '20.00', line_tax: '1.50' });
     });
 
+    it('switching the supermarket VAT Off stops it on the next sale, On restores it; the hotel VAT row is untouched', async () => {
+      await addSupermarketVat({ inclusive: false });
+      await setRole(users.manager, 'super_admin');
+      try {
+        const flip = (enabled) => as(users.manager).post('/api/v1/taxes/SM_VAT/set-enabled').send({ enabled });
+        expect((await flip(false)).status).toBe(200);
+        const off = await sell(users.operator, { items: [{ barcode: '6001000000035', quantity: 2 }] });
+        expect(off.body.data).toMatchObject({ subtotal: '20.00', tax_amount: '0.00', total: '20.00' });
+        expect((await t.trx('taxes').where({ tenant_id: ctx.a.id, tax_code: 'VAT' })).every((r) => Boolean(r.enabled))).toBe(true);
+        expect((await flip(true)).status).toBe(200);
+        const on = await sell(users.operator, { items: [{ barcode: '6001000000035', quantity: 2 }] });
+        expect(on.body.data).toMatchObject({ subtotal: '20.00', tax_amount: '1.50', total: '21.50' });
+      } finally {
+        await setRole(users.manager, 'manager');
+      }
+    });
+
     it('scales an INCLUSIVE row onto each receipt line so lines add up to the settlement', async () => {
       await addSupermarketVat({ inclusive: true });
       const res = await sell(users.operator, { items: [{ barcode: '6001000000011', quantity: 1 }, { barcode: '6001000000035', quantity: 3 }] });

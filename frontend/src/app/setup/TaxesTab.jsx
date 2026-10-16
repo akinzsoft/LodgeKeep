@@ -10,8 +10,6 @@ function firstUntaxedDay(version) {
   return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 }
 
-const STATE_LABEL = { current: 'Current', ending: 'Scheduled to end', inactive: 'Inactive' };
-
 function appliesToLabel(appliesTo) {
   return appliesTo === 'supermarket_sale' ? 'Supermarket sales' : appliesTo === 'all' || appliesTo === undefined ? 'All hotel charges' : appliesTo;
 }
@@ -25,12 +23,12 @@ function deleteBlockedReason(usage) {
     usage.posSettlements > 0 && plural(usage.posSettlements, 'POS sale'),
     usage.supermarketSales > 0 && plural(usage.supermarketSales, 'supermarket sale'),
   ].filter(Boolean);
-  return `In use: ${parts.join(', ')}. Deactivate instead.`;
+  return `In use: ${parts.join(', ')}. Switch it off instead.`;
 }
 
 /**
- * One group per tax code. State: Current (an open version), Scheduled to end (closed, but the end date has not
- * passed), otherwise Inactive. Versions are newest first; the row shows the live version when there is one.
+ * One group per tax code. A tax is On when it is switched on and still has a live version (open, or its end date has
+ * not passed); otherwise Off. Versions are newest first; the row shows the live version when there is one.
  */
 function groupTaxes(rows, isLive) {
   const byCode = new Map();
@@ -42,13 +40,16 @@ function groupTaxes(rows, isLive) {
     const versions = [...list].sort((a, b) => String(b.effective_from).localeCompare(String(a.effective_from)));
     const open = versions.find((v) => !v.effective_to);
     const liveVersion = open ?? versions.find(isLive);
+    const switchedOn = versions.every((v) => v.enabled !== false);
     return {
       code,
       tax_code: code,
       versions,
       liveVersion,
       shown: liveVersion ?? versions[0],
-      state: open ? 'current' : liveVersion ? 'ending' : 'inactive',
+      on: switchedOn && Boolean(liveVersion),
+      switchedOn,
+      ending: Boolean(liveVersion && liveVersion.effective_to),
     };
   });
 }
@@ -78,9 +79,9 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
     applies_to: 'all',
   });
   const [confirming, setConfirming] = useState(false);
-  // { kind: 'deactivate' | 'reactivate' | 'delete', taxCode } while a tax-level action is being confirmed.
+  // { kind: 'switch', taxCode, enabled } or { kind: 'delete', taxCode } while a tax-level action is being confirmed.
   const [action, setAction] = useState(null);
-  const [deactivateFrom, setDeactivateFrom] = useState('');
+  const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [expanded, setExpanded] = useState(() => new Set());
@@ -134,19 +135,15 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
     setSubmitting(true);
     setError(null);
     try {
-      if (action.kind === 'deactivate') {
-        await setupApi.deactivateTax(action.taxCode, { reason, ...(deactivateFrom ? { deactivate_from: deactivateFrom } : {}) });
-      } else if (action.kind === 'changeEnd') {
-        await setupApi.changeTaxEndDate(action.taxCode, { reason, end_from: deactivateFrom });
-      } else if (action.kind === 'reactivate') {
-        await setupApi.reactivateTax(action.taxCode, { reason, ...(deactivateFrom ? { reactivate_from: deactivateFrom } : {}) });
+      if (action.kind === 'switch') {
+        await setupApi.setTaxEnabled(action.taxCode, { enabled: action.enabled, ...(note.trim() ? { note: note.trim() } : {}) });
       } else {
         await setupApi.deleteTax(action.taxCode, { reason });
       }
       setAction(null);
       await reload();
     } catch (caught) {
-      // A refused delete explains itself (how many records use the tax, and to deactivate instead).
+      // A refused delete explains itself (how many records use the tax, and to switch it off instead).
       setError(caught instanceof ApiError ? caught.message : 'Could not complete that action.');
       setAction(null);
     } finally {
@@ -163,9 +160,9 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
     });
   }
 
-  function startAction(kind, taxCode, initialDate = '') {
-    setDeactivateFrom(initialDate);
-    setAction({ kind, taxCode });
+  function startAction(kind, taxCode, enabled) {
+    setNote('');
+    setAction({ kind, taxCode, enabled });
   }
 
   const businessDate = activeProperty?.current_business_date ? String(activeProperty.current_business_date).slice(0, 10) : '';
@@ -173,11 +170,7 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
   // A version is live while it is open or its end date has not passed; a hotel tax with none charges nothing on new bills.
   const isLive = (version) => !version.effective_to || (businessDate !== '' && String(version.effective_to).slice(0, 10) >= businessDate);
   const groups = groupTaxes(taxes ?? [], isLive);
-  const taxesOff = groups.filter((g) => !g.liveVersion && g.versions.some((v) => v.applies_to === 'all' || v.applies_to === undefined)).map((g) => g.code);
-  const pastDate = deactivateFrom !== '' && businessDate !== '' && deactivateFrom < businessDate;
-  const changeEndGroup = action?.kind === 'changeEnd' ? groups.find((g) => g.code === action.taxCode) : null;
-  const changeEndStart = changeEndGroup ? String(changeEndGroup.liveVersion.effective_from).slice(0, 10) : '';
-  const endNotAfterStart = changeEndStart !== '' && deactivateFrom !== '' && deactivateFrom <= changeEndStart;
+  const taxesOff = groups.filter((g) => !g.on && g.versions.some((v) => v.applies_to === 'all' || v.applies_to === undefined)).map((g) => g.code);
 
   return (
     <div className={styles.page}>
@@ -205,8 +198,9 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
             label: 'Status',
             render: (group) => (
               <span>
-                <StatusPill tone={group.state === 'current' ? 'success' : group.state === 'ending' ? 'warning' : 'neutral'} label={STATE_LABEL[group.state]} />
-                {group.state === 'ending' && <span className={formStyles.hint}> No tax from {firstUntaxedDay(group.liveVersion)}</span>}
+                <StatusPill tone={group.on ? 'success' : 'neutral'} label={group.on ? 'On' : 'Off'} />
+                {group.on && group.ending && <span className={formStyles.hint}> No tax from {firstUntaxedDay(group.liveVersion)}</span>}
+                {group.switchedOn && !group.liveVersion && <span className={formStyles.hint}> Ended {String(group.versions[0].effective_to).slice(0, 10)}</span>}
               </span>
             ),
           },
@@ -236,21 +230,17 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
                     return (
                       <span>
                         <span className={formStyles.actionsRow}>
-                          {group.state === 'current' && (
-                            <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('deactivate', group.code)}>
-                              Deactivate
-                            </Button>
-                          )}
-                          {group.state === 'ending' && (
-                            <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('changeEnd', group.code, firstUntaxedDay(group.liveVersion))}>
-                              Change end date
-                            </Button>
-                          )}
-                          {group.state === 'inactive' && (
-                            <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('reactivate', group.code)}>
-                              Reactivate
-                            </Button>
-                          )}
+                          <label className={formStyles.switchLabel}>
+                            <input
+                              type="checkbox"
+                              role="switch"
+                              checked={group.on}
+                              aria-label={`${group.code} charged on new bills`}
+                              disabled={isOffline}
+                              onChange={() => startAction('switch', group.code, !group.on)}
+                            />
+                            <span>{group.on ? 'On' : 'Off'}</span>
+                          </label>
                           <Button
                             size="compact"
                             variant="secondary"
@@ -308,7 +298,7 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
 
       {!canManage ? (
         <Card title="Add a tax or change a rate">
-          <p className={formStyles.disabledNotice}>Only a super admin can add a tax, change a rate, or reactivate, deactivate or delete a tax.</p>
+          <p className={formStyles.disabledNotice}>Only a super admin can add a tax, change a rate, switch a tax on or off, or delete a tax.</p>
         </Card>
       ) : (
       <Card title="Add a tax or change a rate">
@@ -418,76 +408,22 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
       </Card>
       )}
 
-      {action?.kind === 'deactivate' && (
+      {action?.kind === 'switch' && (
         <ConfirmDialog
-          title={`Deactivate ${action.taxCode}`}
-          consequence={`"${action.taxCode}" stops applying to new charges from the date below. Folios, receipts and reports already recorded keep the tax they were charged. To bring it back later, add a new version.`}
-          requireReason
-          confirmLabel={submitting ? 'Saving…' : 'Deactivate'}
-          confirmDisabled={submitting || pastDate}
+          title={`Switch ${action.taxCode} ${action.enabled ? 'on' : 'off'}`}
+          consequence={
+            action.enabled
+              ? `"${action.taxCode}" is charged on every new bill straight away. Bills already made are not changed.`
+              : `"${action.taxCode}" is not charged on any new bill straight away. Bills already made keep the tax they were charged.`
+          }
+          confirmLabel={submitting ? 'Saving…' : action.enabled ? 'Switch on' : 'Switch off'}
+          confirmDisabled={submitting}
           onConfirm={handleAction}
           onCancel={() => setAction(null)}
         >
           <label className={formStyles.field}>
-            <span className={formStyles.label}>Stops applying from</span>
-            <input
-              className={formStyles.input}
-              type="date"
-              value={deactivateFrom || businessDate}
-              min={businessDate || undefined}
-              onChange={(event) => setDeactivateFrom(event.target.value)}
-            />
-            <span className={formStyles.hint}>Defaults to the business date. Past dates are not allowed.</span>
-          </label>
-        </ConfirmDialog>
-      )}
-
-      {action?.kind === 'changeEnd' && (
-        <ConfirmDialog
-          title={`Change end date of ${action.taxCode}`}
-          consequence={`"${action.taxCode}" is charged on bills dated before the date below and not on that date or after. Folios, receipts and reports already recorded keep the tax they were charged.`}
-          requireReason
-          confirmLabel={submitting ? 'Saving…' : 'Change end date'}
-          confirmDisabled={submitting || pastDate || endNotAfterStart || deactivateFrom === ''}
-          onConfirm={handleAction}
-          onCancel={() => setAction(null)}
-        >
-          <label className={formStyles.field}>
-            <span className={formStyles.label}>No tax from</span>
-            <input
-              className={formStyles.input}
-              type="date"
-              value={deactivateFrom}
-              min={businessDate || undefined}
-              onChange={(event) => setDeactivateFrom(event.target.value)}
-            />
-            <span className={formStyles.hint}>
-              The first day the tax is not charged. It can be the business date, not an earlier day, and must be after the start date ({changeEndStart}).
-            </span>
-          </label>
-        </ConfirmDialog>
-      )}
-
-      {action?.kind === 'reactivate' && (
-        <ConfirmDialog
-          title={`Reactivate ${action.taxCode}`}
-          consequence={`"${action.taxCode}" starts applying again from the date below, with the same rate and settings as its last version. Bills dated before that date, including any in the gap, stay untaxed.`}
-          requireReason
-          confirmLabel={submitting ? 'Saving…' : 'Reactivate'}
-          confirmDisabled={submitting || pastDate}
-          onConfirm={handleAction}
-          onCancel={() => setAction(null)}
-        >
-          <label className={formStyles.field}>
-            <span className={formStyles.label}>Applies again from</span>
-            <input
-              className={formStyles.input}
-              type="date"
-              value={deactivateFrom || businessDate}
-              min={businessDate || undefined}
-              onChange={(event) => setDeactivateFrom(event.target.value)}
-            />
-            <span className={formStyles.hint}>Defaults to the business date. Past dates are not allowed.</span>
+            <span className={formStyles.label}>Note (optional)</span>
+            <input className={formStyles.input} value={note} maxLength={200} onChange={(event) => setNote(event.target.value)} />
           </label>
         </ConfirmDialog>
       )}
@@ -495,7 +431,7 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
       {action?.kind === 'delete' && (
         <ConfirmDialog
           title={`Delete ${action.taxCode}`}
-          consequence={`This permanently deletes "${action.taxCode}" and every version of it. It is only allowed if no folio, POS sale or supermarket sale could have used it; otherwise you will be asked to deactivate it instead.`}
+          consequence={`This permanently deletes "${action.taxCode}" and every version of it. It is only allowed if no folio, POS sale or supermarket sale could have used it; otherwise you will be asked to switch it off instead.`}
           requireReason
           confirmLabel={submitting ? 'Deleting…' : 'Delete tax'}
           confirmDisabled={submitting}

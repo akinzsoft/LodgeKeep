@@ -231,16 +231,8 @@ export function createTaxVersion(body) {
   return request('/taxes', { method: 'POST', body });
 }
 
-export function deactivateTax(taxCode, body) {
-  return request(`/taxes/${encodeURIComponent(taxCode)}/deactivate`, { method: 'POST', body });
-}
-
-export function changeTaxEndDate(taxCode, body) {
-  return request(`/taxes/${encodeURIComponent(taxCode)}/change-end-date`, { method: 'POST', body });
-}
-
-export function reactivateTax(taxCode, body) {
-  return request(`/taxes/${encodeURIComponent(taxCode)}/reactivate`, { method: 'POST', body });
+export function setTaxEnabled(taxCode, body) {
+  return request(`/taxes/${encodeURIComponent(taxCode)}/set-enabled`, { method: 'POST', body });
 }
 
 export function deleteTax(taxCode, body) {

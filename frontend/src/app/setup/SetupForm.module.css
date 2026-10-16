@@ -141,3 +141,24 @@
   font-size: var(--text-label-size);
   font-weight: var(--text-label-weight);
 }
+
+.switchLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  font-size: var(--text-label-size);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.switchLabel input {
+  width: var(--space-5);
+  height: var(--space-5);
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.switchLabel input:disabled {
+  cursor: not-allowed;
+}
