@@ -48,6 +48,7 @@ const ALL_PERMISSION_KEYS = Object.freeze([
   'reports.view_business',
   'cashiering.post_charge',
   'cashiering.void_line',
+  'cashiering.backdate',
   'night_audit.view',
   'night_audit.run',
   'pos.operate',
@@ -119,7 +120,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
   manager: [
     'reservations.view', 'reservations.manage',
     'front_desk.view', 'front_desk.manage',
-    'cashiering.post_charge', 'cashiering.void_line',
+    'cashiering.post_charge', 'cashiering.void_line', 'cashiering.backdate',
     'housekeeping.view', 'housekeeping.operate', 'housekeeping.manage',
     'pos.operate', 'pos.manage', 'pos.service_charge.manage',
     'pos.stock_view', 'pos.stock_manage', 'pos.stock_cost_edit', 'pos.stock_transfer', 'pos.stock_request',

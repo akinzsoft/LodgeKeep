@@ -101,7 +101,23 @@ class CannotPayArBilledFolioDirectlyError extends AppError {
   }
 }
 
+/** A client-chosen business date earlier than the current one, by a user without `cashiering.backdate`. */
+class BackdatingNotPermittedError extends AppError {
+  constructor(businessDate) {
+    super('FORBIDDEN_BACKDATING', `Only the current business date can be used. Posting to ${businessDate} needs the back-dating permission.`, 403, { businessDate });
+  }
+}
+
+/** Night Audit has closed that business day: nothing is posted to it again, by anyone. */
+class BusinessDayClosedError extends AppError {
+  constructor(businessDate) {
+    super('BUSINESS_RULE_BUSINESS_DAY_CLOSED', `Business day ${businessDate} has been closed by Night Audit, so nothing can be posted to it.`, 422, { businessDate });
+  }
+}
+
 module.exports = {
+  BackdatingNotPermittedError,
+  BusinessDayClosedError,
   FolioClosedError,
   LineItemAlreadyVoidedError,
   InvalidPaymentTransitionError,

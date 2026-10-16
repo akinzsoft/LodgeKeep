@@ -1846,7 +1846,7 @@ describe('Reservations + Front Desk (PLAN.md Phase 2)', () => {
       // Owe 100.00, pay 400.00 in cash through the real endpoint: a 300.00 credit.
       await t.trx('folios').where({ id: folio.id }).update({ balance: '100.00' });
       await t.trx('folio_line_items').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, folio_id: folio.id, type: 'adjustment', description: 'Charge', amount: '100.00', currency: folio.currency, business_date: '2027-12-14' });
-      const paid = await t.request.post(`/api/v1/cashiering/folios/${folio.id}/payments/cash`).set(auth()).set('Idempotency-Key', idemKey()).send({ amount: '400.00', currency: folio.currency, business_date: '2027-12-14' });
+      const paid = await t.request.post(`/api/v1/cashiering/folios/${folio.id}/payments/cash`).set(auth()).set('Idempotency-Key', idemKey()).send({ amount: '400.00', currency: folio.currency });
       expect(paid.status).toBe(201);
       expect((await t.trx('folios').where({ id: folio.id }).first()).balance).toBe('-300.00');
 

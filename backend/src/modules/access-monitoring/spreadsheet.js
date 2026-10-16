@@ -29,6 +29,53 @@ const XLSX = require('xlsx');
 const { ValidationError } = require('../../shared/errors');
 
 const MAX_ROWS = 50000;
+const MAX_COLUMNS = 100;
+/** The route's multer cap uses this too: a lock export of 50,000 rows is a few MB, so this is generous. */
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MAX_UNZIPPED_BYTES = 64 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 1000;
+
+/** Total size an .xlsx may expand to once unzipped (`DOOR_ACCESS_MAX_UNZIPPED_BYTES`; a garbage value falls back to the default). */
+function maxUnzippedBytes() {
+  const raw = process.env.DOOR_ACCESS_MAX_UNZIPPED_BYTES;
+  return typeof raw === 'string' && /^\d+$/.test(raw.trim()) && Number(raw) > 0 ? Number(raw) : DEFAULT_MAX_UNZIPPED_BYTES;
+}
+
+const tooLarge = (message) => new ValidationError('DOOR_ACCESS_FILE_TOO_LARGE', message);
+
+/**
+ * A zip bomb is a tiny file that unzips to gigabytes, and SheetJS inflates the whole archive before any row limit can
+ * apply. So an .xlsx (a zip: "PK" signature) has its central directory read first and is refused when the sizes it
+ * DECLARES add up to more than the cap, when it has too many entries, or when it uses ZIP64 (not needed for a lock
+ * export). Declared sizes are what the archive claims; this is a cheap first gate, not a substitute for the upload cap
+ * and the row cap. A buffer that is not a readable zip is left for the parser to report as unreadable.
+ */
+function assertSafeArchive(buffer) {
+  if (buffer.length < 22 || buffer.readUInt32LE(0) !== 0x04034b50) return;
+  const searchFrom = Math.max(0, buffer.length - 22 - 0xffff);
+  let eocd = -1;
+  for (let i = buffer.length - 22; i >= searchFrom; i -= 1) {
+    if (buffer.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return;
+  const entries = buffer.readUInt16LE(eocd + 10);
+  let offset = buffer.readUInt32LE(eocd + 16);
+  if (entries === 0xffff || offset === 0xffffffff) throw tooLarge('That workbook uses an archive format that is too large for an import.');
+  if (entries > MAX_ZIP_ENTRIES) throw tooLarge(`That workbook has too many parts (limit ${MAX_ZIP_ENTRIES}).`);
+  const cap = maxUnzippedBytes();
+  let total = 0;
+  for (let n = 0; n < entries; n += 1) {
+    if (offset + 46 > buffer.length || buffer.readUInt32LE(offset) !== 0x02014b50) return; // damaged directory: the parser reports it
+    const size = buffer.readUInt32LE(offset + 24);
+    if (size === 0xffffffff) throw tooLarge('That workbook uses an archive format that is too large for an import.');
+    total += size;
+    if (total > cap) throw tooLarge('That workbook expands to more data than one import allows. Export a shorter date range.');
+    offset += 46 + buffer.readUInt16LE(offset + 28) + buffer.readUInt16LE(offset + 30) + buffer.readUInt16LE(offset + 32);
+  }
+}
 
 /** A cell as the mapping layer consumes it: a trimmed string, or decoded date fields for a real date cell. */
 function cellValue(cell) {
@@ -78,9 +125,12 @@ function readSpreadsheet(buffer) {
     throw new ValidationError('DOOR_ACCESS_FILE_EMPTY', 'The uploaded file is empty.');
   }
 
+  assertSafeArchive(buffer);
+
   let workbook;
   try {
-    workbook = XLSX.read(buffer, { type: 'buffer', raw: true, cellNF: true, dense: false });
+    // `sheetRows` makes SheetJS stop after the row cap (+ header + one to detect an overflow) instead of parsing the whole sheet.
+    workbook = XLSX.read(buffer, { type: 'buffer', raw: true, cellNF: true, dense: false, sheetRows: MAX_ROWS + 2 });
   } catch {
     throw new ValidationError('DOOR_ACCESS_FILE_UNREADABLE', 'The uploaded file could not be read as a spreadsheet (.xls, .xlsx or .csv).');
   }
@@ -92,6 +142,9 @@ function readSpreadsheet(buffer) {
   }
 
   const range = XLSX.utils.decode_range(sheet['!ref']);
+  if (range.e.c - range.s.c + 1 > MAX_COLUMNS) {
+    throw tooLarge(`A single import is limited to ${MAX_COLUMNS} columns.`);
+  }
   const cellAt = (r, c) => sheet[XLSX.utils.encode_cell({ r, c })];
 
   const rawHeaders = [];
@@ -102,7 +155,7 @@ function readSpreadsheet(buffer) {
   const headers = uniqueHeaders(rawHeaders.map((h) => (h && typeof h === 'object' ? null : h)));
 
   if (range.e.r - range.s.r > MAX_ROWS) {
-    throw new ValidationError('DOOR_ACCESS_FILE_TOO_LARGE', `A single import is limited to ${MAX_ROWS} rows.`);
+    throw tooLarge(`A single import is limited to ${MAX_ROWS} rows.`);
   }
 
   const rows = [];
@@ -135,4 +188,4 @@ function distinctValuesByHeader(headers, rows, limit = 25) {
   return result;
 }
 
-module.exports = { readSpreadsheet, distinctValuesByHeader, MAX_ROWS };
+module.exports = { readSpreadsheet, distinctValuesByHeader, MAX_ROWS, MAX_UPLOAD_BYTES };

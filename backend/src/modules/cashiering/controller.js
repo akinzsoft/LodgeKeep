@@ -21,7 +21,7 @@ const { runIdempotentMutation, requireIdempotencyKey } = require('../../shared/m
 const { scopedDb } = require('../../db');
 const { hasPermission } = require('../../auth/rbac');
 const { PermissionDeniedError } = require('../../auth/errors');
-const { assertPaymentAmount } = require('../../shared/payment-amount');
+const { assertPaymentAmount, assertAdjustmentAmount } = require('../../shared/payment-amount');
 const { compareMoney } = require('../../shared/money');
 const service = require('./service');
 const terminalAccounts = require('./terminal-accounts');
@@ -51,6 +51,27 @@ async function assertCanOverrideCreditLimit(req) {
   const granted = await hasPermission(db, req.role, 'ar.manage');
   if (!granted) throw new PermissionDeniedError('ar.manage', req.role);
 }
+
+/**
+ * The business date a client-sent `business_date` resolves to, or `{}` when none was sent (F-03, product audit).
+ * `backdated` is true for a permitted past day; callers put it on the audit row. See
+ * `service.resolveClientBusinessDate` for the rules; the only thing decided here is whether this user holds
+ * `cashiering.backdate`.
+ */
+async function resolveBusinessDate(req, trx, folioId) {
+  const clientDate = req.body?.business_date;
+  if (clientDate === undefined || clientDate === null) return { businessDate: undefined, backdated: false };
+  const canBackdate = await hasPermission(scopedDb().for(req.context), req.role, 'cashiering.backdate');
+  return service.resolveClientBusinessDate({ trx, folioId, clientDate, canBackdate });
+}
+
+/** A payment's audit extras: the deposit flag and/or the back-dating marker; nothing when neither applies (an ordinary payment's audit row is unchanged). */
+function paymentAudit(deposit, resolved) {
+  const extras = { ...(deposit ? { deposit: true } : {}), ...(backdatedAudit(resolved) ?? {}) };
+  return Object.keys(extras).length ? extras : undefined;
+}
+
+const backdatedAudit = (resolved) => (resolved?.backdated ? { backdated: true, business_date: resolved.businessDate } : undefined);
 
 // ---------------------------------------------------------------------
 // Folios
@@ -143,20 +164,24 @@ async function postCharge(req, res, next) {
   try {
     const type = require_(req.body, 'type');
     const description = require_(req.body, 'description');
-    const amount = require_(req.body, 'amount');
+    // A charge is always a positive amount (F-03); a discount is an adjustment, which needs `cashiering.void_line` and a reason.
+    const amount = assertPaymentAmount(req.body?.amount);
     if (req.body?.override_credit_limit) await assertCanOverrideCreditLimit(req);
+    let resolved;
     await runIdempotentMutation(req, res, {
       operationType: 'cashiering.post_charge',
       entityType: 'folio_line_items',
       action: 'post_charge',
+      auditExtras: () => ({ afterState: backdatedAudit(resolved) }),
       handler: async (trx) => {
+        resolved = await resolveBusinessDate(req, trx, req.params.folioId);
         const result = await service.postCharge({
           trx,
           folioId: req.params.folioId,
           type,
           description,
           amount,
-          businessDate: req.body?.business_date,
+          businessDate: resolved.businessDate,
           userId: req.context.userId,
           overrideCreditLimit: Boolean(req.body?.override_credit_limit),
           overrideReason: req.body?.override_reason,
@@ -172,21 +197,24 @@ async function postCharge(req, res, next) {
 async function postAdjustment(req, res, next) {
   try {
     const description = require_(req.body, 'description');
-    const amount = require_(req.body, 'amount');
+    const amount = assertAdjustmentAmount(req.body?.amount);
     const reason = require_(req.body, 'reason');
     if (req.body?.override_credit_limit) await assertCanOverrideCreditLimit(req);
+    let resolved;
     await runIdempotentMutation(req, res, {
       operationType: 'cashiering.post_adjustment',
       entityType: 'folio_line_items',
       action: 'post_adjustment',
+      auditExtras: () => ({ afterState: backdatedAudit(resolved) }),
       handler: async (trx) => {
+        resolved = await resolveBusinessDate(req, trx, req.params.folioId);
         const line = await service.postAdjustment({
           trx,
           folioId: req.params.folioId,
           description,
           amount,
           relatedLineItemId: req.body?.related_line_item_id,
-          businessDate: req.body?.business_date,
+          businessDate: resolved.businessDate,
           userId: req.context.userId,
           reason,
           overrideCreditLimit: Boolean(req.body?.override_credit_limit),
@@ -237,13 +265,15 @@ async function captureCashPayment(req, res, next) {
     const amount = require_(req.body, 'amount');
     const currency = require_(req.body, 'currency');
     let deposit = false;
+    let resolved;
     await runIdempotentMutation(req, res, {
       operationType: 'cashiering.capture_cash_payment',
       entityType: 'payments',
       action: 'capture_cash',
       // Only a real deposit adds the flag, so an ordinary payment's audit row is exactly what it always was.
-      auditExtras: () => ({ afterState: deposit ? { deposit: true } : undefined }),
+      auditExtras: () => ({ afterState: paymentAudit(deposit, resolved) }),
       handler: async (trx) => {
+        resolved = await resolveBusinessDate(req, trx, req.params.folioId);
         deposit = await exceedsFolioBalance(trx, req.params.folioId, amount);
         const payment = await service.captureCashPayment({
           trx,
@@ -252,7 +282,7 @@ async function captureCashPayment(req, res, next) {
           currency,
           idempotencyKey: req.get('Idempotency-Key'),
           userId: req.context.userId,
-          businessDate: req.body?.business_date,
+          businessDate: resolved.businessDate,
         });
         return { status: 201, body: ok(payment) };
       },
@@ -268,13 +298,15 @@ async function captureTerminalPayment(req, res, next) {
     const amount = require_(req.body, 'amount');
     const currency = require_(req.body, 'currency');
     let deposit = false;
+    let resolved;
     await runIdempotentMutation(req, res, {
       operationType: 'cashiering.capture_terminal_payment',
       entityType: 'payments',
       action: 'capture_terminal',
       // Only a real deposit adds the flag, so an ordinary payment's audit row is exactly what it always was.
-      auditExtras: () => ({ afterState: deposit ? { deposit: true } : undefined }),
+      auditExtras: () => ({ afterState: paymentAudit(deposit, resolved) }),
       handler: async (trx) => {
+        resolved = await resolveBusinessDate(req, trx, req.params.folioId);
         deposit = await exceedsFolioBalance(trx, req.params.folioId, amount);
         const payment = await service.captureTerminalPayment({
           trx,
@@ -283,7 +315,7 @@ async function captureTerminalPayment(req, res, next) {
           currency,
           idempotencyKey: req.get('Idempotency-Key'),
           userId: req.context.userId,
-          businessDate: req.body?.business_date,
+          businessDate: resolved.businessDate,
           terminal: { accountId: req.body?.account_id, reference: req.body?.reference },
         });
         return { status: 201, body: ok(payment) };
@@ -362,6 +394,7 @@ async function capturePaystackPayment(req, res, next) {
     const guestEmail = require_(req.body, 'guest_email');
     const key = requireIdempotencyKey(req);
     let deposit = false;
+    let resolved;
 
     const intentOutcome = await withIdempotency({
       context: req.context,

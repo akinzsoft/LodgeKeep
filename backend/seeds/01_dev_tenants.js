@@ -174,7 +174,7 @@ exports.seed = async function seed(knex) {
    * backfill shape as the functions above.
    */
   async function ensureManagerPhase25Access(tenantId) {
-    const keys = ['cashiering.post_charge', 'cashiering.void_line', 'night_audit.view', 'night_audit.run'];
+    const keys = ['cashiering.post_charge', 'cashiering.void_line', 'cashiering.backdate', 'night_audit.view', 'night_audit.run'];
     const permissions = await knex('permissions').whereIn('permission_key', keys).select('id', 'permission_key');
     if (permissions.length !== keys.length) return; // migrations not yet run — nothing to grant
     const managerRole = await knex('roles').where({ tenant_id: tenantId, code: 'manager' }).first('id');
