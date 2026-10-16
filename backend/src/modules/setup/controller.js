@@ -772,37 +772,18 @@ async function createTaxVersion(req, res, next) {
   }
 }
 
-async function deactivateTax(req, res, next) {
+async function setTaxEnabled(req, res, next) {
   try {
-    const reason = requireReason(req.body);
-    const result = await service.deactivateTax({ context: req.context, taxCode: req.params.taxCode, deactivateFrom: req.body?.deactivate_from });
+    if (typeof req.body?.enabled !== 'boolean') {
+      throw new ValidationError('MISSING_FIELD', '"enabled" is required and must be true or false.', [{ field: 'enabled', issue: 'missing' }]);
+    }
+    const note = typeof req.body?.note === 'string' && req.body.note.trim() ? req.body.note.trim() : undefined;
+    const result = await service.setTaxEnabled({ context: req.context, taxCode: req.params.taxCode, enabled: req.body.enabled });
     if (!result) return notFound(res);
-    await req.audit({ entityType: 'taxes', entityId: result.after.id, action: 'deactivate', beforeState: result.before, afterState: result.after, reason });
-    res.status(200).json(ok(result.after));
-  } catch (error) {
-    next(error);
-  }
-}
-
-async function changeTaxEndDate(req, res, next) {
-  try {
-    const reason = requireReason(req.body);
-    const result = await service.changeTaxEndDate({ context: req.context, taxCode: req.params.taxCode, endFrom: req.body?.end_from });
-    if (!result) return notFound(res);
-    await req.audit({ entityType: 'taxes', entityId: result.after.id, action: 'change_end_date', beforeState: result.before, afterState: result.after, reason });
-    res.status(200).json(ok(result.after));
-  } catch (error) {
-    next(error);
-  }
-}
-
-async function reactivateTax(req, res, next) {
-  try {
-    const reason = requireReason(req.body);
-    const result = await service.reactivateTax({ context: req.context, taxCode: req.params.taxCode, reactivateFrom: req.body?.reactivate_from });
-    if (!result) return notFound(res);
-    await req.audit({ entityType: 'taxes', entityId: result.after.id, action: 'reactivate', beforeState: result.before, afterState: result.after, reason });
-    res.status(201).json(ok(result.after));
+    if (!result.unchanged) {
+      await req.audit({ entityType: 'taxes', entityId: result.after.id, action: req.body.enabled ? 'switch_on' : 'switch_off', beforeState: result.before, afterState: result.after, reason: note });
+    }
+    res.status(200).json(ok({ tax_code: req.params.taxCode, enabled: req.body.enabled, changed: !result.unchanged }));
   } catch (error) {
     next(error);
   }
@@ -1083,9 +1064,7 @@ module.exports = {
   resolveRate,
   createTaxVersion,
   listTaxes,
-  deactivateTax,
-  changeTaxEndDate,
-  reactivateTax,
+  setTaxEnabled,
   deleteTax,
   resolveTax,
   createMarketSegment,

@@ -97,21 +97,15 @@ class TaxInUseError extends AppError {
     const total = usage.folioTaxLines + usage.posSettlements + usage.supermarketSales;
     super(
       'CONFLICT_TAX_IN_USE',
-      `Tax "${taxCode}" cannot be deleted: ${total} record${total === 1 ? '' : 's'} dated within its effective period carry tax (${usage.folioTaxLines} folio tax line${usage.folioTaxLines === 1 ? '' : 's'}, ${usage.posSettlements} POS settlement${usage.posSettlements === 1 ? '' : 's'}, ${usage.supermarketSales} supermarket sale${usage.supermarketSales === 1 ? '' : 's'}). Deactivate it instead: it stops applying to new charges and history is untouched.`,
+      `Tax "${taxCode}" cannot be deleted: ${total} record${total === 1 ? '' : 's'} dated within its effective period carry tax (${usage.folioTaxLines} folio tax line${usage.folioTaxLines === 1 ? '' : 's'}, ${usage.posSettlements} POS settlement${usage.posSettlements === 1 ? '' : 's'}, ${usage.supermarketSales} supermarket sale${usage.supermarketSales === 1 ? '' : 's'}). Switch it off instead: it stops being charged on new bills and history is untouched.`,
       409,
       { taxCode, usage, total }
     );
   }
 }
 
-/** Deactivation was asked for a tax with no open version, or at a date that is in the past or not after the version's start. */
-class TaxDeactivationError extends AppError {
-  constructor(code, message, status = 422, details) {
-    super(code, message, status, details);
-  }
-}
-
-class TaxReactivationError extends AppError {
+/** Switching a tax on or off was refused (for example no business date to start a new version from). */
+class TaxSwitchError extends AppError {
   constructor(code, message, status = 422, details) {
     super(code, message, status, details);
   }
@@ -119,8 +113,7 @@ class TaxReactivationError extends AppError {
 
 module.exports = {
   TaxInUseError,
-  TaxReactivationError,
-  TaxDeactivationError,
+  TaxSwitchError,
   DuplicateEntryError,
   InvalidBulkRangeError,
   TaxEffectiveDateOverlapError,

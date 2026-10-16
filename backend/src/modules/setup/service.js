@@ -12,7 +12,7 @@
 const { scopedDb } = require('../../db');
 const imageStore = require('../../shared/image-store');
 const { withDuplicateMapping, ValidationError } = require('../../shared/errors');
-const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError, TaxInUseError, TaxDeactivationError, TaxReactivationError } = require('./errors');
+const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError, TaxInUseError, TaxSwitchError } = require('./errors');
 const { encrypt } = require('../../shared/encryption');
 const { resolveEmailAdapter, describeEmailDelivery, isUndeliverable, NoMailboxConfiguredError } = require('../notifications/email-adapter');
 const paystackAdapter = require('../cashiering/paystack-adapter');
@@ -880,6 +880,9 @@ async function createTaxVersion({ context, taxCode, name, rate, effectiveFrom, i
   const db = scopedDb().for(context);
 
   return db.transaction(async (trx) => {
+    // A new version inherits the code's current on/off state, so a rate change never flips the switch.
+    const latest = await trx.table('taxes').where({ tax_code: taxCode }).orderBy('effective_from', 'desc').forUpdate().first();
+    const inheritedEnabled = latest ? latest.enabled !== 0 && latest.enabled !== false : true;
     const previous = await trx
       .table('taxes')
       .where({ tax_code: taxCode })
@@ -914,6 +917,7 @@ async function createTaxVersion({ context, taxCode, name, rate, effectiveFrom, i
           rounding_method: roundingMethod ?? 'half_up',
           jurisdiction: jurisdiction ?? null,
           applies_to: appliesTo ?? 'all',
+          enabled: inheritedEnabled,
         });
         return trx.table('taxes').where({ id }).first();
       }
@@ -975,111 +979,53 @@ async function countTaxUsage(trx, versions) {
 
 const usageTotal = (usage) => usage.folioTaxLines + usage.posSettlements + usage.supermarketSales;
 
-/**
- * Deactivate a tax: stop it applying from `deactivateFrom` (the first day it
- * no longer applies; default the business date). Closes the open version by
- * setting `effective_to` to the day before — the field the engine already
- * honours, so nothing about how any existing date resolves changes. Past
- * dates are refused. Reactivating is a new version.
- */
-async function deactivateTax({ context, taxCode, deactivateFrom }) {
-  const db = scopedDb().for(context);
-  return db.transaction(async (trx) => {
-    const property = await trx.table('properties').where({ id: context.propertyId }).first();
-    const businessDate = property?.current_business_date;
-    const versions = await trx.table('taxes').where({ tax_code: taxCode }).orderBy('effective_from', 'desc').forUpdate();
-    if (versions.length === 0) return null;
-    const from = deactivateFrom ?? (businessDate ? String(businessDate).slice(0, 10) : undefined);
-    if (!from || !/^\d{4}-\d{2}-\d{2}$/.test(String(from))) {
-      throw new TaxDeactivationError('VALIDATION_INVALID_DATE', 'A valid deactivation date (YYYY-MM-DD) is required.', 400);
-    }
-    const open = versions.find((v) => !v.effective_to);
-    if (!open) throw new TaxDeactivationError('CONFLICT_TAX_ALREADY_INACTIVE', `Tax "${taxCode}" is already inactive.`, 409);
-    if (businessDate && from < String(businessDate).slice(0, 10)) {
-      throw new TaxDeactivationError('BUSINESS_RULE_TAX_DEACTIVATION_IN_PAST', `A tax cannot be deactivated from a past date (the business date is ${String(businessDate).slice(0, 10)}).`, 422);
-    }
-    if (from <= open.effective_from) {
-      throw new TaxDeactivationError('BUSINESS_RULE_TAX_DEACTIVATION_BEFORE_START', `Tax "${taxCode}" only starts on ${open.effective_from}; choose a later date, or delete the tax if it has never been used.`, 422);
-    }
-    await trx.table('taxes').where({ id: open.id }).update({ effective_to: dayBefore(from) });
-    return { before: open, after: await trx.table('taxes').where({ id: open.id }).first() };
-  });
+/** The tax's effective on/off state: switched on AND still live on the business date (an expired end date counts as off). */
+function isTaxLive(versions, businessDate) {
+  if (versions.some((v) => !v.effective_to)) return true;
+  return Boolean(businessDate) && versions.some((v) => String(v.effective_to).slice(0, 10) >= businessDate);
 }
 
 /**
- * Change the end date of a tax that is "Scheduled to end" (no open version, one still live on the business date).
- * `endFrom` is the first day the tax no longer applies, the same exclusive meaning as deactivation, so the stored
- * `effective_to` becomes the day before. It may be the business date itself, never earlier, and must fall after the
- * version's own start so the tax keeps at least one taxed day. Only that version's `effective_to` moves; nothing else
- * about how any date resolves changes.
+ * Switch a tax On or Off, for every version of the code at once. No dates: Off means the tax is not charged on any
+ * new bill from the next read, On means it is. Bills already made are never touched. The flag lives on each row so a
+ * backdated lookup resolves to the same state. Switching On a tax that has no live version (it was ended under the old
+ * date system) adds a new version from the business date copying the last one, so earlier dates resolve as they did.
+ * Returns `{unchanged: true}` when the tax is already in the requested state.
  */
-async function changeTaxEndDate({ context, taxCode, endFrom }) {
+async function setTaxEnabled({ context, taxCode, enabled }) {
   const db = scopedDb().for(context);
   return db.transaction(async (trx) => {
     const property = await trx.table('properties').where({ id: context.propertyId }).first();
     const businessDate = property?.current_business_date ? String(property.current_business_date).slice(0, 10) : undefined;
     const versions = await trx.table('taxes').where({ tax_code: taxCode }).orderBy('effective_from', 'desc').forUpdate();
     if (versions.length === 0) return null;
-    const realDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d)) && !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === String(d);
-    if (!endFrom || !realDate(endFrom)) {
-      throw new TaxDeactivationError('VALIDATION_INVALID_DATE', 'A valid end date (YYYY-MM-DD) is required.', 400);
-    }
-    const ending = !versions.some((v) => !v.effective_to) && versions.find((v) => v.effective_to && businessDate && String(v.effective_to).slice(0, 10) >= businessDate);
-    if (!ending) {
-      throw new TaxDeactivationError('CONFLICT_TAX_NOT_SCHEDULED_TO_END', `Tax "${taxCode}" is not scheduled to end, so it has no end date to change.`, 409);
-    }
-    if (endFrom < businessDate) {
-      throw new TaxDeactivationError('BUSINESS_RULE_TAX_END_DATE_IN_PAST', `The end date cannot be before the business date (${businessDate}).`, 422);
-    }
-    if (endFrom <= String(ending.effective_from).slice(0, 10)) {
-      throw new TaxDeactivationError('BUSINESS_RULE_TAX_DEACTIVATION_BEFORE_START', `Tax "${taxCode}" only starts on ${String(ending.effective_from).slice(0, 10)}; choose a later date.`, 422);
-    }
-    const effectiveTo = dayBefore(endFrom);
-    if (effectiveTo === String(ending.effective_to).slice(0, 10)) {
-      throw new TaxDeactivationError('BUSINESS_RULE_TAX_END_DATE_UNCHANGED', `Tax "${taxCode}" already stops applying from ${endFrom}.`, 422);
-    }
-    await trx.table('taxes').where({ id: ending.id }).update({ effective_to: effectiveTo });
-    return { before: ending, after: await trx.table('taxes').where({ id: ending.id }).first() };
-  });
-}
-
-/**
- * Reactivate a deactivated tax: a NEW version copying the last version's rate, settings and `applies_to`,
- * effective from `reactivateFrom` (default the business date; past dates refused). The previous version is
- * never touched, so a gap between the two stays untaxed — nothing is backfilled. Refused while the tax still
- * has a live version (open, or closed only from a date that has not arrived yet).
- */
-async function reactivateTax({ context, taxCode, reactivateFrom }) {
-  const db = scopedDb().for(context);
-  return db.transaction(async (trx) => {
-    const property = await trx.table('properties').where({ id: context.propertyId }).first();
-    const businessDate = property?.current_business_date ? String(property.current_business_date).slice(0, 10) : undefined;
-    const versions = await trx.table('taxes').where({ tax_code: taxCode }).orderBy('effective_from', 'desc').forUpdate();
-    if (versions.length === 0) return null;
-    const from = reactivateFrom ?? businessDate;
-    if (!from || !/^\d{4}-\d{2}-\d{2}$/.test(String(from))) {
-      throw new TaxReactivationError('VALIDATION_INVALID_DATE', 'A valid reactivation date (YYYY-MM-DD) is required.', 400);
-    }
-    const live = versions.find((v) => !v.effective_to || (businessDate && String(v.effective_to).slice(0, 10) >= businessDate));
-    if (live) throw new TaxReactivationError('CONFLICT_TAX_ALREADY_ACTIVE', `Tax "${taxCode}" is already active; there is nothing to reactivate.`, 409);
-    if (businessDate && from < businessDate) {
-      throw new TaxReactivationError('BUSINESS_RULE_TAX_REACTIVATION_IN_PAST', `A tax cannot be reactivated from a past date (the business date is ${businessDate}).`, 422);
-    }
+    const live = isTaxLive(versions, businessDate);
+    const currentlyOn = live && versions.every((v) => v.enabled !== 0 && v.enabled !== false);
     const last = versions[0];
-    const [id] = await trx.table('taxes').insert({
-      tax_code: last.tax_code,
-      name: last.name,
-      rate: last.rate,
-      effective_from: from,
-      is_inclusive: last.is_inclusive,
-      calculation_method: last.calculation_method,
-      priority: last.priority,
-      is_compound: last.is_compound,
-      rounding_method: last.rounding_method,
-      jurisdiction: last.jurisdiction,
-      applies_to: last.applies_to,
-    });
-    return { before: last, after: await trx.table('taxes').where({ id }).first() };
+    if (currentlyOn === enabled) return { unchanged: true, before: last, after: last };
+
+    if (enabled && !live) {
+      if (!businessDate) throw new TaxSwitchError('BUSINESS_RULE_NO_BUSINESS_DATE', 'The property has no business date yet, so the tax cannot be switched on.', 422);
+      await trx.table('taxes').where({ tax_code: taxCode }).update({ enabled: true });
+      await trx.table('taxes').insert({
+        tax_code: last.tax_code,
+        name: last.name,
+        rate: last.rate,
+        effective_from: businessDate,
+        is_inclusive: last.is_inclusive,
+        calculation_method: last.calculation_method,
+        priority: last.priority,
+        is_compound: last.is_compound,
+        rounding_method: last.rounding_method,
+        jurisdiction: last.jurisdiction,
+        applies_to: last.applies_to,
+        enabled: true,
+      });
+    } else {
+      await trx.table('taxes').where({ tax_code: taxCode }).update({ enabled });
+    }
+    const after = await trx.table('taxes').where({ tax_code: taxCode }).orderBy('effective_from', 'desc').first();
+    return { unchanged: false, before: last, after };
   });
 }
 
@@ -1114,7 +1060,7 @@ async function listTaxes({ context }) {
       const total = usageTotal(usage);
       usageByCode.set(code, { ...usage, total, deletable: total === 0 });
     }
-    return rows.map((row) => ({ ...row, usage: usageByCode.get(row.tax_code) }));
+    return rows.map((row) => ({ ...row, enabled: row.enabled !== 0 && row.enabled !== false, usage: usageByCode.get(row.tax_code) }));
   });
 }
 
@@ -1184,9 +1130,7 @@ module.exports = {
   resolveRateForDate,
   createTaxVersion,
   listTaxes,
-  deactivateTax,
-  changeTaxEndDate,
-  reactivateTax,
+  setTaxEnabled,
   deleteTax,
   countTaxUsage,
   resolveEffectiveTax,
