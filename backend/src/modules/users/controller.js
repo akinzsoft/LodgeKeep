@@ -86,7 +86,7 @@ async function deactivateUser(req, res, next) {
     const { id } = req.params;
     const before = await service.getUserAtActiveProperty({ context: req.context, id });
     if (!before) return notFound(res);
-    const user = await service.deactivateUser({ context: req.context, id });
+    const user = await service.deactivateUser({ context: req.context, id, actorRole: req.role, actorUserId: req.context.userId });
     await req.audit({ entityType: 'users', entityId: id, action: 'deactivate', beforeState: before, afterState: user });
     res.status(200).json(ok(user));
   } catch (error) {
@@ -100,7 +100,7 @@ async function changeUserRole(req, res, next) {
     const role = require_(req.body, 'role');
     const before = await service.getUserAtActiveProperty({ context: req.context, id });
     if (!before) return notFound(res);
-    const user = await service.changeUserRole({ context: req.context, id, role });
+    const user = await service.changeUserRole({ context: req.context, id, role, actorRole: req.role, actorUserId: req.context.userId });
     await req.audit({ entityType: 'user_property_access', entityId: id, action: 'change_role', beforeState: before, afterState: user });
     res.status(200).json(ok(user));
   } catch (error) {

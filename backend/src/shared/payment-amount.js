@@ -37,4 +37,24 @@ function assertPaymentAmount(amount) {
   return value;
 }
 
-module.exports = { assertPaymentAmount, maxPaymentAmount, DEFAULT_MAX_PAYMENT_AMOUNT };
+/**
+ * A folio ADJUSTMENT amount: signed (a negative one is a discount or write-off), non-zero, at most 2 decimals and no
+ * larger in size than the ceiling. Text, exponents, NaN and Infinity are refused.
+ */
+function assertAdjustmentAmount(amount) {
+  const value = typeof amount === 'string' || typeof amount === 'number' ? String(amount).trim() : '';
+  if (!/^-?\d+(\.\d{1,2})?$/.test(value)) {
+    throw new ValidationError('INVALID_AMOUNT', '"amount" must be an amount with at most 2 decimal places, negative for a discount.', [{ field: 'amount', issue: 'invalid' }]);
+  }
+  const magnitude = value.replace(/^-/, '');
+  if (toCents(magnitude) === 0n) {
+    throw new ValidationError('INVALID_AMOUNT', '"amount" must not be zero.', [{ field: 'amount', issue: 'zero' }]);
+  }
+  const max = maxPaymentAmount();
+  if (toCents(magnitude) > toCents(max)) {
+    throw new ValidationError('INVALID_AMOUNT', `"amount" must not exceed ${max} in size.`, [{ field: 'amount', issue: 'too_large', max }]);
+  }
+  return value;
+}
+
+module.exports = { assertAdjustmentAmount, assertPaymentAmount, maxPaymentAmount, DEFAULT_MAX_PAYMENT_AMOUNT };

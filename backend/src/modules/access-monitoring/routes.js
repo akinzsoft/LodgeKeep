@@ -15,7 +15,20 @@ const multer = require('multer');
 const controller = require('./controller');
 const { requirePermission, requireEntitlement } = require('../../auth');
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024, files: 1 } });
+const { MAX_UPLOAD_BYTES } = require('./spreadsheet');
+const { ValidationError } = require('../../shared/errors');
+
+const multerUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 } });
+/** `upload.single('file')`, but a file over the size cap is the same clear 400 every other import limit gives, not a raw multer error. */
+const upload = {
+  single: (field) => (req, res, next) =>
+    multerUpload.single(field)(req, res, (error) => {
+      if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+        return next(new ValidationError('DOOR_ACCESS_FILE_TOO_LARGE', `The file is larger than ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB. Export a shorter date range.`));
+      }
+      return next(error);
+    }),
+};
 const FEATURE_KEY = 'door_access_monitoring';
 
 function accessMonitoringRouter() {

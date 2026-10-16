@@ -27,7 +27,7 @@ const { writeOutboxEvent } = require('../../shared/outbox');
 const { writeAuthEvent, roleOutranksOrEquals } = require('../../auth');
 const notifications = require('../notifications/service');
 const { reserveInvitationResend } = require('../../shared/email-quota');
-const { RoleEscalationError, InvitationNotPendingError, InvitationResendLimitError } = require('./errors');
+const { RoleEscalationError, UserRankError, SelfRoleChangeError, SelfDeactivationError, LastSuperAdminError, InvitationNotPendingError, InvitationResendLimitError } = require('./errors');
 const { describeEmailDelivery } = require('../notifications/email-adapter');
 
 const INVITATION_TTL_DAYS = 7;
@@ -269,20 +269,57 @@ async function revokeInvitation({ context, id, actorRole, actorUserId }) {
   });
 }
 
+const { roleRank } = require('../../auth/roles');
+
+/**
+ * The tenant-wide guard behind "the last super_admin": distinct ACTIVE users holding `super_admin` at ANY property of
+ * the tenant, not counting `exceptUserId`'s super_admin rows at `exceptPropertyId` (or, with no property, any of that
+ * user's rows). Called inside the transaction, after the super_admin rows are locked, so two concurrent demotions
+ * cannot both see the other as the survivor.
+ */
+async function otherActiveSuperAdminExists(trx, { exceptUserId, exceptPropertyId }) {
+  const rows = await trx.acrossProperties().table('user_property_access').where({ role: 'super_admin' }).forUpdate().select('user_id', 'property_id');
+  const candidates = rows.filter((row) => !(String(row.user_id) === String(exceptUserId) && (exceptPropertyId == null || String(row.property_id) === String(exceptPropertyId))));
+  const ids = [...new Set(candidates.map((row) => String(row.user_id)))];
+  if (ids.length === 0) return false;
+  const active = await trx.table('users').whereIn('id', ids).where({ status: 'active' }).select('id');
+  return active.length > 0;
+}
+
+/** Highest rank the user holds at any property of the tenant (a super_admin elsewhere still outranks an admin here), and whether they hold `super_admin` anywhere. */
+async function targetRoles(trx, id) {
+  const rows = await trx.acrossProperties().table('user_property_access').where({ user_id: id }).select('role', 'property_id');
+  return { roles: rows.map((row) => row.role), isSuperAdminAnywhere: rows.some((row) => row.role === 'super_admin') };
+}
+
+/** Ends every live session of the user, with the reason on the session row and a `session_revoked` auth event. Returns how many were revoked. */
+async function revokeUserSessions(trx, { id, reason }) {
+  return trx.table('sessions').where({ user_id: id }).whereNull('revoked_at').update({ revoked_at: new Date(), revoked_reason: reason });
+}
+
 /**
  * Immediate, and revokes every existing session — PRODUCT_REQUIREMENTS.md
  * §3.16: "Deactivation is immediate and revokes sessions." The user record
  * survives (DATABASE.md §3) — this only flips `status`, never deletes.
+ *
+ * Same rank rule as invite / resend / revoke (an actor may only act on someone at or below their own rank, judged by
+ * the highest role the target holds at ANY property), never on yourself, and never on the tenant's last active
+ * super_admin (F-01, product audit).
  */
-async function deactivateUser({ context, id }) {
+async function deactivateUser({ context, id, actorRole, actorUserId }) {
   const db = scopedDb().for(context);
+  if (actorUserId != null && String(actorUserId) === String(id)) throw new SelfDeactivationError();
   const user = await db.transaction(async (trx) => {
+    const { roles, isSuperAdminAnywhere } = await targetRoles(trx, id);
+    const targetRank = Math.max(0, ...roles.map(roleRank));
+    if (roles.length && roleRank(actorRole) < targetRank) {
+      throw new UserRankError('You cannot deactivate a user whose role ranks above your own.');
+    }
+    if (isSuperAdminAnywhere && !(await otherActiveSuperAdminExists(trx, { exceptUserId: id, exceptPropertyId: null }))) {
+      throw new LastSuperAdminError();
+    }
     await trx.table('users').where({ id }).update({ status: 'inactive' });
-    await trx
-      .table('sessions')
-      .where({ user_id: id })
-      .whereNull('revoked_at')
-      .update({ revoked_at: new Date(), revoked_reason: 'user_deactivated' });
+    await revokeUserSessions(trx, { id, reason: 'user_deactivated' });
     return trx.table('users').where({ id }).first();
   });
   // auth_events.event_type has carried `user_deactivated` since Phase 0 —
@@ -300,14 +337,41 @@ async function deactivateUser({ context, id }) {
   return user;
 }
 
-/** Reassigns the role held at the active property — "assign role" for an existing user. Initial role assignment happens at invitation-acceptance time instead. */
-async function changeUserRole({ context, id, role }) {
+/**
+ * Reassigns the role held at the active property — "assign role" for an existing user. Initial role assignment
+ * happens at invitation-acceptance time instead.
+ *
+ * F-01: the actor must outrank-or-equal BOTH the target's current role here and the new role (so an admin can neither
+ * touch a super_admin nor make anyone, themselves included, a super_admin), cannot change their own role, and cannot
+ * remove the tenant's last active super_admin. A real change ends the target's sessions: their old token carries no
+ * role, but cached screens and long-lived refresh tokens should not outlive the privileges they were issued under.
+ */
+async function changeUserRole({ context, id, role, actorRole, actorUserId }) {
   const db = scopedDb().for(context);
+  if (actorUserId != null && String(actorUserId) === String(id)) throw new SelfRoleChangeError();
   const roleRow = await db.table('roles').where({ code: role, status: 'active' }).first();
   if (!roleRow) {
     throw new ValidationError('ROLE_NOT_FOUND', `"${role}" is not a valid role for this tenant.`);
   }
-  await db.table('user_property_access').where({ user_id: id }).update({ role });
+  if (!roleOutranksOrEquals(actorRole, role)) throw new UserRankError(`You cannot assign the "${role}" role: it ranks above your own role.`);
+  let changed = false;
+  await db.transaction(async (trx) => {
+    const current = await trx.table('user_property_access').where({ user_id: id }).forUpdate().first('role');
+    if (!current) return;
+    if (!roleOutranksOrEquals(actorRole, current.role)) {
+      throw new UserRankError('You cannot change the role of a user whose role ranks above your own.');
+    }
+    if (current.role === role) return;
+    if (current.role === 'super_admin' && !(await otherActiveSuperAdminExists(trx, { exceptUserId: id, exceptPropertyId: context.propertyId }))) {
+      throw new LastSuperAdminError();
+    }
+    await trx.table('user_property_access').where({ user_id: id }).update({ role });
+    await revokeUserSessions(trx, { id, reason: 'admin_revoked' });
+    changed = true;
+  });
+  if (changed) {
+    await writeAuthEvent({ audience: 'staff', eventType: 'session_revoked', tenantId: context.tenantId, propertyId: context.propertyId, userId: id });
+  }
   return getUserAtActiveProperty({ context, id });
 }
 

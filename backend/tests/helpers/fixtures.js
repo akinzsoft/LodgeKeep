@@ -2098,6 +2098,7 @@ async function seedTwoTenants(trx) {
   for (const [key, domain] of [
     ['cashiering.post_charge', 'cashiering'],
     ['cashiering.void_line', 'cashiering'],
+    ['cashiering.backdate', 'cashiering'],
     ['reports.view_financial', 'reports'],
     ['setup.view', 'setup'],
     ['setup.manage', 'setup'],
@@ -2161,10 +2162,13 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.cashier, permission_id: permissions['cashiering.void_line'] },
       { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['cashiering.post_charge'] },
       { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['cashiering.void_line'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['cashiering.backdate'] },
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['cashiering.post_charge'] },
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['cashiering.void_line'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['cashiering.backdate'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['cashiering.post_charge'] },
       { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['cashiering.void_line'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['cashiering.backdate'] },
     ]);
   }
 

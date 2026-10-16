@@ -56,6 +56,7 @@ const { ValidationError, withDuplicateMapping } = require('../../shared/errors')
 const { lastFour, accountDisplayName, normalizeAccountInput } = require('../../shared/terminal-account-input');
 const { createCategoryCatalogue } = require('../../shared/category-catalogue');
 const { sumMoney, negateMoney, compareMoney, percentOfMoney } = require('../../shared/money');
+const { assertTipAmount } = require('../../shared/tip-amount');
 // PLAN.md Phase 6 (QR self-ordering) promoted this out of this module once
 // a second caller (`qr-ordering/service.js`) needed the identical
 // per-item pricing computation to price a guest's cart before an order
@@ -1331,6 +1332,8 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
   if (!Array.isArray(settlements) || settlements.length === 0) {
     throw new ValidationError('MISSING_FIELD', 'At least one settlement is required.', [{ field: 'settlements', issue: 'missing' }]);
   }
+  // Every tip is checked before the order is even locked, so no settlement method can write a bad one (F-02).
+  const tipAmounts = settlements.map((settlement) => assertTipAmount(settlement.tipAmount));
 
   const order = await trx.table('pos_orders').where({ id: orderId }).forUpdate().first();
   if (!order) throw new OrderNotFoundError();
@@ -1395,14 +1398,14 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
   }
 
   const results = [];
-  for (const settlement of settlements) {
+  for (const [settlementIndex, settlement] of settlements.entries()) {
     if (!SETTLEMENT_METHODS.includes(settlement.method)) {
       throw new ValidationError('INVALID_SETTLEMENT_METHOD', `"${settlement.method}" is not a supported settlement method — use "cash", "card", "terminal", or "room_charge".`);
     }
 
     const groupItems = items.filter((item) => groupKey(item.split_group) === groupKey(settlement.splitGroup));
     const baseAmount = sumMoney(groupItems.map(computeItemLineTotal));
-    const tipAmount = settlement.tipAmount ?? '0.00';
+    const tipAmount = tipAmounts[settlementIndex];
     // The server always works the service charge out from the net below; nothing the client sends is
     // used. A guest QR settlement passes `serviceChargePercent` (the rate frozen when the guest placed
     // the order, null for none); every other settlement uses the outlet's staff Register rate.

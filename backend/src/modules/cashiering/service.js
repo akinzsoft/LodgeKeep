@@ -88,6 +88,8 @@ const {
   CannotVoidInvoicedLineError,
   CannotPayArBilledFolioDirectlyError,
   PaymentGatewayRecordMismatchError,
+  BackdatingNotPermittedError,
+  BusinessDayClosedError,
 } = require('./errors');
 
 const CHARGE_TYPES = new Set(['room_charge', 'pos_charge']);
@@ -131,6 +133,46 @@ async function getPayment({ context, id }) {
 async function propertyBusinessDate({ trx, propertyId }) {
   const property = await trx.table('properties').where({ id: propertyId }).first();
   return property?.current_business_date ?? null;
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Decides the business date a CLIENT asked a posting to carry (F-03, product audit). The date used to come straight
+ * from the request body, so anyone who could post could post into any day, closed or not.
+ *
+ *  - none sent: the caller falls back to the property's current business date (returned as `undefined`);
+ *  - not a real calendar date: 400 `VALIDATION_INVALID_BUSINESS_DATE`;
+ *  - the property's CURRENT BUSINESS DATE (`properties.current_business_date`, which moves only when Night Audit runs,
+ *    never the calendar date): allowed;
+ *  - later than it: 400 `VALIDATION_BUSINESS_DATE_IN_FUTURE`, for everyone;
+ *  - earlier: 403 `FORBIDDEN_BACKDATING` without `canBackdate`; and even with it, 422 `BUSINESS_RULE_BUSINESS_DAY_CLOSED`
+ *    when Night Audit has closed that day (a COMPLETED run or a `daily_reports` snapshot exists for it).
+ * Returns `{ businessDate, backdated }`.
+ */
+async function resolveClientBusinessDate({ trx, folioId, clientDate, canBackdate }) {
+  if (clientDate === undefined || clientDate === null) return { businessDate: undefined, backdated: false };
+  const invalid = () => new ValidationError('INVALID_BUSINESS_DATE', '"business_date" must be a real date written YYYY-MM-DD.', [{ field: 'business_date', issue: 'invalid' }]);
+  if (typeof clientDate !== 'string' || !ISO_DATE.test(clientDate)) throw invalid();
+  const parsed = new Date(`${clientDate}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== clientDate) throw invalid();
+
+  const folio = await trx.table('folios').where({ id: folioId }).first('property_id');
+  if (!folio) return { businessDate: clientDate, backdated: false }; // the posting itself reports the missing folio
+  const current = await propertyBusinessDate({ trx, propertyId: folio.property_id });
+  if (!current) {
+    throw new ValidationError('BUSINESS_DATE_NOT_SET', 'This property has no business date yet, so a business_date cannot be chosen.', [{ field: 'business_date', issue: 'not_set' }]);
+  }
+  const currentIso = String(current).slice(0, 10); // DATE columns come back as 'YYYY-MM-DD' strings (knexfile `dateStrings`)
+  if (clientDate === currentIso) return { businessDate: clientDate, backdated: false };
+  if (clientDate > currentIso) {
+    throw new ValidationError('BUSINESS_DATE_IN_FUTURE', `"business_date" cannot be after the current business date (${currentIso}).`, [{ field: 'business_date', issue: 'in_future' }]);
+  }
+  if (!canBackdate) throw new BackdatingNotPermittedError(clientDate);
+  const run = await trx.table('night_audit_runs').where({ property_id: folio.property_id, business_date: clientDate, status: 'COMPLETED' }).first('id');
+  const report = await trx.table('daily_reports').where({ property_id: folio.property_id, business_date: clientDate }).first('id');
+  if (run || report) throw new BusinessDayClosedError(clientDate);
+  return { businessDate: clientDate, backdated: true };
 }
 
 // ---------------------------------------------------------------------
@@ -1706,6 +1748,7 @@ async function sumPostedRoomChargesByDate({ db, dates, baseCurrency }) {
 }
 
 module.exports = {
+  resolveClientBusinessDate,
   captureTerminalPayment,
   setSupermarketCaptureFinalizer,
   resolvePayoutSubaccount,
