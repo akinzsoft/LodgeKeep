@@ -4,6 +4,12 @@ import { setupApi, ApiError } from '../../shared/api/index.js';
 import styles from './SetupScreen.module.css';
 import formStyles from './SetupForm.module.css';
 
+/** The stored effective_to is the last taxed day; the first untaxed day is the one after it (UTC-safe). */
+function firstUntaxedDay(version) {
+  const [y, m, d] = String(version.effective_to).slice(0, 10).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+}
+
 const STATE_LABEL = { current: 'Current', ending: 'Scheduled to end', inactive: 'Inactive' };
 
 function appliesToLabel(appliesTo) {
@@ -130,6 +136,8 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
     try {
       if (action.kind === 'deactivate') {
         await setupApi.deactivateTax(action.taxCode, { reason, ...(deactivateFrom ? { deactivate_from: deactivateFrom } : {}) });
+      } else if (action.kind === 'changeEnd') {
+        await setupApi.changeTaxEndDate(action.taxCode, { reason, end_from: deactivateFrom });
       } else if (action.kind === 'reactivate') {
         await setupApi.reactivateTax(action.taxCode, { reason, ...(deactivateFrom ? { reactivate_from: deactivateFrom } : {}) });
       } else {
@@ -155,8 +163,8 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
     });
   }
 
-  function startAction(kind, taxCode) {
-    setDeactivateFrom('');
+  function startAction(kind, taxCode, initialDate = '') {
+    setDeactivateFrom(initialDate);
     setAction({ kind, taxCode });
   }
 
@@ -167,6 +175,9 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
   const groups = groupTaxes(taxes ?? [], isLive);
   const taxesOff = groups.filter((g) => !g.liveVersion && g.versions.some((v) => v.applies_to === 'all' || v.applies_to === undefined)).map((g) => g.code);
   const pastDate = deactivateFrom !== '' && businessDate !== '' && deactivateFrom < businessDate;
+  const changeEndGroup = action?.kind === 'changeEnd' ? groups.find((g) => g.code === action.taxCode) : null;
+  const changeEndStart = changeEndGroup ? String(changeEndGroup.liveVersion.effective_from).slice(0, 10) : '';
+  const endNotAfterStart = changeEndStart !== '' && deactivateFrom !== '' && deactivateFrom <= changeEndStart;
 
   return (
     <div className={styles.page}>
@@ -195,7 +206,7 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
             render: (group) => (
               <span>
                 <StatusPill tone={group.state === 'current' ? 'success' : group.state === 'ending' ? 'warning' : 'neutral'} label={STATE_LABEL[group.state]} />
-                {group.state === 'ending' && <span className={formStyles.hint}> Ends {String(group.liveVersion.effective_to).slice(0, 10)}</span>}
+                {group.state === 'ending' && <span className={formStyles.hint}> No tax from {firstUntaxedDay(group.liveVersion)}</span>}
               </span>
             ),
           },
@@ -228,6 +239,11 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
                           {group.state === 'current' && (
                             <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('deactivate', group.code)}>
                               Deactivate
+                            </Button>
+                          )}
+                          {group.state === 'ending' && (
+                            <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('changeEnd', group.code, firstUntaxedDay(group.liveVersion))}>
+                              Change end date
                             </Button>
                           )}
                           {group.state === 'inactive' && (
@@ -422,6 +438,32 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
               onChange={(event) => setDeactivateFrom(event.target.value)}
             />
             <span className={formStyles.hint}>Defaults to the business date. Past dates are not allowed.</span>
+          </label>
+        </ConfirmDialog>
+      )}
+
+      {action?.kind === 'changeEnd' && (
+        <ConfirmDialog
+          title={`Change end date of ${action.taxCode}`}
+          consequence={`"${action.taxCode}" is charged on bills dated before the date below and not on that date or after. Folios, receipts and reports already recorded keep the tax they were charged.`}
+          requireReason
+          confirmLabel={submitting ? 'Saving…' : 'Change end date'}
+          confirmDisabled={submitting || pastDate || endNotAfterStart || deactivateFrom === ''}
+          onConfirm={handleAction}
+          onCancel={() => setAction(null)}
+        >
+          <label className={formStyles.field}>
+            <span className={formStyles.label}>No tax from</span>
+            <input
+              className={formStyles.input}
+              type="date"
+              value={deactivateFrom}
+              min={businessDate || undefined}
+              onChange={(event) => setDeactivateFrom(event.target.value)}
+            />
+            <span className={formStyles.hint}>
+              The first day the tax is not charged. It can be the business date, not an earlier day, and must be after the start date ({changeEndStart}).
+            </span>
           </label>
         </ConfirmDialog>
       )}
