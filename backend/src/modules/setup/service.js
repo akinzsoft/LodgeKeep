@@ -1020,7 +1020,7 @@ async function changeTaxEndDate({ context, taxCode, endFrom }) {
     const businessDate = property?.current_business_date ? String(property.current_business_date).slice(0, 10) : undefined;
     const versions = await trx.table('taxes').where({ tax_code: taxCode }).orderBy('effective_from', 'desc').forUpdate();
     if (versions.length === 0) return null;
-    const realDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d)) && new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === String(d);
+    const realDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d)) && !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === String(d);
     if (!endFrom || !realDate(endFrom)) {
       throw new TaxDeactivationError('VALIDATION_INVALID_DATE', 'A valid end date (YYYY-MM-DD) is required.', 400);
     }
