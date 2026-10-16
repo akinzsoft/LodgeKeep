@@ -14,7 +14,19 @@ const imageStore = require('../../shared/image-store');
 const { withDuplicateMapping, ValidationError } = require('../../shared/errors');
 const { InvalidBulkRangeError, TaxEffectiveDateOverlapError, EmailTestSendFailedError, TaxInUseError, TaxSwitchError } = require('./errors');
 const { encrypt } = require('../../shared/encryption');
-const { resolveEmailAdapter, describeEmailDelivery, isUndeliverable, NoMailboxConfiguredError } = require('../notifications/email-adapter');
+const {
+  resolveEmailAdapter,
+  describeEmailDelivery,
+  isUndeliverable,
+  undeliverableReason,
+  safeErrorText,
+  PROVIDER_PLATFORM,
+  PROVIDER_CUSTOM,
+  PROVIDER_CONSOLE,
+  NoMailboxConfiguredError,
+} = require('../notifications/email-adapter');
+const { resolveSafeSmtpHost, assertAllowedPort, isSingleEmailAddress, SMTP_SECURITY_MODES } = require('../../shared/smtp-guard');
+const { reservePlatformSend, platformUsageToday } = require('../../shared/email-quota');
 const paystackAdapter = require('../cashiering/paystack-adapter');
 const emailLayout = require('../notifications/email-layout');
 
@@ -253,45 +265,88 @@ async function listProperties({ context }) {
 // (AskUserQuestion-confirmed: per-property, stored in the database)
 // ---------------------------------------------------------------------
 
+/** Mode names the API speaks. Stored as provider: platform | smtp (= custom) | console. */
+const MODE_TO_PROVIDER = { platform: PROVIDER_PLATFORM, custom: PROVIDER_CUSTOM, console: PROVIDER_CONSOLE };
+
+function providerToMode(provider) {
+  return provider === PROVIDER_CUSTOM ? 'custom' : provider === PROVIDER_CONSOLE ? 'console' : 'platform';
+}
+
+/** `console` is a local-development stand-in only: never offered or accepted in production. */
+function consoleAllowed() {
+  return process.env.NODE_ENV !== 'production';
+}
+
 /**
- * A property's own email/SMTP configuration — never returns the decrypted
- * password (`smtp_password_set` is the boolean signal a form uses to show
- * a masked placeholder instead), the same "show that a secret exists,
- * never the secret itself" shape every dev-only-token disclosure in this
- * codebase already avoids in the OTHER direction (showing a real secret
- * only outside production, and only the once).
+ * A property's own email configuration. Never returns the encrypted or the
+ * decrypted password (`smtp_password_set` is the only signal), and never any
+ * platform credential.
  */
 async function getEmailSettings({ context }) {
   const db = scopedDb().for(context);
   const row = await db.table('email_settings').first();
   if (!row) return null;
   const { smtp_password_encrypted: _passwordEncrypted, ...rest } = row;
-  return { ...rest, smtp_password_set: Boolean(row.smtp_password_encrypted) };
+  return { ...rest, mode: providerToMode(row.provider), smtp_password_set: Boolean(row.smtp_password_encrypted) };
+}
+
+/** The settings with the password masked, for audit rows. */
+function maskEmailSettingsForAudit(settings) {
+  if (!settings) return null;
+  const { smtp_password_set: passwordSet, ...rest } = settings;
+  return { ...rest, smtp_password: passwordSet ? '***set***' : '***unset***' };
+}
+
+function emailSettingsInvalid(field, message) {
+  return new ValidationError('EMAIL_SETTINGS_INVALID', message, [{ field, issue: 'invalid' }]);
 }
 
 /**
- * Insert-if-missing / update-if-present — one row per property, the
- * migration's own `UNIQUE(tenant_id, property_id)`. `smtpPassword`
- * omitted or blank PRESERVES the existing encrypted password rather than
- * clearing it, since the real value is never sent back to the client to
- * resubmit unchanged — the standard "blank means unchanged" convention a
- * masked-password field needs.
+ * Insert-if-missing / update-if-present — one row per property. `mode` is
+ * 'platform' (the default), 'custom' or, outside production, 'console'.
+ *
+ * - platform: only the mode and the Reply-To change; any saved custom
+ *   settings are kept so switching back does not lose them.
+ * - custom: host (must resolve to a public address), port (25/465/587/2525),
+ *   TLS mode and From are validated; a blank password keeps the saved one.
  */
-async function upsertEmailSettings({ context, provider, smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpFromName }) {
-  const db = scopedDb().for(context);
-  const changes = {
-    provider,
-    smtp_host: smtpHost ?? null,
-    smtp_port: smtpPort ?? null,
-    smtp_user: smtpUser ?? null,
-    smtp_from: smtpFrom ?? null,
-    smtp_from_name: smtpFromName ?? null,
-  };
-  if (smtpPassword) {
-    changes.smtp_password_encrypted = encrypt(smtpPassword);
+async function upsertEmailSettings({ context, mode, replyTo, smtpHost, smtpPort, smtpSecurity, smtpUser, smtpPassword, smtpFrom, smtpFromName }) {
+  if (!MODE_TO_PROVIDER[mode]) throw emailSettingsInvalid('mode', 'Email mode must be "platform" or "custom".');
+  if (mode === 'console' && !consoleAllowed()) {
+    throw emailSettingsInvalid('mode', 'The console mode is only for local development and is not available in production.');
+  }
+  if (replyTo !== undefined && replyTo !== null && !isSingleEmailAddress(replyTo)) {
+    throw emailSettingsInvalid('reply_to', 'Reply-To must be a single email address.');
   }
 
+  const db = scopedDb().for(context);
   const existing = await db.table('email_settings').first();
+  const changes = { provider: MODE_TO_PROVIDER[mode] };
+  if (replyTo !== undefined) changes.reply_to = replyTo;
+
+  if (mode === 'custom') {
+    if (!smtpHost) throw emailSettingsInvalid('smtp_host', 'Enter your SMTP host.');
+    const port = smtpPort ?? 587;
+    if (!Number.isInteger(port)) throw emailSettingsInvalid('smtp_port', 'The SMTP port must be a number.');
+    assertAllowedPort(port);
+    const security = smtpSecurity ?? (port === 465 ? 'tls' : 'starttls');
+    if (!SMTP_SECURITY_MODES.includes(security)) throw emailSettingsInvalid('smtp_security', 'Security must be "tls" or "starttls".');
+    const from = smtpFrom || smtpUser;
+    if (!from || !isSingleEmailAddress(from)) {
+      throw emailSettingsInvalid('smtp_from', 'Enter a valid From address (or a username that is an email address).');
+    }
+    await resolveSafeSmtpHost(smtpHost);
+    Object.assign(changes, {
+      smtp_host: smtpHost,
+      smtp_port: port,
+      smtp_security: security,
+      smtp_user: smtpUser ?? null,
+      smtp_from: smtpFrom ?? null,
+      smtp_from_name: smtpFromName ?? null,
+    });
+    if (smtpPassword) changes.smtp_password_encrypted = encrypt(smtpPassword);
+  }
+
   if (existing) {
     await db.table('email_settings').where({ id: existing.id }).update(changes);
   } else {
@@ -306,29 +361,53 @@ async function upsertEmailSettings({ context, provider, smtpHost, smtpPort, smtp
 
 /**
  * Whether this property's emails actually get sent, and through which
- * mailbox — see `describeEmailDelivery`. Drives the warning on Setup →
- * Email settings and next to staff invitations.
+ * mailbox. Drives the status and warnings on Setup → Email and next to staff
+ * invitations. Contains no credentials, and says only "not configured" about
+ * the platform mailbox (what exactly is missing goes to the server log).
  */
 async function getEmailDeliveryStatus({ context }) {
   const db = scopedDb().for(context);
-  return describeEmailDelivery({ db, propertyId: context.propertyId });
+  const delivery = await describeEmailDelivery({ db, propertyId: context.propertyId });
+  const row = await db.table('email_settings').first();
+  const usage = delivery.mode === 'platform' ? await platformUsageToday({ tenantId: context.tenantId }) : null;
+  return {
+    ...delivery,
+    consoleAllowed: consoleAllowed(),
+    usage,
+    lastTest: row?.last_test_at ? { at: row.last_test_at, ok: Boolean(row.last_test_ok), error: row.last_test_error ?? null } : null,
+  };
 }
 
 /**
- * Sends a real test message through the property's currently-SAVED
- * configuration — via the exact same `resolveEmailAdapter` a real outbox
- * dispatch uses, so a passing test genuinely proves what a real send would
- * do, not a separate, parallel path that could quietly diverge from it.
- * Requires `upsertEmailSettings` to have already run at least once (there
- * is nothing to test against otherwise) — the frontend's own "Save, then
- * Send test email" two-step flow enforces this, matching how a masked
- * password field can only ever describe an already-saved secret.
+ * Sends a real test message to the SIGNED-IN USER's own address through the
+ * property's currently-saved configuration (the exact adapter a real send
+ * uses), records the result on the settings row, and reports a clear
+ * success or an error with secrets removed.
  */
-async function sendTestEmail({ context, to }) {
+async function sendTestEmail({ context }) {
   const db = scopedDb().for(context);
+  const user = context.userId ? await db.table('users').where({ id: context.userId }).first() : null;
+  if (!user?.email) throw emailSettingsInvalid('to', 'Your account has no email address to send the test to.');
   const adapter = await resolveEmailAdapter({ db, propertyId: context.propertyId });
-  // No mailbox at all: say so, rather than "sending" into the server log.
-  if (isUndeliverable(adapter)) throw new NoMailboxConfiguredError();
+
+  async function record(ok, error) {
+    if (adapter.mode === 'platform' || adapter.mode === 'custom') {
+      const row = await db.table('email_settings').first();
+      const values = { last_test_at: new Date(), last_test_ok: ok ? 1 : 0, last_test_error: error ? error.slice(0, 300) : null };
+      if (row) await db.table('email_settings').where({ id: row.id }).update(values);
+      else await db.table('email_settings').insert({ provider: PROVIDER_PLATFORM, ...values });
+    }
+  }
+
+  // No mailbox at all (production, platform email not configured): say so, rather than "sending" into the server log.
+  if (isUndeliverable(adapter)) {
+    const reason = undeliverableReason(adapter);
+    await record(false, reason);
+    throw new NoMailboxConfiguredError(reason);
+  }
+  if (adapter.mode === 'platform') {
+    await reservePlatformSend({ tenantId: context.tenantId, recipient: user.email, eventClass: 'critical' });
+  }
   try {
     // Sent in the same branded shell as every real email, so the test also
     // shows how the property's logo and footer will look in an inbox.
@@ -338,14 +417,17 @@ async function sendTestEmail({ context, to }) {
       emailLayout.heading('Your email settings work') +
       emailLayout.paragraph('This is a test email from your LodgeKeep email settings. If you received it, guests and staff will receive their emails too.');
     const result = await adapter.send({
-      to,
+      to: user.email,
       subject,
       html: emailLayout.renderEmailShell({ subject, contentHtml, branding, preheader: 'Your LodgeKeep email settings work.' }),
       attachments: branding.logoAttachment ? [branding.logoAttachment] : [],
     });
-    return { sent: true, provider: adapter.name, providerRef: result.providerRef };
+    await record(true, null);
+    return { sent: true, mode: adapter.mode ?? 'console', provider: adapter.name, to: user.email, providerRef: result.providerRef };
   } catch (error) {
-    throw new EmailTestSendFailedError(String(error?.message ?? error));
+    const safe = safeErrorText(adapter, error);
+    await record(false, safe);
+    throw new EmailTestSendFailedError(safe);
   }
 }
 
@@ -1102,6 +1184,7 @@ module.exports = {
   getProperty,
   listProperties,
   getEmailSettings,
+  maskEmailSettingsForAudit,
   getEmailDeliveryStatus,
   upsertEmailSettings,
   sendTestEmail,

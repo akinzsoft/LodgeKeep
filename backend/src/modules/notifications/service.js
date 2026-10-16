@@ -17,7 +17,8 @@
 
 const { scopedDb } = require('../../db');
 const { workerContext } = require('../tenancy');
-const { resolveEmailAdapter, isUndeliverable, NO_MAILBOX_REASON, NoMailboxConfiguredError } = require('./email-adapter');
+const { resolveEmailAdapter, isUndeliverable, undeliverableReason, safeErrorText, NoMailboxConfiguredError, EmailSendFailedError } = require('./email-adapter');
+const { reservePlatformSend, classifyEvent, EmailLimitError } = require('../../shared/email-quota');
 const { escapeHtml, heading, paragraph, note, details, button, codeBlock, loadEmailBranding, renderEmailShell, preheaderFrom } = require('./email-layout');
 
 const staffNotifications = require('./staff-notifications');
@@ -362,35 +363,64 @@ async function dispatchOne({ tenantDb, propertyDb, event }) {
     return;
   }
 
+  let adapter = null;
   try {
     const { subject, html, attachments } = await composeEmail({ db: propertyDb, propertyId: event.property_id, templateKey, variables: payload });
     // Gap closure: "add the mail setup on in SETUP menu" — a property's own
     // email_settings row, when configured, overrides the process-level
     // adapter, the same override-else-default shape `renderTemplate` above
     // already uses for the template content itself.
-    const adapter = await resolveEmailAdapter({ db: propertyDb, propertyId: event.property_id });
+    adapter = await resolveEmailAdapter({ db: propertyDb, propertyId: event.property_id });
     if (isUndeliverable(adapter)) {
-      // No mailbox at all (production, no property settings, no server
-      // default): recorded as NOT sent, straight away — retrying cannot
-      // help until someone sets one up, after which the delivery log's
-      // Resend sends it. It used to be logged and recorded as "sent".
+      // No mailbox at all, or the platform mailbox is not configured on this
+      // server: recorded as NOT sent, straight away (never marked sent, never
+      // falling back to the console), with the reason in the delivery log.
+      // Retrying cannot help until it is fixed, after which Resend sends it.
+      const reason = undeliverableReason(adapter);
       await propertyDb.table('notification_log').insert({
+        outbox_event_id: event.id,
         recipient_email: recipientEmail,
         template_key: templateKey,
         channel: 'email',
         status: 'failed',
-        failed_reason: NO_MAILBOX_REASON,
+        failed_reason: reason,
         reservation_id: payload.reservationId ?? null,
       });
       await tenantDb
         .table('outbox_events')
         .where({ id: event.id })
-        .update({ status: 'failed', processed_at: new Date(), attempt_count: event.attempt_count + 1, last_error: NO_MAILBOX_REASON });
+        .update({ status: 'failed', processed_at: new Date(), attempt_count: event.attempt_count + 1, last_error: reason });
       return;
+    }
+    if (adapter.mode === 'platform') {
+      // Abuse limits apply to the platform mailbox only. A per-minute limit
+      // throws into the retry path below; the daily cap fails the event now.
+      try {
+        await reservePlatformSend({ tenantId: event.tenant_id, recipient: recipientEmail, eventClass: classifyEvent(event.event_type) });
+      } catch (limitError) {
+        if (limitError instanceof EmailLimitError && limitError.kind === 'daily_cap') {
+          await propertyDb.table('notification_log').insert({
+        outbox_event_id: event.id,
+            recipient_email: recipientEmail,
+            template_key: templateKey,
+            channel: 'email',
+            status: 'failed',
+            failed_reason: limitError.message,
+            reservation_id: payload.reservationId ?? null,
+          });
+          await tenantDb
+            .table('outbox_events')
+            .where({ id: event.id })
+            .update({ status: 'failed', processed_at: new Date(), attempt_count: event.attempt_count + 1, last_error: limitError.message });
+          return;
+        }
+        throw limitError;
+      }
     }
     const { providerRef, status } = await adapter.send({ to: recipientEmail, subject, html, attachments });
 
     await propertyDb.table('notification_log').insert({
+        outbox_event_id: event.id,
       recipient_email: recipientEmail,
       template_key: templateKey,
       channel: 'email',
@@ -406,15 +436,16 @@ async function dispatchOne({ tenantDb, propertyDb, event }) {
     await tenantDb.table('outbox_events').where({ id: event.id }).update({
       status: exhausted ? 'failed' : 'pending',
       attempt_count: attemptCount,
-      last_error: String(error?.message ?? error).slice(0, 2000),
+      last_error: safeErrorText(adapter, error).slice(0, 2000),
     });
     if (exhausted) {
       await propertyDb.table('notification_log').insert({
+        outbox_event_id: event.id,
         recipient_email: recipientEmail,
         template_key: templateKey,
         channel: 'email',
         status: 'failed',
-        failed_reason: String(error?.message ?? error).slice(0, 2000),
+        failed_reason: safeErrorText(adapter, error).slice(0, 2000),
         reservation_id: payload.reservationId ?? null,
       });
     }
@@ -501,33 +532,81 @@ async function resendNotification({ context, id }) {
   const failed = await db.table('notification_log').where({ id }).first();
   if (!failed) return null;
 
-  const reservation = failed.reservation_id ? await db.table('reservations').where({ id: failed.reservation_id }).first() : null;
-  const guest = reservation ? await db.table('guests').where({ id: reservation.guest_id }).first() : null;
-  const variables = {
-    guestEmail: failed.recipient_email,
-    guestName: guest ? `${guest.first_name} ${guest.last_name}` : failed.recipient_email,
-    confirmationNumber: reservation?.confirmation_number ?? '',
-    arrivalDate: reservation?.arrival_date ?? '',
-    departureDate: reservation?.departure_date ?? '',
-  };
+  // Prefer the ORIGINAL event payload (an invitation link, a code, an invoice
+  // number): a resend then sends the same content, not a reservation-shaped
+  // approximation. Older log rows carry no event link, so the newest event for
+  // the same template and recipient is used.
+  const payload = await findOutboxPayloadForLogEntry({ db, failed, propertyId: context.propertyId });
 
-  const { subject, html, attachments } = await composeEmail({ db, propertyId: reservation?.property_id ?? context.propertyId, templateKey: failed.template_key, variables });
+  let variables;
+  let reservationId = failed.reservation_id;
+  if (payload) {
+    variables = payload;
+    reservationId = reservationId ?? payload.reservationId ?? null;
+  } else {
+    const reservation = failed.reservation_id ? await db.table('reservations').where({ id: failed.reservation_id }).first() : null;
+    const guest = reservation ? await db.table('guests').where({ id: reservation.guest_id }).first() : null;
+    variables = {
+      guestEmail: failed.recipient_email,
+      guestName: guest ? `${guest.first_name} ${guest.last_name}` : failed.recipient_email,
+      confirmationNumber: reservation?.confirmation_number ?? '',
+      arrivalDate: reservation?.arrival_date ?? '',
+      departureDate: reservation?.departure_date ?? '',
+    };
+  }
+
+  const { subject, html, attachments } = await composeEmail({ db, propertyId: context.propertyId, templateKey: failed.template_key, variables });
   // Consistency with `dispatchOne`: a resend honors the same property-level
-  // `email_settings` override, not silently the process-level default.
+  // settings (custom mailbox, or the platform mailbox with its limits).
   const adapter = await resolveEmailAdapter({ db, propertyId: context.propertyId });
-  if (isUndeliverable(adapter)) throw new NoMailboxConfiguredError();
-  const { providerRef, status } = await adapter.send({ to: failed.recipient_email, subject, html, attachments });
+  if (isUndeliverable(adapter)) throw new NoMailboxConfiguredError(undeliverableReason(adapter));
+  if (adapter.mode === 'platform') {
+    await reservePlatformSend({
+      tenantId: context.tenantId,
+      recipient: failed.recipient_email,
+      eventClass: classifyEvent(eventTypeForTemplate(failed.template_key)),
+    });
+  }
+  let providerRef;
+  let status;
+  try {
+    ({ providerRef, status } = await adapter.send({ to: failed.recipient_email, subject, html, attachments }));
+  } catch (error) {
+    throw new EmailSendFailedError(safeErrorText(adapter, error));
+  }
 
   const [newId] = await db.table('notification_log').insert({
+    outbox_event_id: failed.outbox_event_id ?? null,
     recipient_email: failed.recipient_email,
     template_key: failed.template_key,
     channel: 'email',
     status,
     provider_ref: providerRef,
-    reservation_id: failed.reservation_id,
+    reservation_id: reservationId,
     sent_at: new Date(),
   });
   return db.table('notification_log').where({ id: newId }).first();
+}
+
+function eventTypeForTemplate(templateKey) {
+  return Object.keys(EVENT_TEMPLATE_KEYS).find((eventType) => EVENT_TEMPLATE_KEYS[eventType] === templateKey) ?? null;
+}
+
+async function findOutboxPayloadForLogEntry({ db, failed, propertyId }) {
+  const parse = (value) => (typeof value === 'string' ? JSON.parse(value) : value);
+  if (failed.outbox_event_id) {
+    const event = await db.table('outbox_events').where({ id: failed.outbox_event_id }).first();
+    return event ? parse(event.payload) : null;
+  }
+  const eventType = eventTypeForTemplate(failed.template_key);
+  if (!eventType) return null;
+  const candidates = await db.table('outbox_events').where({ event_type: eventType, property_id: propertyId }).orderBy('id', 'desc').limit(100);
+  for (const candidate of candidates) {
+    const payload = parse(candidate.payload);
+    const recipient = payload?.recipientEmail ?? payload?.guestEmail;
+    if (recipient && String(recipient).toLowerCase() === String(failed.recipient_email).toLowerCase()) return payload;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------

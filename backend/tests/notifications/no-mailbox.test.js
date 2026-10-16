@@ -17,7 +17,7 @@ const { workerContext } = require('../../src/modules/tenancy');
 const { writeOutboxEvent } = require('../../src/shared/outbox');
 const { scopedDb } = require('../../src/db');
 const { dispatchPendingOutboxEventsForTenant, resendNotification } = require('../../src/modules/notifications/service');
-const { NO_MAILBOX_REASON } = require('../../src/modules/notifications/email-adapter');
+const { PLATFORM_UNAVAILABLE_REASON: NO_MAILBOX_REASON } = require('../../src/modules/notifications/email-adapter');
 
 describe('dispatch with no mailbox configured', () => {
   const t = useTestApp();

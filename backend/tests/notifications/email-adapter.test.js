@@ -90,6 +90,10 @@ describe('email-adapter', () => {
           host: 'smtp.example.com',
           port: 587,
           secure: false,
+          requireTLS: true,
+          connectionTimeout: 10000,
+          greetingTimeout: 10000,
+          socketTimeout: 30000,
           auth: { user: 'no-reply@example.com', pass: 'secret' },
         })
       );
@@ -97,7 +101,7 @@ describe('email-adapter', () => {
         // Gap closure (user-reported, live-tested): "goin to my spam" — a
         // bare address with no display name is a real spam-classifier
         // signal, defaults to "LodgeKeep" when SMTP_FROM_NAME is unset.
-        from: '"LodgeKeep" <no-reply@example.com>',
+        from: { name: 'LodgeKeep', address: 'no-reply@example.com' },
         to: 'guest@example.com',
         subject: 'Your code',
         html: '<p>123456</p>',
@@ -118,7 +122,7 @@ describe('email-adapter', () => {
       nodemailer.createTransport.mockReturnValue({ sendMail, close: jest.fn() });
       await getEmailAdapter().send({ to: 'guest@example.com', subject: 's', html: '<p>h</p>' });
 
-      expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ from: '"Acme Hotels" <domain-hosting-renewal@example.com>' }));
+      expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ from: { name: 'Acme Hotels', address: 'domain-hosting-renewal@example.com' } }));
     });
 
     it('treats port 465 as implicit TLS (secure: true)', async () => {
@@ -144,7 +148,7 @@ describe('email-adapter', () => {
       nodemailer.createTransport.mockReturnValue({ sendMail, close: jest.fn() });
       await getEmailAdapter().send({ to: 'guest@example.com', subject: 's', html: 'h' });
 
-      expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ from: '"LodgeKeep" <bookings@lodgekeep-tenant.example.com>' }));
+      expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ from: { name: 'LodgeKeep', address: 'bookings@lodgekeep-tenant.example.com' } }));
     });
 
     it('rejects with a clear error when SMTP_HOST is missing rather than connecting to nothing', async () => {

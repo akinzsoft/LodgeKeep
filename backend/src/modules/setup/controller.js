@@ -223,15 +223,20 @@ async function getEmailDeliveryStatus(req, res, next) {
   }
 }
 
+/** Accepts `mode` ("platform" | "custom" | "console"); the old `provider: "smtp"` still means custom. */
 function pickEmailSettingsChanges(body) {
-  const provider = body?.provider === 'smtp' ? 'smtp' : 'console';
+  const legacy = body?.provider === 'smtp' ? 'custom' : body?.provider === 'console' ? 'console' : undefined;
+  const mode = body?.mode ?? legacy ?? 'platform';
+  const number = (value) => (value !== undefined && value !== null && value !== '' ? Number(value) : null);
   return {
-    provider,
-    smtpHost: body?.smtp_host || null,
-    smtpPort: body?.smtp_port !== undefined && body?.smtp_port !== null && body?.smtp_port !== '' ? Number(body.smtp_port) : null,
+    mode,
+    // undefined = leave the saved Reply-To alone; '' / null = clear it.
+    replyTo: body && 'reply_to' in body ? body.reply_to || null : undefined,
+    smtpHost: typeof body?.smtp_host === 'string' ? body.smtp_host.trim() || null : null,
+    smtpPort: number(body?.smtp_port),
+    smtpSecurity: body?.smtp_security || undefined,
     smtpUser: body?.smtp_user || null,
-    // Blank/omitted preserves the existing encrypted password — see
-    // `upsertEmailSettings`'s own header for why.
+    // Blank/omitted preserves the existing encrypted password.
     smtpPassword: body?.smtp_password || null,
     smtpFrom: body?.smtp_from || null,
     smtpFromName: body?.smtp_from_name || null,
@@ -240,8 +245,16 @@ function pickEmailSettingsChanges(body) {
 
 async function upsertEmailSettings(req, res, next) {
   try {
+    const before = await service.getEmailSettings({ context: req.context });
     const settings = await service.upsertEmailSettings({ context: req.context, ...pickEmailSettingsChanges(req.body) });
-    await req.audit({ entityType: 'email_settings', entityId: req.context.propertyId, action: 'update', afterState: settings });
+    // Every mode or settings change is audited, with the password masked.
+    await req.audit({
+      entityType: 'email_settings',
+      entityId: req.context.propertyId,
+      action: 'update',
+      beforeState: service.maskEmailSettingsForAudit(before),
+      afterState: service.maskEmailSettingsForAudit(settings),
+    });
     res.status(200).json(ok(settings));
   } catch (error) {
     next(error);
@@ -300,8 +313,8 @@ async function upsertPaymentSubaccount(req, res, next) {
 
 async function sendTestEmail(req, res, next) {
   try {
-    const to = require_(req.body, 'to');
-    const result = await service.sendTestEmail({ context: req.context, to });
+    // Always the signed-in user's own address: no recipient field.
+    const result = await service.sendTestEmail({ context: req.context });
     res.status(200).json(ok(result));
   } catch (error) {
     next(error);
