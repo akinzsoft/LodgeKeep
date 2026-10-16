@@ -4,6 +4,49 @@ import { setupApi, ApiError } from '../../shared/api/index.js';
 import styles from './SetupScreen.module.css';
 import formStyles from './SetupForm.module.css';
 
+const STATE_LABEL = { current: 'Current', ending: 'Scheduled to end', inactive: 'Inactive' };
+
+function appliesToLabel(appliesTo) {
+  return appliesTo === 'supermarket_sale' ? 'Supermarket sales' : appliesTo === 'all' || appliesTo === undefined ? 'All hotel charges' : appliesTo;
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** Why Delete is unavailable, with the counts the server found. Zero counts are left out. */
+function deleteBlockedReason(usage) {
+  const parts = [
+    usage.folioTaxLines > 0 && plural(usage.folioTaxLines, 'folio tax line'),
+    usage.posSettlements > 0 && plural(usage.posSettlements, 'POS sale'),
+    usage.supermarketSales > 0 && plural(usage.supermarketSales, 'supermarket sale'),
+  ].filter(Boolean);
+  return `In use: ${parts.join(', ')}. Deactivate instead.`;
+}
+
+/**
+ * One group per tax code. State: Current (an open version), Scheduled to end (closed, but the end date has not
+ * passed), otherwise Inactive. Versions are newest first; the row shows the live version when there is one.
+ */
+function groupTaxes(rows, isLive) {
+  const byCode = new Map();
+  for (const row of rows) {
+    if (!byCode.has(row.tax_code)) byCode.set(row.tax_code, []);
+    byCode.get(row.tax_code).push(row);
+  }
+  return [...byCode].map(([code, list]) => {
+    const versions = [...list].sort((a, b) => String(b.effective_from).localeCompare(String(a.effective_from)));
+    const open = versions.find((v) => !v.effective_to);
+    const liveVersion = open ?? versions.find(isLive);
+    return {
+      code,
+      tax_code: code,
+      versions,
+      liveVersion,
+      shown: liveVersion ?? versions[0],
+      state: open ? 'current' : liveVersion ? 'ending' : 'inactive',
+    };
+  });
+}
+
 /**
  * TaxesTab — PRODUCT_REQUIREMENTS.md's "Tax configuration — rate, name,
  * applicability, effective-from date. Changing a tax rate must warn plainly
@@ -14,8 +57,7 @@ import formStyles from './SetupForm.module.css';
  * `requireReason` is exactly that; the reason is threaded straight to
  * `POST /taxes`, which the backend's controller passes to `req.audit(...)`.
  *
- * Every version of every tax is listed, not just the current one — a
- * property should be able to see for itself that changing a rate created a
+ * One row per tax; its History lists every version, so a property can see for itself that changing a rate created a
  * new version rather than rewriting history (ARCHITECTURE.md §12.1).
  */
 export function TaxesTab({ disabled, isOffline = false, activeProperty = null, canManage = false }) {
@@ -35,6 +77,7 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
   const [deactivateFrom, setDeactivateFrom] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState(() => new Set());
 
   async function reload() {
     try {
@@ -54,10 +97,6 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
 
   if (disabled) {
     return <p className={formStyles.disabledNotice}>Create a property first — taxes belong to one property.</p>;
-  }
-
-  function isCurrentlyOpen(version) {
-    return !version.effective_to;
   }
 
   async function handleConfirm(reason) {
@@ -107,6 +146,15 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
     }
   }
 
+  function toggleHistory(code) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  }
+
   function startAction(kind, taxCode) {
     setDeactivateFrom('');
     setAction({ kind, taxCode });
@@ -116,11 +164,9 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
 
   // A version is live while it is open or its end date has not passed; a hotel tax with none charges nothing on new bills.
   const isLive = (version) => !version.effective_to || (businessDate !== '' && String(version.effective_to).slice(0, 10) >= businessDate);
-  const taxesOff = (taxes ?? [])
-    .filter((v) => v.applies_to === 'all' || v.applies_to === undefined)
-    .map((v) => v.tax_code)
-    .filter((code, index, all) => all.indexOf(code) === index)
-    .filter((code) => !(taxes ?? []).some((v) => v.tax_code === code && isLive(v)));
+  const groups = groupTaxes(taxes ?? [], isLive);
+  const taxesOff = groups.filter((g) => !g.liveVersion && g.versions.some((v) => v.applies_to === 'all' || v.applies_to === undefined)).map((g) => g.code);
+  const pastDate = deactivateFrom !== '' && businessDate !== '' && deactivateFrom < businessDate;
 
   return (
     <div className={styles.page}>
@@ -129,58 +175,120 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
           {code} is off: new bills carry no tax
         </p>
       ))}
+      {error && (
+        <p role="alert" className={formStyles.errorBanner}>
+          {error}
+        </p>
+      )}
       <DataTable
-        title="Taxes (every version)"
-        state={taxes === null ? 'loading' : taxes.length === 0 ? 'empty' : 'success'}
+        title="Taxes"
+        state={taxes === null ? 'loading' : groups.length === 0 ? 'empty' : 'success'}
         emptyMessage="No taxes configured yet — add one below."
         columns={[
           { key: 'tax_code', label: 'Code' },
-          { key: 'name', label: 'Name' },
-          { key: 'rate', label: 'Rate', align: 'right', render: (row) => `${row.rate}${row.calculation_method === 'percentage' ? '%' : ''}` },
-          { key: 'applies_to', label: 'Applies to', render: (row) => (row.applies_to === 'supermarket_sale' ? 'Supermarket sales' : row.applies_to === 'all' ? 'All hotel charges' : row.applies_to) },
-          { key: 'effective_from', label: 'Effective from' },
-          { key: 'effective_to', label: 'Effective to', render: (row) => row.effective_to ?? '—' },
+          { key: 'name', label: 'Name', render: (group) => group.shown.name },
+          { key: 'rate', label: 'Rate', align: 'right', render: (group) => `${group.shown.rate}${group.shown.calculation_method === 'percentage' ? '%' : ''}` },
+          { key: 'applies_to', label: 'Applies to', render: (group) => appliesToLabel(group.shown.applies_to) },
           {
-            key: 'status',
+            key: 'state',
             label: 'Status',
-            render: (row) =>
-              isCurrentlyOpen(row) ? (
-                <StatusPill tone="success" label="Current" />
-              ) : (
-                <StatusPill tone="neutral" label="Historical" />
-              ),
+            render: (group) => (
+              <span>
+                <StatusPill tone={group.state === 'current' ? 'success' : group.state === 'ending' ? 'warning' : 'neutral'} label={STATE_LABEL[group.state]} />
+                {group.state === 'ending' && <span className={formStyles.hint}> Ends {String(group.liveVersion.effective_to).slice(0, 10)}</span>}
+              </span>
+            ),
           },
           {
-            key: 'actions',
-            label: 'Actions',
-            render: (row) => {
-              // Actions apply to the whole tax, so they sit on its newest version only.
-              const isLatest = taxes.find((v) => v.tax_code === row.tax_code)?.id === row.id;
-              if (!isLatest || !canManage) return null;
-              return (
-                <span className={formStyles.actionsRow}>
-                  {isLive(row) ? (
-                    isCurrentlyOpen(row) && (
-                      <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('deactivate', row.tax_code)}>
-                        Deactivate
-                      </Button>
-                    )
-                  ) : (
-                    <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('reactivate', row.tax_code)}>
-                      Reactivate
-                    </Button>
-                  )}
-                  <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('delete', row.tax_code)}>
-                    Delete
-                  </Button>
-                </span>
-              );
-            },
+            key: 'history',
+            label: 'History',
+            render: (group) => (
+              <Button
+                size="compact"
+                variant="secondary"
+                aria-expanded={expanded.has(group.code)}
+                aria-controls={expanded.has(group.code) ? `tax-history-${group.code}` : undefined}
+                onClick={() => toggleHistory(group.code)}
+              >
+                {expanded.has(group.code) ? 'Hide history' : `History (${group.versions.length})`}
+              </Button>
+            ),
           },
+          ...(canManage
+            ? [
+                {
+                  key: 'actions',
+                  label: 'Actions',
+                  render: (group) => {
+                    const { usage } = group.shown; // identical on every version of a code
+                    const canDelete = usage ? usage.deletable : true;
+                    return (
+                      <span>
+                        <span className={formStyles.actionsRow}>
+                          {group.state === 'current' && (
+                            <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('deactivate', group.code)}>
+                              Deactivate
+                            </Button>
+                          )}
+                          {group.state === 'inactive' && (
+                            <Button size="compact" variant="secondary" disabled={isOffline} onClick={() => startAction('reactivate', group.code)}>
+                              Reactivate
+                            </Button>
+                          )}
+                          <Button
+                            size="compact"
+                            variant="secondary"
+                            disabled={isOffline || !canDelete}
+                            aria-describedby={canDelete ? undefined : `tax-delete-reason-${group.code}`}
+                            onClick={() => startAction('delete', group.code)}
+                          >
+                            Delete
+                          </Button>
+                        </span>
+                        {!canDelete && (
+                          <span id={`tax-delete-reason-${group.code}`} className={formStyles.hint}>
+                            {deleteBlockedReason(usage)}
+                          </span>
+                        )}
+                      </span>
+                    );
+                  },
+                },
+              ]
+            : []),
         ]}
-        rows={taxes ?? []}
-        rowKey={(row) => row.id}
+        rows={groups}
+        rowKey={(group) => group.code}
       />
+
+      {groups
+        .filter((group) => expanded.has(group.code))
+        .map((group) => (
+          <Card key={group.code} title={`${group.code} — history`}>
+            <table id={`tax-history-${group.code}`} className={formStyles.historyTable}>
+              <thead>
+                <tr>
+                  <th scope="col">Effective from</th>
+                  <th scope="col">Effective to</th>
+                  <th scope="col">Rate</th>
+                  <th scope="col">Version</th>
+                </tr>
+              </thead>
+              <tbody>
+                {group.versions.map((version) => (
+                  <tr key={version.id}>
+                    <td>{String(version.effective_from).slice(0, 10)}</td>
+                    <td>{version.effective_to ? String(version.effective_to).slice(0, 10) : '—'}</td>
+                    <td>{`${version.rate}${version.calculation_method === 'percentage' ? '%' : ''}`}</td>
+                    <td>
+                      <StatusPill tone={version.effective_to ? 'neutral' : 'success'} label={version.effective_to ? 'Historical' : 'Current'} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        ))}
 
       {!canManage ? (
         <Card title="Add a tax or change a rate">
@@ -188,11 +296,6 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
         </Card>
       ) : (
       <Card title="Add a tax or change a rate">
-        {error && (
-          <p role="alert" className={formStyles.errorBanner}>
-            {error}
-          </p>
-        )}
         <p className={formStyles.disabledNotice}>
           Changing an existing tax code&rsquo;s rate creates a new version effective from the date below. It never
           alters what a historical folio already recorded.
@@ -305,7 +408,7 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
           consequence={`"${action.taxCode}" stops applying to new charges from the date below. Folios, receipts and reports already recorded keep the tax they were charged. To bring it back later, add a new version.`}
           requireReason
           confirmLabel={submitting ? 'Saving…' : 'Deactivate'}
-          confirmDisabled={submitting || (deactivateFrom !== '' && businessDate !== '' && deactivateFrom < businessDate)}
+          confirmDisabled={submitting || pastDate}
           onConfirm={handleAction}
           onCancel={() => setAction(null)}
         >
@@ -329,7 +432,7 @@ export function TaxesTab({ disabled, isOffline = false, activeProperty = null, c
           consequence={`"${action.taxCode}" starts applying again from the date below, with the same rate and settings as its last version. Bills dated before that date, including any in the gap, stay untaxed.`}
           requireReason
           confirmLabel={submitting ? 'Saving…' : 'Reactivate'}
-          confirmDisabled={submitting || (deactivateFrom !== '' && businessDate !== '' && deactivateFrom < businessDate)}
+          confirmDisabled={submitting || pastDate}
           onConfirm={handleAction}
           onCancel={() => setAction(null)}
         >

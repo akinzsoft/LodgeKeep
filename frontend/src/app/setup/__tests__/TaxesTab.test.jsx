@@ -35,16 +35,6 @@ describe('<TaxesTab>', () => {
     mocks.listTaxes.mockResolvedValue([]);
   });
 
-  it('shows current vs historical versions as status pills, not colour alone', async () => {
-    mocks.listTaxes.mockResolvedValue([
-      { id: '1', tax_code: 'VAT', name: 'VAT', rate: '7.5000', calculation_method: 'percentage', effective_from: '2026-01-01', effective_to: '2026-05-31' },
-      { id: '2', tax_code: 'VAT', name: 'VAT', rate: '10.0000', calculation_method: 'percentage', effective_from: '2026-06-01', effective_to: null },
-    ]);
-    render(<TaxesTab canManage disabled={false} />);
-    expect(await screen.findByText('Current')).toBeInTheDocument();
-    expect(screen.getByText('Historical')).toBeInTheDocument();
-  });
-
   it('does not save on submit alone — a confirmation step is required first (DESIGN_SYSTEM.md §2)', async () => {
     render(<TaxesTab canManage disabled={false} />);
     await screen.findByText(/no taxes configured yet/i);
@@ -127,7 +117,7 @@ describe('<TaxesTab>', () => {
     ];
     const property = { current_business_date: '2026-10-10' };
 
-    it('offers the actions once per tax, on its newest version only, and Deactivate only while it is open', async () => {
+    it('offers the actions once per tax, and Deactivate only while it is open', async () => {
       mocks.listTaxes.mockResolvedValue(VAT_ROWS);
       render(<TaxesTab canManage disabled={false} activeProperty={property} />);
       await screen.findByText('Current');
@@ -213,6 +203,91 @@ describe('<TaxesTab>', () => {
       await userEvent.type(within(dialog).getByRole('textbox'), 'Back on');
       await userEvent.click(within(dialog).getByRole('button', { name: 'Reactivate' }));
       expect(mocks.reactivateTax).toHaveBeenCalledWith('VAT', { reason: 'Back on' });
+    });
+  });
+  describe('grouping, history and delete availability', () => {
+    const property = { current_business_date: '2026-10-10' };
+    const V = (over) => ({ tax_code: 'VAT', name: 'VAT', calculation_method: 'percentage', applies_to: 'all', ...over });
+    const UNUSED = { folioTaxLines: 0, posSettlements: 0, supermarketSales: 0, total: 0, deletable: true };
+    const USED = { folioTaxLines: 33, posSettlements: 28, supermarketSales: 0, total: 61, deletable: false };
+    const TWO_VERSIONS = (usage) => [
+      V({ id: '2', rate: '10.0000', effective_from: '2026-06-01', effective_to: null, usage }),
+      V({ id: '1', rate: '7.5000', effective_from: '2026-01-01', effective_to: '2026-05-31', usage }),
+    ];
+
+    it('shows one row per tax code even with several versions, and the live rate', async () => {
+      mocks.listTaxes.mockResolvedValue([...TWO_VERSIONS(UNUSED), V({ id: '9', tax_code: 'SVC', name: 'Service', rate: '5.0000', effective_from: '2026-01-01', effective_to: null, usage: UNUSED })]);
+      render(<TaxesTab canManage disabled={false} activeProperty={property} />);
+      await screen.findAllByText('Current');
+      const table = screen.getByRole('table');
+      expect(within(table).getAllByRole('row')).toHaveLength(3); // header + VAT + SVC
+      expect(within(table).getAllByText('VAT')).toHaveLength(2); // code and name cells, never a second VAT row
+      expect(within(table).getByText('10.0000%')).toBeInTheDocument();
+      expect(within(table).queryByText('7.5000%')).not.toBeInTheDocument();
+    });
+
+    it('labels the state: Current, Scheduled to end (with the date) and Inactive', async () => {
+      mocks.listTaxes.mockResolvedValue([
+        V({ id: '1', tax_code: 'A', name: 'A', rate: '1.0000', effective_from: '2026-01-01', effective_to: null, usage: UNUSED }),
+        V({ id: '2', tax_code: 'B', name: 'B', rate: '1.0000', effective_from: '2026-01-01', effective_to: '2026-12-31', usage: UNUSED }),
+        V({ id: '3', tax_code: 'C', name: 'C', rate: '1.0000', effective_from: '2026-01-01', effective_to: '2026-10-05', usage: UNUSED }),
+      ]);
+      render(<TaxesTab canManage disabled={false} activeProperty={property} />);
+      expect(await screen.findByText('Current')).toBeInTheDocument();
+      expect(screen.getByText('Scheduled to end')).toBeInTheDocument();
+      expect(screen.getByText(/Ends 2026-12-31/)).toBeInTheDocument();
+      expect(screen.getByText('Inactive')).toBeInTheDocument();
+      // Only the open tax can be deactivated, only the inactive one reactivated, a scheduled one neither.
+      expect(screen.getAllByRole('button', { name: 'Deactivate' })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: 'Reactivate' })).toHaveLength(1);
+    });
+
+    it('History is collapsed by default and expands to every version with its dates and rate', async () => {
+      mocks.listTaxes.mockResolvedValue(TWO_VERSIONS(UNUSED));
+      render(<TaxesTab canManage disabled={false} activeProperty={property} />);
+      const toggle = await screen.findByRole('button', { name: 'History (2)' });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByText('Historical')).not.toBeInTheDocument();
+      await userEvent.click(toggle);
+      expect(screen.getByRole('button', { name: 'Hide history' })).toHaveAttribute('aria-expanded', 'true');
+      const history = document.getElementById('tax-history-VAT');
+      expect(within(history).getAllByRole('row')).toHaveLength(3);
+      expect(within(history).getByText('2026-05-31')).toBeInTheDocument();
+      expect(within(history).getByText('7.5000%')).toBeInTheDocument();
+      expect(within(history).getByText('Historical')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Hide history' }));
+      expect(document.getElementById('tax-history-VAT')).toBeNull();
+    });
+
+    it('Delete is enabled for an unused tax', async () => {
+      mocks.listTaxes.mockResolvedValue(TWO_VERSIONS(UNUSED));
+      render(<TaxesTab canManage disabled={false} activeProperty={property} />);
+      expect(await screen.findByRole('button', { name: 'Delete' })).toBeEnabled();
+      expect(screen.queryByText(/In use:/)).not.toBeInTheDocument();
+    });
+
+    it('Delete is disabled for a used tax, with the reason and counts as visible text', async () => {
+      mocks.listTaxes.mockResolvedValue(TWO_VERSIONS(USED));
+      render(<TaxesTab canManage disabled={false} activeProperty={property} />);
+      const button = await screen.findByRole('button', { name: 'Delete' });
+      expect(button).toBeDisabled();
+      const reason = screen.getByText('In use: 33 folio tax lines, 28 POS sales. Deactivate instead.');
+      expect(reason).toBeVisible();
+      expect(button).toHaveAccessibleDescription(reason.textContent);
+    });
+
+    it('a non-holder sees no buttons beyond History, and no delete reason', async () => {
+      mocks.listTaxes.mockResolvedValue(TWO_VERSIONS(USED));
+      render(<TaxesTab disabled={false} activeProperty={property} />);
+      await screen.findByText('Current');
+      expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+      expect(screen.queryByText(/In use:/)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'History (2)' })).toBeInTheDocument();
+    });
+    it('a load failure is shown to a non-holder too, not as "no taxes configured"', async () => {
+      mocks.listTaxes.mockRejectedValue(new Error('boom'));
+      render(<TaxesTab disabled={false} activeProperty={property} />);
+      expect(await screen.findByRole('alert')).toHaveTextContent(/could not load taxes/i);
     });
   });
 });

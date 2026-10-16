@@ -180,4 +180,37 @@ describe('Setup → Taxes: deactivate and delete', () => {
       expect(await t.trx('taxes').where({ tenant_id: ctx.b.id })).toEqual(bTaxesBefore);
     });
   });
+  describe('list: usage per tax', () => {
+    const list = (token = superAdmin()) => t.request.get('/api/v1/taxes').set('Authorization', `Bearer ${token}`);
+
+    it('marks an unused tax deletable and a used one not, with the same counts delete would refuse with', async () => {
+      // USE1's window predates every fixture record, so nothing can have used it.
+      await addTax('USE1', { effective_from: '2015-01-01' });
+      await t.trx('taxes').where({ tenant_id: ctx.a.id, tax_code: 'USE1' }).update({ effective_to: '2015-12-31' });
+      await addTax('USE2');
+      await t.trx('folio_line_items').insert({
+        tenant_id: ctx.a.id, property_id: ctx.a.properties[0].id, folio_id: ctx.a.folios[0].id,
+        type: 'tax', description: 'USE2 (USE2)', amount: '1.00', currency: 'NGN', business_date: '2026-06-01', voided_at: null,
+      });
+      const res = await list();
+      expect(res.status).toBe(200);
+      const unused = res.body.data.find((r) => r.tax_code === 'USE1');
+      const used = res.body.data.find((r) => r.tax_code === 'USE2');
+      expect(unused.usage).toEqual({ folioTaxLines: 0, posSettlements: 0, supermarketSales: 0, total: 0, deletable: true });
+      expect(used.usage.deletable).toBe(false);
+      expect(used.usage.folioTaxLines).toBe(1);
+      const refused = await post('/taxes/USE2/delete', superAdmin(), { reason: 'x' });
+      expect(refused.body.error.details.usage).toEqual({ folioTaxLines: used.usage.folioTaxLines, posSettlements: used.usage.posSettlements, supermarketSales: used.usage.supermarketSales });
+    });
+
+    it('carries the same usage on every version of a code, and a read-only role can see it', async () => {
+      await addTax('USE3');
+      await post('/taxes', superAdmin(), { tax_code: 'USE3', name: 'USE3', rate: '6.0000', effective_from: '2026-06-01', is_inclusive: false, calculation_method: 'percentage', reason: 'rate change' });
+      const res = await list(manager());
+      expect(res.status).toBe(200);
+      const rows = res.body.data.filter((r) => r.tax_code === 'USE3');
+      expect(rows).toHaveLength(2);
+      expect(rows[0].usage).toEqual(rows[1].usage);
+    });
+  });
 });
