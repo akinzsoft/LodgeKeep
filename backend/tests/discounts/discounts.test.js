@@ -91,6 +91,7 @@ describe('discounts and comps on the Register', () => {
     await t.trx('properties').where({ id: propertyId }).update({ current_business_date: BUSINESS_DATE });
     users.manager = await userWithRole('manager', { pin: true });
     users.admin = await userWithRole('admin', { pin: true });
+    users.superAdmin = await userWithRole('super_admin', { pin: true });
     users.operator = await userWithRole('pos_operator');
     users.operator2 = await userWithRole('pos_operator');
 
@@ -366,6 +367,29 @@ describe('discounts and comps on the Register', () => {
       expect(frozen).toMatchObject({ kind: 'comp', amount: '140.00' });
     });
 
+    test('a comp needs a manager even for a role whose percent limit is 100', async () => {
+      const orderId = await openTab(users.superAdmin);
+      const created = await requestDiscount(users.superAdmin, orderId, { kind: 'comp', reason_id: reasons.staff_meal });
+      expect(created.status).toBe(201);
+      expect(created.body.data.status).toBe('pending_approval');
+      expect((await preview(users.superAdmin, orderId)).groups[0].discountTotal).toBeUndefined();
+    });
+
+    test('a comp carries no tax even when a tax adds a flat amount per charge', async () => {
+      const [flatId] = await t.trx('taxes').insert({ tenant_id: ctx.a.id, property_id: propertyId, tax_code: 'FLATFEE', name: 'Flat fee', rate: '5.0000', effective_from: '2026-01-01', is_inclusive: false, calculation_method: 'flat_amount' });
+      try {
+        const orderId = await openTab(users.manager);
+        const created = await requestDiscount(users.manager, orderId, { kind: 'comp', reason_id: reasons.staff_meal });
+        await approve(users.manager, users.manager, created.body.data.id);
+        const view = await preview(users.manager, orderId);
+        expect(view.groups[0]).toMatchObject({ subtotal: '0.00', taxAmount: '0.00', total: '0.00' });
+        const other = await openTab(users.manager); // the flat fee does apply to an undiscounted check
+        expect((await preview(users.manager, other)).groups[0].taxAmount).toBe('15.50'); // 7.5% of 140.00 = 10.50, plus 5.00
+      } finally {
+        await t.trx('taxes').where({ id: flatId }).delete();
+      }
+    });
+
     test('an approver without discount.comp cannot approve a comp even within any percent limit', async () => {
       // A role that may approve discounts but not comps.
       const permissionId = (await t.trx('permissions').where({ permission_key: 'discount.approve' }).first('id')).id;
@@ -377,6 +401,79 @@ describe('discounts and comps on the Register', () => {
       const res = await as(users.operator).post(`/api/v1/discounts/${created.body.data.id}/approve`).set('X-Manager-Approval', token).send({});
       expect(res.status).toBe(403);
       expect(res.body.error.code).toBe('FORBIDDEN_APPROVER_NOT_ELIGIBLE');
+    });
+  });
+
+  describe('an approval covers what the manager saw', () => {
+    test('a discount stays at the amount it was asked for when items are added afterwards', async () => {
+      const orderId = await openTab(); // 140.00
+      const created = await requestDiscount(users.operator, orderId, { value: '10' }); // 14.00, above the cashier's limit
+      expect(created.body.data.amount).toBe('14.00');
+      await approve(users.operator, users.manager, created.body.data.id);
+      await as(users.operator).post(`/api/v1/pos/orders/${orderId}/items`).send({ menu_item_id: outlet.beer, quantity: 5 }); // +500.00
+      const view = await preview(users.operator, orderId);
+      expect(view.groups[0]).toMatchObject({ gross: '640.00', discountTotal: '14.00', subtotal: '626.00' });
+      expect(String((await discountRow(created.body.data.id)).max_amount)).toBe('14.00');
+    });
+
+    test('an approved comp cannot be stretched over items added after the manager approved it', async () => {
+      const orderId = await openTab(users.manager); // 140.00
+      const comp = await requestDiscount(users.manager, orderId, { kind: 'comp', reason_id: reasons.staff_meal });
+      await approve(users.manager, users.manager, comp.body.data.id);
+      await as(users.manager).post(`/api/v1/pos/orders/${orderId}/items`).send({ menu_item_id: outlet.beer, quantity: 10 }); // +1000.00
+      const view = await preview(users.manager, orderId);
+      expect(view.groups[0]).toMatchObject({ gross: '1140.00', discountTotal: '140.00', subtotal: '1000.00' });
+      const settled = await settleCash(users.manager, orderId);
+      expect(settled.body.data.settlements[0].subtotal).toBe('1000.00');
+    });
+
+    test('the cap holds when a big item is moved to another split group after approval', async () => {
+      const orderId = await openTab(); // 140.00
+      const created = await requestDiscount(users.operator, orderId, { value: '10' }); // 14.00, above the cashier's limit
+      await approve(users.operator, users.manager, created.body.data.id);
+      await as(users.operator).post(`/api/v1/pos/orders/${orderId}/items`).send({ menu_item_id: outlet.beer, quantity: 5 }); // +500.00
+      const items = (await as(users.operator).get(`/api/v1/pos/orders/${orderId}`)).body.data.items;
+      for (const item of items.filter((row) => String(row.menu_item_id) === String(outlet.beer))) {
+        expect((await as(users.operator).post(`/api/v1/pos/orders/${orderId}/items/${item.id}/split-group`).send({ split_group: 2 })).status).toBe(200);
+      }
+      const view = await preview(users.operator, orderId);
+      const total = view.groups.reduce((sum, group) => sum + Number(group.discountTotal ?? 0), 0);
+      expect(total.toFixed(2)).toBe('14.00');
+      expect(String((await discountRow(created.body.data.id)).max_amount)).toBe('14.00');
+    });
+
+    test('the cap is applied again at settlement: the sale takes the approved amount, not the percent of the grown check', async () => {
+      const orderId = await openTab(); // 140.00
+      const created = await requestDiscount(users.operator, orderId, { value: '10' });
+      await approve(users.operator, users.manager, created.body.data.id);
+      await as(users.operator).post(`/api/v1/pos/orders/${orderId}/items`).send({ menu_item_id: outlet.beer, quantity: 5 });
+      const settled = await settleCash(users.operator, orderId);
+      expect(settled.status).toBe(200);
+      expect(settled.body.data.settlements[0].subtotal).toBe('626.00'); // 640.00 - 14.00, not 640.00 - 64.00
+      const frozen = await t.trx('settlement_discounts').where({ discount_id: created.body.data.id });
+      expect(frozen.map((row) => String(row.amount))).toEqual(['14.00']);
+    });
+
+    test('a request is frozen at the amount it was shown for: a check that grew before approval is not covered by the extra', async () => {
+      const orderId = await openTab(); // 140.00
+      const created = await requestDiscount(users.operator, orderId, { value: '10' });
+      expect(created.body.data.amount).toBe('14.00');
+      await as(users.operator).post(`/api/v1/pos/orders/${orderId}/items`).send({ menu_item_id: outlet.beer, quantity: 5 }); // 640.00
+      // The list the manager's screen reads shows the exact money being approved while the request waits.
+      const waiting = (await as(users.manager).get(`/api/v1/pos/orders/${orderId}/discounts`)).body.data;
+      expect(waiting.find((row) => String(row.id) === String(created.body.data.id))).toMatchObject({ status: 'pending_approval', amount: '14.00' });
+      await approve(users.operator, users.manager, created.body.data.id);
+      expect(String((await discountRow(created.body.data.id)).max_amount)).toBe('14.00');
+      expect((await preview(users.operator, orderId)).groups[0]).toMatchObject({ gross: '640.00', discountTotal: '14.00' });
+    });
+
+    test('a line discount does not grow with the quantity of its product', async () => {
+      const orderId = await openTab(users.operator, [[outlet.beer, 1]]); // 100.00
+      const items = (await as(users.operator).get(`/api/v1/pos/orders/${orderId}`)).body.data.items;
+      const line = await requestDiscount(users.operator, orderId, { scope: 'line', item_id: String(items[0].id), value: '5' }); // 5.00
+      expect(line.body.data.amount).toBe('5.00');
+      await as(users.operator).post(`/api/v1/pos/orders/${orderId}/items`).send({ menu_item_id: outlet.beer, quantity: 3 });
+      expect((await preview(users.operator, orderId)).groups[0]).toMatchObject({ gross: '400.00', discountTotal: '5.00' });
     });
   });
 
@@ -604,6 +701,28 @@ describe('discounts and comps on the Register', () => {
       const closed = await as(shiftUser).post(`/api/v1/pos/shifts/${opened.body.data.id}/close`).send({ counted_cash: '0.00' });
       expect(closed.status).toBe(200);
       expect(closed.body.data.discounts).toBeUndefined();
+    });
+  });
+
+  describe('the POS sales report', () => {
+    test('the item rows add up to the summary under a discount, and the summary lists the discounts', async () => {
+      const orderId = await openTab();
+      await requestDiscount(users.operator, orderId, { value: '5' });
+      await settleCash(users.operator, orderId);
+      const res = await as(users.manager).get(`/api/v1/pos/reports/sales?date_from=${BUSINESS_DATE}&date_to=${BUSINESS_DATE}&outlet_id=${outlet.outletId}`);
+      expect(res.status).toBe(200);
+      const { summary, topItems, tabs } = res.body.data;
+      expect(summary.discounts.count).toBeGreaterThan(0);
+      expect(topItems.reduce((sum, row) => sum + Math.round(Number(row.sales) * 100), 0)).toBe(Math.round(Number(summary.subtotal) * 100));
+      const tab = tabs.find((row) => String(row.orderId) === String(orderId));
+      expect(tab.discountTotal).toBe('7.00');
+    });
+
+    test('a report with no discounts keeps its old shape', async () => {
+      const [freshOutlet] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: `ND${next()}`.slice(0, 30), name: 'No Discount Bar', type: 'bar' });
+      const res = await as(users.manager).get(`/api/v1/pos/reports/sales?date_from=${BUSINESS_DATE}&date_to=${BUSINESS_DATE}&outlet_id=${freshOutlet}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.summary.discounts).toBeUndefined();
     });
   });
 

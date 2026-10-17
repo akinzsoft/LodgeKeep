@@ -113,6 +113,36 @@ describe('applyDiscounts', () => {
   });
 });
 
+describe('max_amount: a discount never takes more than the amount that was computed when it was asked for', () => {
+  const items = [item(1, '100.00')];
+
+  test('caps a percent discount when the check has grown since', () => {
+    const grown = [item(1, '100.00'), item(2, '900.00')];
+    const result = applyDiscounts({ items: grown, discounts: [{ id: 'd', scope: 'order', type: 'percent', value: '10', max_amount: '10.00' }] });
+    expect(result.discounts[0].amount).toBe('10.00'); // not 100.00
+    expect(result.baseTotal).toBe('990.00');
+  });
+
+  test('caps a comp the same way', () => {
+    const grown = [item(1, '100.00'), item(2, '900.00')];
+    const result = applyDiscounts({ items: grown, discounts: [{ id: 'c', scope: 'order', type: 'percent', value: '100', max_amount: '100.00' }] });
+    expect(result.discountTotal).toBe('100.00');
+    expect(result.baseTotal).toBe('900.00');
+  });
+
+  test('caps a line discount on a product whose quantity has grown', () => {
+    const rows = [{ id: 1, menu_item_id: 'beer', unit_price: '100.00', quantity: 5, split_group: null, modifiers: [] }];
+    const result = applyDiscounts({ items: rows, discounts: [{ id: 'l', scope: 'line', type: 'percent', value: '50', menu_item_id: 'beer', max_amount: '50.00' }] });
+    expect(result.discounts[0].amount).toBe('50.00');
+  });
+
+  test('still limited by the base when the check shrinks, and unlimited when no max is stored', () => {
+    expect(applyDiscounts({ items, discounts: [{ id: 'd', scope: 'order', type: 'fixed', value: '50', max_amount: '50.00' }] }).discounts[0].amount).toBe('50.00');
+    expect(applyDiscounts({ items: [item(1, '20.00')], discounts: [{ id: 'd', scope: 'order', type: 'fixed', value: '50', max_amount: '50.00' }] }).discounts[0].amount).toBe('20.00');
+    expect(applyDiscounts({ items: [item(1, '1000.00')], discounts: [{ id: 'd', scope: 'order', type: 'percent', value: '10' }] }).discounts[0].amount).toBe('100.00');
+  });
+});
+
 describe('a line discount by product', () => {
   test('covers every unvoided row of the product, across split groups, and the group shares add up', () => {
     const rows = [

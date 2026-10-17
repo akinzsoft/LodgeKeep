@@ -1,7 +1,8 @@
 import { useEffect, useId, useState } from 'react';
 import { discountsApi, ApiError } from '../../shared/api/index.js';
 import { ManagerApprovalDialog } from '../approvals/ManagerApprovalDialog.jsx';
-import { KIND_LABELS, reasonsFor, isValidDiscountValue } from './discountText.js';
+import { formatMoney } from '../../shared/format/money.jsx';
+import { KIND_LABELS, reasonsFor, isValidDiscountValue, approvalConsequence } from './discountText.js';
 import styles from './DiscountDialog.module.css';
 
 /**
@@ -16,8 +17,9 @@ import styles from './DiscountDialog.module.css';
  *
  * @param {Array<{id: string, label: string}>} lines  The lines a line discount can target (empty = whole check only).
  * @param {string|null} [initialLineId]
+ * @param {string} [currency]  The property's currency, so the manager sees the exact amount they are approving.
  */
-export function DiscountDialog({ title = 'Give a discount', lines = [], initialLineId = null, create, onDone, onPending, onCancel, isOffline = false }) {
+export function DiscountDialog({ title = 'Give a discount', lines = [], initialLineId = null, create, onDone, onPending, onCancel, isOffline = false, currency }) {
   const kindId = useId();
   const [kind, setKind] = useState('discount');
   const [scope, setScope] = useState(initialLineId ? 'line' : 'order');
@@ -29,6 +31,8 @@ export function DiscountDialog({ title = 'Give a discount', lines = [], initialL
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState(null); // the created discount waiting for a manager
+  const [approvalError, setApprovalError] = useState(null);
+  const [approvalAttempt, setApprovalAttempt] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -40,6 +44,15 @@ export function DiscountDialog({ title = 'Give a discount', lines = [], initialL
       live = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (pending) return undefined; // the manager step has its own Escape handling
+    function onKey(event) {
+      if (event.key === 'Escape' && !busy) onCancel();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [pending, busy, onCancel]);
 
   const choices = reasons ? reasonsFor(reasons, kind) : [];
   const valueOk = kind === 'comp' || isValidDiscountValue(value);
@@ -68,9 +81,9 @@ export function DiscountDialog({ title = 'Give a discount', lines = [], initialL
       const activated = await discountsApi.approveDiscount(pending.id, token);
       onDone({ ...pending, ...activated });
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not apply the approved discount.');
-      setPending(null);
-      onPending?.(pending);
+      // Stay on the manager step with the reason shown: going back to the form would let a retry file a second request.
+      setApprovalError(caught instanceof ApiError ? caught.message : 'Could not apply the approved discount.');
+      setApprovalAttempt((count) => count + 1);
     } finally {
       setBusy(false);
     }
@@ -79,10 +92,11 @@ export function DiscountDialog({ title = 'Give a discount', lines = [], initialL
   if (pending) {
     return (
       <ManagerApprovalDialog
+        key={approvalAttempt}
         action={pending.approvalAction}
         targetId={pending.id}
         title={pending.kind === 'comp' ? 'Approve a comp' : 'Approve a discount'}
-        consequence={pending.kind === 'comp' ? 'The whole amount will be given away.' : 'This discount is above what you may give on your own.'}
+        consequence={approvalConsequence(pending, (amount) => (currency ? formatMoney(amount, currency) : amount), 'you')}
         confirmLabel="Approve"
         busy={busy}
         isOffline={isOffline}
@@ -91,7 +105,13 @@ export function DiscountDialog({ title = 'Give a discount', lines = [], initialL
           onPending?.(pending);
           onCancel();
         }}
-      />
+      >
+        {approvalError && (
+          <p role="alert" className={styles.error}>
+            {approvalError}
+          </p>
+        )}
+      </ManagerApprovalDialog>
     );
   }
 

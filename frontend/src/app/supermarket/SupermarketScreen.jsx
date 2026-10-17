@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Card, Button, ConfirmDialog, DataTable, PrintDocument, PrintLetterhead } from '../../shared/components/index.js';
 import { ManagerApprovalDialog } from '../approvals/ManagerApprovalDialog.jsx';
-import { Money } from '../../shared/format/money.jsx';
+import { Money, formatMoney } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney } from '../../shared/money.js';
 import { supermarketApi, posApi, discountsApi, ApiError } from '../../shared/api/index.js';
 import { SupermarketReceipt } from './SupermarketReceipt.jsx';
@@ -17,6 +17,7 @@ import { StockRequestsTab } from '../pos/StockRequestsTab.jsx';
 import { StockWastageTab } from '../pos/StockWastageTab.jsx';
 import { OnlineCardDialog } from './OnlineCardDialog.jsx';
 import { DiscountDialog } from '../discounts/DiscountDialog.jsx';
+import { approvalConsequence } from '../discounts/discountText.js';
 import { DiscountList } from '../discounts/DiscountList.jsx';
 import { OnlineReviewCard } from './OnlineReviewCard.jsx';
 import { cameraSupported } from '../../shared/scanner/cameraScanner.js';
@@ -522,12 +523,14 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
 
   /** Remembers a priced request against the cart it was made for (a pending one waits for a manager). */
   function rememberDiscount(result) {
+    attemptKey.current = null; // the sale's body changes with its discounts, so a retry is a new attempt
     setCartDiscounts((current) => [...current.filter((discount) => discount.cartKey === cartKey), { ...result, cartKey }]);
   }
 
   async function handleApproveDiscount(approval) {
     const target = approvingDiscount;
     setApprovingDiscount(null);
+    attemptKey.current = null;
     try {
       await discountsApi.approveDiscount(target.id, approval);
       setCartDiscounts((current) => current.map((discount) => (discount.id === target.id ? { ...discount, status: 'active' } : discount)));
@@ -539,6 +542,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   async function handleRemoveDiscount(reason) {
     const target = removingDiscount;
     setRemovingDiscount(null);
+    attemptKey.current = null;
     try {
       await discountsApi.removeDiscount(target.id, reason);
       setCartDiscounts((current) => current.filter((discount) => discount.id !== target.id));
@@ -1042,6 +1046,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
 
       {discountDialogOpen && (
         <DiscountDialog
+          currency={currency}
           lines={cart.map((line) => ({ id: String(line.menuItem.id), label: line.menuItem.name }))}
           isOffline={isOffline}
           create={({ scope, kind, type, value, reasonId, lineId }) =>
@@ -1070,7 +1075,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
           action="supermarket.discount_approval"
           targetId={approvingDiscount.id}
           title={approvingDiscount.kind === 'comp' ? 'Approve a comp' : 'Approve a discount'}
-          consequence={approvingDiscount.kind === 'comp' ? 'The whole amount will be given away.' : 'This discount is above what the cashier may give on their own.'}
+          consequence={approvalConsequence(approvingDiscount, (amount) => formatMoney(amount, currency))}
           confirmLabel="Approve"
           isOffline={isOffline}
           onApproved={handleApproveDiscount}

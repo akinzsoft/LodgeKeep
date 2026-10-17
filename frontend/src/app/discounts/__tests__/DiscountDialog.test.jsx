@@ -87,6 +87,18 @@ describe('<DiscountDialog>', () => {
     expect(await screen.findByText('A manager must approve this with their PIN.')).toBeInTheDocument();
   });
 
+  it('the manager is shown the exact money they approve, and that later items are not covered', async () => {
+    const pending = { id: '10', kind: 'discount', status: 'pending_approval', approvalRequired: true, approvalAction: 'pos.discount_approval', amount: '14.00' };
+    const props = { create: vi.fn().mockResolvedValue(pending), onDone: vi.fn(), onPending: vi.fn(), onCancel: vi.fn(), lines: LINES, currency: 'NGN' };
+    render(<DiscountDialog {...props} />);
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText('Percent off'), '10');
+    await userEvent.selectOptions(within(dialog).getByLabelText('Reason'), '1');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Apply discount' }));
+    expect(await screen.findByText(/14\.00 will come off the check/)).toBeInTheDocument();
+    expect(screen.getByText(/Items added after this request are not covered/)).toBeInTheDocument();
+  });
+
   it('approving applies the discount; cancelling the approval leaves it pending', async () => {
     const pending = { id: '10', kind: 'discount', status: 'pending_approval', approvalRequired: true, approvalAction: 'pos.discount_approval' };
     discountMocks.approveDiscount.mockResolvedValue({ status: 'active' });

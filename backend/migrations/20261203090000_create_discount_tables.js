@@ -87,6 +87,7 @@ exports.up = async function up(knex) {
     table.string('kind', 10).notNullable().comment('discount | comp');
     table.string('type', 10).notNullable().comment('percent | fixed');
     table.decimal('value', 12, 2).notNullable();
+    table.decimal('max_amount', 12, 2).nullable().comment('Set when a manager approves: the most this discount can ever take off, whatever is added to the check afterwards. Null = not approval-capped.');
     table.bigInteger('reason_id').unsigned().notNullable();
     table.string('status', 20).notNullable().comment('pending_approval | active | removed | applied | expired');
     table.decimal('effective_percent', 7, 2).nullable().comment('The percent of its base when requested; informational.');

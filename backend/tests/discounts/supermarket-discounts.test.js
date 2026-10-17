@@ -135,6 +135,14 @@ describe('discounts at the supermarket till', () => {
       expect(String((await discountRow(grant.body.data.id)).pos_order_id)).toBe(String(receipt.pos_order_id));
     });
 
+    test("a request cannot be used on a bigger cart than the one it was priced for", async () => {
+      const grant = await requestDiscount(users.cashier, { items: [{ menu_item_id: rice, quantity: 1 }] }); // 5% of 100.00 = 5.00
+      expect(grant.body.data.amount).toBe('5.00');
+      const sale = await sell(users.cashier, [grant.body.data.id], { items: [{ menu_item_id: rice, quantity: 10 }] }); // 1000.00
+      expect(sale.status).toBe(201);
+      expect(sale.body.data).toMatchObject({ gross: '1000.00', discount_total: '5.00', subtotal: '995.00' });
+    });
+
     test('a sale without a discount has the old receipt shape', async () => {
       const sale = await sell(users.cashier, []);
       expect(sale.status).toBe(201);
@@ -262,6 +270,19 @@ describe('discounts at the supermarket till', () => {
       expect(sale).toMatchObject({ subtotal: '190.00', tax_amount: '2.85', total: '192.85' });
       expect((await discountRow(grant.body.data.id)).status).toBe('applied');
       expect(await t.trx('settlement_discounts').where({ settlement_id: sale.settlement_id })).toHaveLength(1);
+    });
+
+    test('a comp cart that a flat-amount tax would otherwise charge has nothing to pay online', async () => {
+      const [flatId] = await t.trx('taxes').insert({ tenant_id: ctx.a.id, property_id: propertyId, tax_code: 'SM_FLAT', name: 'Flat levy', rate: '5.0000', effective_from: '2026-01-01', is_inclusive: false, calculation_method: 'flat_amount', applies_to: 'supermarket_sale' });
+      try {
+        const comp = await requestDiscount(users.cashier, { kind: 'comp', reason_id: await reasonId('staff_meal') });
+        await approve(users.cashier, users.manager, comp.body.data.id);
+        const started = await startOnline(users.cashier, [comp.body.data.id]);
+        expect(started.status).toBe(400);
+        expect(started.body.error.code).toBe('VALIDATION_NOTHING_TO_PAY');
+      } finally {
+        await t.trx('taxes').where({ id: flatId }).delete();
+      }
     });
 
     test('a discount spent on another sale before the payment lands keeps the money for a manager to refund', async () => {

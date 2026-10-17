@@ -12,7 +12,7 @@
  * service charge). Pure: cents arithmetic only, no database.
  *
  * `items`: unvoided check lines `{id, split_group, unit_price, quantity, modifiers}`.
- * `discounts`: ACTIVE discounts `{id, scope, type, value, menu_item_id | pos_order_item_id}`; a pending one is never passed in.
+ * `discounts`: ACTIVE discounts `{id, scope, type, value, max_amount?, menu_item_id | pos_order_item_id}`; a pending one is never passed in.
  */
 
 const { toCents, fromCents, percentOfMoney } = require('./money');
@@ -23,10 +23,18 @@ function groupKeyOf(splitGroup) {
   return splitGroup === null || splitGroup === undefined ? 'null' : String(splitGroup);
 }
 
-/** What one discount takes off `baseCents`: a percent rounds half-up, a fixed amount is capped at the base. */
+/**
+ * What one discount takes off `baseCents`: a percent rounds half-up, a fixed amount is capped at the base. A discount a
+ * manager approved carries `max_amount`, the amount it came to when approved; it never takes more than that, so items
+ * added to the check afterwards are paid for in full (a comp stays the comp that was approved, not the whole check).
+ */
 function amountOffCents(discount, baseCents) {
   if (baseCents <= 0n) return 0n;
-  const wanted = discount.type === 'percent' ? toCents(percentOfMoney(fromCents(baseCents), discount.value)) : toCents(discount.value);
+  let wanted = discount.type === 'percent' ? toCents(percentOfMoney(fromCents(baseCents), discount.value)) : toCents(discount.value);
+  if (discount.max_amount !== null && discount.max_amount !== undefined) {
+    const ceiling = toCents(String(discount.max_amount));
+    if (wanted > ceiling) wanted = ceiling;
+  }
   return wanted > baseCents ? baseCents : wanted;
 }
 

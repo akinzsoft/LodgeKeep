@@ -178,6 +178,9 @@ async function insertRequest(trx, { order, outlet, spec, reason, evaluation, use
     effective_percent: evaluation.effectivePercent,
     applied_by_user_id: userId,
     decided_at: active ? new Date() : null,
+    // Fixed at the amount the request came to, whether it applies at once or waits for a manager: the manager approves
+    // exactly the money the dialog showed, and items added after the request are not discounted (ask again).
+    max_amount: evaluation.amount,
     ...extra,
   });
   return trx.table('discounts').where({ id }).first();
@@ -343,7 +346,7 @@ async function describe(db, rows, amounts = new Map()) {
     effective_percent: row.effective_percent === null ? null : String(row.effective_percent),
     applied_by_user_id: String(row.applied_by_user_id),
     approved_by_user_id: row.approved_by_user_id ? String(row.approved_by_user_id) : null,
-    amount: amounts.get(String(row.id)) ?? null,
+    amount: amounts.get(String(row.id)) ?? (row.status === 'pending_approval' && row.max_amount !== null && row.max_amount !== undefined ? String(row.max_amount) : null),
   }));
 }
 

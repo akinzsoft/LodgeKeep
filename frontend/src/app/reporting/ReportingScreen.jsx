@@ -96,7 +96,7 @@ export function ReportingScreen({ activePropertyId, canViewBusinessSummary = fal
             {tab === 'revenue' && <RevenueTab activeProperty={activeProperty} />}
             {tab === 'housekeeping' && <HousekeepingSummaryTab />}
             {tab === 'reconciliation' && <PaymentReconciliationTab />}
-            {tab === 'discounts' && <DiscountsTab currencyCode={activeProperty.base_currency} />}
+            {tab === 'discounts' && <DiscountsTab activeProperty={activeProperty} />}
           </div>
         </>
       )}

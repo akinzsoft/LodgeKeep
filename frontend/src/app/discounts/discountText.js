@@ -26,3 +26,13 @@ export function isValidDiscountValue(text) {
   const value = String(text ?? '').trim();
   return /^\d+(\.\d{1,2})?$/.test(value) && Number(value) > 0;
 }
+
+/**
+ * What the manager is told they approve. The PIN approves exactly this amount: the server fixed it when the request was
+ * made, and anything added to the check afterwards is not discounted (the cashier asks again).
+ */
+export function approvalConsequence(discount, formatAmount, who = 'the cashier') {
+  const amount = discount.amount ? formatAmount(discount.amount) : null;
+  const what = discount.kind === 'comp' ? (amount ? `${amount} will be given away.` : 'The whole amount will be given away.') : amount ? `${amount} will come off the check. That is above what ${who} may give on their own.` : `This discount is above what ${who} may give on their own.`;
+  return amount ? `${what} Items added after this request are not covered.` : what;
+}

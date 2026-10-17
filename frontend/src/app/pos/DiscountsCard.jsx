@@ -34,6 +34,7 @@ export function DiscountsCard({ isOffline = false, canManage = true }) {
       setDrafts(Object.fromEntries(limitRows.map((row) => [row.role, String(row.max_percent)])));
     } catch (caught) {
       setReasons(null);
+      setLimits(null);
       setError(caught instanceof ApiError ? caught.message : 'Could not load the discount settings.');
     }
   }
@@ -108,7 +109,9 @@ export function DiscountsCard({ isOffline = false, canManage = true }) {
             </li>
           ))}
         </ul>
-      ) : null}
+      ) : (
+        <p className={formStyles.hint}>The limits could not be loaded.</p>
+      )}
       <p className={formStyles.hint}>A discount above a role&rsquo;s limit, and every comp, waits for a manager&rsquo;s PIN. Comps always need a manager.</p>
 
       <DataTable

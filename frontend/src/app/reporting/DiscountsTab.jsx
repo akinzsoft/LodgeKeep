@@ -5,8 +5,9 @@ import { discountsApi, ApiError } from '../../shared/api/index.js';
 import { triggerDownload } from '../../shared/download.js';
 import styles from './ReportingScreen.module.css';
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+/** The property's business date (never the wall clock: between midnight and Night Audit they differ). */
+function businessDateOf(property) {
+  return String(property?.current_business_date ?? new Date().toISOString().slice(0, 10)).slice(0, 10);
 }
 
 const KIND_LABELS = { discount: 'Discount', comp: 'Comp' };
@@ -17,9 +18,11 @@ const KIND_LABELS = { discount: 'Discount', comp: 'Comp' };
  * 403 in the banner, like the other report tabs. Date-range form sits OUTSIDE the tables (their toolbar slot only
  * renders when there are rows).
  */
-export function DiscountsTab({ currencyCode }) {
-  const [dateFrom, setDateFrom] = useState(todayIso());
-  const [dateTo, setDateTo] = useState(todayIso());
+export function DiscountsTab({ activeProperty }) {
+  const currencyCode = activeProperty?.base_currency;
+  const [dateFrom, setDateFrom] = useState(businessDateOf(activeProperty));
+  const [dateTo, setDateTo] = useState(businessDateOf(activeProperty));
+  const [loading, setLoading] = useState(false);
   const [report, setReport] = useState(null);
   const [error, setError] = useState(null);
   const [exporting, setExporting] = useState(false);
@@ -27,11 +30,14 @@ export function DiscountsTab({ currencyCode }) {
   async function runReport(event) {
     event?.preventDefault();
     setError(null);
+    setLoading(true);
     try {
       setReport(await discountsApi.getReport({ dateFrom, dateTo }));
     } catch (caught) {
       setReport(null);
       setError(caught instanceof ApiError ? caught.message : 'Could not load the discounts report.');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -52,7 +58,7 @@ export function DiscountsTab({ currencyCode }) {
   const group = (title, rows, label) => (
     <DataTable
       title={title}
-      state={hasRun && rows.length > 0 ? 'success' : 'empty'}
+      state={loading ? 'loading' : hasRun && rows.length > 0 ? 'success' : 'empty'}
       emptyMessage={hasRun ? 'None in this range.' : 'Choose a date range and run the report.'}
       columns={[
         { key: 'label', label },
@@ -80,7 +86,9 @@ export function DiscountsTab({ currencyCode }) {
           <span className={styles.label}>To</span>
           <input type="date" className={styles.input} value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
         </label>
-        <Button type="submit">Run report</Button>
+        <Button type="submit" loading={loading}>
+          Run report
+        </Button>
         <Button type="button" variant="secondary" loading={exporting} disabled={!hasRun || report.lines.length === 0} onClick={handleExport}>
           Export CSV
         </Button>
@@ -113,7 +121,7 @@ export function DiscountsTab({ currencyCode }) {
 
       <DataTable
         title="Every discount and comp"
-        state={hasRun && report.lines.length > 0 ? 'success' : 'empty'}
+        state={loading ? 'loading' : hasRun && report.lines.length > 0 ? 'success' : 'empty'}
         emptyMessage={hasRun ? 'None in this range.' : 'Choose a date range and run the report.'}
         columns={[
           { key: 'business_date', label: 'Date' },

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { ConfirmDialog } from '../../shared/components/index.js';
 import { ManagerApprovalDialog } from '../approvals/ManagerApprovalDialog.jsx';
-import { Money } from '../../shared/format/money.jsx';
+import { Money, formatMoney } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney, percentOfMoney } from '../../shared/money.js';
 import { posApi, discountsApi, ApiError } from '../../shared/api/index.js';
 import { DiscountDialog } from '../discounts/DiscountDialog.jsx';
+import { approvalConsequence } from '../discounts/discountText.js';
 import { DiscountList } from '../discounts/DiscountList.jsx';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { CategoryIcon, AllCategoriesIcon, PaymentMethodIcon, TrashIcon } from './registerCategoryIcons.jsx';
@@ -250,6 +251,11 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const [approvingDiscount, setApprovingDiscount] = useState(null);
   const [removingDiscount, setRemovingDiscount] = useState(null);
   const discountsRequestIdRef = useRef(0);
+  // The check on screen, so a late answer about another check is dropped.
+  const activeOrderIdRef = useRef(null);
+  useEffect(() => {
+    activeOrderIdRef.current = activeOrderId;
+  }, [activeOrderId]);
   // Bug fix (code-review pass on the settlement-preview fix): a preview
   // fetch has no natural cancellation — a cashier can switch tabs (or an
   // item change can fire a new fetch) while a slow fetch is still in
@@ -681,31 +687,34 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     }
   }
 
-  /** After any change to a discount the totals are asked for again, never adjusted here. */
-  async function discountsChanged() {
-    await loadDiscounts(activeOrderId);
-    fetchSettlementPreview(activeOrderId);
+  /** After any change to a discount the totals are asked for again, never adjusted here. A late answer about another check is dropped. */
+  async function discountsChanged(orderId = activeOrderId) {
+    if (activeOrderIdRef.current !== orderId) return;
+    await loadDiscounts(orderId);
+    if (activeOrderIdRef.current === orderId) fetchSettlementPreview(orderId);
   }
 
   async function handleRemoveDiscount(reason) {
     const target = removingDiscount;
+    const orderId = activeOrderId;
     setRemovingDiscount(null);
     try {
-      await discountsApi.removeDiscount(target.id, reason, { overrideReason: overrideReasonOf(activeOrderId) });
-      await discountsChanged();
+      await discountsApi.removeDiscount(target.id, reason, { overrideReason: overrideReasonOf(orderId) });
+      await discountsChanged(orderId);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not remove the discount.');
+      if (activeOrderIdRef.current === orderId) setError(caught instanceof ApiError ? caught.message : 'Could not remove the discount.');
     }
   }
 
   async function handleApproveDiscount(token) {
     const target = approvingDiscount;
+    const orderId = activeOrderId;
     setApprovingDiscount(null);
     try {
       await discountsApi.approveDiscount(target.id, token);
-      await discountsChanged();
+      await discountsChanged(orderId);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not apply the approved discount.');
+      if (activeOrderIdRef.current === orderId) setError(caught instanceof ApiError ? caught.message : 'Could not apply the approved discount.');
     }
   }
 
@@ -1673,6 +1682,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
 
           {discountDialog && (
             <DiscountDialog
+              currency={activeProperty.base_currency}
               lines={discountLineOptions}
               initialLineId={discountDialog.lineId}
               isOffline={isOffline}
@@ -1693,7 +1703,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
               action="pos.discount_approval"
               targetId={approvingDiscount.id}
               title={approvingDiscount.kind === 'comp' ? 'Approve a comp' : 'Approve a discount'}
-              consequence={approvingDiscount.kind === 'comp' ? 'The whole amount will be given away.' : 'This discount is above what the cashier may give on their own.'}
+              consequence={approvalConsequence(approvingDiscount, (amount) => formatMoney(amount, activeProperty.base_currency))}
               confirmLabel="Approve"
               isOffline={isOffline}
               onApproved={handleApproveDiscount}

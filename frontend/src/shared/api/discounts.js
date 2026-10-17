@@ -62,7 +62,7 @@ export function approveDiscount(id, approval) {
 }
 
 export function removeDiscount(id, reason, { overrideReason } = {}) {
-  return request(`/discounts/${id}/remove`, { method: 'POST', body: { reason, override_reason: overrideReason || undefined } });
+  return request(`/discounts/${id}/remove`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey() }, body: { reason, override_reason: overrideReason || undefined } });
 }
 
 export function getReport({ dateFrom, dateTo, outletId }) {

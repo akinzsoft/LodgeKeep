@@ -94,7 +94,10 @@ async function priceCart(trx, outlet, rows, { discountIds = [], userId = null } 
   // Manual discounts the cashier asked for come off the base before tax (a voucher is not allowed on this path).
   const pricing = discountIds.length ? await discounts.priceCartWithGrants({ trx, cartLines: rows, grantIds: discountIds, userId, outletId: outlet.id }) : null;
   const baseAmount = pricing ? pricing.baseTotal : sumMoney(rows.map((row) => computeItemLineTotal({ unit_price: row.unit_price, quantity: row.quantity, modifiers: [] })));
-  const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
+  // A cart a discount took to exactly zero (a comp) carries no tax, not even a flat-amount one: nothing was sold. This
+  // matches the settlement (pos/service.js chargeForBase), so the amount the customer is asked for is the amount it settles for.
+  const comped = Boolean(pricing) && compareMoney(baseAmount, '0.00') === 0;
+  const { netAmount, taxLines } = comped ? { netAmount: '0.00', taxLines: [] } : computeChargeWithTax({ baseAmount, taxVersions });
   return { total: sumMoney([netAmount, ...taxLines.map((line) => line.amount)]), currency: property?.base_currency };
 }
 
