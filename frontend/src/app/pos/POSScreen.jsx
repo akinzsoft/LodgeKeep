@@ -113,6 +113,7 @@ export function POSScreen({ activeProperty, isOffline = false, currentUserLabel,
                 currentUserLabel={currentUserLabel}
                 currentUserId={currentUserId}
                 canManageTabs={permissions ? permissions.has('pos.manage') : false}
+                canDiscount={permissions ? permissions.has('discount.apply') : false}
               />
             )}
             {tab === 'tickets' && <TicketsTab />}
@@ -123,7 +124,7 @@ export function POSScreen({ activeProperty, isOffline = false, currentUserLabel,
             {tab === 'sales' && <SalesTab activeProperty={activeProperty} isOffline={isOffline} />}
             {tab === 'qr_codes' && <QrTokensTab />}
             {tab === 'stock' && <StockTab activeProperty={activeProperty} isOffline={isOffline} permissions={permissions} intent={intent} />}
-            {tab === 'setup' && <SetupTab activeProperty={activeProperty} isOffline={isOffline} canManageAccounts={permissions ? permissions.has('setup.manage') : true} canManageServiceCharge={permissions ? permissions.has('pos.service_charge.manage') : true} />}
+            {tab === 'setup' && <SetupTab activeProperty={activeProperty} isOffline={isOffline} canManageAccounts={permissions ? permissions.has('setup.manage') : true} canManageServiceCharge={permissions ? permissions.has('pos.service_charge.manage') : true} canManageDiscounts={permissions ? permissions.has('discount.manage') : true} />}
           </div>
         </>
       )}

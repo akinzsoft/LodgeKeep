@@ -41,6 +41,17 @@ export function SupermarketReceipt({ sale, property }) {
         </tbody>
       </table>
       <dl className={styles.totals}>
+        {sale.discounts && (
+          <>
+            <div><dt>Items</dt><dd><Money amount={sale.gross} currencyCode={currency} /></dd></div>
+            {sale.discounts.map((discount, index) => (
+              <div key={`${discount.reason}-${index}`}>
+                <dt>{discount.kind === 'comp' ? 'Comp' : 'Discount'} · {discount.reason}</dt>
+                <dd>−<Money amount={discount.amount} currencyCode={currency} /></dd>
+              </div>
+            ))}
+          </>
+        )}
         <div><dt>Subtotal</dt><dd><Money amount={sale.subtotal} currencyCode={currency} /></dd></div>
         <div><dt>Tax</dt><dd><Money amount={sale.tax_amount} currencyCode={currency} /></dd></div>
         <div className={styles.grandTotal}><dt>Total</dt><dd><Money amount={sale.total} currencyCode={currency} /></dd></div>

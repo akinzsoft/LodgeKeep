@@ -28,10 +28,10 @@ export function searchItems(outletId, q) {
  * Pass the same `idempotencyKey` when retrying the same attempt.
  */
 /** A confirmed oversell (`confirmOversell`) also needs a manager's `approval` token (action `supermarket.oversell`). */
-export function createSale({ outletId, items, method, idempotencyKey, confirmOversell = false, approval }) {
+export function createSale({ outletId, items, method, idempotencyKey, confirmOversell = false, approval, discountIds = [] }) {
   return request('/supermarket/sales', {
     method: 'POST',
-    body: { outlet_id: outletId, items, method, ...(confirmOversell ? { confirm_oversell: true } : {}) },
+    body: { outlet_id: outletId, items, method, ...(confirmOversell ? { confirm_oversell: true } : {}), ...(discountIds.length ? { discount_ids: discountIds } : {}) },
     headers: { 'Idempotency-Key': idempotencyKey ?? crypto.randomUUID(), ...approvalHeaders(approval) },
   });
 }
@@ -171,10 +171,10 @@ export function rollbackProductsImport(id, reason) {
  * is set when the sale was recorded but Paystack could not be reached (reopen it
  * with `reopenOnlineCheckout`). The same `idempotencyKey` for a retry of the same attempt.
  */
-export async function startOnlineSale({ outletId, items, tender = 'online', customerEmail, confirmOversell = false, idempotencyKey, approval }) {
+export async function startOnlineSale({ outletId, items, tender = 'online', customerEmail, confirmOversell = false, idempotencyKey, approval, discountIds = [] }) {
   const { data, meta } = await requestWithMeta('/supermarket/online-sales', {
     method: 'POST',
-    body: { outlet_id: outletId, items, tender, ...(customerEmail ? { customer_email: customerEmail } : {}), ...(confirmOversell ? { confirm_oversell: true } : {}) },
+    body: { outlet_id: outletId, items, tender, ...(customerEmail ? { customer_email: customerEmail } : {}), ...(confirmOversell ? { confirm_oversell: true } : {}), ...(discountIds.length ? { discount_ids: discountIds } : {}) },
     headers: { 'Idempotency-Key': idempotencyKey ?? crypto.randomUUID(), ...approvalHeaders(approval) },
   });
   return { intent: data, ...meta };

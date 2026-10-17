@@ -5,6 +5,7 @@ import { RevenueTab } from './RevenueTab.jsx';
 import { HousekeepingSummaryTab } from './HousekeepingSummaryTab.jsx';
 import { PaymentReconciliationTab } from './PaymentReconciliationTab.jsx';
 import { BusinessSummaryTab } from './BusinessSummaryTab.jsx';
+import { DiscountsTab } from './DiscountsTab.jsx';
 import styles from './ReportingScreen.module.css';
 
 /**
@@ -35,10 +36,11 @@ const TABS = [
 ];
 
 const BUSINESS_TAB = { key: 'business', label: 'Business summary' };
+const DISCOUNTS_TAB = { key: 'discounts', label: 'Discounts & comps' };
 
-/** `canViewBusinessSummary`: the signed-in user holds `reports.view_business`; only then is the combined summary offered, and it becomes the first tab. */
-export function ReportingScreen({ activePropertyId, canViewBusinessSummary = false }) {
-  const tabs = canViewBusinessSummary ? [BUSINESS_TAB, ...TABS] : TABS;
+/** `canViewBusinessSummary`: the signed-in user holds `reports.view_business`; only then is the combined summary offered, and it becomes the first tab. `canViewDiscounts`: `reports.view_discounts` adds the Discounts & comps tab at the end. */
+export function ReportingScreen({ activePropertyId, canViewBusinessSummary = false, canViewDiscounts = false }) {
+  const tabs = [...(canViewBusinessSummary ? [BUSINESS_TAB] : []), ...TABS, ...(canViewDiscounts ? [DISCOUNTS_TAB] : [])];
   const [tab, setTab] = useState(canViewBusinessSummary ? 'business' : 'occupancy');
   const [properties, setProperties] = useState(null);
   const [error, setError] = useState(null);
@@ -94,6 +96,7 @@ export function ReportingScreen({ activePropertyId, canViewBusinessSummary = fal
             {tab === 'revenue' && <RevenueTab activeProperty={activeProperty} />}
             {tab === 'housekeeping' && <HousekeepingSummaryTab />}
             {tab === 'reconciliation' && <PaymentReconciliationTab />}
+            {tab === 'discounts' && <DiscountsTab activeProperty={activeProperty} />}
           </div>
         </>
       )}

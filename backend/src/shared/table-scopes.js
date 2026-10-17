@@ -447,6 +447,12 @@ const TABLE_SCOPES = Object.freeze({
   // property for an action there.
   approval_pins: { scope: SCOPES.TENANT },
   manager_approvals: { scope: SCOPES.PROPERTY },
+
+  // Discounts and comps — 20261203090000_create_discount_tables.
+  discount_reasons: { scope: SCOPES.PROPERTY },
+  discount_limits: { scope: SCOPES.PROPERTY },
+  discounts: { scope: SCOPES.PROPERTY },
+  settlement_discounts: { scope: SCOPES.PROPERTY },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

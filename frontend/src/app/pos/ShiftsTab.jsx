@@ -268,6 +268,23 @@ export function ShiftsTab({ isOffline = false, currentUserId, canCloseForOthers 
                 <Money amount={closeResult.variance} currencyCode={closeResult.currency} />
               </dd>
             </div>
+            {/* Only when this shift gave discounts or comps: the cash above is already net of them. */}
+            {closeResult.discounts && (
+              <>
+                <div>
+                  <dt className={formStyles.label}>Discounts given</dt>
+                  <dd>
+                    <Money amount={closeResult.discounts.discounts} currencyCode={closeResult.currency} />
+                  </dd>
+                </div>
+                <div>
+                  <dt className={formStyles.label}>Comps given ({closeResult.discounts.compCount})</dt>
+                  <dd>
+                    <Money amount={closeResult.discounts.comps} currencyCode={closeResult.currency} />
+                  </dd>
+                </div>
+              </>
+            )}
           </dl>
           <div className={formStyles.actionsRow}>
             <Button variant="ghost" onClick={finishClosing}>

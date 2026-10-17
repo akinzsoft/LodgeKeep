@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   setOutletServiceCharge: vi.fn(),
 }));
 
+const discountMocks = vi.hoisted(() => ({ listReasons: vi.fn(), listLimits: vi.fn() }));
+
 const stockMocks = vi.hoisted(() => ({
   listStockItems: vi.fn(),
   listMenuItemComponents: vi.fn(),
@@ -39,7 +41,7 @@ const stockMocks = vi.hoisted(() => ({
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
-  return { ...actual, posApi: mocks, stockApi: stockMocks };
+  return { ...actual, posApi: mocks, stockApi: stockMocks, discountsApi: discountMocks };
 });
 
 const OUTLET = { id: '1', code: 'BAR', name: 'Main Bar', type: 'bar' };
@@ -62,6 +64,18 @@ describe('<SetupTab>', () => {
     mocks.getOutletPayoutAccount.mockResolvedValue({ account: null, settles_to: { source: 'property', bank_name: 'Zenith Bank', account_number_last4: '1784', account_name: 'Hotel Ltd' } });
     stockMocks.listStockItems.mockResolvedValue([]);
     stockMocks.listMenuItemComponents.mockResolvedValue([]);
+    Object.values(discountMocks).forEach((fn) => fn.mockReset());
+    discountMocks.listReasons.mockResolvedValue([{ id: '1', code: 'promo', name: 'Promotion', kind: 'discount', status: 'active' }]);
+    discountMocks.listLimits.mockResolvedValue([{ role: 'pos_operator', max_percent: '5.00', is_default: true }]);
+  });
+
+  it('keeps the discounts and comps settings out of the way until asked, then shows them', async () => {
+    await renderOutlets();
+    await screen.findByText('Main Bar');
+    expect(discountMocks.listReasons).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Discounts, comps and limits' }));
+    expect(await screen.findByText('Promotion')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Most each role may give without a manager' })).toBeInTheDocument();
   });
 
   it('lists outlets and creates a new one', async () => {

@@ -63,6 +63,7 @@ const { assertTipAmount } = require('../../shared/tip-amount');
 // even exists — re-exported below so no existing import of this module
 // breaks.
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
+const discountStore = require('../discounts/store');
 const { registerServiceChargePercent, serviceChargeApplies, parseServiceChargePercent, parseQrMode } = require('../../shared/service-charge');
 const { resolveOrderLine, normalizeModifierCatalogue, modifiersForInsert } = require('../../shared/pos-line-input');
 const { outletScopeForUser, scopeCovers, usersCoveringOutlets } = require('../../shared/outlet-assignments');
@@ -1250,6 +1251,29 @@ function groupKey(splitGroup) {
  * client-side instead would double-count tax the moment a property
  * configures an inclusive one.
  */
+/**
+ * The tax engine's answer for a group's base. A group a discount took to exactly zero (a comp) carries no tax at all, not
+ * even a flat-amount one: nothing was sold, so nothing is taxed. Without a discount this IS `computeChargeWithTax`.
+ */
+function chargeForBase({ baseAmount, taxVersions, discounted }) {
+  if (discounted && compareMoney(baseAmount, '0.00') === 0) return { netAmount: '0.00', grossAmount: '0.00', taxLines: [] };
+  return computeChargeWithTax({ baseAmount, taxVersions });
+}
+
+/** What a settled/previewed group shows about its discounts, or nothing when it had none (so the old shape is unchanged). */
+function discountView(group, rows, reasonNames) {
+  if (!group || compareMoney(group.discount, '0.00') === 0) return null;
+  const byId = new Map(rows.map((row) => [String(row.id), row]));
+  return {
+    gross: group.gross,
+    discountTotal: group.discount,
+    discounts: group.parts.map((part) => {
+      const row = byId.get(String(part.discountId));
+      return { discountId: String(row.id), kind: row.kind, scope: row.scope, reason: reasonNames.get(String(row.reason_id)) ?? '', amount: part.amount };
+    }),
+  };
+}
+
 async function previewSettlement({ context, orderId }) {
   const db = scopedDb().for(context);
   const order = await db.table('pos_orders').where({ id: orderId }).first();
@@ -1264,15 +1288,21 @@ async function previewSettlement({ context, orderId }) {
   const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType: taxChargeTypeForOutlet(saleOutlet) });
   const serviceChargePercent = registerServiceChargePercent(saleOutlet);
 
+  // Active discounts come off the item base BEFORE tax, so VAT and the service charge follow the discounted amount.
+  const discountRows = await discountStore.activeForOrder(db, orderId);
+  const pricing = discountStore.priceOrNull(items, discountRows);
+  const reasonNames = pricing ? await discountStore.reasonNamesFor(db, discountRows) : null;
+
   const groupKeys = [...new Set(items.map((item) => groupKey(item.split_group)))];
   const groups = groupKeys.map((key) => {
     const splitGroup = key === 'null' ? null : Number(key);
     const groupItems = items.filter((item) => groupKey(item.split_group) === key);
-    const baseAmount = sumMoney(groupItems.map(computeItemLineTotal));
-    const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
+    const baseAmount = pricing ? pricing.groups[key].base : sumMoney(groupItems.map(computeItemLineTotal));
+    const view = pricing ? discountView(pricing.groups[key], discountRows, reasonNames) : null;
+    const { netAmount, taxLines } = chargeForBase({ baseAmount, taxVersions, discounted: Boolean(view) });
     const taxAmount = sumMoney(taxLines.map((t) => t.amount));
     const serviceCharge = percentOfMoney(netAmount, serviceChargePercent);
-    return { splitGroup, subtotal: netAmount, taxAmount, serviceCharge, total: sumMoney([netAmount, taxAmount, serviceCharge]) };
+    return { splitGroup, subtotal: netAmount, taxAmount, serviceCharge, total: sumMoney([netAmount, taxAmount, serviceCharge]), ...(view ?? {}) };
   });
 
   // Sent only when it differs from the long-standing 7.50, so an ordinary outlet's response is unchanged;
@@ -1384,6 +1414,14 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
   const registerRate = registerServiceChargePercent(saleOutlet);
   const saleTaxChargeType = taxChargeTypeForOutlet(saleOutlet);
 
+  // Active discounts come off each group's item base before tax. An unapproved one is checked against its giver's
+  // limit again here, because the check may have shrunk since it was given.
+  const discountRows = await discountStore.activeForOrder(trx, orderId, { lock: true });
+  const pricing = discountStore.priceOrNull(items, discountRows);
+  const reasonNames = pricing ? await discountStore.reasonNamesFor(trx, discountRows) : null;
+  if (pricing) await discountStore.assertUnapprovedWithinLimit(trx, { rows: discountRows, pricing, propertyId: order.property_id });
+  const discountSummary = [];
+
   // Cash-up attribution: record which shift was open on this terminal when
   // the sale settled, so `closeShift` counts exactly these rows rather than
   // guessing by timestamp. See `lockTerminalForShifts` for the lock order —
@@ -1404,7 +1442,8 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
     }
 
     const groupItems = items.filter((item) => groupKey(item.split_group) === groupKey(settlement.splitGroup));
-    const baseAmount = sumMoney(groupItems.map(computeItemLineTotal));
+    const baseAmount = pricing ? pricing.groups[groupKey(settlement.splitGroup)].base : sumMoney(groupItems.map(computeItemLineTotal));
+    const groupView = pricing ? discountView(pricing.groups[groupKey(settlement.splitGroup)], discountRows, reasonNames) : null;
     const tipAmount = tipAmounts[settlementIndex];
     // The server always works the service charge out from the net below; nothing the client sends is
     // used. A guest QR settlement passes `serviceChargePercent` (the rate frozen when the guest placed
@@ -1437,6 +1476,9 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
           'A guest must be selected before this settlement can be charged to a room.',
           [{ field: 'roomCharge.reservationId', issue: 'missing' }]
         );
+      }
+      if (groupView && compareMoney(baseAmount, '0.00') === 0) {
+        throw new ValidationError('NOTHING_TO_CHARGE', 'This check was discounted to nothing, so there is nothing to charge to a room. Settle it as cash.', [{ field: 'method', issue: 'invalid' }]);
       }
       const reservation = await trx.table('reservations').where({ id: roomCharge.reservationId }).first();
       if (!reservation || reservation.status !== 'checked_in') {
@@ -1500,7 +1542,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
       });
     } else {
       const taxVersions = resolveApplicableTaxVersions({ allTaxRows, businessDate, chargeType: saleTaxChargeType });
-      const { netAmount, taxLines } = computeChargeWithTax({ baseAmount, taxVersions });
+      const { netAmount, taxLines } = chargeForBase({ baseAmount, taxVersions, discounted: Boolean(groupView) });
       const taxAmount = sumMoney(taxLines.map((t) => t.amount));
       if (serverRate !== null) {
         serviceCharge = percentOfMoney(netAmount, serverRate);
@@ -1555,6 +1597,19 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
 
     const [settlementId] = await trx.table('pos_order_settlements').insert(fields);
     results.push(await trx.table('pos_order_settlements').where({ id: settlementId }).first());
+    if (groupView) {
+      // The amounts are frozen on the settlement: reports, receipts and refunds read these, never recompute them.
+      await discountStore.recordSettlementDiscounts(trx, {
+        settlementId,
+        group: pricing.groups[groupKey(settlement.splitGroup)],
+        rows: discountRows,
+        reasonNames,
+        outletId: order.outlet_id,
+        businessDate: businessDate ?? null,
+        currency: fields.currency,
+      });
+      discountSummary.push({ settlementId: String(settlementId), splitGroup: settlement.splitGroup ?? null, ...groupView });
+    }
 
     // PLAN.md Phase 6 (POS inventory & stock control) — deduct THIS
     // settlement's own group of items only, immediately after its own
@@ -1574,6 +1629,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
   }
 
   await trx.table('pos_orders').where({ id: orderId }).update({ status: 'settled', closed_at: new Date() });
+  if (pricing) await discountStore.markApplied(trx, discountRows.map((row) => row.id));
   const settledOrder = await trx.table('pos_orders').where({ id: orderId }).first();
   // A guest QR order settling (room charge) raises its own, richer
   // `qr_ordering.guest_order_placed` alert instead — never both.
@@ -1589,7 +1645,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
       methods: [...new Set(results.map((row) => row.method))],
     },
   });
-  return { order: settledOrder, settlements: results, ownerOverride };
+  return { order: settledOrder, settlements: results, ownerOverride, ...(discountSummary.length ? { discounts: discountSummary } : {}) };
 }
 
 // ---------------------------------------------------------------------
@@ -1649,8 +1705,16 @@ async function prepareRegisterPayment({ trx, orderId, splitGroup, tender, idempo
   const property = await trx.table('properties').where({ id: order.property_id }).first('current_business_date', 'base_currency');
   const saleOutlet = await trx.table('pos_outlets').where({ id: order.outlet_id }).first('type', 'service_charge_percent');
   const taxVersions = resolveApplicableTaxVersions({ allTaxRows: await trx.table('taxes'), businessDate: property?.current_business_date, chargeType: taxChargeTypeForOutlet(saleOutlet) });
-  const { netAmount, taxLines } = computeChargeWithTax({ baseAmount: sumMoney(groupItems.map(computeItemLineTotal)), taxVersions });
+  // The intent amount follows the same discounted base the settlement will use, so the exact-amount claim still matches.
+  const discountRows = await discountStore.activeForOrder(trx, orderId, { lock: true });
+  const pricing = discountStore.priceOrNull(items, discountRows);
+  const discounted = Boolean(pricing) && compareMoney(pricing.groups[groupKey(splitGroup)].discount, '0.00') > 0;
+  const baseAmount = pricing ? pricing.groups[groupKey(splitGroup)].base : sumMoney(groupItems.map(computeItemLineTotal));
+  const { netAmount, taxLines } = chargeForBase({ baseAmount, taxVersions, discounted });
   const amount = sumMoney([netAmount, ...taxLines.map((t) => t.amount), percentOfMoney(netAmount, registerServiceChargePercent(saleOutlet))]);
+  if (discounted && compareMoney(amount, '0.00') === 0) {
+    throw new ValidationError('NOTHING_TO_PAY', 'This check was discounted to nothing, so there is nothing to pay by card. Settle it as cash.', [{ field: 'tender', issue: 'invalid' }]);
+  }
 
   const existing = (await listUnsettledRegisterPayments({ db: trx, orderId })).filter((p) => groupKey(p.split_group) === groupKey(splitGroup));
   const captured = existing.find((p) => p.status === 'CAPTURED');
@@ -1900,11 +1964,15 @@ async function closeShift({ trx, shiftId, countedCash, userId, canCloseForOthers
     variance,
     closed_at: new Date(),
   });
-  return trx.table('pos_shifts').where({ id: shiftId }).first();
+  const closed = await trx.table('pos_shifts').where({ id: shiftId }).first();
+  // Discounts and comps given on this shift, only when there were any (the cash-up keeps its old shape otherwise).
+  const discounts = await discountStore.summaryForShift(trx, shift.id);
+  return discounts ? { ...closed, discounts } : closed;
 }
 
 module.exports = {
   cleanOverrideReason,
+  assertCanChangeTab,
   TERMINAL_PROVIDERS,
   listTransferCandidates,
   transferTabs,

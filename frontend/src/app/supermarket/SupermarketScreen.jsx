@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Card, Button, DataTable, PrintDocument, PrintLetterhead } from '../../shared/components/index.js';
+import { Card, Button, ConfirmDialog, DataTable, PrintDocument, PrintLetterhead } from '../../shared/components/index.js';
 import { ManagerApprovalDialog } from '../approvals/ManagerApprovalDialog.jsx';
-import { Money } from '../../shared/format/money.jsx';
+import { Money, formatMoney } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney } from '../../shared/money.js';
-import { supermarketApi, posApi, ApiError } from '../../shared/api/index.js';
+import { supermarketApi, posApi, discountsApi, ApiError } from '../../shared/api/index.js';
 import { SupermarketReceipt } from './SupermarketReceipt.jsx';
 import { paymentLabel } from './paymentLabel.js';
 import { ProductTile } from './ProductTile.jsx';
@@ -16,6 +16,9 @@ import { presetRange } from './salesRange.js';
 import { StockRequestsTab } from '../pos/StockRequestsTab.jsx';
 import { StockWastageTab } from '../pos/StockWastageTab.jsx';
 import { OnlineCardDialog } from './OnlineCardDialog.jsx';
+import { DiscountDialog } from '../discounts/DiscountDialog.jsx';
+import { approvalConsequence } from '../discounts/discountText.js';
+import { DiscountList } from '../discounts/DiscountList.jsx';
 import { OnlineReviewCard } from './OnlineReviewCard.jsx';
 import { cameraSupported } from '../../shared/scanner/cameraScanner.js';
 import formStyles from '../pos/POSForm.module.css';
@@ -60,6 +63,8 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const canSell = permissions.has('supermarket.sales');
   const canReport = permissions.has('supermarket.report');
   const canVoid = permissions.has('supermarket.manage');
+  // A cashier may ask for a discount or a comp; above their limit (and for every comp) a manager approves with a PIN.
+  const canDiscount = canSell && permissions.has('discount.apply');
   // A cashier may start a void; a manager approves it with their PIN (ManagerApprovalDialog).
   const canStartVoid = canSell;
   // Stock reaches the mart only by a store-approved request: a cashier raises one here, the store issues it under Stock → Requests.
@@ -74,6 +79,11 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   const [scan, setScan] = useState('');
   const [results, setResults] = useState([]);
   const [cart, setCart] = useState([]);
+  // Discount requests priced (by the server) against a particular cart; one made for a different cart no longer counts.
+  const [cartDiscounts, setCartDiscounts] = useState([]);
+  const [discountDialogOpen, setDiscountDialogOpen] = useState(false);
+  const [approvingDiscount, setApprovingDiscount] = useState(null);
+  const [removingDiscount, setRemovingDiscount] = useState(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [canUseCamera] = useState(cameraSupported);
   // `?scandebug=1` shows the camera scanner's on-screen diagnostics (no effect on scanning).
@@ -450,6 +460,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
           confirmOversell,
           approval,
           items: cart.map((line) => ({ menu_item_id: line.menuItem.id, quantity: line.quantity })),
+          discountIds: usableDiscountIds,
         });
         attemptKey.current = null;
         setOnlineSession(started);
@@ -462,10 +473,12 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
         confirmOversell,
         approval,
         items: cart.map((line) => ({ menu_item_id: line.menuItem.id, quantity: line.quantity })),
+        discountIds: usableDiscountIds,
       });
       setIsReprint(false);
       setReceipt(sale);
       setCart([]);
+      setCartDiscounts([]);
       setScan('');
       setResults([]);
       attemptKey.current = null;
@@ -508,11 +521,42 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per outlet
   }, [outletId]);
 
+  /** Remembers a priced request against the cart it was made for (a pending one waits for a manager). */
+  function rememberDiscount(result) {
+    attemptKey.current = null; // the sale's body changes with its discounts, so a retry is a new attempt
+    setCartDiscounts((current) => [...current.filter((discount) => discount.cartKey === cartKey), { ...result, cartKey }]);
+  }
+
+  async function handleApproveDiscount(approval) {
+    const target = approvingDiscount;
+    setApprovingDiscount(null);
+    attemptKey.current = null;
+    try {
+      await discountsApi.approveDiscount(target.id, approval);
+      setCartDiscounts((current) => current.map((discount) => (discount.id === target.id ? { ...discount, status: 'active' } : discount)));
+    } catch (caught) {
+      setSaleError(caught instanceof ApiError ? caught.message : 'Could not apply the approved discount.');
+    }
+  }
+
+  async function handleRemoveDiscount(reason) {
+    const target = removingDiscount;
+    setRemovingDiscount(null);
+    attemptKey.current = null;
+    try {
+      await discountsApi.removeDiscount(target.id, reason);
+      setCartDiscounts((current) => current.filter((discount) => discount.id !== target.id));
+    } catch (caught) {
+      setSaleError(caught instanceof ApiError ? caught.message : 'Could not remove the discount.');
+    }
+  }
+
   function finishOnlineSale(sale) {
     setOnlineSession(null);
     setIsReprint(false);
     setReceipt(sale);
     setCart([]);
+    setCartDiscounts([]);
     setScan('');
     setResults([]);
     attemptKey.current = null;
@@ -549,6 +593,13 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
 
   const currency = activeProperty?.base_currency;
   const itemsTotal = sumMoney(cart.map((line) => multiplyMoney(line.menuItem.price, line.quantity)));
+  // A discount was priced against one cart; if the cart has changed since, it is dropped from view and from the sale.
+  const cartKey = JSON.stringify(cart.map((line) => [line.menuItem.id, line.quantity]));
+  const currentDiscounts = cartDiscounts.filter((discount) => discount.cartKey === cartKey);
+  const staleDiscounts = cartDiscounts.length > currentDiscounts.length;
+  const usableDiscountIds = currentDiscounts.filter((discount) => discount.status === 'active').map((discount) => discount.id);
+  const waitingDiscounts = currentDiscounts.filter((discount) => discount.status === 'pending_approval');
+  const discountTotal = sumMoney(currentDiscounts.filter((discount) => discount.status === 'active').map((discount) => discount.amount ?? '0.00'));
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
   const quantityById = new Map(cart.map((line) => [String(line.menuItem.id), line.quantity]));
 
@@ -750,6 +801,27 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
                   <span>Items total</span>
                   <span className={styles.totalAmount}><Money amount={itemsTotal} currencyCode={currency} /></span>
                 </div>
+                {canDiscount && (
+                  <button type="button" className={styles.discountButton} onClick={() => setDiscountDialogOpen(true)} disabled={isOffline || submitting}>
+                    Discount or comp
+                  </button>
+                )}
+                {staleDiscounts && currentDiscounts.length === 0 && <p className={styles.taxNote}>The cart changed, so its discounts were cleared. Ask for them again.</p>}
+                <DiscountList
+                  discounts={currentDiscounts}
+                  currencyCode={currency}
+                  lineLabel={(discount) => cart.find((line) => String(line.menuItem.id) === String(discount.menu_item_id))?.menuItem.name ?? ''}
+                  disabled={isOffline || submitting}
+                  onApprove={setApprovingDiscount}
+                  onRemove={setRemovingDiscount}
+                />
+                {waitingDiscounts.length > 0 && <p className={styles.taxNote}>A discount is waiting for a manager. Until it is approved, the sale goes through at the full price.</p>}
+                {usableDiscountIds.length > 0 && (
+                  <div className={styles.totalRow}>
+                    <span>After discounts</span>
+                    <span className={styles.totalAmount}><Money amount={sumMoney([itemsTotal, `-${discountTotal}`])} currencyCode={currency} /></span>
+                  </div>
+                )}
                 <p className={styles.taxNote}>Tax is added on the receipt according to the supermarket VAT setting.</p>
                 <div className={styles.methods} role="group" aria-label="Payment method">
                   <button type="button" className={`${styles.method} ${method === 'cash' ? styles.methodActive : ''}`} aria-pressed={method === 'cash'} onClick={() => setMethod('cash')}>Cash</button>
@@ -970,6 +1042,56 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
             ))}
           </ul>
         </ManagerApprovalDialog>
+      )}
+
+      {discountDialogOpen && (
+        <DiscountDialog
+          currency={currency}
+          lines={cart.map((line) => ({ id: String(line.menuItem.id), label: line.menuItem.name }))}
+          isOffline={isOffline}
+          create={({ scope, kind, type, value, reasonId, lineId }) =>
+            discountsApi.createCartDiscount({
+              outletId,
+              items: cart.map((line) => ({ menu_item_id: line.menuItem.id, quantity: line.quantity })),
+              scope,
+              kind,
+              type,
+              value,
+              reasonId,
+              menuItemId: lineId,
+            })
+          }
+          onDone={(result) => {
+            rememberDiscount(result);
+            setDiscountDialogOpen(false);
+          }}
+          onPending={rememberDiscount}
+          onCancel={() => setDiscountDialogOpen(false)}
+        />
+      )}
+
+      {approvingDiscount && (
+        <ManagerApprovalDialog
+          action="supermarket.discount_approval"
+          targetId={approvingDiscount.id}
+          title={approvingDiscount.kind === 'comp' ? 'Approve a comp' : 'Approve a discount'}
+          consequence={approvalConsequence(approvingDiscount, (amount) => formatMoney(amount, currency))}
+          confirmLabel="Approve"
+          isOffline={isOffline}
+          onApproved={handleApproveDiscount}
+          onCancel={() => setApprovingDiscount(null)}
+        />
+      )}
+
+      {removingDiscount && (
+        <ConfirmDialog
+          title="Remove this discount?"
+          consequence="The sale goes back to its full price. To give it again, ask for it again."
+          requireReason
+          confirmLabel="Remove"
+          onConfirm={handleRemoveDiscount}
+          onCancel={() => setRemovingDiscount(null)}
+        />
       )}
 
       {onlineSession && (

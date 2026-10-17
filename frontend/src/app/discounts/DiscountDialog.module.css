@@ -1,0 +1,183 @@
+/* Same overlay/dialog shape as the approval dialog; tokens only. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  z-index: 100;
+}
+
+.dialog {
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised);
+  padding: var(--space-5);
+  max-width: 440px;
+  width: 100%;
+  max-height: calc(100dvh - var(--space-8));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-h2-size);
+  line-height: var(--text-h2-line);
+  font-weight: var(--text-h2-weight);
+}
+
+.hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.label {
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+  font-weight: var(--text-label-weight);
+  color: var(--text-secondary);
+}
+
+.input {
+  min-height: var(--control-h-touch);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-size);
+  background: var(--surface-card);
+  color: var(--text-primary);
+}
+
+.segment {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.segmentButton {
+  flex: 1;
+  min-height: var(--control-h-touch);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  cursor: pointer;
+}
+
+.segmentButton[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-inverse);
+}
+
+.error {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--state-danger-bg);
+  color: var(--state-danger);
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.primary,
+.secondary {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  cursor: pointer;
+}
+
+.primary {
+  background: var(--accent);
+  color: var(--text-inverse);
+  border: none;
+}
+
+.primary:disabled {
+  background: var(--state-neutral-bg);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.secondary {
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+
+/* The list under a ticket or a cart. */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-size: var(--text-label-size);
+  line-height: var(--text-label-line);
+}
+
+.itemText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--text-primary);
+}
+
+.itemMeta {
+  color: var(--text-secondary);
+}
+
+.itemActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.linkButton {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-size: var(--text-label-size);
+  cursor: pointer;
+}
