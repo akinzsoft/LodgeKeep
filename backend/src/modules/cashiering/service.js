@@ -98,8 +98,48 @@ const CHARGE_TYPES = new Set(['room_charge', 'pos_charge']);
 // Reads
 // ---------------------------------------------------------------------
 
+/**
+ * The ONE way a folio is locked before its balance is changed or relied on (F-05). Every mutation that posts, voids or
+ * moves a line, takes a payment or refund against a folio, or closes it, starts here.
+ *
+ * Lock order, for the whole module: the payment row (when there is one), then the AR account of any folio billed to a
+ * company, then the folios themselves in ASCENDING id. That is the order `generateInvoice`/`recordPayment` already
+ * use (AR account, then the folio rows their locking reads touch), so a charge on an AR-billed folio and an invoice run
+ * for the same account cannot deadlock. A folio's `company_profile_id` can change (`billFolioToCompany`) between the
+ * peek that finds the account and the lock on the folio, so it is re-checked under the lock and the whole thing
+ * retried until the two agree.
+ *
+ * Returns the freshly locked folio rows by id.
+ */
+async function lockFoliosForMutation({ trx, folioIds }) {
+  const ids = [...new Set(folioIds.map(String))].sort((a, b) => (BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0));
+  const lockedAccountCompanies = new Set();
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const peek = await trx.table('folios').whereIn('id', ids).select('id', 'company_profile_id');
+    const wanted = [...new Set(peek.map((row) => row.company_profile_id).filter(Boolean).map(String))].filter((id) => !lockedAccountCompanies.has(id));
+    if (wanted.length > 0) {
+      await trx.table('ar_accounts').whereIn('company_profile_id', wanted).orderBy('id').forUpdate();
+      wanted.forEach((id) => lockedAccountCompanies.add(id));
+    }
+    const locked = await trx.table('folios').whereIn('id', ids).orderBy('id').forUpdate();
+    const stable = locked.every((row) => !row.company_profile_id || lockedAccountCompanies.has(String(row.company_profile_id)));
+    if (stable) return new Map(locked.map((row) => [String(row.id), row]));
+  }
+  throw new ValidationError('FOLIO_BUSY', 'The folio was changing while it was being locked. Please try again.');
+}
+
+async function lockFolio({ trx, folioId }) {
+  return (await lockFoliosForMutation({ trx, folioIds: [folioId] })).get(String(folioId)) ?? null;
+}
+
+/**
+ * The folio's balance is always re-derived from its non-voided lines and written back, never adjusted in place. The sum
+ * is a LOCKING read: a plain read sees the REPEATABLE READ snapshot the request's first read fixed (the idempotency-key
+ * lookup), which can predate a line another request has since committed. The caller holds the folio lock
+ * (`lockFoliosForMutation`), so no other writer can add a line between this read and the write.
+ */
 async function recomputeFolioBalance({ trx, folioId }) {
-  const lines = await trx.table('folio_line_items').where({ folio_id: folioId }).whereNull('voided_at');
+  const lines = await trx.table('folio_line_items').where({ folio_id: folioId }).whereNull('voided_at').forUpdate();
   const balance = sumMoney(lines.map((line) => line.amount));
   await trx.table('folios').where({ id: folioId }).update({ balance });
   return balance;
@@ -243,14 +283,27 @@ async function openAdditionalFolio({ trx, reservationId, billedTo }) {
  * lines" only means something if the charge and its tax stay together.
  */
 async function moveLineItem({ trx, lineItemId, destinationFolioId }) {
-  const line = await trx.table('folio_line_items').where({ id: lineItemId }).first();
+  let line = await trx.table('folio_line_items').where({ id: lineItemId }).first();
   if (!line) throw new LineItemNotFoundError();
+  // Both folios are locked together, ascending by id, so two moves in opposite directions cannot deadlock. The line is
+  // then re-read under the lock: a concurrent move may have taken it to another folio since it was first read.
+  let locked;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    locked = await lockFoliosForMutation({ trx, folioIds: [line.folio_id, destinationFolioId] });
+    const fresh = await trx.table('folio_line_items').where({ id: lineItemId }).forUpdate().first();
+    if (!fresh) throw new LineItemNotFoundError();
+    if (String(fresh.folio_id) === String(line.folio_id)) {
+      line = fresh;
+      break;
+    }
+    line = fresh;
+    locked = null;
+  }
+  if (!locked) throw new ValidationError('FOLIO_BUSY', 'The line was moving while it was being locked. Please try again.');
   if (line.voided_at) throw new LineItemAlreadyVoidedError(lineItemId);
 
-  const [sourceFolio, destinationFolio] = await Promise.all([
-    trx.table('folios').where({ id: line.folio_id }).first(),
-    trx.table('folios').where({ id: destinationFolioId }).first(),
-  ]);
+  const sourceFolio = locked.get(String(line.folio_id));
+  const destinationFolio = locked.get(String(destinationFolioId));
   if (!destinationFolio) throw new ValidationError('FOLIO_NOT_FOUND', 'The destination folio does not exist.');
   if (sourceFolio.reservation_id !== destinationFolio.reservation_id) throw new CrossReservationFolioMoveError();
   if (destinationFolio.status !== 'open') throw new FolioClosedError(destinationFolioId);
@@ -282,7 +335,9 @@ async function moveLineItem({ trx, lineItemId, destinationFolioId }) {
  * invoice's own accounting.
  */
 async function billFolioToCompany({ trx, folioId, companyProfileId }) {
-  const folio = await trx.table('folios').where({ id: folioId }).first();
+  // The company's AR account first (the module-wide lock order: AR account, then the folio), then the folio.
+  if (companyProfileId) await trx.table('ar_accounts').where({ company_profile_id: companyProfileId }).forUpdate();
+  const folio = await lockFolio({ trx, folioId });
   if (!folio) throw new ValidationError('FOLIO_NOT_FOUND', 'The specified folio does not exist.');
   if (folio.status !== 'open') throw new FolioClosedError(folioId);
 
@@ -339,7 +394,7 @@ async function postCharge({ trx, folioId, type, description, amount, businessDat
   if (!CHARGE_TYPES.has(type)) {
     throw new ValidationError('INVALID_CHARGE_TYPE', `"${type}" is not a postable charge type — use "room_charge" or "pos_charge".`);
   }
-  const folio = await trx.table('folios').where({ id: folioId }).first();
+  const folio = await lockFolio({ trx, folioId });
   if (!folio) throw new ValidationError('FOLIO_NOT_FOUND', 'The specified folio does not exist.');
   if (folio.status !== 'open') throw new FolioClosedError(folioId);
 
@@ -498,7 +553,7 @@ async function postLateRoomCharges({ trx, folioId, nights, businessDate, userId,
  */
 async function postAdjustment({ trx, folioId, description, amount, relatedLineItemId, businessDate, userId, reason, overrideCreditLimit, overrideReason }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required for a folio adjustment.', [{ field: 'reason', issue: 'missing' }]);
-  const folio = await trx.table('folios').where({ id: folioId }).first();
+  const folio = await lockFolio({ trx, folioId });
   if (!folio) throw new ValidationError('FOLIO_NOT_FOUND', 'The specified folio does not exist.');
   if (folio.status !== 'open') throw new FolioClosedError(folioId);
 
@@ -550,7 +605,12 @@ async function postAdjustment({ trx, folioId, description, amount, relatedLineIt
  */
 async function voidLineItem({ trx, lineItemId, reason, userId }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to void a folio line.', [{ field: 'reason', issue: 'missing' }]);
-  const line = await trx.table('folio_line_items').where({ id: lineItemId }).first();
+  const peeked = await trx.table('folio_line_items').where({ id: lineItemId }).first();
+  if (!peeked) throw new LineItemNotFoundError();
+  // The folio is locked BEFORE the line is judged, and the line is re-read under that lock, so a void and a charge (or
+  // two voids) on the same folio serialise and the second sees what the first did.
+  await lockFolio({ trx, folioId: peeked.folio_id });
+  const line = await trx.table('folio_line_items').where({ id: lineItemId }).forUpdate().first();
   if (!line) throw new LineItemNotFoundError();
   if (line.voided_at) throw new LineItemAlreadyVoidedError(lineItemId);
   if (line.type === 'payment' || line.type === 'refund') {
@@ -595,7 +655,7 @@ async function voidLineItem({ trx, lineItemId, reason, userId }) {
 async function assertFolioOpenForPayment({ trx, folioId, amount, currency }) {
   // The amount is checked first and on every path, so a bad one is refused before anything is read or written.
   const checkedAmount = assertPaymentAmount(amount);
-  const folio = await trx.table('folios').where({ id: folioId }).first();
+  const folio = await lockFolio({ trx, folioId });
   if (!folio) throw new ValidationError('FOLIO_NOT_FOUND', 'The specified folio does not exist.');
   if (folio.status !== 'open') throw new FolioClosedError(folioId);
   if (folio.company_profile_id) throw new CannotPayArBilledFolioDirectlyError(folioId);
@@ -1099,7 +1159,7 @@ async function applyGatewayResult({ trx, payment, gatewayStatus, providerPayment
       if (!supermarketCaptureFinalizer) throw new Error('A supermarket payment was captured but the supermarket module is not loaded to complete its sale.');
       await supermarketCaptureFinalizer({ trx, payment: { ...payment, status: 'CAPTURED', provider_payment_id: providerPaymentId ?? payment.provider_payment_id }, lateCapture: lateRegisterCapture });
     } else {
-      const folio = await trx.table('folios').where({ id: payment.folio_id }).first();
+      const folio = await lockFolio({ trx, folioId: payment.folio_id });
       const businessDate = await propertyBusinessDate({ trx, propertyId: folio.property_id });
       await trx.table('folio_line_items').insert({
         folio_id: payment.folio_id,
@@ -1457,58 +1517,108 @@ async function recordWebhookAudit({ payment, action, detail }) {
 // Refunds — ARCHITECTURE.md §7 ("CAPTURED -> REFUNDED / PARTIALLY_REFUNDED")
 // ---------------------------------------------------------------------
 
-async function refundedSoFar({ trx, paymentId }) {
-  const refunds = await trx.table('payments').where({ parent_payment_id: paymentId, status: 'CAPTURED' });
-  // A refund itself is recorded as its own payment row (see below) whose
-  // own status settles to CAPTURED once applied — summing its amount is
-  // what "already refunded" means.
+/** Refund rows that count against a payment: settled ones, and ones still in flight (their amount is RESERVED until the gateway answers). */
+const REFUND_RESERVING_STATUSES = ['INITIATED', 'PENDING', 'CAPTURED'];
+
+/**
+ * What has been refunded (or is being refunded) against a payment. A LOCKING read: the caller holds the payment's row
+ * lock, and a plain read here would show the transaction's snapshot, which can predate a refund another request has
+ * since committed. Counts refunds still in flight (INITIATED / PENDING) as well as settled ones, so an amount Paystack
+ * has accepted but not yet processed cannot be refunded a second time.
+ */
+async function refundedSoFar({ trx, paymentId, statuses = REFUND_RESERVING_STATUSES }) {
+  const refunds = await trx.table('payments').where({ parent_payment_id: paymentId }).whereIn('status', statuses).forUpdate();
   return sumMoney(refunds.map((r) => r.amount));
 }
 
+/** Locks the payment being refunded and re-checks, under that lock, that it can still be refunded and by how much. */
+async function lockRefundablePayment({ trx, paymentId, refundAmount, amountSupplied }) {
+  const original = await trx.table('payments').where({ id: paymentId }).forUpdate().first();
+  if (!original) throw new ValidationError('PAYMENT_NOT_FOUND', 'The specified payment does not exist.');
+  if (original.status !== 'CAPTURED' && original.status !== 'PARTIALLY_REFUNDED') {
+    throw new InvalidPaymentTransitionError(original.status, 'REFUNDED');
+  }
+  const reserved = await refundedSoFar({ trx, paymentId });
+  const available = sumMoney([original.amount, negateMoney(reserved)]);
+  const amount = amountSupplied ? refundAmount : available;
+  if (compareMoney(available, '0.00') <= 0 || compareMoney(amount, available) > 0) {
+    throw new RefundExceedsCapturedAmountError(paymentId, amount, available);
+  }
+  return { original, refundAmount: amount };
+}
+
+/** A gateway failure whose outcome we know: Paystack looked at the request and said no (an HTTP 4xx other than a timeout), so no refund exists. */
+function gatewayRefusedDefinitively(error) {
+  const status = error?.details?.httpStatus;
+  return Number.isInteger(status) && status >= 400 && status < 500 && status !== 408;
+}
+
 /**
- * `amount` omitted means a full refund of whatever remains uncaptured-back.
- * Cash: real, synchronous, complete in this one transaction. Paystack: a
- * real refund API call (`src/modules/cashiering/paystack-adapter.js`) —
- * made OUTSIDE this transaction (§6.4), with the folio effect posted in a
- * short follow-up transaction once Paystack's own response confirms it
- * processed. `reason` is mandatory (CLAUDE.md: "money confirmations require
- * a reason field").
+ * The refund request left us but we cannot say whether Paystack acted on it (a timeout, a dropped connection, a 5xx, or
+ * a failure writing the result down). The intent stays PENDING, so the amount STAYS reserved, and it is marked for a
+ * human to reconcile against Paystack. Releasing it would let the same refund be sent twice.
+ */
+async function flagRefundOutcomeUnknown({ db, intent, original, userId, error }) {
+  const detail = `Outcome unknown, awaiting reconciliation with Paystack: ${error?.message ?? 'no response'}`.slice(0, 500);
+  await db.transaction(async (trx) => {
+    await trx.table('payments').where({ id: intent.id }).whereIn('status', ['INITIATED', 'PENDING']).update({ status: 'PENDING', failure_reason: detail });
+    await recordAuditEntry(trx, {
+      entityType: 'payments',
+      entityId: intent.id,
+      propertyId: original.property_id,
+      userId,
+      action: 'refund_outcome_unknown',
+      source: 'api',
+      afterState: { originalPaymentId: original.id, amount: intent.amount, currency: original.currency },
+      reason: detail,
+    });
+  });
+}
+
+/**
+ * `amount` omitted means a full refund of whatever remains. Every path takes the PAYMENT'S ROW LOCK first and works
+ * out what is left to refund under it (F-04), so two requests — with different idempotency keys, from a double click
+ * or two cashiers — cannot both refund the same money. Lock order, module-wide: payment, then (AR account and) folios
+ * in ascending id.
+ *
+ * Cash and a physical card terminal reverse locally in ONE transaction. Paystack: (1) one short transaction locks the
+ * payment, re-checks, and writes the refund as an INITIATED intent, which RESERVES its amount; (2) Paystack is asked,
+ * outside any transaction (§6.4); (3) a second short transaction records the answer. A definite refusal marks the
+ * intent FAILED and releases the amount. An answer we never got keeps it reserved and flags it for reconciliation.
+ * `reason` is mandatory.
  */
 async function refundPayment({ context, paymentId, amount, reason, idempotencyKey, userId, approve = null }) {
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required for a refund.', [{ field: 'reason', issue: 'missing' }]);
   const db = scopedDb().for(context);
 
-  const original = await db.table('payments').where({ id: paymentId }).first();
-  if (!original) throw new ValidationError('PAYMENT_NOT_FOUND', 'The specified payment does not exist.');
+  // A first, unlocked look only to route the request; everything that matters is re-read under the lock below.
+  const peeked = await db.table('payments').where({ id: paymentId }).first();
+  if (!peeked) throw new ValidationError('PAYMENT_NOT_FOUND', 'The specified payment does not exist.');
   // A supermarket online sale is refunded by voiding the sale (it also returns
   // the stock and marks the sale void), never through this generic refund.
-  if (original.settlement_target === 'supermarket_sale') {
+  if (peeked.settlement_target === 'supermarket_sale') {
     throw new ValidationError('USE_SUPERMARKET_VOID', 'Refund a supermarket online sale by voiding the sale on the Supermarket screen.', [{ field: 'payment_id', issue: 'supermarket_sale' }]);
   }
-  if (original.status !== 'CAPTURED' && original.status !== 'PARTIALLY_REFUNDED') {
-    throw new InvalidPaymentTransitionError(original.status, 'REFUNDED');
+  if (peeked.status !== 'CAPTURED' && peeked.status !== 'PARTIALLY_REFUNDED') {
+    throw new InvalidPaymentTransitionError(peeked.status, 'REFUNDED');
   }
-
-  const alreadyRefunded = await refundedSoFar({ trx: db, paymentId });
-  const available = sumMoney([original.amount, negateMoney(alreadyRefunded)]);
   // A supplied refund amount gets the same validation as a payment (positive, 2 decimals); omitted means the full remainder.
   const amountSupplied = !(amount === undefined || amount === null || amount === '');
-  const refundAmount = amountSupplied ? assertPaymentAmount(amount) : available;
-  if (compareMoney(refundAmount, available) > 0) {
-    throw new RefundExceedsCapturedAmountError(paymentId, refundAmount, available);
-  }
+  const suppliedAmount = amountSupplied ? assertPaymentAmount(amount) : null;
 
   const reference = generateUlid();
   // `approve(trx, payment)` — a manager's approval (`src/modules/approvals`), passed by the refund route, which
   // claims one for a POS payment only (a folio refund is a no-op there); the QR order rejection passes none.
-  // Called after every check above, inside the local refund's own transaction, or — for Paystack — in a short
-  // transaction just before the gateway is asked (it cannot share one with an external call).
+  // Called after every check, inside the refund's own transaction (cash/terminal) or the intent's transaction (Paystack).
 
   // Cash and a physical-terminal card payment both reverse LOCALLY, with no gateway: the money goes back through
   // the till or the terminal itself, which is the staff's to do. Anything else is a Paystack payment.
-  if (original.provider === 'cash' || original.provider === 'terminal') {
-    const isTerminal = original.provider === 'terminal';
+  if (peeked.provider === 'cash' || peeked.provider === 'terminal') {
+    const isTerminal = peeked.provider === 'terminal';
     return db.transaction(async (trx) => {
+      const { original, refundAmount } = await lockRefundablePayment({ trx, paymentId, refundAmount: suppliedAmount, amountSupplied });
+      const alreadyRefunded = await refundedSoFar({ trx, paymentId, statuses: ['CAPTURED'] });
+      const folio = await lockFolio({ trx, folioId: original.folio_id });
       if (approve) await approve(trx, original);
       const [refundPaymentId] = await trx.table('payments').insert({
         folio_id: original.folio_id,
@@ -1521,7 +1631,7 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
         captured_at: new Date(),
         parent_payment_id: original.id,
       });
-      const businessDate = await propertyBusinessDate({ trx, propertyId: (await trx.table('folios').where({ id: original.folio_id }).first()).property_id });
+      const businessDate = await propertyBusinessDate({ trx, propertyId: folio.property_id });
       await trx.table('folio_line_items').insert({
         folio_id: original.folio_id,
         type: 'refund',
@@ -1553,121 +1663,164 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
     });
   }
 
-  // Paystack — the real external call, outside a transaction (§6.4).
-  if (approve) await db.transaction((trx) => approve(trx, original));
-  const { adapter } = await paystack.resolveAdapterForCurrency(db, original.currency);
-  const gatewayResult = await adapter.refundTransaction({ reference: original.provider_reference, amount: amountSupplied ? refundAmount : undefined });
-  const processed = gatewayResult.status === 'processed' || gatewayResult.status === 'success';
-  // A Register payment reverses the same way a guest QR order's does: void
-  // the settlement it funded. Neither has a folio to post a refund line to.
-  const isPosOrderTarget = original.settlement_target === 'pos_order' || original.settlement_target === 'pos_register';
+  // Paystack. The adapter is resolved first: a missing gateway fails before anything is reserved.
+  const { adapter } = await paystack.resolveAdapterForCurrency(db, peeked.currency);
+  // A Register payment reverses the same way a guest QR order's does: the settlement it funded is voided (once the
+  // payment is refunded in full). Neither has a folio to post a refund line to.
+  const isPosOrderTarget = peeked.settlement_target === 'pos_order' || peeked.settlement_target === 'pos_register';
 
-  return db.transaction(async (trx) => {
-    const [refundPaymentId] = await trx.table('payments').insert({
-      folio_id: isPosOrderTarget ? null : original.folio_id,
-      pos_order_id: isPosOrderTarget ? original.pos_order_id : null,
-      settlement_target: isPosOrderTarget ? original.settlement_target : 'folio',
+  // (1) Reserve: lock the payment, re-check, write the INITIATED intent.
+  const { intent, original, refundAmount } = await db.transaction(async (trx) => {
+    const locked = await lockRefundablePayment({ trx, paymentId, refundAmount: suppliedAmount, amountSupplied });
+    if (approve) await approve(trx, locked.original);
+    const [intentId] = await trx.table('payments').insert({
+      folio_id: isPosOrderTarget ? null : locked.original.folio_id,
+      pos_order_id: isPosOrderTarget ? locked.original.pos_order_id : null,
+      settlement_target: isPosOrderTarget ? locked.original.settlement_target : 'folio',
       idempotency_key: idempotencyKey,
       provider: 'paystack',
       provider_reference: reference,
-      amount: refundAmount,
-      currency: original.currency,
-      status: processed ? 'CAPTURED' : 'PENDING',
-      captured_at: processed ? new Date() : null,
-      parent_payment_id: original.id,
+      amount: locked.refundAmount,
+      currency: locked.original.currency,
+      status: 'INITIATED',
+      parent_payment_id: locked.original.id,
     });
+    return { intent: await trx.table('payments').where({ id: intentId }).first(), original: locked.original, refundAmount: locked.refundAmount };
+  });
 
-    if (processed) {
-      if (isPosOrderTarget) {
-        // PLAN.md Phase 6 (QR self-ordering gap closure) — no folio exists
-        // for a guest order's card payment at all; the real reversal is
-        // voiding the `card` settlement itself. Replicated inline
-        // (`pos/service.js`'s own `voidSettlement` shape: lock the parent
-        // order, re-check `voided_at` under a locking read, then write)
-        // rather than imported — see this file's own header comment on
-        // why `pos/service.js` is never required from here.
-        //
-        // Code-review fix (LOW) — this MUST stay in lockstep with
-        // `voidSettlement`'s own two invariants, since a future change to
-        // either copy can otherwise silently diverge from the other:
-        // (1) an already-voided settlement is a real `409` conflict, never
-        // a silent no-op (ARCHITECTURE.md §8's "void, never delete" —
-        // voiding twice must be as loud as deleting twice); (2) a
-        // `tip_service_charge_line_item_id` (currently never set on a
-        // `card`-method settlement — tips/service charges only ever post
-        // for `room_charge` settlements, `pos/service.js`'s own
-        // `settleOrder` — but voided here too regardless, so this stays
-        // correct the moment that stops being true) is voided alongside
-        // the settlement itself, never left orphaned on a folio.
-        const settlement = await trx.table('pos_order_settlements').where({ payment_id: original.id }).first();
-        if (settlement) {
-          await trx.table('pos_orders').where({ id: settlement.pos_order_id }).forUpdate().first();
-          const lockedSettlement = await trx.table('pos_order_settlements').where({ id: settlement.id }).forUpdate().first();
-          if (lockedSettlement.voided_at) throw new SettlementAlreadyVoidedError(settlement.id);
+  // (2) Ask Paystack, outside any transaction.
+  let gatewayResult;
+  try {
+    gatewayResult = await adapter.refundTransaction({ reference: original.provider_reference, amount: amountSupplied ? refundAmount : undefined });
+  } catch (error) {
+    if (gatewayRefusedDefinitively(error)) {
+      // The failed intent gives its idempotency key back, so the cashier can retry the same action under the same key.
+      await db.table('payments').where({ id: intent.id }).update({
+        status: 'FAILED',
+        failed_at: new Date(),
+        failure_reason: `Paystack refused the refund: ${error.message}`.slice(0, 500),
+        idempotency_key: `${String(idempotencyKey).slice(0, 150)}~failed-${intent.id}`,
+      });
+    } else {
+      await flagRefundOutcomeUnknown({ db, intent, original, userId, error });
+    }
+    throw error;
+  }
+  const processed = gatewayResult.status === 'processed' || gatewayResult.status === 'success';
 
-          if (lockedSettlement.tip_service_charge_line_item_id) {
-            await voidLineItem({ trx, lineItemId: lockedSettlement.tip_service_charge_line_item_id, reason, userId });
+  // (3) Record the answer. A failure here leaves the refund sent but unrecorded, so it is flagged, never released.
+  try {
+    return await db.transaction(async (trx) => {
+      const lockedOriginal = await trx.table('payments').where({ id: original.id }).forUpdate().first();
+      await trx.table('payments').where({ id: intent.id }).update({
+        status: processed ? 'CAPTURED' : 'PENDING',
+        captured_at: processed ? new Date() : null,
+        provider_payment_id: gatewayResult.refundId ?? null,
+      });
+
+      if (processed) {
+        const capturedTotal = await refundedSoFar({ trx, paymentId: original.id, statuses: ['CAPTURED'] });
+        const fullyRefunded = compareMoney(capturedTotal, lockedOriginal.amount) === 0;
+
+        if (isPosOrderTarget) {
+          // PLAN.md Phase 6 (QR self-ordering gap closure) — no folio exists for a guest order's card payment at
+          // all; the real reversal is voiding the `card` settlement itself, but ONLY once the payment has been
+          // refunded in full: a partial refund hands part of the money back and leaves the sale standing.
+          // Replicated inline (`pos/service.js`'s own `voidSettlement` shape: lock the parent order, re-check
+          // `voided_at` under a locking read, then write) rather than imported — see this file's own header comment
+          // on why `pos/service.js` is never required from here.
+          //
+          // This MUST stay in lockstep with `voidSettlement`'s own two invariants: (1) an already-voided
+          // settlement is a real `409` conflict, never a silent no-op; (2) a `tip_service_charge_line_item_id` is
+          // voided alongside the settlement, never left orphaned on a folio.
+          const settlement = await trx.table('pos_order_settlements').where({ payment_id: original.id }).first();
+          if (settlement && fullyRefunded) {
+            await trx.table('pos_orders').where({ id: settlement.pos_order_id }).forUpdate().first();
+            const lockedSettlement = await trx.table('pos_order_settlements').where({ id: settlement.id }).forUpdate().first();
+            if (lockedSettlement.voided_at) throw new SettlementAlreadyVoidedError(settlement.id);
+
+            if (lockedSettlement.tip_service_charge_line_item_id) {
+              await voidLineItem({ trx, lineItemId: lockedSettlement.tip_service_charge_line_item_id, reason, userId });
+            }
+            await trx.table('pos_order_settlements').where({ id: settlement.id }).update({
+              voided_at: new Date(),
+              void_reason: reason,
+              voided_by_user_id: userId,
+            });
+          } else if (settlement) {
+            // Flagged, not hidden: money went back but the sale stands, and NO stock is put back — a partial amount
+            // says nothing about which line the guest returned.
+            await recordAuditEntry(trx, {
+              entityType: 'payments',
+              entityId: intent.id,
+              propertyId: original.property_id,
+              userId,
+              action: 'refund_partial_settlement_kept',
+              source: 'api',
+              afterState: { settlementId: String(settlement.id), originalPaymentId: String(original.id), refundAmount, refundedSoFar: capturedTotal, paymentAmount: lockedOriginal.amount, currency: original.currency },
+              reason: 'A partial refund does not void the sale it paid for; the settlement and its stock movements are unchanged.',
+            });
           }
-          await trx.table('pos_order_settlements').where({ id: settlement.id }).update({
-            voided_at: new Date(),
-            void_reason: reason,
-            voided_by_user_id: userId,
+        } else {
+          const folio = await lockFolio({ trx, folioId: original.folio_id });
+          const businessDate = await propertyBusinessDate({ trx, propertyId: folio.property_id });
+          await trx.table('folio_line_items').insert({
+            folio_id: original.folio_id,
+            type: 'refund',
+            description: `Paystack refund of payment ${original.id}`,
+            amount: refundAmount,
+            currency: original.currency,
+            payment_method: 'paystack',
+            payment_id: intent.id,
+            business_date: businessDate,
+            posted_by_user_id: userId ?? null,
+          });
+          await recomputeFolioBalance({ trx, folioId: original.folio_id });
+        }
+        await trx.table('payments').where({ id: original.id }).update({ status: fullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED' });
+
+        // Gap closure — confirmed LIVE against the real sandbox before this
+        // shipped, not assumed: a Paystack refund debits the FULL original
+        // amount from the PLATFORM's own balance immediately, with nothing
+        // automatically clawed back from the subaccount's own share, even
+        // though that share may already have been paid to the hotel's bank.
+        // User-confirmed scope for this pass ("record and flag only"): no
+        // automatic recovery/netting mechanism is built here — this is a
+        // real, audited fact that the property now owes this amount back to
+        // the platform, surfaced for a future reconciliation pass to act on,
+        // not silently absorbed or silently hidden. `refundAmount` (not a
+        // percentage of it) is the property's own shortfall: every property
+        // subaccount is seeded at 0% platform fee today, so 100% of any
+        // split charge — and therefore 100% of any refund of it — was the
+        // property's own share.
+        if (original.subaccount_code) {
+          await recordAuditEntry(trx, {
+            entityType: 'payments',
+            entityId: intent.id,
+            propertyId: original.property_id,
+            userId,
+            action: 'refund_subaccount_shortfall',
+            source: 'api',
+            afterState: {
+              originalPaymentId: original.id,
+              subaccountCode: original.subaccount_code,
+              amountOwedBackByProperty: refundAmount,
+              currency: original.currency,
+            },
+            reason:
+              'Paystack refunds a split payment from the platform\'s own balance only — this amount is not yet automatically recovered from the property.',
           });
         }
-      } else {
-        const businessDate = await propertyBusinessDate({ trx, propertyId: (await trx.table('folios').where({ id: original.folio_id }).first()).property_id });
-        await trx.table('folio_line_items').insert({
-          folio_id: original.folio_id,
-          type: 'refund',
-          description: `Paystack refund of payment ${original.id}`,
-          amount: refundAmount,
-          currency: original.currency,
-          payment_method: 'paystack',
-          payment_id: refundPaymentId,
-          business_date: businessDate,
-          posted_by_user_id: userId ?? null,
-        });
-        await recomputeFolioBalance({ trx, folioId: original.folio_id });
       }
-      const fullyRefunded = compareMoney(sumMoney([alreadyRefunded, refundAmount]), original.amount) === 0;
-      await trx.table('payments').where({ id: original.id }).update({ status: fullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED' });
 
-      // Gap closure — confirmed LIVE against the real sandbox before this
-      // shipped, not assumed: a Paystack refund debits the FULL original
-      // amount from the PLATFORM's own balance immediately, with nothing
-      // automatically clawed back from the subaccount's own share, even
-      // though that share may already have been paid to the hotel's bank.
-      // User-confirmed scope for this pass ("record and flag only"): no
-      // automatic recovery/netting mechanism is built here — this is a
-      // real, audited fact that the property now owes this amount back to
-      // the platform, surfaced for a future reconciliation pass to act on,
-      // not silently absorbed or silently hidden. `refundAmount` (not a
-      // percentage of it) is the property's own shortfall: every property
-      // subaccount is seeded at 0% platform fee today, so 100% of any
-      // split charge — and therefore 100% of any refund of it — was the
-      // property's own share.
-      if (original.subaccount_code) {
-        await recordAuditEntry(trx, {
-          entityType: 'payments',
-          entityId: refundPaymentId,
-          propertyId: original.property_id,
-          userId,
-          action: 'refund_subaccount_shortfall',
-          source: 'api',
-          afterState: {
-            originalPaymentId: original.id,
-            subaccountCode: original.subaccount_code,
-            amountOwedBackByProperty: refundAmount,
-            currency: original.currency,
-          },
-          reason:
-            'Paystack refunds a split payment from the platform\'s own balance only — this amount is not yet automatically recovered from the property.',
-        });
-      }
-    }
-
-    return trx.table('payments').where({ id: refundPaymentId }).first();
-  });
+      return trx.table('payments').where({ id: intent.id }).first();
+    });
+  } catch (error) {
+    await flagRefundOutcomeUnknown({ db, intent, original, userId, error }).catch((flagError) => {
+      console.error(`[refund] could not flag refund ${intent.id} for reconciliation: ${flagError?.message ?? flagError}`);
+    });
+    throw error;
+  }
 }
 
 /**
@@ -1748,6 +1901,8 @@ async function sumPostedRoomChargesByDate({ db, dates, baseCurrency }) {
 }
 
 module.exports = {
+  lockFolio,
+  lockFoliosForMutation,
   resolveClientBusinessDate,
   captureTerminalPayment,
   setSupermarketCaptureFinalizer,

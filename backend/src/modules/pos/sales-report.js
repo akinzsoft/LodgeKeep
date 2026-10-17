@@ -60,7 +60,7 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
     .whereNull('pos_order_settlements.voided_at')
     .whereBetween('pos_order_settlements.business_date', [dateFrom, dateTo]);
   if (outletId) query = query.where('pos_orders.outlet_id', outletId);
-  return query
+  const rows = await query
     .select(
       'pos_order_settlements.id as id',
       'pos_order_settlements.pos_order_id as pos_order_id',
@@ -95,6 +95,25 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
       'users.last_name as cashier_last_name'
     )
     .orderBy('pos_order_settlements.settled_at', 'desc');
+  return withPartialRefunds({ db, rows });
+}
+
+/**
+ * A card payment can be refunded in part while the sale it paid for stays standing (a full refund voids the sale and
+ * drops it from this report). Each standing row whose payment has settled refunds gets `partially_refunded`, the sum of
+ * them, so the report shows money went back; rows with no refund are left exactly as they were.
+ */
+async function withPartialRefunds({ db, rows }) {
+  const paymentIds = [...new Set(rows.filter((row) => row.payment_id).map((row) => String(row.payment_id)))];
+  if (paymentIds.length === 0) return rows;
+  const refunds = await db.table('payments').whereIn('parent_payment_id', paymentIds).where({ status: 'CAPTURED' }).select('parent_payment_id', 'amount');
+  if (refunds.length === 0) return rows;
+  const totals = new Map();
+  for (const refund of refunds) {
+    const key = String(refund.parent_payment_id);
+    totals.set(key, sumMoney([totals.get(key) ?? '0.00', refund.amount]));
+  }
+  return rows.map((row) => (row.payment_id && totals.has(String(row.payment_id)) ? { ...row, partially_refunded: totals.get(String(row.payment_id)) } : row));
 }
 
 /**
@@ -334,6 +353,8 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
       roomNumber: target?.roomNumber ?? null,
       guestName: target?.guestName ?? null,
       total,
+      // Only a payment that was partly refunded carries this; every other entry keeps its old shape.
+      ...(row.partially_refunded ? { partiallyRefunded: row.partially_refunded } : {}),
     });
     tab.amounts.push(total);
     tab.groups.add(groupKey(row.split_group));
