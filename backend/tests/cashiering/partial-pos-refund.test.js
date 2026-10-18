@@ -20,7 +20,7 @@ const { seedTwoTenants } = require('../helpers/fixtures');
 const { managerApproval, setApprovalPin } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
-const { insertMenuItem } = require('../helpers/catalogue');
+const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
 
 describe('partial refund of a Register card payment', () => {
   const t = useTestApp();
@@ -54,7 +54,10 @@ describe('partial refund of a Register card payment', () => {
     const [outletId] = await t.trx('pos_outlets').insert({ tenant_id: ctx.a.id, property_id: propertyId, code: `PP-${suffix}`, name: 'Partial Bar', type: 'bar' });
     const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, device_ref: `PP-T-${suffix}` });
     const [beer] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Partial Beer', category: 'Drinks', price: '100.00' });
-    outlet = { outletId, terminalId, beer };
+    const [stockItemId] = await insertStockItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: `Partial Keg ${suffix}`, unit: 'unit', purchase_cost: '30.00', current_quantity: '10.000', reorder_level: '1.000' });
+    await t.trx('stock_movements').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, stock_item_id: stockItemId, type: 'received', quantity: '10.000', unit_cost: '30.00', total_cost: '300.00', business_date: '2027-07-01', reference: 'seed' });
+    await t.trx('pos_menu_item_components').insert({ tenant_id: ctx.a.id, property_id: propertyId, menu_item_id: beer, stock_item_id: stockItemId, quantity: '1.000' });
+    outlet = { outletId, terminalId, beer, stockItemId };
   });
 
   beforeEach(() => {
@@ -139,5 +142,27 @@ describe('partial refund of a Register card payment', () => {
     expect(lines.filter((line) => !line.parentPaymentId)).toHaveLength(1);
     expect(lines.filter((line) => line.parentPaymentId)).toHaveLength(1);
     expect(orderId).toBeDefined();
+  });
+
+  describe('stock after a refund of a Register/QR card payment', () => {
+    const level = async () => Number((await t.trx('stock_levels').where({ stock_item_id: outlet.stockItemId, outlet_id: outlet.outletId }).first()).current_quantity);
+
+    test('a FULL refund voids the settlement AND puts the sold stock back, in the same transaction', async () => {
+      const before = await level();
+      const { payment, settlementId } = await cardSale();
+      expect(await level()).toBe(before - 1);
+      const res = await refund(payment.id, undefined);
+      expect(res.status).toBe(201);
+      expect((await settlementRow(settlementId)).voided_at).not.toBeNull();
+      expect(await t.trx('stock_movements').where({ pos_order_settlement_id: settlementId, type: 'sale_reversal' })).toHaveLength(1);
+      expect(await level()).toBe(before);
+    });
+
+    test('a partial refund puts no stock back', async () => {
+      const before = await level();
+      const { payment } = await cardSale();
+      await refund(payment.id, '10.00');
+      expect(await level()).toBe(before - 1);
+    });
   });
 });

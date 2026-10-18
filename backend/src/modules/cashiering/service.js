@@ -1747,6 +1747,9 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
               void_reason: reason,
               voided_by_user_id: userId,
             });
+            // The sale is void, so the stock it took goes back — the same reversal `pos/service.js voidSettlement` makes.
+            // Only a FULL refund reaches this branch; a partial amount says nothing about which line came back.
+            await stockService.reverseStockForSettlement({ trx, settlementId: settlement.id, userId });
           } else if (settlement) {
             // Flagged, not hidden: money went back but the sale stands, and NO stock is put back — a partial amount
             // says nothing about which line the guest returned.
