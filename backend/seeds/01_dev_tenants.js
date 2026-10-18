@@ -314,6 +314,7 @@ exports.seed = async function seed(knex) {
   async function ensureDiscountAccess(tenantId) {
     await grantManagerKeys(tenantId, ['discount.apply', 'discount.approve', 'discount.comp', 'discount.manage', 'reports.view_discounts']);
     await grantManagerKeys(tenantId, ['discount.apply'], 'pos_operator');
+    await grantManagerKeys(tenantId, ['cashiering.refund_clear']);
   }
 
   async function grantManagerKeys(tenantId, keys, roleCode = 'manager') {

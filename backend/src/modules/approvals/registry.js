@@ -27,6 +27,12 @@ const APPROVAL_ACTIONS = Object.freeze({
     targetRequired: true,
     label: 'Refund a card payment',
   },
+  'cashiering.clear_stuck_refund': {
+    permission: 'cashiering.refund_clear',
+    targetType: 'payments',
+    targetRequired: true,
+    label: 'Clear a stuck card refund',
+  },
   'pos.stock_override': {
     permission: 'pos.manage',
     targetType: 'pos_orders',

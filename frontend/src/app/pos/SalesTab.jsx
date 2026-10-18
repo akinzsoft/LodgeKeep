@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { DataTable, Button, Toast } from '../../shared/components/index.js';
 import { ManagerApprovalDialog } from '../approvals/ManagerApprovalDialog.jsx';
+import { StuckRefundNote, ClearStuckRefundDialog } from '../cashiering/StuckRefund.jsx';
 import { terminalProviderLabel, terminalAccountText } from '../../shared/terminalProviders.js';
 import { Money } from '../../shared/format/money.jsx';
 import { posApi, cashieringApi, ApiError } from '../../shared/api/index.js';
@@ -63,7 +64,7 @@ function formatTime(iso) {
  * refund goes through Cashiering's own refund endpoint
  * (`cashiering.void_line`), with a required reason.
  */
-export function SalesTab({ activeProperty, isOffline = false }) {
+export function SalesTab({ activeProperty, isOffline = false, canClearRefunds = false }) {
   const defaultDate = activeProperty.current_business_date ?? new Date().toISOString().slice(0, 10);
   const currencyCode = activeProperty.base_currency;
 
@@ -77,6 +78,7 @@ export function SalesTab({ activeProperty, isOffline = false }) {
   const [error, setError] = useState(null);
   const [exporting, setExporting] = useState(null);
   const [refunding, setRefunding] = useState(null);
+  const [clearing, setClearing] = useState(null);
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
@@ -129,6 +131,9 @@ export function SalesTab({ activeProperty, isOffline = false }) {
       setError(caught instanceof ApiError ? caught.message : 'Could not refund this payment.');
     }
   }
+
+  // Card refunds Paystack accepted (or may have taken) but never confirmed: listed so the guest's money is not lost track of.
+  const refundsInFlight = (report?.tabs ?? []).flatMap((tab) => (tab.payments ?? []).filter((payment) => payment.refundInFlight).map((payment) => ({ tab, payment, refund: payment.refundInFlight })));
 
   const tableState = (rows) => (loading ? 'loading' : report === null || rows.length === 0 ? 'empty' : 'success');
   const emptyMessage = report === null ? 'Choose a date range and run the report.' : 'No sales in this range.';
@@ -345,6 +350,49 @@ export function SalesTab({ activeProperty, isOffline = false }) {
           ]}
           rows={report.unsettledCardPayments}
           rowKey={(row) => row.paymentId}
+        />
+      )}
+
+      {refundsInFlight.length > 0 && (
+        <DataTable
+          title="Card refunds waiting on Paystack"
+          state="success"
+          columns={[
+            { key: 'tab', label: 'Tab', render: (row) => tabName(row.tab) },
+            { key: 'amount', label: 'Refund', align: 'right', render: (row) => <Money amount={row.refund.amount} currencyCode={currencyCode} /> },
+            { key: 'status', label: 'Status', render: (row) => <StuckRefundNote reconciliation={row.refund} /> },
+            {
+              key: 'actions',
+              label: '',
+              align: 'right',
+              render: (row) =>
+                canClearRefunds && row.refund.canClear ? (
+                  <Button type="button" size="compact" variant="danger" disabled={isOffline} onClick={() => setClearing(row)}>
+                    Clear stuck refund
+                  </Button>
+                ) : null,
+            },
+          ]}
+          rows={refundsInFlight}
+          rowKey={(row) => row.refund.refundPaymentId}
+        />
+      )}
+
+      {clearing && (
+        <ClearStuckRefundDialog
+          refundPaymentId={clearing.refund.refundPaymentId}
+          amountText={`${clearing.refund.amount} ${currencyCode}`}
+          isOffline={isOffline}
+          onCancel={() => setClearing(null)}
+          onError={(message) => {
+            setClearing(null);
+            setError(message);
+          }}
+          onDone={async (result) => {
+            setClearing(null);
+            setToast(result?.cleared ? 'The stuck refund was cleared.' : 'Paystack had already processed this refund; it is now recorded.');
+            await runReport();
+          }}
         />
       )}
 

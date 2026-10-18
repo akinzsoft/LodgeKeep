@@ -3878,6 +3878,30 @@ const ENTITIES = [
   },
 
   {
+    // The fixture seeds exactly one payment per tenant and the hotel golden snapshots pin payment ids, so no fixture row
+    // (and no second payment) is added here; the (tenant, payment) uniqueness is pinned in refund-reconciliation tests.
+    table: 'refund_reconciliations',
+    uniqueKeys: [],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      payment_id: t.payments[0].id,
+      reason: 'New',
+    }),
+    crossTenant: [
+      {
+        name: "reconciles another tenant's payment",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          payment_id: other.payments[0].id,
+          reason: 'Cross',
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'manager_approvals',
     uniqueKeys: [['token_hash']],
     newRow: (ctx, t) => ({

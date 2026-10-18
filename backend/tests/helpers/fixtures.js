@@ -117,6 +117,7 @@ async function seedTwoTenants(trx) {
     mfaLoginCodes: [],
     approvalPins: [],
     managerApprovals: [],
+    refundReconciliations: [],
     discountReasons: [],
     discountLimits: [],
     discounts: [],
@@ -1972,6 +1973,17 @@ async function seedTwoTenants(trx) {
       }),
       user_id: t.users[0].id,
     });
+    t.refundReconciliations.push({
+      id: await insertReturningId(trx, 'refund_reconciliations', {
+        tenant_id: t.id,
+        property_id: t.properties[0].id,
+        payment_id: t.payments[0].id,
+        requested_by_user_id: t.users[0].id,
+        reason: 'Fixture refund',
+        attempts: 1,
+      }),
+      payment_id: t.payments[0].id,
+    });
     const approvalHash = tokenHash(`${t.slug}-approval-used`);
     t.managerApprovals.push({
       id: await insertReturningId(trx, 'manager_approvals', {
@@ -2168,6 +2180,7 @@ async function seedTwoTenants(trx) {
     ['cashiering.post_charge', 'cashiering'],
     ['cashiering.void_line', 'cashiering'],
     ['cashiering.backdate', 'cashiering'],
+    ['cashiering.refund_clear', 'cashiering'],
     ['reports.view_financial', 'reports'],
     ['setup.view', 'setup'],
     ['setup.manage', 'setup'],
@@ -2237,6 +2250,9 @@ async function seedTwoTenants(trx) {
       { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['cashiering.post_charge'] },
       { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['cashiering.void_line'] },
       { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['cashiering.backdate'] },
+      { tenant_id: t.id, role_id: t.roles.manager, permission_id: permissions['cashiering.refund_clear'] },
+      { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['cashiering.refund_clear'] },
+      { tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['cashiering.refund_clear'] },
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['cashiering.post_charge'] },
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['cashiering.void_line'] },
       { tenant_id: t.id, role_id: t.roles.admin, permission_id: permissions['cashiering.backdate'] },

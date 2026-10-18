@@ -8,6 +8,7 @@ import { OutstandingBalancesTab } from './OutstandingBalancesTab.jsx';
 import { PrintedFolio } from './PrintedFolio.jsx';
 import { TerminalPaymentFields } from './TerminalPaymentFields.jsx';
 import { PaymentAmountField } from './PaymentAmountField.jsx';
+import { StuckRefundNote, ClearStuckRefundDialog } from './StuckRefund.jsx';
 import { defaultPaymentAmount, paymentAmountProblem } from './paymentAmount.js';
 import formStyles from './CashieringForm.module.css';
 import styles from './CashieringScreen.module.css';
@@ -45,7 +46,7 @@ const TABS = [
  * §3.5's own explicit requirement, and ARCHITECTURE.md §8's "void, never
  * delete" made visible).
  */
-export function CashieringScreen({ isOffline = false, activeProperty = null }) {
+export function CashieringScreen({ isOffline = false, activeProperty = null, canClearRefunds = false }) {
   const [tab, setTab] = useState('balances');
   const [reservationIdInput, setReservationIdInput] = useState('');
   const [reservationId, setReservationId] = useState(null);
@@ -175,6 +176,7 @@ export function CashieringScreen({ isOffline = false, activeProperty = null }) {
                   submitting={submitting}
                   onAction={withSubmitting}
                   property={activeProperty}
+                  canClearRefunds={canClearRefunds}
                 />
               ))}
 
@@ -192,7 +194,7 @@ export function CashieringScreen({ isOffline = false, activeProperty = null }) {
   );
 }
 
-function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAction, property }) {
+function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAction, property, canClearRefunds = false }) {
   const [lineItems, setLineItems] = useState(null);
   const [payments, setPayments] = useState(null);
   const [showChargeForm, setShowChargeForm] = useState(false);
@@ -200,6 +202,8 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [voidingLine, setVoidingLine] = useState(null);
   const [refundingPayment, setRefundingPayment] = useState(null);
+  const [clearingRefund, setClearingRefund] = useState(null);
+  const [refundNotice, setRefundNotice] = useState(null);
   // Blank = refund everything still refundable; a smaller amount refunds part of it (e.g. a deposit's leftover credit).
   const [refundAmount, setRefundAmount] = useState('');
   const refundAmountProblem = refundAmount.trim() ? paymentAmountProblem(refundAmount) : null;
@@ -393,7 +397,16 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
         emptyMessage="No payments captured yet."
         columns={[
           { key: 'provider', label: 'Method' },
-          { key: 'status', label: 'Status', render: (row) => <StatusPill tone={row.status === 'CAPTURED' ? 'success' : row.status === 'FAILED' ? 'danger' : 'neutral'} label={row.status} /> },
+          {
+            key: 'status',
+            label: 'Status',
+            render: (row) =>
+              row.refundReconciliation ? (
+                <StuckRefundNote reconciliation={row.refundReconciliation} />
+              ) : (
+                <StatusPill tone={row.status === 'CAPTURED' ? 'success' : row.status === 'FAILED' ? 'danger' : 'neutral'} label={row.status} />
+              ),
+          },
           { key: 'amount', label: 'Amount', align: 'right', render: (row) => <Money amount={row.amount} currencyCode={row.currency} /> },
         ]}
         rows={payments ?? []}
@@ -423,6 +436,11 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
                 }}
               >
                 Verify
+              </Button>
+            )}
+            {canClearRefunds && row.refundReconciliation?.canClear && (
+              <Button size="compact" variant="danger" disabled={isOffline || submitting} onClick={() => setClearingRefund(row)}>
+                Clear stuck refund
               </Button>
             )}
             {(row.status === 'CAPTURED' || row.status === 'PARTIALLY_REFUNDED') && !row.parent_payment_id && (
@@ -581,6 +599,26 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
             reload();
           }}
           onCancel={() => setVoidingLine(null)}
+        />
+      )}
+
+      {refundNotice && <p role="status" className={formStyles.hint}>{refundNotice}</p>}
+
+      {clearingRefund && (
+        <ClearStuckRefundDialog
+          refundPaymentId={clearingRefund.id}
+          amountText={`${clearingRefund.amount} ${clearingRefund.currency}`}
+          isOffline={isOffline}
+          onCancel={() => setClearingRefund(null)}
+          onError={(message) => {
+            setClearingRefund(null);
+            setRefundNotice(message);
+          }}
+          onDone={(result) => {
+            setClearingRefund(null);
+            setRefundNotice(result?.cleared ? 'The stuck refund was cleared.' : 'Paystack had already processed this refund; it is now recorded.');
+            reload();
+          }}
         />
       )}
 

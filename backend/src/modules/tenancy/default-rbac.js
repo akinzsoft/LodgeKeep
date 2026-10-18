@@ -49,6 +49,7 @@ const ALL_PERMISSION_KEYS = Object.freeze([
   'cashiering.post_charge',
   'cashiering.void_line',
   'cashiering.backdate',
+  'cashiering.refund_clear',
   'night_audit.view',
   'night_audit.run',
   'pos.operate',
@@ -126,7 +127,7 @@ const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
   manager: [
     'reservations.view', 'reservations.manage',
     'front_desk.view', 'front_desk.manage',
-    'cashiering.post_charge', 'cashiering.void_line', 'cashiering.backdate',
+    'cashiering.post_charge', 'cashiering.void_line', 'cashiering.backdate', 'cashiering.refund_clear',
     'housekeeping.view', 'housekeeping.operate', 'housekeeping.manage',
     'pos.operate', 'pos.manage', 'pos.service_charge.manage',
     'discount.apply', 'discount.approve', 'discount.comp', 'discount.manage', 'reports.view_discounts',

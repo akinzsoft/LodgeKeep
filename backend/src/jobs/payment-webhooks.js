@@ -34,6 +34,7 @@ const { knex } = require('../db');
 const { processPaymentWebhookEvent } = require('../modules/cashiering/service');
 const { processBillingWebhookEvent } = require('../modules/billing/service');
 const { refreshOnlineRefunds } = require('../modules/supermarket/paystack-sale');
+const { reconcileRefundIntent, refundReconcileConfig } = require('../modules/cashiering/service');
 const { workerContext } = require('../modules/tenancy');
 
 const SWEEP_JOB_NAME = 'sweep';
@@ -95,6 +96,42 @@ async function runSupermarketRefundSweep() {
   return changed;
 }
 
+/**
+ * Refund reconciliation (folio and Register / QR card refunds). A Paystack refund intent still INITIATED or PENDING
+ * after a few minutes — accepted but unfinished, or sent with an outcome we never learned — is checked against
+ * Paystack's own record and settled when Paystack gives a clear answer. If Paystack cannot be reached or answers
+ * unclearly nothing is released; the check is recorded and tried again later. Supermarket online refunds keep their own
+ * sweep above. Each intent is its own transaction, so one failure never blocks the rest.
+ */
+async function runRefundReconciliationSweep(now = new Date()) {
+  const { minAgeMinutes } = refundReconcileConfig();
+  const cutoff = new Date(now.getTime() - minAgeMinutes * 60_000);
+  const due = await knex()('payments as p')
+    .leftJoin('refund_reconciliations as r', 'r.payment_id', 'p.id')
+    .where('p.provider', 'paystack')
+    .whereNotNull('p.parent_payment_id')
+    .whereIn('p.status', ['INITIATED', 'PENDING'])
+    .whereNot('p.settlement_target', 'supermarket_sale')
+    .andWhere('p.created_at', '<=', cutoff)
+    .andWhere((builder) => builder.whereNull('r.last_checked_at').orWhere('r.last_checked_at', '<=', cutoff))
+    .orderBy('p.id')
+    .limit(BATCH_SIZE)
+    .select('p.id', 'p.tenant_id', 'p.property_id');
+  const results = [];
+  for (const row of due) {
+    try {
+      const owner = await knex()('tenants').where({ id: row.tenant_id }).first('status');
+      if (!owner || ['purging', 'purged', 'offboarding'].includes(owner.status)) continue;
+      const outcome = await reconcileRefundIntent({ context: workerContext({ tenantId: row.tenant_id, propertyId: row.property_id }), intentId: row.id, source: 'sweep', now });
+      results.push({ paymentId: row.id, ...outcome });
+    } catch (error) {
+      console.error(`refund reconciliation failed for payment ${row.id}:`, error);
+      results.push({ paymentId: row.id, error: error.message });
+    }
+  }
+  return results;
+}
+
 /** Registers the repeatable sweep — call once at process startup. Idempotent by scheduler id. */
 async function schedulePaymentWebhookSweep() {
   await paymentWebhooksQueue().upsertJobScheduler(SWEEP_SCHEDULER_ID, { every: SWEEP_INTERVAL_MS }, { name: SWEEP_JOB_NAME, data: {} });
@@ -106,6 +143,7 @@ function startPaymentWebhooksWorker() {
     async () => {
       await runPaymentWebhookRetrySweep();
       await runSupermarketRefundSweep();
+      await runRefundReconciliationSweep();
     },
     { connection: redisConnection() }
   );
@@ -114,6 +152,7 @@ function startPaymentWebhooksWorker() {
 module.exports = {
   runPaymentWebhookRetrySweep,
   runSupermarketRefundSweep,
+  runRefundReconciliationSweep,
   schedulePaymentWebhookSweep,
   startPaymentWebhooksWorker,
   SWEEP_SCHEDULER_ID,

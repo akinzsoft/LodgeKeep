@@ -27,6 +27,7 @@ const { computeItemLineTotal } = require('../../shared/pos-pricing');
 const { isPointOfSaleOutlet, SUPERMARKET_OUTLET_TYPE } = require('../../shared/outlet-types');
 const { allocateLineNetAndTax } = require('../../shared/line-allocation');
 const { applyDiscounts } = require('../../shared/discount-pricing');
+const cashieringService = require('../cashiering/service');
 
 const TENDERS = ['cash', 'card', 'nqr', 'terminal', 'room_charge'];
 const TOP_ITEMS_LIMIT = 20;
@@ -107,13 +108,35 @@ async function withPartialRefunds({ db, rows }) {
   const paymentIds = [...new Set(rows.filter((row) => row.payment_id).map((row) => String(row.payment_id)))];
   if (paymentIds.length === 0) return rows;
   const refunds = await db.table('payments').whereIn('parent_payment_id', paymentIds).where({ status: 'CAPTURED' }).select('parent_payment_id', 'amount');
-  if (refunds.length === 0) return rows;
   const totals = new Map();
   for (const refund of refunds) {
     const key = String(refund.parent_payment_id);
     totals.set(key, sumMoney([totals.get(key) ?? '0.00', refund.amount]));
   }
-  return rows.map((row) => (row.payment_id && totals.has(String(row.payment_id)) ? { ...row, partially_refunded: totals.get(String(row.payment_id)) } : row));
+  // A refund Paystack accepted (or that may have gone out) but never confirmed: shown on the payment so it is not lost.
+  const inFlight = await db.table('payments').whereIn('parent_payment_id', paymentIds).where({ provider: 'paystack' }).whereIn('status', ['INITIATED', 'PENDING']);
+  const stuckByPayment = new Map();
+  if (inFlight.length > 0) {
+    for (const refund of await cashieringService.annotateStuckRefunds({ db, payments: inFlight })) {
+      stuckByPayment.set(String(refund.parent_payment_id), {
+        refundPaymentId: String(refund.id),
+        amount: refund.amount,
+        status: refund.status,
+        note: refund.failure_reason ?? null,
+        ...(refund.refundReconciliation ?? {}),
+      });
+    }
+  }
+  if (totals.size === 0 && stuckByPayment.size === 0) return rows;
+  return rows.map((row) => {
+    const key = row.payment_id ? String(row.payment_id) : null;
+    if (!key || (!totals.has(key) && !stuckByPayment.has(key))) return row;
+    return {
+      ...row,
+      ...(totals.has(key) ? { partially_refunded: totals.get(key) } : {}),
+      ...(stuckByPayment.has(key) ? { refund_in_flight: stuckByPayment.get(key) } : {}),
+    };
+  });
 }
 
 /**
@@ -355,6 +378,8 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
       total,
       // Only a payment that was partly refunded carries this; every other entry keeps its old shape.
       ...(row.partially_refunded ? { partiallyRefunded: row.partially_refunded } : {}),
+      // Only a payment with a card refund still waiting on Paystack carries this.
+      ...(row.refund_in_flight ? { refundInFlight: row.refund_in_flight } : {}),
     });
     tab.amounts.push(total);
     tab.groups.add(groupKey(row.split_group));

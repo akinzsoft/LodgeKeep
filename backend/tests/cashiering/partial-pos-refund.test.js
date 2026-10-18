@@ -7,7 +7,7 @@
 
 jest.mock('../../src/modules/cashiering/paystack-adapter', () => {
   const actual = jest.requireActual('../../src/modules/cashiering/paystack-adapter');
-  const mockAdapter = { initializeTransaction: jest.fn(), verifyTransaction: jest.fn(), refundTransaction: jest.fn() };
+  const mockAdapter = { initializeTransaction: jest.fn(), verifyTransaction: jest.fn(), refundTransaction: jest.fn(), fetchRefund: jest.fn(), listRefundsForTransaction: jest.fn() };
   return {
     ...actual,
     __mockAdapter: mockAdapter,
@@ -21,6 +21,8 @@ const { managerApproval, setApprovalPin } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystack = require('../../src/modules/cashiering/paystack-adapter').__mockAdapter;
 const { insertMenuItem, insertStockItem } = require('../helpers/catalogue');
+const { reconcileRefundIntent } = require('../../src/modules/cashiering/service');
+const { workerContext } = require('../../src/modules/tenancy');
 
 describe('partial refund of a Register card payment', () => {
   const t = useTestApp();
@@ -163,6 +165,71 @@ describe('partial refund of a Register card payment', () => {
       const { payment } = await cardSale();
       await refund(payment.id, '10.00');
       expect(await level()).toBe(before - 1);
+    });
+  });
+
+  describe('a card refund Paystack accepted but had not processed, settled later by reconciliation', () => {
+    const level = async () => Number((await t.trx('stock_levels').where({ stock_item_id: outlet.stockItemId, outlet_id: outlet.outletId }).first()).current_quantity);
+    const reconcile = (intentId) => reconcileRefundIntent({ context: workerContext({ tenantId: String(ctx.a.id), propertyId: String(propertyId) }), intentId, source: 'sweep' });
+
+    test('a FULL refund processed later voids the settlement AND puts the stock back, exactly as the normal path does', async () => {
+      const before = await level();
+      const { payment, settlementId } = await cardSale();
+      paystack.refundTransaction.mockResolvedValue({ refundId: 'late1', status: 'pending' });
+      const res = await refund(payment.id, undefined);
+      expect(res.body.data.status).toBe('PENDING');
+      expect((await settlementRow(settlementId)).voided_at).toBeNull(); // nothing yet: Paystack has not finished
+      expect(await level()).toBe(before - 1);
+
+      paystack.fetchRefund.mockResolvedValue({ status: 'processed', refundId: 'late1' });
+      const outcome = await reconcile(res.body.data.id);
+      expect(outcome).toMatchObject({ result: 'processed', applied: true });
+      expect((await settlementRow(settlementId)).voided_at).not.toBeNull();
+      expect(await t.trx('stock_movements').where({ pos_order_settlement_id: settlementId, type: 'sale_reversal' })).toHaveLength(1);
+      expect(await level()).toBe(before);
+      expect((await t.trx('payments').where({ id: payment.id }).first()).status).toBe('REFUNDED');
+      // Checking again changes nothing.
+      expect((await reconcile(res.body.data.id)).skipped).toBe(true);
+      expect(await t.trx('stock_movements').where({ pos_order_settlement_id: settlementId, type: 'sale_reversal' })).toHaveLength(1);
+    });
+
+    test('a PARTIAL refund processed later keeps the sale standing and puts no stock back', async () => {
+      const before = await level();
+      const { payment, settlementId } = await cardSale();
+      paystack.refundTransaction.mockResolvedValue({ refundId: 'late2', status: 'pending' });
+      const res = await refund(payment.id, '10.00');
+      paystack.fetchRefund.mockResolvedValue({ status: 'processed', refundId: 'late2' });
+      await reconcile(res.body.data.id);
+      expect((await settlementRow(settlementId)).voided_at).toBeNull();
+      expect(await level()).toBe(before - 1);
+      expect((await t.trx('payments').where({ id: payment.id }).first()).status).toBe('PARTIALLY_REFUNDED');
+      expect(await t.trx('audit_log').where({ entity_type: 'payments', entity_id: res.body.data.id, action: 'refund_partial_settlement_kept' })).toHaveLength(1);
+    });
+
+    test('a refund Paystack reports failed leaves the sale, the stock and the payment untouched', async () => {
+      const before = await level();
+      const { payment, settlementId } = await cardSale();
+      paystack.refundTransaction.mockResolvedValue({ refundId: 'late3', status: 'pending' });
+      const res = await refund(payment.id, undefined);
+      paystack.fetchRefund.mockResolvedValue({ status: 'failed', refundId: 'late3' });
+      await reconcile(res.body.data.id);
+      expect((await settlementRow(settlementId)).voided_at).toBeNull();
+      expect(await level()).toBe(before - 1);
+      expect((await t.trx('payments').where({ id: payment.id }).first()).status).toBe('CAPTURED');
+      expect((await t.trx('payments').where({ id: res.body.data.id }).first()).status).toBe('FAILED');
+    });
+
+    test('the Sales report shows a refund still waiting on Paystack on the payment it belongs to, and only there', async () => {
+      const { orderId, payment } = await cardSale();
+      const clean = await as(manager).get('/api/v1/pos/reports/sales?date_from=2027-08-01&date_to=2027-08-01');
+      expect(clean.body.data.tabs.find((row) => String(row.orderId) === String(orderId)).payments[0].refundInFlight).toBeUndefined();
+
+      paystack.refundTransaction.mockResolvedValue({ refundId: 'late4', status: 'pending' });
+      const res = await refund(payment.id, '10.00');
+      const report = await as(manager).get('/api/v1/pos/reports/sales?date_from=2027-08-01&date_to=2027-08-01');
+      const tab = report.body.data.tabs.find((row) => String(row.orderId) === String(orderId));
+      expect(tab.payments[0].refundInFlight).toMatchObject({ refundPaymentId: String(res.body.data.id), amount: '10.00', status: 'PENDING', canClear: false });
+      expect(tab.payments[0].partiallyRefunded).toBeUndefined(); // nothing has gone back yet
     });
   });
 });

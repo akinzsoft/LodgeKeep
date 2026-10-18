@@ -173,6 +173,7 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'payment_webhook_events',
   'folio_line_items',
   'payment_terminal_details',
+  'refund_reconciliations', // references payments and users
   'payments',
   'folios',
   'pos_orders',

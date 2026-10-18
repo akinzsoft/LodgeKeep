@@ -426,7 +426,7 @@ function Demo() {
       ) : screenKey === 'reports' ? (
         <ReportingScreen activePropertyId={user.activePropertyId} canViewBusinessSummary={grantedPermissions.has('reports.view_business')} canViewDiscounts={grantedPermissions.has('reports.view_discounts')} />
       ) : screenKey === 'cashiering' ? (
-        <CashieringScreen isOffline={!isOnline} activeProperty={activePropertyRecord} />
+        <CashieringScreen isOffline={!isOnline} activeProperty={activePropertyRecord} canClearRefunds={grantedPermissions.has('cashiering.refund_clear')} />
       ) : screenKey === 'night_audit' ? (
         <NightAuditScreen isOffline={!isOnline} />
       ) : screenKey === 'profiles' ? (

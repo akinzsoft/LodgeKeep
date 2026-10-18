@@ -285,7 +285,7 @@ describe('Paystack webhook — verified against Paystack’s own record (guest p
       // A non-charge event is keyed under its own namespace, so it can never claim a transaction id.
       const row = await eventRow(`refund.processed:${refundId}`);
       expect(row.outcome).toBe('ignored');
-      expect(row.outcome_detail.reason).toBe('event_not_handled');
+      expect(row.outcome_detail.reason).toBe('no_refund_in_flight'); // a refund event is only acted on for a refund actually in flight
     });
 
     it('a signed non-charge event with the same numeric id cannot block the genuine charge.success', async () => {

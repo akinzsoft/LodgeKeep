@@ -121,6 +121,15 @@ function readTimeoutMs() {
   return Number.isFinite(configured) && configured > 0 ? configured : 8000;
 }
 
+/**
+ * Upper bound for the refund POST, in ms — default 15s. A refund that times out is NOT a refusal: Paystack may have acted
+ * on it, so the caller records "outcome unknown" and keeps the amount reserved (cashiering/service.js refundPayment).
+ */
+function refundTimeoutMs() {
+  const configured = Number(process.env.PAYSTACK_REFUND_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 15000;
+}
+
 /** Converts a DECIMAL-as-string money amount (e.g. "150.00") to Paystack's smallest-currency-unit integer (kobo/pesewas/cents). */
 function toSubunit(amountDecimalString) {
   const [whole, fraction = ''] = String(amountDecimalString).split('.');
@@ -220,11 +229,26 @@ function buildAdapter(secretKey) {
    * subaccount.
    */
   async function refundTransaction({ reference, amount }) {
-    const data = await paystackFetch('/refund', {
-      method: 'POST',
-      body: amount ? { transaction: reference, amount: toSubunit(amount) } : { transaction: reference },
-    });
+    const body = amount ? { transaction: reference, amount: toSubunit(amount) } : { transaction: reference };
+    // Bounded (F-09): a hung call must not hold the request open forever, and a timeout is "outcome unknown", never a refusal.
+    const data = await paystackFetch('/refund', { method: 'POST', body, timeoutMs: refundTimeoutMs() });
     return { status: data.status, reference: data.transaction_reference ?? reference, refundId: data.id != null ? String(data.id) : null };
+  }
+
+  /**
+   * `GET /refund?transaction=<Paystack's numeric transaction id>` — the refunds Paystack holds against one transaction.
+   * Used to find a refund whose creation call we never heard back about (no refund id recorded). Checked against the
+   * sandbox: the `transaction` filter takes the NUMERIC id (`payments.provider_payment_id`), and `reference` does NOT
+   * filter by the transaction reference. Amounts come back in subunits, as `amountSubunit`.
+   */
+  async function listRefundsForTransaction({ transactionId }) {
+    const data = await paystackFetch(`/refund?transaction=${encodeURIComponent(transactionId)}&perPage=50`, { timeoutMs: readTimeoutMs() });
+    return (Array.isArray(data) ? data : []).map((row) => ({
+      refundId: String(row.id),
+      status: row.status,
+      amountSubunit: Number(row.amount),
+      createdAt: row.createdAt ?? row.created_at ?? null,
+    }));
   }
 
   /**
@@ -315,6 +339,7 @@ function buildAdapter(secretKey) {
     verifyTransaction,
     refundTransaction,
     fetchRefund,
+    listRefundsForTransaction,
     createSubaccount,
     fetchSubaccount,
     resolveBankAccount,
