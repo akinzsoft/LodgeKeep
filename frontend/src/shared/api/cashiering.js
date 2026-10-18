@@ -218,6 +218,15 @@ export function verifyPayment(paymentId) {
   return request(`/cashiering/payments/${paymentId}/verify`, { method: 'POST', body: {} });
 }
 
+/** A manager gives up on a refund reconciliation could not confirm. Needs a manager's `approval` token (action `cashiering.clear_stuck_refund`). */
+export function clearStuckRefund(paymentId, { reason, approval }) {
+  return request(`/cashiering/payments/${paymentId}/clear-stuck-refund`, {
+    method: 'POST',
+    body: { reason },
+    headers: { 'Idempotency-Key': idempotencyKey(), ...approvalHeaders(approval) },
+  });
+}
+
 /** @param {string} paymentId @param {{amount?: string, reason: string}} params */
 /** A refund of a POS (Register / QR guest order) payment also needs a manager's `approval` token (action `pos.refund_payment`). */
 export function refundPayment(paymentId, { amount, reason, approval }) {

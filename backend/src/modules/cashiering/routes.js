@@ -51,6 +51,7 @@ function cashieringRouter() {
   router.post('/cashiering/payments/:id/start-checkout', requirePermission('cashiering.void_line'), controller.startCheckout);
   router.post('/cashiering/payments/:id/verify', requirePermission('cashiering.void_line'), controller.verifyPayment);
   router.post('/cashiering/payments/:id/refund', requirePermission('cashiering.void_line'), controller.refundPayment);
+  router.post('/cashiering/payments/:id/clear-stuck-refund', requirePermission('cashiering.refund_clear'), controller.clearStuckRefund);
 
   return router;
 }

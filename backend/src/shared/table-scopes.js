@@ -448,6 +448,9 @@ const TABLE_SCOPES = Object.freeze({
   approval_pins: { scope: SCOPES.TENANT },
   manager_approvals: { scope: SCOPES.PROPERTY },
 
+  // Refund reconciliation — 20261204090000_create_refund_reconciliations. One row per Paystack refund intent.
+  refund_reconciliations: { scope: SCOPES.PROPERTY },
+
   // Discounts and comps — 20261203090000_create_discount_tables.
   discount_reasons: { scope: SCOPES.PROPERTY },
   discount_limits: { scope: SCOPES.PROPERTY },

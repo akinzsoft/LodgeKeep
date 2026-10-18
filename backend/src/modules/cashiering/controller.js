@@ -496,6 +496,30 @@ async function refundPayment(req, res, next) {
   }
 }
 
+/** A manager gives up on a refund that reconciliation could not confirm: permission, PIN approval, reason, audit. */
+async function clearStuckRefund(req, res, next) {
+  try {
+    const reason = require_(req.body, 'reason');
+    await runIdempotentMutation(req, res, {
+      operationType: 'cashiering.clear_stuck_refund',
+      entityType: 'payments',
+      action: 'clear_stuck_refund',
+      handler: async () => {
+        const result = await service.clearStuckRefund({
+          context: req.context,
+          paymentId: req.params.id,
+          reason,
+          userId: req.context.userId,
+          approve: (trx) => claimApproval(req, trx, 'cashiering.clear_stuck_refund', req.params.id),
+        });
+        return { status: 200, body: ok(result) };
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 /**
  * Public — no staff auth (API.md §7, mounted before `authenticate('staff')`
  * in `src/app.js`). Verified by signature, not by bearer token.
@@ -536,5 +560,6 @@ module.exports = {
   startCheckout,
   verifyPayment,
   refundPayment,
+  clearStuckRefund,
   receivePaystackWebhook,
 };

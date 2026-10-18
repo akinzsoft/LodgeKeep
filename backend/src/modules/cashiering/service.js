@@ -83,6 +83,7 @@ const {
   LineItemAlreadyVoidedError,
   InvalidPaymentTransitionError,
   RefundExceedsCapturedAmountError,
+  RefundNotStuckError,
   CrossReservationFolioMoveError,
   LineItemNotFoundError,
   CannotVoidInvoicedLineError,
@@ -162,7 +163,7 @@ async function listLineItems({ context, folioId }) {
 
 async function listPaymentsForFolio({ context, folioId }) {
   const db = scopedDb().for(context);
-  return db.table('payments').where({ folio_id: folioId }).orderBy('id');
+  return annotateStuckRefunds({ db, payments: await db.table('payments').where({ folio_id: folioId }).orderBy('id') });
 }
 
 async function getPayment({ context, id }) {
@@ -1281,7 +1282,8 @@ async function verifyPayment({ context, paymentId, userId }) {
  * which is the same outcome as today for any other unmatched webhook.
  */
 async function handlePaystackWebhook({ rawBody, signatureHeader, parsedBody }) {
-  const reference = parsedBody?.data?.reference;
+  // A charge event names the transaction as `reference`; a refund event as `transaction_reference`.
+  const reference = parsedBody?.data?.reference ?? parsedBody?.data?.transaction_reference;
   const rawPayment = reference ? await knex()('payments').where({ provider: 'paystack', provider_reference: reference }).first() : null;
 
   // Only "no credentials configured for this currency" means the event cannot be
@@ -1374,6 +1376,7 @@ async function decidePaymentWebhookEvent({ eventId, now = new Date() }) {
     return { outcome };
   };
 
+  if (REFUND_WEBHOOK_EVENTS.has(eventType)) return decideRefundWebhookEvent({ event: { ...event, event: eventType }, payload, finalize });
   if (!WEBHOOK_CHARGE_EVENTS.has(eventType)) return finalize('ignored', { reason: 'event_not_handled', event: eventType ?? null });
 
   const payment = reference ? await knex()('payments').where({ provider: 'paystack', provider_reference: reference }).first() : null;
@@ -1561,7 +1564,9 @@ function gatewayRefusedDefinitively(error) {
 async function flagRefundOutcomeUnknown({ db, intent, original, userId, error }) {
   const detail = `Outcome unknown, awaiting reconciliation with Paystack: ${error?.message ?? 'no response'}`.slice(0, 500);
   await db.transaction(async (trx) => {
-    await trx.table('payments').where({ id: intent.id }).whereIn('status', ['INITIATED', 'PENDING']).update({ status: 'PENDING', failure_reason: detail });
+    // Conditional: a sweep or webhook that already settled this intent (CAPTURED / FAILED) must not be walked back.
+    const flagged = await trx.table('payments').where({ id: intent.id }).whereIn('status', ['INITIATED', 'PENDING']).update({ status: 'PENDING', failure_reason: detail });
+    if (!flagged) return;
     await recordAuditEntry(trx, {
       entityType: 'payments',
       entityId: intent.id,
@@ -1573,6 +1578,162 @@ async function flagRefundOutcomeUnknown({ db, intent, original, userId, error })
       reason: detail,
     });
   });
+}
+
+const RESERVING_REFUND_STATUSES = ['INITIATED', 'PENDING'];
+
+/** One `refund_reconciliations` row per refund intent, created on first use. The caller holds the refunded payment's row lock. */
+async function ensureRefundReconciliation({ trx, intent, userId = null, reason = null }) {
+  const existing = await trx.table('refund_reconciliations').where({ payment_id: intent.id }).forUpdate().first();
+  if (existing) return existing;
+  const [id] = await trx.table('refund_reconciliations').insert({
+    payment_id: intent.id,
+    requested_by_user_id: userId,
+    reason: reason ? String(reason).slice(0, 500) : null,
+  });
+  return trx.table('refund_reconciliations').where({ id }).first();
+}
+
+/**
+ * The effects of a refund that Paystack has PROCESSED, applied exactly once by whichever path first sees it: the
+ * refund call itself, the reconciliation sweep, a refund webhook or a manager. The caller holds the original payment's
+ * row lock and has just claimed the intent (INITIATED/PENDING -> CAPTURED).
+ *
+ * A Register / QR card payment has no folio: a FULL refund voids the settlement it funded (and puts its stock back); a
+ * partial one leaves the sale standing. Anything else posts a refund line to the folio. A subaccount-split payment
+ * records the shortfall the property now owes back.
+ */
+async function applyProcessedRefundEffects({ trx, intent, original, reason, userId }) {
+  const isPosOrderTarget = intent.settlement_target === 'pos_order' || intent.settlement_target === 'pos_register';
+  const refundAmount = intent.amount;
+  const capturedTotal = await refundedSoFar({ trx, paymentId: original.id, statuses: ['CAPTURED'] });
+  const fullyRefunded = compareMoney(capturedTotal, original.amount) === 0;
+
+  if (isPosOrderTarget) {
+    // PLAN.md Phase 6 (QR self-ordering gap closure) — no folio exists for a guest order's card payment at all; the
+    // real reversal is voiding the `card` settlement itself, but ONLY once the payment has been refunded in full: a
+    // partial refund hands part of the money back and leaves the sale standing. Replicated inline (`pos/service.js`'s
+    // own `voidSettlement` shape: lock the parent order, re-check `voided_at` under a locking read, then write) rather
+    // than imported — see this file's own header comment on why `pos/service.js` is never required from here.
+    //
+    // This MUST stay in lockstep with `voidSettlement`'s own invariants: (1) an already-voided settlement is a real
+    // `409` conflict, never a silent no-op; (2) a `tip_service_charge_line_item_id` is voided alongside the settlement.
+    const settlement = await trx.table('pos_order_settlements').where({ payment_id: original.id }).first();
+    if (settlement && fullyRefunded) {
+      await trx.table('pos_orders').where({ id: settlement.pos_order_id }).forUpdate().first();
+      const lockedSettlement = await trx.table('pos_order_settlements').where({ id: settlement.id }).forUpdate().first();
+      if (lockedSettlement.voided_at) throw new SettlementAlreadyVoidedError(settlement.id);
+
+      if (lockedSettlement.tip_service_charge_line_item_id) {
+        await voidLineItem({ trx, lineItemId: lockedSettlement.tip_service_charge_line_item_id, reason, userId });
+      }
+      await trx.table('pos_order_settlements').where({ id: settlement.id }).update({
+        voided_at: new Date(),
+        void_reason: reason,
+        voided_by_user_id: userId,
+      });
+      // The sale is void, so the stock it took goes back — the same reversal `pos/service.js voidSettlement` makes.
+      // Only a FULL refund reaches this branch; a partial amount says nothing about which line came back.
+      await stockService.reverseStockForSettlement({ trx, settlementId: settlement.id, userId });
+    } else if (settlement) {
+      // Flagged, not hidden: money went back but the sale stands, and NO stock is put back — a partial amount says
+      // nothing about which line the guest returned.
+      await recordAuditEntry(trx, {
+        entityType: 'payments',
+        entityId: intent.id,
+        propertyId: original.property_id,
+        userId,
+        action: 'refund_partial_settlement_kept',
+        source: 'api',
+        afterState: { settlementId: String(settlement.id), originalPaymentId: String(original.id), refundAmount, refundedSoFar: capturedTotal, paymentAmount: original.amount, currency: original.currency },
+        reason: 'A partial refund does not void the sale it paid for; the settlement and its stock movements are unchanged.',
+      });
+    }
+  } else {
+    const folio = await lockFolio({ trx, folioId: original.folio_id });
+    const businessDate = await propertyBusinessDate({ trx, propertyId: folio.property_id });
+    await trx.table('folio_line_items').insert({
+      folio_id: original.folio_id,
+      type: 'refund',
+      description: `Paystack refund of payment ${original.id}`,
+      amount: refundAmount,
+      currency: original.currency,
+      payment_method: 'paystack',
+      payment_id: intent.id,
+      business_date: businessDate,
+      posted_by_user_id: userId ?? null,
+    });
+    await recomputeFolioBalance({ trx, folioId: original.folio_id });
+  }
+  await trx.table('payments').where({ id: original.id }).update({ status: fullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED' });
+
+  // Gap closure — confirmed LIVE against the real sandbox before this shipped, not assumed: a Paystack refund debits
+  // the FULL original amount from the PLATFORM's own balance immediately, with nothing automatically clawed back from
+  // the subaccount's own share, even though that share may already have been paid to the hotel's bank. User-confirmed
+  // scope ("record and flag only"): no automatic recovery/netting is built — this is a real, audited fact that the
+  // property now owes this amount back to the platform. Every property subaccount is seeded at 0% platform fee today,
+  // so 100% of any split charge — and of any refund of it — was the property's own share.
+  if (original.subaccount_code) {
+    await recordAuditEntry(trx, {
+      entityType: 'payments',
+      entityId: intent.id,
+      propertyId: original.property_id,
+      userId,
+      action: 'refund_subaccount_shortfall',
+      source: 'api',
+      afterState: {
+        originalPaymentId: original.id,
+        subaccountCode: original.subaccount_code,
+        amountOwedBackByProperty: refundAmount,
+        currency: original.currency,
+      },
+      reason:
+        'Paystack refunds a split payment from the platform\'s own balance only — this amount is not yet automatically recovered from the property.',
+    });
+  }
+}
+
+/**
+ * The ONE place a refund intent leaves INITIATED/PENDING. Every path that learns Paystack's answer — the refund call
+ * itself, the reconciliation sweep, a refund webhook, the manager "clear" — comes through here, so the same refund can
+ * never be applied twice: the original payment is locked first, the intent is re-read under that lock, and a claim on
+ * an intent that is no longer in flight changes nothing.
+ *
+ *   outcome 'processed'  claim CAPTURED and apply the effects (folio line / settlement void + stock / balances)
+ *   outcome 'pending'    Paystack has it but has not finished: stays PENDING, remembers the refund id
+ *   outcome 'failed'     Paystack failed or reversed it: FAILED, the reserved amount is released and the
+ *                        Idempotency-Key is given back
+ *
+ * Returns `{ applied, intent }`; `applied` is false when another path got there first. Never releases an amount on doubt:
+ * a caller with no clear answer does not call this.
+ */
+async function settleRefundIntent({ trx, intentId, outcome, refundId = null, reason = null, userId = null, failureReason = null }) {
+  const peek = await trx.table('payments').where({ id: intentId }).first();
+  if (!peek) return { applied: false, intent: null };
+  const original = await trx.table('payments').where({ id: peek.parent_payment_id }).forUpdate().first();
+  const intent = await trx.table('payments').where({ id: intentId }).forUpdate().first();
+  if (!original || !RESERVING_REFUND_STATUSES.includes(intent.status)) return { applied: false, intent };
+
+  if (outcome === 'failed') {
+    await trx.table('payments').where({ id: intent.id }).update({
+      status: 'FAILED',
+      failed_at: new Date(),
+      failure_reason: String(failureReason ?? 'Paystack reported the refund failed.').slice(0, 500),
+      provider_payment_id: refundId ?? intent.provider_payment_id ?? null,
+      idempotency_key: `${String(intent.idempotency_key).slice(0, 150)}~failed-${intent.id}`,
+    });
+  } else if (outcome === 'processed') {
+    await trx.table('payments').where({ id: intent.id }).update({
+      status: 'CAPTURED',
+      captured_at: new Date(),
+      provider_payment_id: refundId ?? intent.provider_payment_id ?? null,
+      failure_reason: null,
+    });
+    await applyProcessedRefundEffects({ trx, intent, original, reason: reason ?? 'Refund confirmed by Paystack', userId });
+  } else {
+    await trx.table('payments').where({ id: intent.id }).update({ status: 'PENDING', provider_payment_id: refundId ?? intent.provider_payment_id ?? null });
+  }
+  return { applied: true, intent: await trx.table('payments').where({ id: intent.id }).first() };
 }
 
 /**
@@ -1685,17 +1846,21 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
       status: 'INITIATED',
       parent_payment_id: locked.original.id,
     });
-    return { intent: await trx.table('payments').where({ id: intentId }).first(), original: locked.original, refundAmount: locked.refundAmount };
+    const created = await trx.table('payments').where({ id: intentId }).first();
+    // Who asked and why, kept for whichever path later learns Paystack's answer (the sweep, a webhook, a manager).
+    await ensureRefundReconciliation({ trx, intent: created, userId, reason });
+    return { intent: created, original: locked.original, refundAmount: locked.refundAmount };
   });
 
-  // (2) Ask Paystack, outside any transaction.
+  // (2) Ask Paystack, outside any transaction. The call is bounded; a timeout is "outcome unknown", never a refusal.
   let gatewayResult;
   try {
     gatewayResult = await adapter.refundTransaction({ reference: original.provider_reference, amount: amountSupplied ? refundAmount : undefined });
   } catch (error) {
     if (gatewayRefusedDefinitively(error)) {
       // The failed intent gives its idempotency key back, so the cashier can retry the same action under the same key.
-      await db.table('payments').where({ id: intent.id }).update({
+      // Conditional: if a sweep or webhook already settled the intent it is left alone.
+      await db.table('payments').where({ id: intent.id }).whereIn('status', RESERVING_REFUND_STATUSES).update({
         status: 'FAILED',
         failed_at: new Date(),
         failure_reason: `Paystack refused the refund: ${error.message}`.slice(0, 500),
@@ -1711,109 +1876,8 @@ async function refundPayment({ context, paymentId, amount, reason, idempotencyKe
   // (3) Record the answer. A failure here leaves the refund sent but unrecorded, so it is flagged, never released.
   try {
     return await db.transaction(async (trx) => {
-      const lockedOriginal = await trx.table('payments').where({ id: original.id }).forUpdate().first();
-      await trx.table('payments').where({ id: intent.id }).update({
-        status: processed ? 'CAPTURED' : 'PENDING',
-        captured_at: processed ? new Date() : null,
-        provider_payment_id: gatewayResult.refundId ?? null,
-      });
-
-      if (processed) {
-        const capturedTotal = await refundedSoFar({ trx, paymentId: original.id, statuses: ['CAPTURED'] });
-        const fullyRefunded = compareMoney(capturedTotal, lockedOriginal.amount) === 0;
-
-        if (isPosOrderTarget) {
-          // PLAN.md Phase 6 (QR self-ordering gap closure) — no folio exists for a guest order's card payment at
-          // all; the real reversal is voiding the `card` settlement itself, but ONLY once the payment has been
-          // refunded in full: a partial refund hands part of the money back and leaves the sale standing.
-          // Replicated inline (`pos/service.js`'s own `voidSettlement` shape: lock the parent order, re-check
-          // `voided_at` under a locking read, then write) rather than imported — see this file's own header comment
-          // on why `pos/service.js` is never required from here.
-          //
-          // This MUST stay in lockstep with `voidSettlement`'s own two invariants: (1) an already-voided
-          // settlement is a real `409` conflict, never a silent no-op; (2) a `tip_service_charge_line_item_id` is
-          // voided alongside the settlement, never left orphaned on a folio.
-          const settlement = await trx.table('pos_order_settlements').where({ payment_id: original.id }).first();
-          if (settlement && fullyRefunded) {
-            await trx.table('pos_orders').where({ id: settlement.pos_order_id }).forUpdate().first();
-            const lockedSettlement = await trx.table('pos_order_settlements').where({ id: settlement.id }).forUpdate().first();
-            if (lockedSettlement.voided_at) throw new SettlementAlreadyVoidedError(settlement.id);
-
-            if (lockedSettlement.tip_service_charge_line_item_id) {
-              await voidLineItem({ trx, lineItemId: lockedSettlement.tip_service_charge_line_item_id, reason, userId });
-            }
-            await trx.table('pos_order_settlements').where({ id: settlement.id }).update({
-              voided_at: new Date(),
-              void_reason: reason,
-              voided_by_user_id: userId,
-            });
-          } else if (settlement) {
-            // Flagged, not hidden: money went back but the sale stands, and NO stock is put back — a partial amount
-            // says nothing about which line the guest returned.
-            await recordAuditEntry(trx, {
-              entityType: 'payments',
-              entityId: intent.id,
-              propertyId: original.property_id,
-              userId,
-              action: 'refund_partial_settlement_kept',
-              source: 'api',
-              afterState: { settlementId: String(settlement.id), originalPaymentId: String(original.id), refundAmount, refundedSoFar: capturedTotal, paymentAmount: lockedOriginal.amount, currency: original.currency },
-              reason: 'A partial refund does not void the sale it paid for; the settlement and its stock movements are unchanged.',
-            });
-          }
-        } else {
-          const folio = await lockFolio({ trx, folioId: original.folio_id });
-          const businessDate = await propertyBusinessDate({ trx, propertyId: folio.property_id });
-          await trx.table('folio_line_items').insert({
-            folio_id: original.folio_id,
-            type: 'refund',
-            description: `Paystack refund of payment ${original.id}`,
-            amount: refundAmount,
-            currency: original.currency,
-            payment_method: 'paystack',
-            payment_id: intent.id,
-            business_date: businessDate,
-            posted_by_user_id: userId ?? null,
-          });
-          await recomputeFolioBalance({ trx, folioId: original.folio_id });
-        }
-        await trx.table('payments').where({ id: original.id }).update({ status: fullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED' });
-
-        // Gap closure — confirmed LIVE against the real sandbox before this
-        // shipped, not assumed: a Paystack refund debits the FULL original
-        // amount from the PLATFORM's own balance immediately, with nothing
-        // automatically clawed back from the subaccount's own share, even
-        // though that share may already have been paid to the hotel's bank.
-        // User-confirmed scope for this pass ("record and flag only"): no
-        // automatic recovery/netting mechanism is built here — this is a
-        // real, audited fact that the property now owes this amount back to
-        // the platform, surfaced for a future reconciliation pass to act on,
-        // not silently absorbed or silently hidden. `refundAmount` (not a
-        // percentage of it) is the property's own shortfall: every property
-        // subaccount is seeded at 0% platform fee today, so 100% of any
-        // split charge — and therefore 100% of any refund of it — was the
-        // property's own share.
-        if (original.subaccount_code) {
-          await recordAuditEntry(trx, {
-            entityType: 'payments',
-            entityId: intent.id,
-            propertyId: original.property_id,
-            userId,
-            action: 'refund_subaccount_shortfall',
-            source: 'api',
-            afterState: {
-              originalPaymentId: original.id,
-              subaccountCode: original.subaccount_code,
-              amountOwedBackByProperty: refundAmount,
-              currency: original.currency,
-            },
-            reason:
-              'Paystack refunds a split payment from the platform\'s own balance only — this amount is not yet automatically recovered from the property.',
-          });
-        }
-      }
-
-      return trx.table('payments').where({ id: intent.id }).first();
+      const settled = await settleRefundIntent({ trx, intentId: intent.id, outcome: processed ? 'processed' : 'pending', refundId: gatewayResult.refundId ?? null, reason, userId });
+      return settled.intent;
     });
   } catch (error) {
     await flagRefundOutcomeUnknown({ db, intent, original, userId, error }).catch((flagError) => {
@@ -1900,7 +1964,321 @@ async function sumPostedRoomChargesByDate({ db, dates, baseCurrency }) {
   return new Map([...amountsByDate.entries()].map(([date, amounts]) => [date, sumMoney(amounts)]));
 }
 
+
+// ---------------------------------------------------------------------
+// Refund reconciliation — a refund Paystack accepted but we never saw finish, or one whose outcome we never learned
+// ---------------------------------------------------------------------
+
+function positiveIntEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+/** Read per call so a test (or an operator) can change them without a restart. */
+function refundReconcileConfig() {
+  return {
+    /** A refund intent is first checked once it is this old, and re-checked this often. */
+    minAgeMinutes: positiveIntEnv('REFUND_RECONCILE_MIN_AGE_MINUTES', 5),
+    /** A manager may clear a stuck refund only after this many checks AND once the refund is this old. */
+    clearMinChecks: positiveIntEnv('REFUND_CLEAR_MIN_CHECKS', 3),
+    clearMinMinutes: positiveIntEnv('REFUND_CLEAR_MIN_MINUTES', 30),
+  };
+}
+
+/** What Paystack's refund status means for us. `null`: not a status we recognise, so no decision may be taken on it. */
+function classifyRefundStatus(status) {
+  const value = String(status ?? '').toLowerCase();
+  if (value === 'processed' || value === 'success') return 'processed';
+  if (value === 'failed' || value === 'reversed') return 'failed';
+  if (value === 'pending' || value === 'processing' || value === 'needs-attention') return 'pending';
+  return null;
+}
+
+/** A Paystack refund intent still in flight that the generic reconciliation owns (a supermarket void has its own sweep). */
+function isReconcilableRefund(intent) {
+  return Boolean(
+    intent &&
+      intent.parent_payment_id &&
+      intent.provider === 'paystack' &&
+      RESERVING_REFUND_STATUSES.includes(intent.status) &&
+      intent.settlement_target !== 'supermarket_sale'
+  );
+}
+
+/**
+ * Asks Paystack what really happened to one refund intent. Read-only, no transaction open. Returns
+ * `{ result, refundId?, detail }` where `result` is `processed | failed | pending` (a clear answer) or `unreachable |
+ * ambiguous | not_found` (NO answer: the caller must not release anything on these).
+ *
+ * An intent that has a refund id is looked up by it. One that never got an id (the refund call timed out or dropped) is
+ * found among the refunds Paystack holds for the original transaction: the match must be unique (same amount, created
+ * after the intent, not already claimed by another local refund), otherwise it is "ambiguous" or "not_found".
+ */
+async function lookUpRefundAtPaystack({ db, intent, original }) {
+  let adapter;
+  try {
+    ({ adapter } = await paystack.resolveAdapterForCurrency(db, intent.currency));
+  } catch (error) {
+    return { result: 'unreachable', detail: `Paystack is not available: ${error?.message ?? error}`.slice(0, 500) };
+  }
+  try {
+    if (intent.provider_payment_id) {
+      const found = await adapter.fetchRefund({ refundId: intent.provider_payment_id });
+      const kind = classifyRefundStatus(found.status);
+      if (!kind) return { result: 'ambiguous', detail: `Paystack reported a refund status we do not recognise: "${found.status}".` };
+      return { result: kind, refundId: found.refundId, detail: `Paystack refund status: ${found.status}.` };
+    }
+    if (!original.provider_payment_id) {
+      return { result: 'not_found', detail: 'The original payment has no Paystack transaction id on record, so its refunds cannot be listed.' };
+    }
+    const refunds = await adapter.listRefundsForTransaction({ transactionId: original.provider_payment_id });
+    const wanted = paystack.toSubunit(intent.amount);
+    const claimedRows = await db.table('payments').where({ parent_payment_id: original.id }).whereNotNull('provider_payment_id').select('id', 'provider_payment_id');
+    const claimed = new Set(claimedRows.filter((row) => String(row.id) !== String(intent.id)).map((row) => String(row.provider_payment_id)));
+    const startedMs = new Date(intent.created_at).getTime();
+    const candidates = refunds.filter((row) => {
+      if (row.amountSubunit !== wanted || claimed.has(String(row.refundId))) return false;
+      const createdMs = row.createdAt ? Date.parse(row.createdAt) : NaN;
+      return Number.isNaN(createdMs) || createdMs >= startedMs - 120_000;
+    });
+    if (candidates.length === 0) return { result: 'not_found', detail: 'Paystack lists no refund of this amount for the original transaction.' };
+    const rivals = await db
+      .table('payments')
+      .where({ parent_payment_id: original.id, provider: 'paystack', amount: intent.amount })
+      .whereIn('status', RESERVING_REFUND_STATUSES)
+      .whereNull('provider_payment_id')
+      .select('id');
+    const otherRivals = rivals.filter((row) => String(row.id) !== String(intent.id));
+    if (candidates.length !== 1 || otherRivals.length > 0) {
+      return { result: 'ambiguous', detail: `Paystack lists ${candidates.length} possible refund(s) of this amount and ${otherRivals.length + 1} local refund(s) are waiting; they cannot be told apart.` };
+    }
+    const pick = candidates[0];
+    const kind = classifyRefundStatus(pick.status);
+    if (!kind) return { result: 'ambiguous', detail: `Paystack reported a refund status we do not recognise: "${pick.status}".` };
+    return { result: kind, refundId: pick.refundId, detail: `Matched Paystack refund ${pick.refundId} (${pick.status}).` };
+  } catch (error) {
+    return { result: 'unreachable', detail: `Paystack could not be asked: ${error?.message ?? error}`.slice(0, 500) };
+  }
+}
+
+/** Whether a manager may clear this refund: only once reconciliation has checked Paystack enough times and still cannot confirm. */
+function refundClearEligibility({ intent, reconciliation, now = new Date() }) {
+  const config = refundReconcileConfig();
+  if (!isReconcilableRefund(intent)) return { eligible: false, reason: 'not_in_flight' };
+  const attempts = Number(reconciliation?.attempts ?? 0);
+  if (attempts < config.clearMinChecks) return { eligible: false, reason: 'not_enough_checks', attempts, needed: config.clearMinChecks };
+  const ageMinutes = (now.getTime() - new Date(intent.created_at).getTime()) / 60_000;
+  if (ageMinutes < config.clearMinMinutes) return { eligible: false, reason: 'too_recent', needed: config.clearMinMinutes };
+  if (!['unreachable', 'ambiguous', 'not_found'].includes(reconciliation?.last_result)) {
+    return { eligible: false, reason: 'paystack_reports_pending' };
+  }
+  return { eligible: true, reason: null };
+}
+
+/**
+ * Checks one refund intent against Paystack and settles it if Paystack gives a clear answer. Safe to call from the
+ * sweep, a webhook and a manager at once: Paystack is asked outside any transaction, and the answer is applied through
+ * `settleRefundIntent`, which claims the intent under the original payment's row lock, so a refund is applied once.
+ *
+ *   processed  -> CAPTURED, with exactly the effects the normal path applies
+ *   failed     -> FAILED, the reserved amount is released and a manager is told (the guest has not been repaid)
+ *   pending    -> left alone, to be checked again
+ *   no answer  -> left alone, nothing released; the check is recorded so a manager can clear it after enough of them
+ */
+async function reconcileRefundIntent({ context, intentId, source = 'sweep', now = new Date() }) {
+  const db = scopedDb().for(context);
+  const intent = await db.table('payments').where({ id: intentId }).first();
+  if (!isReconcilableRefund(intent)) return { skipped: true, status: intent?.status ?? null };
+  const original = await db.table('payments').where({ id: intent.parent_payment_id }).first();
+
+  const found = await lookUpRefundAtPaystack({ db, intent, original });
+  const auditSource = source === 'webhook' ? 'integration' : source === 'manager' ? 'api' : 'job';
+
+  return db.transaction(async (trx) => {
+    await trx.table('payments').where({ id: original.id }).forUpdate().first(); // lock order: the refunded payment first
+    const reconciliation = await ensureRefundReconciliation({ trx, intent });
+    let settled = { applied: false };
+    if (found.result === 'processed' || found.result === 'failed' || found.result === 'pending') {
+      settled = await settleRefundIntent({
+        trx,
+        intentId: intent.id,
+        outcome: found.result,
+        refundId: found.refundId ?? null,
+        reason: reconciliation.reason ?? 'Refund confirmed by Paystack (reconciliation)',
+        userId: reconciliation.requested_by_user_id ?? null,
+        failureReason: `Paystack reported the refund failed; the guest has not been repaid. ${found.detail ?? ''}`.trim(),
+      });
+      // Another path (the refund call itself, a webhook, a manager) settled it first: nothing left to do or record.
+      if (!settled.applied) return { skipped: true, status: settled.intent?.status ?? null, result: found.result };
+    }
+
+    const attempts = Number(reconciliation.attempts) + 1;
+    await trx.table('refund_reconciliations').where({ id: reconciliation.id }).update({
+      attempts,
+      first_checked_at: reconciliation.first_checked_at ?? now,
+      last_checked_at: now,
+      last_result: found.result,
+      last_detail: String(found.detail ?? '').slice(0, 500),
+      updated_at: now,
+    });
+
+    const resolved = found.result === 'processed' || found.result === 'failed';
+    if (resolved) {
+      await recordAuditEntry(trx, {
+        entityType: 'payments',
+        entityId: intent.id,
+        propertyId: original.property_id,
+        action: found.result === 'processed' ? 'refund_reconciled' : 'refund_reconciled_failed',
+        source: auditSource,
+        afterState: { originalPaymentId: original.id, amount: intent.amount, currency: intent.currency, refundId: found.refundId ?? null, attempts, via: source },
+        reason: found.detail ?? null,
+      });
+    }
+    if (found.result === 'failed') {
+      await notifyStaff({
+        trx,
+        eventType: 'payments.refund_needs_attention',
+        payload: { paymentId: original.id, refundPaymentId: intent.id, amount: intent.amount, currency: intent.currency, kind: 'failed' },
+        dedupKey: `refund-attention:${intent.id}:failed`,
+      });
+    }
+    if (!resolved && found.result !== 'pending') {
+      const eligibility = refundClearEligibility({ intent, reconciliation: { attempts, last_result: found.result }, now });
+      if (eligibility.eligible) {
+        await notifyStaff({
+          trx,
+          eventType: 'payments.refund_needs_attention',
+          payload: { paymentId: original.id, refundPaymentId: intent.id, amount: intent.amount, currency: intent.currency, kind: 'stuck' },
+          dedupKey: `refund-attention:${intent.id}:stuck`,
+        });
+      }
+    }
+    return { skipped: false, result: found.result, detail: found.detail, applied: resolved, attempts };
+  });
+}
+
+/**
+ * Manager "Clear stuck refund": gives up on a refund reconciliation cannot confirm, releasing its reserved amount so the
+ * money can be refunded another way. Allowed ONLY after reconciliation has checked Paystack enough times and could not
+ * confirm; and it asks Paystack one last time first — a refund that turns out to be processed is applied, not cleared,
+ * and one Paystack still reports as pending is refused, so clearing can never cause a double refund.
+ */
+async function clearStuckRefund({ context, paymentId, reason, userId, approve = null, now = new Date() }) {
+  const cleanReason = String(reason ?? '').trim();
+  if (!cleanReason) throw new ValidationError('MISSING_FIELD', '"reason" is required to clear a stuck refund.', [{ field: 'reason', issue: 'missing' }]);
+  const db = scopedDb().for(context);
+  const peek = await db.table('payments').where({ id: paymentId }).first();
+  if (!peek || !peek.parent_payment_id || peek.provider !== 'paystack') throw new ValidationError('PAYMENT_NOT_FOUND', 'The specified refund does not exist.');
+  if (!isReconcilableRefund(peek)) throw new RefundNotStuckError(peek.status, 'This refund is not waiting on Paystack.');
+
+  // Eligibility is judged on the checks made BEFORE this request: the sweep must already have failed to confirm it.
+  const before = await db.table('refund_reconciliations').where({ payment_id: paymentId }).first();
+  const eligibility = refundClearEligibility({ intent: peek, reconciliation: before, now });
+  if (!eligibility.eligible) throw new RefundNotStuckError(peek.status, `Reconciliation has not yet finished checking this refund (${eligibility.reason}).`, eligibility);
+
+  // One last look at Paystack, outside any transaction.
+  const checked = await reconcileRefundIntent({ context, intentId: paymentId, source: 'manager', now });
+  if (!checked.skipped && (checked.result === 'processed' || checked.result === 'failed')) {
+    return { cleared: false, resolved: checked.result, intent: await db.table('payments').where({ id: paymentId }).first() };
+  }
+  if (!checked.skipped && checked.result === 'pending') {
+    throw new RefundNotStuckError(peek.status, 'Paystack reports this refund is still being processed, so it cannot be cleared.', { reason: 'paystack_reports_pending' });
+  }
+
+  return db.transaction(async (trx) => {
+    const original = await trx.table('payments').where({ id: peek.parent_payment_id }).forUpdate().first();
+    const intent = await trx.table('payments').where({ id: paymentId }).forUpdate().first();
+    if (!isReconcilableRefund(intent)) return { cleared: false, resolved: intent.status.toLowerCase(), intent };
+    const reconciliation = await ensureRefundReconciliation({ trx, intent });
+    if (!refundClearEligibility({ intent, reconciliation, now }).eligible) {
+      throw new RefundNotStuckError(intent.status, 'Reconciliation has not yet finished checking this refund.');
+    }
+    if (approve) await approve(trx, original);
+    await trx.table('payments').where({ id: intent.id }).update({
+      status: 'FAILED',
+      failed_at: now,
+      failure_reason: `Cleared by a manager after reconciliation could not confirm it: ${cleanReason}`.slice(0, 500),
+      idempotency_key: `${String(intent.idempotency_key).slice(0, 150)}~failed-${intent.id}`,
+    });
+    await trx.table('refund_reconciliations').where({ id: reconciliation.id }).update({ last_result: 'cleared', last_detail: cleanReason.slice(0, 500), updated_at: now });
+    await recordAuditEntry(trx, {
+      entityType: 'payments',
+      entityId: intent.id,
+      propertyId: original.property_id,
+      userId,
+      action: 'refund_stuck_cleared',
+      source: 'api',
+      beforeState: { status: intent.status, attempts: reconciliation.attempts, lastResult: reconciliation.last_result, lastDetail: reconciliation.last_detail },
+      afterState: { originalPaymentId: original.id, amount: intent.amount, currency: intent.currency, status: 'FAILED' },
+      reason: cleanReason,
+    });
+    return { cleared: true, intent: await trx.table('payments').where({ id: intent.id }).first() };
+  });
+}
+
+/** Adds what the screens need to show a stuck refund on a payment row: only rows that are in-flight Paystack refunds gain a field. */
+async function annotateStuckRefunds({ db, payments, now = new Date() }) {
+  const inFlight = payments.filter(isReconcilableRefund);
+  if (inFlight.length === 0) return payments;
+  const rows = await db.table('refund_reconciliations').whereIn('payment_id', inFlight.map((row) => row.id));
+  const byPayment = new Map(rows.map((row) => [String(row.payment_id), row]));
+  return payments.map((payment) => {
+    if (!isReconcilableRefund(payment)) return payment;
+    const reconciliation = byPayment.get(String(payment.id)) ?? null;
+    const eligibility = refundClearEligibility({ intent: payment, reconciliation, now });
+    return {
+      ...payment,
+      refundReconciliation: {
+        attempts: Number(reconciliation?.attempts ?? 0),
+        lastCheckedAt: reconciliation?.last_checked_at ?? null,
+        lastResult: reconciliation?.last_result ?? null,
+        lastDetail: reconciliation?.last_detail ?? null,
+        canClear: eligibility.eligible,
+        clearBlockedBy: eligibility.eligible ? null : eligibility.reason,
+      },
+    };
+  });
+}
+
+/** `refund.*` webhook events are a hint: the real status is re-read from Paystack through the same reconciliation. */
+const REFUND_WEBHOOK_EVENTS = new Set(['refund.pending', 'refund.processing', 'refund.processed', 'refund.failed']);
+
+async function decideRefundWebhookEvent({ event, payload, finalize }) {
+  const data = payload?.data ?? {};
+  const refundId = data.id != null ? String(data.id) : null;
+  const transactionReference = data.transaction_reference ?? data.transaction?.reference ?? null;
+  let candidates = [];
+  if (refundId) {
+    candidates = await knex()('payments').where({ provider: 'paystack', provider_payment_id: refundId }).whereNotNull('parent_payment_id').whereIn('status', RESERVING_REFUND_STATUSES);
+  }
+  if (candidates.length === 0 && transactionReference) {
+    const original = await knex()('payments').where({ provider: 'paystack', provider_reference: transactionReference }).first();
+    if (original) candidates = await knex()('payments').where({ parent_payment_id: original.id, provider: 'paystack' }).whereIn('status', RESERVING_REFUND_STATUSES);
+  }
+  candidates = candidates.filter(isReconcilableRefund);
+  if (candidates.length === 0) return finalize('ignored', { reason: 'no_refund_in_flight', event: event.event ?? null });
+
+  const attribution = { tenant_id: candidates[0].tenant_id, property_id: candidates[0].property_id, related_payment_id: candidates[0].id };
+  let resolved = 0;
+  for (const intent of candidates) {
+    const owner = await knex()('tenants').where({ id: intent.tenant_id }).first('status');
+    if (!owner || ['purging', 'purged'].includes(owner.status)) continue;
+    const outcome = await reconcileRefundIntent({ context: workerContext({ tenantId: intent.tenant_id, propertyId: intent.property_id }), intentId: intent.id, source: 'webhook' });
+    if (outcome.applied) resolved += 1;
+  }
+  // Only a refund Paystack's own record says is finished counts as applied; anything else is left to the sweep.
+  return finalize(resolved > 0 ? 'applied' : 'ignored', { reason: resolved > 0 ? 'refund_reconciled' : 'refund_not_final', event: payload?.event ?? null }, attribution);
+}
+
 module.exports = {
+  settleRefundIntent,
+  reconcileRefundIntent,
+  clearStuckRefund,
+  refundClearEligibility,
+  annotateStuckRefunds,
+  isReconcilableRefund,
+  refundReconcileConfig,
+  RefundNotStuckError,
   lockFolio,
   lockFoliosForMutation,
   resolveClientBusinessDate,

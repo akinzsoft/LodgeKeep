@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CashieringScreen } from '../CashieringScreen.jsx';
+import { approveInDialog, TEST_APPROVERS, TEST_APPROVAL_TOKEN } from '../../approvals/__tests__/approveInDialog.js';
 
 const mocks = vi.hoisted(() => ({
   listFoliosForReservation: vi.fn(),
@@ -15,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   listTerminalAccountOptions: vi.fn(),
   capturePaystackPayment: vi.fn(),
   refundPayment: vi.fn(),
+  clearStuckRefund: vi.fn(),
+  listApprovers: vi.fn(),
+  requestApproval: vi.fn(),
   openAdditionalFolio: vi.fn(),
   billFolioToCompany: vi.fn(),
   verifyPayment: vi.fn(),
@@ -31,6 +35,7 @@ vi.mock('../../../shared/api/index.js', async () => {
   return {
     ...actual,
     cashieringApi: mocks,
+    approvalsApi: { listApprovers: mocks.listApprovers, requestApproval: mocks.requestApproval },
     profilesApi: { ...actual.profilesApi, listCompanyProfiles: mocks.listCompanyProfiles },
     arApi: { ...actual.arApi, listAccounts: mocks.listAccounts },
   };
@@ -576,6 +581,59 @@ describe('<CashieringScreen>', () => {
         '1',
         expect.objectContaining({ overrideCreditLimit: true, overrideReason: 'Manager approved' })
       );
+    });
+  });
+
+  describe('a refund stuck waiting on Paystack', () => {
+    const PAID = { id: '70', provider: 'paystack', status: 'CAPTURED', amount: '300.00', currency: 'NGN', parent_payment_id: null };
+    const STUCK = (extra = {}) => ({
+      id: '71',
+      provider: 'paystack',
+      status: 'PENDING',
+      amount: '300.00',
+      currency: 'NGN',
+      parent_payment_id: '70',
+      refundReconciliation: { attempts: 3, lastResult: 'unreachable', canClear: true, ...extra },
+    });
+
+    async function open(props, payments) {
+      mocks.getFolio.mockResolvedValue({ ...FOLIO, lineItems: [LINE_ITEM], payments });
+      mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+      await loadReservation(props);
+    }
+
+    it('shows the refund as waiting on Paystack, with what reconciliation has found', async () => {
+      await open({}, [PAID, STUCK()]);
+      expect(await screen.findByText('Refund waiting on Paystack')).toBeInTheDocument();
+      expect(screen.getByText(/Checked 3 times\. Paystack could not be reached\./)).toBeInTheDocument();
+      expect(screen.getByText(/A manager can clear it/)).toBeInTheDocument();
+    });
+
+    it('a manager clears it with their PIN and a reason, and the folio reloads', async () => {
+      mocks.clearStuckRefund.mockResolvedValue({ cleared: true });
+      mocks.listApprovers.mockResolvedValue(TEST_APPROVERS);
+      mocks.requestApproval.mockResolvedValue({ token: TEST_APPROVAL_TOKEN });
+      await open({ canClearRefunds: true }, [PAID, STUCK()]);
+      await userEvent.click(await screen.findByRole('button', { name: 'Clear stuck refund' }));
+      await approveInDialog({ reason: 'Paystack confirmed it never went out', confirmLabel: 'Clear refund' });
+      expect(mocks.listApprovers).toHaveBeenCalledWith('cashiering.clear_stuck_refund');
+      expect(mocks.clearStuckRefund).toHaveBeenCalledWith('71', { reason: 'Paystack confirmed it never went out', approval: TEST_APPROVAL_TOKEN });
+      expect(await screen.findByText('The stuck refund was cleared.')).toBeInTheDocument();
+    });
+
+    it.each([
+      ['without the permission', { canClearRefunds: false }, STUCK()],
+      ['before reconciliation has finished checking', { canClearRefunds: true }, STUCK({ canClear: false, attempts: 1 })],
+    ])('offers no clear button %s', async (_name, props, stuck) => {
+      await open(props, [PAID, stuck]);
+      await screen.findByText('Refund waiting on Paystack');
+      expect(screen.queryByRole('button', { name: 'Clear stuck refund' })).not.toBeInTheDocument();
+    });
+
+    it('an ordinary payment row is unchanged', async () => {
+      await open({ canClearRefunds: true }, [PAID]);
+      await screen.findByText('CAPTURED');
+      expect(screen.queryByText('Refund waiting on Paystack')).not.toBeInTheDocument();
     });
   });
 });

@@ -32,6 +32,7 @@ process.env.EMAIL_PROVIDER = 'console';
 const { destroy } = require('./db');
 const { __closeQueuesForTesting } = require('../../src/jobs/queues');
 const { destroyRedisConnection } = require('../../src/jobs/redis-connection');
+const { destroyRateLimitRedisConnection } = require('../../src/shared/rate-limit-redis-connection');
 
 // Schema work against a real MySQL instance is slower than the 5s default, and
 // a timeout here reads as a mysterious failure rather than a slow query.
@@ -47,4 +48,8 @@ afterAll(async () => {
   // open" discipline `destroy()` above already exists for MySQL.
   await __closeQueuesForTesting();
   await destroyRedisConnection();
+  // The QR-ordering / auth rate limiters keep their own Redis connection. Left open, its live socket kept every test
+  // file's whole module graph reachable after the file finished (about 22 MB per file under --runInBand, ~4.4 GB over
+  // the suite, which ran CI out of heap). A no-op for a file that never opened it.
+  await destroyRateLimitRedisConnection();
 });

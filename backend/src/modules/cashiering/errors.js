@@ -115,7 +115,15 @@ class BusinessDayClosedError extends AppError {
   }
 }
 
+/** A manager tried to clear a refund that is not stuck: still in flight at Paystack, or not yet checked enough times. */
+class RefundNotStuckError extends AppError {
+  constructor(status, message, details = {}) {
+    super('BUSINESS_RULE_REFUND_NOT_STUCK', message, 422, { status, ...details });
+  }
+}
+
 module.exports = {
+  RefundNotStuckError,
   BackdatingNotPermittedError,
   BusinessDayClosedError,
   FolioClosedError,

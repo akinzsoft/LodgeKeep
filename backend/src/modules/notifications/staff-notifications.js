@@ -107,6 +107,13 @@ const NOTIFICATION_EVENTS = Object.freeze([
     defaultRoles: ['manager', 'admin', 'super_admin'],
   },
   {
+    eventType: 'payments.refund_needs_attention',
+    group: 'Payments',
+    label: 'Card refund needs attention',
+    description: 'Paystack reported a card refund failed (the guest has not been repaid), or a refund could not be confirmed after repeated checks and can now be cleared by a manager.',
+    defaultRoles: ['manager', 'admin', 'super_admin'],
+  },
+  {
     eventType: 'supermarket.online_refund_failed',
     group: 'POS & QR orders',
     label: 'Supermarket online refund failed',

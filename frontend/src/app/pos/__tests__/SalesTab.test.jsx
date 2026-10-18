@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getSalesReport: vi.fn(),
   getSalesReportCsv: vi.fn(),
   refundPayment: vi.fn(),
+  clearStuckRefund: vi.fn(),
   triggerDownload: vi.fn(),
   listApprovers: vi.fn(),
   requestApproval: vi.fn(),
@@ -21,7 +22,7 @@ vi.mock('../../../shared/api/index.js', async () => {
   return {
     ...actual,
     posApi: { listOutlets: mocks.listOutlets, getSalesReport: mocks.getSalesReport, getSalesReportCsv: mocks.getSalesReportCsv },
-    cashieringApi: { refundPayment: mocks.refundPayment },
+    cashieringApi: { refundPayment: mocks.refundPayment, clearStuckRefund: mocks.clearStuckRefund },
     approvalsApi: { listApprovers: mocks.listApprovers, requestApproval: mocks.requestApproval },
   };
 });
@@ -210,6 +211,93 @@ describe('<SalesTab>', () => {
       expect(within((await screen.findByText('#12 · Table 5')).closest('tr')).getByRole('button', { name: 'Refund' })).toBeDisabled();
     });
   });
+  describe('card refunds waiting on Paystack', () => {
+    const inFlight = (extra = {}) => ({
+      refundPaymentId: '81',
+      amount: '23.00',
+      status: 'PENDING',
+      attempts: 3,
+      lastResult: 'unreachable',
+      canClear: true,
+      ...extra,
+    });
+    const withStuckRefund = (refundInFlight) => ({
+      ...REPORT,
+      tabs: [{ ...REPORT.tabs[0], payments: [{ ...REPORT.tabs[0].payments[0], tender: 'card', refundInFlight }] }, ...REPORT.tabs.slice(1)],
+    });
+
+    it('is hidden when no refund is waiting', async () => {
+      render(<SalesTab activeProperty={PROPERTY} canClearRefunds />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+      await screen.findByText('Settled tabs');
+      expect(screen.queryByText('Card refunds waiting on Paystack')).not.toBeInTheDocument();
+    });
+
+    it('shows the refund, what reconciliation knows, and lets a manager clear it with their PIN and a reason', async () => {
+      mocks.getSalesReport.mockResolvedValueOnce(withStuckRefund(inFlight())).mockResolvedValueOnce(REPORT);
+      mocks.clearStuckRefund.mockResolvedValue({ cleared: true });
+      mocks.listApprovers.mockResolvedValue(TEST_APPROVERS);
+      mocks.requestApproval.mockResolvedValue({ token: TEST_APPROVAL_TOKEN });
+      render(<SalesTab activeProperty={PROPERTY} canClearRefunds />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+
+      const table = (await screen.findByText('Card refunds waiting on Paystack')).closest('section, div');
+      expect(await screen.findByText('Refund waiting on Paystack')).toBeInTheDocument();
+      expect(screen.getByText(/Checked 3 times\. Paystack could not be reached\./)).toBeInTheDocument();
+      expect(table).toBeTruthy();
+      await userEvent.click(screen.getByRole('button', { name: 'Clear stuck refund' }));
+      await approveInDialog({ reason: 'Paystack support confirmed it never went out', confirmLabel: 'Clear refund' });
+
+      expect(mocks.listApprovers).toHaveBeenCalledWith('cashiering.clear_stuck_refund');
+      expect(mocks.requestApproval).toHaveBeenCalledWith(expect.objectContaining({ action: 'cashiering.clear_stuck_refund', targetId: '81' }));
+      expect(mocks.clearStuckRefund).toHaveBeenCalledWith('81', { reason: 'Paystack support confirmed it never went out', approval: TEST_APPROVAL_TOKEN });
+      expect(await screen.findByText('The stuck refund was cleared.')).toBeInTheDocument();
+      expect(mocks.getSalesReport).toHaveBeenCalledTimes(2);
+    });
+
+    it('says so when Paystack had in fact processed it', async () => {
+      mocks.getSalesReport.mockResolvedValue(withStuckRefund(inFlight()));
+      mocks.clearStuckRefund.mockResolvedValue({ cleared: false, resolved: 'processed' });
+      mocks.listApprovers.mockResolvedValue(TEST_APPROVERS);
+      mocks.requestApproval.mockResolvedValue({ token: TEST_APPROVAL_TOKEN });
+      render(<SalesTab activeProperty={PROPERTY} canClearRefunds />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Clear stuck refund' }));
+      await approveInDialog({ reason: 'checked', confirmLabel: 'Clear refund' });
+      expect(await screen.findByText(/already processed this refund/)).toBeInTheDocument();
+    });
+
+    it('shows a server refusal instead of pretending it worked', async () => {
+      mocks.getSalesReport.mockResolvedValue(withStuckRefund(inFlight()));
+      mocks.clearStuckRefund.mockRejectedValue(new ApiError({ code: 'BUSINESS_RULE_REFUND_NOT_STUCK', message: 'Paystack reports this refund is still being processed, so it cannot be cleared.' }));
+      mocks.listApprovers.mockResolvedValue(TEST_APPROVERS);
+      mocks.requestApproval.mockResolvedValue({ token: TEST_APPROVAL_TOKEN });
+      render(<SalesTab activeProperty={PROPERTY} canClearRefunds />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Clear stuck refund' }));
+      await approveInDialog({ reason: 'checked', confirmLabel: 'Clear refund' });
+      expect(await screen.findByText(/still being processed/)).toBeInTheDocument();
+    });
+
+    it.each([
+      ['the person cannot clear refunds', { canClearRefunds: false }, inFlight()],
+      ['reconciliation has not finished checking (not eligible yet)', { canClearRefunds: true }, inFlight({ canClear: false, attempts: 1 })],
+    ])('offers no clear button when %s, but still shows the refund is waiting', async (_name, props, refundInFlight) => {
+      mocks.getSalesReport.mockResolvedValue(withStuckRefund(refundInFlight));
+      render(<SalesTab activeProperty={PROPERTY} {...props} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+      expect(await screen.findByText('Refund waiting on Paystack')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Clear stuck refund' })).not.toBeInTheDocument();
+    });
+
+    it('disables clearing while offline', async () => {
+      mocks.getSalesReport.mockResolvedValue(withStuckRefund(inFlight()));
+      render(<SalesTab activeProperty={PROPERTY} canClearRefunds isOffline />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+      expect(await screen.findByRole('button', { name: 'Clear stuck refund' })).toBeDisabled();
+    });
+  });
+
   describe('profit', () => {
     const PROFIT_REPORT = {
       ...REPORT,

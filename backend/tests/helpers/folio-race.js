@@ -87,6 +87,7 @@ async function seedRaceTenant({ label = 'race' } = {}) {
     await db()('ar_invoice_sequences').where(where).delete();
     await db()('payment_terminal_details').whereIn('payment_id', db()('payments').where(where).select('id')).delete();
     await db()('folio_line_items').where(where).delete();
+    await db()('refund_reconciliations').where(where).delete();
     await db()('payments').where(where).whereNotNull('parent_payment_id').delete();
     await db()('payments').where(where).delete();
     await db()('folios').where(where).delete();
