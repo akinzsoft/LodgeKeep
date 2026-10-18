@@ -36,6 +36,7 @@ const {
   ensurePrimaryFolio,
   postRoomChargesForStay,
   postLateRoomCharges,
+  lockFoliosForMutation,
 } = require('../cashiering/service');
 const {
   OverbookingThresholdExceededError,
@@ -965,7 +966,20 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
   // charge-posting time (`cashiering/service.js`'s `postCharge`/
   // `postAdjustment`), so no re-check is needed here. A folio the guest
   // owes directly must still be exactly zero, unchanged.
-  const openFolios = await trx.table('folios').where({ reservation_id: id, status: 'open' }).orderBy('id');
+  // The folios are LOCKED (ascending id, after the reservation) before any balance is read, and the balance is read from
+  // the locked rows: a plain read here sees the transaction's snapshot, which can predate a charge another request has
+  // since committed, and check-out would close the folio over it. A folio opened while this was locking is picked up by
+  // looking again until the set of open folios stops growing.
+  let openFolios = [];
+  const lockedIds = new Set();
+  for (let pass = 0; pass < 3; pass += 1) {
+    const peek = await trx.table('folios').where({ reservation_id: id, status: 'open' }).orderBy('id').select('id');
+    const unseen = peek.filter((row) => !lockedIds.has(String(row.id)));
+    if (pass > 0 && unseen.length === 0) break;
+    const locked = await lockFoliosForMutation({ trx, folioIds: peek.map((row) => row.id) });
+    peek.forEach((row) => lockedIds.add(String(row.id)));
+    openFolios = [...locked.values()].filter((row) => row.status === 'open').sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+  }
   if (openFolios.length === 0) {
     throw new ValidationError('FOLIO_NOT_FOUND', 'No open folio for this reservation.');
   }
@@ -1033,7 +1047,7 @@ async function checkOut({ trx, id, scheduledCheckoutTime, actualCheckoutTime, ea
   const closedFolios = await trx.table('folios').whereIn(
     'id',
     openFolios.map((openFolio) => openFolio.id)
-  );
+  ).forUpdate();
   const finalBalance = sumMoney(closedFolios.map((closedFolio) => closedFolio.balance));
   // The credit the hotel still owes the guest: the negative balances of the guest's own (non-AR) folios, as a
   // positive amount. '0.00' when there is none. Informational: the folio balance itself is unchanged.

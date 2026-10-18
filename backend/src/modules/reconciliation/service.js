@@ -264,6 +264,7 @@ async function listPosRefundLines({ db, dateFrom, dateTo }) {
     .select(
       'pos_order_settlements.payment_id as parent_payment_id',
       'pos_order_settlements.business_date as business_date',
+      'pos_order_settlements.voided_at as voided_at',
       'pos_orders.outlet_id as outlet_id',
       'pos_orders.source as source'
     );
@@ -286,7 +287,9 @@ async function listPosRefundLines({ db, dateFrom, dateTo }) {
     const businessDate = settlement?.business_date ?? new Date(refund.captured_at).toISOString().slice(0, 10);
 
     const parent = parentById.get(String(refund.parent_payment_id));
-    if (parent && !reconstructedParentIds.has(String(parent.id))) {
+    // The original charge is rebuilt here only when its settlement was voided (a full refund) or is gone: a payment
+    // refunded in part keeps its settlement standing, and that settlement already supplies the charge line.
+    if (parent && (!settlement || settlement.voided_at) && !reconstructedParentIds.has(String(parent.id))) {
       reconstructedParentIds.add(String(parent.id));
       if (businessDate >= dateFrom && businessDate <= dateTo) {
         lines.push({

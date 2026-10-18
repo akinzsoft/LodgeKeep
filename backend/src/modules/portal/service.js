@@ -235,7 +235,9 @@ async function getLatestPaymentForReservation({ context, reservationId }) {
 async function abandonUnpaidBooking({ trx, reservationId, reason }) {
   const folio = await trx.table('folios').where({ reservation_id: reservationId, status: 'open' }).first();
   if (folio) {
-    const chargeLines = await trx.table('folio_line_items').where({ folio_id: folio.id, type: 'room_charge' }).whereNull('voided_at');
+    // Locked before its lines are read or the folio is closed, like every other folio mutation.
+    await cashieringService.lockFolio({ trx, folioId: folio.id });
+    const chargeLines = await trx.table('folio_line_items').where({ folio_id: folio.id, type: 'room_charge' }).whereNull('voided_at').forUpdate();
     for (const line of chargeLines) {
       await cashieringService.voidLineItem({ trx, lineItemId: line.id, reason, userId: null });
     }
