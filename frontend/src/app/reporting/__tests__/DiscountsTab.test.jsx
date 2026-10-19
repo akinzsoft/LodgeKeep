@@ -86,4 +86,25 @@ describe('<DiscountsTab>', () => {
     expect(mocks.getReportCsv).toHaveBeenCalledWith(expect.objectContaining({ dateFrom: expect.any(String), dateTo: expect.any(String) }));
     expect(mocks.triggerDownload).toHaveBeenCalledWith(expect.any(Blob), expect.stringMatching(/^discounts-.*\.csv$/));
   });
+
+  it('shows vouchers separately, with their code, only when the range redeemed some', async () => {
+    mocks.getReport.mockResolvedValue({
+      ...REPORT,
+      summary: { ...REPORT.summary, count: 4, total: '80.00', vouchers: '20.00', voucherCount: 1 },
+      lines: [...REPORT.lines, { id: '3', settlement_id: '12', business_date: '2027-08-01', outlet: 'Main Bar', kind: 'voucher', scope: 'order', type: 'percent', value: '10.00', amount: '20.00', currency: 'NGN', reason: 'Voucher', voucherCode: 'ABCD-EFGH-JKLM', given_by: 'Ada Cashier', approved_by: 'Grace Manager' }],
+    });
+    render(<DiscountsTab activeProperty={{ base_currency: 'NGN', current_business_date: '2027-08-01' }} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+    expect((await screen.findByText(/Vouchers \(1\)/)).closest('li')).toHaveTextContent(/20\.00/);
+    const line = screen.getAllByRole('row').find((row) => row.textContent.includes('ABCD-EFGH-JKLM'));
+    expect(line).toHaveTextContent('Voucher');
+  });
+
+  it('shows no voucher line when none were redeemed', async () => {
+    mocks.getReport.mockResolvedValue(REPORT);
+    render(<DiscountsTab activeProperty={{ base_currency: 'NGN', current_business_date: '2027-08-01' }} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+    await screen.findByText(/3 given/);
+    expect(screen.queryByText(/Vouchers \(/)).not.toBeInTheDocument();
+  });
 });

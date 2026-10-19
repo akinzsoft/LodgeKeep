@@ -1,3 +1,4 @@
+import { receiptDiscountLabel } from '../discounts/discountText.js';
 import { paymentLabel } from './paymentLabel.js';
 import { Money } from '../../shared/format/money.jsx';
 import styles from './Supermarket.module.css';
@@ -46,7 +47,7 @@ export function SupermarketReceipt({ sale, property }) {
             <div><dt>Items</dt><dd><Money amount={sale.gross} currencyCode={currency} /></dd></div>
             {sale.discounts.map((discount, index) => (
               <div key={`${discount.reason}-${index}`}>
-                <dt>{discount.kind === 'comp' ? 'Comp' : 'Discount'} · {discount.reason}</dt>
+                <dt>{receiptDiscountLabel(discount)}</dt>
                 <dd>−<Money amount={discount.amount} currencyCode={currency} /></dd>
               </div>
             ))}

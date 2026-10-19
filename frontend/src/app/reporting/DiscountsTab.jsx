@@ -109,6 +109,11 @@ export function DiscountsTab({ activeProperty }) {
               <li>
                 Comps ({report.summary.compCount}) <Money amount={report.summary.comps} currencyCode={currency} />
               </li>
+              {report.summary.voucherCount ? (
+                <li>
+                  Vouchers ({report.summary.voucherCount}) <Money amount={report.summary.vouchers} currencyCode={currency} />
+                </li>
+              ) : null}
             </ul>
           )}
         </Card>
@@ -126,8 +131,8 @@ export function DiscountsTab({ activeProperty }) {
         columns={[
           { key: 'business_date', label: 'Date' },
           { key: 'outlet', label: 'Outlet' },
-          { key: 'kind', label: 'Kind', render: (row) => KIND_LABELS[row.kind] ?? row.kind },
-          { key: 'reason', label: 'Reason' },
+          { key: 'kind', label: 'Kind', render: (row) => (row.kind === 'voucher' ? 'Voucher' : (KIND_LABELS[row.kind] ?? row.kind)) },
+          { key: 'reason', label: 'Reason', render: (row) => (row.kind === 'voucher' ? row.voucherCode ?? row.reason : row.reason) },
           { key: 'amount', label: 'Amount', align: 'right', render: (row) => <Money amount={row.amount} currencyCode={row.currency} /> },
           { key: 'given_by', label: 'Given by' },
           { key: 'approved_by', label: 'Approved by', render: (row) => row.approved_by || '—' },

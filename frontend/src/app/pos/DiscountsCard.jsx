@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Card, Button, DataTable, Toast } from '../../shared/components/index.js';
 import { discountsApi, ApiError } from '../../shared/api/index.js';
+import { VouchersSection } from './VouchersSection.jsx';
 import formStyles from './POSForm.module.css';
 
 const ROLE_LABELS = { pos_operator: 'Cashier / POS operator', manager: 'Manager', admin: 'Admin', super_admin: 'Super admin' };
@@ -17,7 +18,7 @@ export function isValidLimit(text) {
  * DiscountsCard — the reasons staff choose from when they give a discount or comp, and how much each role may give
  * without a manager. A change to a limit is audited. Without `discount.manage` it only shows what applies.
  */
-export function DiscountsCard({ isOffline = false, canManage = true }) {
+export function DiscountsCard({ isOffline = false, canManage = true, currencyCode = 'NGN' }) {
   const [reasons, setReasons] = useState(undefined); // undefined loading, null failed
   const [limits, setLimits] = useState(undefined);
   const [drafts, setDrafts] = useState({});
@@ -176,6 +177,8 @@ export function DiscountsCard({ isOffline = false, canManage = true }) {
           {isOffline && <p className={formStyles.hint}>You are offline — changes are disabled.</p>}
         </form>
       )}
+
+      {canManage && <VouchersSection currencyCode={currencyCode} isOffline={isOffline} />}
 
       {toast && (
         <div className={formStyles.toastLayer}>

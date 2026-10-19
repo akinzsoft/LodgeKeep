@@ -302,7 +302,7 @@ export function SetupTab({ activeProperty, isOffline = false, canManageAccounts 
       />
 
       {discountsOpen ? (
-        <DiscountsCard isOffline={isOffline} canManage={canManageDiscounts} />
+        <DiscountsCard isOffline={isOffline} canManage={canManageDiscounts} currencyCode={activeProperty.base_currency} />
       ) : (
         <div>
           <Button type="button" variant="secondary" onClick={() => setDiscountsOpen(true)}>

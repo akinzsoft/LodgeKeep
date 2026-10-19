@@ -34,6 +34,7 @@ const discountMocks = vi.hoisted(() => ({
   listReasons: vi.fn(),
   listOrderDiscounts: vi.fn(),
   createOrderDiscount: vi.fn(),
+  applyOrderVoucher: vi.fn(),
   approveDiscount: vi.fn(),
   removeDiscount: vi.fn(),
 }));
@@ -1698,6 +1699,97 @@ describe('<RegisterTab>', () => {
       await screen.findByRole('button', { name: 'Discount or comp' });
       rerender(view(true));
       expect(screen.getByRole('button', { name: 'Discount or comp' })).toBeDisabled();
+    });
+  });
+
+  describe('vouchers', () => {
+    const VOUCHER_ROW = { id: '71', scope: 'order', kind: 'voucher', type: 'percent', value: '10.00', status: 'active', reason_name: 'Voucher', voucher_code: 'ABCD-EFGH-JKLM', amount: '2.00', menu_item_id: null };
+    const VOUCHER_PREVIEW = {
+      orderId: '9',
+      currency: 'NGN',
+      groups: [{ splitGroup: null, subtotal: '18.00', taxAmount: '1.35', gross: '20.00', discountTotal: '2.00', discounts: [{ discountId: '71', kind: 'voucher', scope: 'order', reason: 'Voucher', voucherCode: 'ABCD-EFGH-JKLM', amount: '2.00' }] }],
+    };
+    const PROBLEM = { code: 'BUSINESS_RULE_VOUCHER_NO_LONGER_AVAILABLE', reason: 'disabled', discountId: '71', message: 'The voucher on this check was disabled. Nothing was charged. Remove the voucher from the check and ring it up again at the full price.' };
+
+    async function openWithVoucherRights() {
+      const order = { id: '9', table_label: '', status: 'open' };
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} canDiscount />);
+      await selectStation();
+      mocks.openOrder.mockResolvedValue(order);
+      mocks.getOrder.mockResolvedValue({ order, items: [orderItem()], settlements: [] });
+      await clickNewTab();
+      await screen.findByText('Order Ticket');
+    }
+
+    it('shows no voucher button to someone who may not give discounts', async () => {
+      await openNewTab([orderItem()]);
+      await screen.findByText('Subtotal');
+      expect(screen.queryByRole('button', { name: 'Voucher' })).not.toBeInTheDocument();
+    });
+
+    it('sends ONLY the code, then asks the server for the new totals', async () => {
+      discountMocks.applyOrderVoucher.mockResolvedValue({ ...VOUCHER_ROW, approvalRequired: false });
+      await openWithVoucherRights();
+      await userEvent.click(await screen.findByRole('button', { name: 'Voucher' }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText('Voucher code'), 'abcd efgh jklm');
+      const previewCallsBefore = mocks.getSettlementPreview.mock.calls.length;
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Use voucher' }));
+      expect(discountMocks.applyOrderVoucher).toHaveBeenCalledWith('9', { code: 'abcd efgh jklm', overrideReason: undefined });
+      await waitFor(() => expect(mocks.getSettlementPreview.mock.calls.length).toBeGreaterThan(previewCallsBefore));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('shows the server\'s one generic message when a code cannot be used', async () => {
+      discountMocks.applyOrderVoucher.mockRejectedValue(new ApiError({ code: 'BUSINESS_RULE_VOUCHER_INVALID', message: 'That voucher code cannot be used here.' }));
+      await openWithVoucherRights();
+      await userEvent.click(await screen.findByRole('button', { name: 'Voucher' }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText('Voucher code'), 'NOSUCHCODE12');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Use voucher' }));
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent('That voucher code cannot be used here.');
+    });
+
+    it('lists the voucher with its code, and the receipt line names it', async () => {
+      mocks.getSettlementPreview.mockResolvedValue(VOUCHER_PREVIEW);
+      discountMocks.listOrderDiscounts.mockResolvedValue([VOUCHER_ROW]);
+      await openWithVoucherRights();
+      const list = await screen.findByRole('list', { name: 'Discounts on this sale' });
+      expect(list).toHaveTextContent('Voucher ABCD-EFGH-JKLM');
+      expect(screen.getByText('Voucher ABCD-EFGH-JKLM', { selector: 'span' })).toBeInTheDocument();
+    });
+
+    it('a voucher that stopped working is shown BEFORE any payment and blocks the checkout button', async () => {
+      mocks.getSettlementPreview.mockResolvedValue({ ...VOUCHER_PREVIEW, voucherProblem: PROBLEM });
+      discountMocks.listOrderDiscounts.mockResolvedValue([VOUCHER_ROW]);
+      await openWithVoucherRights();
+      expect(await screen.findByText(/was disabled\. Nothing was charged/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Send to Bar & Checkout' })).toBeDisabled();
+    });
+
+    it('choosing how to pay asks the server again, so a stale voucher is found before the customer pays', async () => {
+      mocks.getSettlementPreview.mockResolvedValue(VOUCHER_PREVIEW);
+      discountMocks.listOrderDiscounts.mockResolvedValue([VOUCHER_ROW]);
+      await openWithVoucherRights();
+      await screen.findByRole('button', { name: 'Send to Bar & Checkout' });
+      const before = mocks.getSettlementPreview.mock.calls.length;
+      mocks.getSettlementPreview.mockResolvedValue({ ...VOUCHER_PREVIEW, voucherProblem: PROBLEM });
+      await userEvent.click(screen.getByRole('button', { name: 'Card (external terminal)' }));
+      await waitFor(() => expect(mocks.getSettlementPreview.mock.calls.length).toBeGreaterThan(before));
+      expect(await screen.findByText(/was disabled\. Nothing was charged/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Send to Bar & Checkout' })).toBeDisabled();
+    });
+
+    it('the checkout re-checks the voucher right before any payment step and does not settle when it has gone stale', async () => {
+      mocks.getSettlementPreview.mockResolvedValueOnce(VOUCHER_PREVIEW).mockResolvedValue({ ...VOUCHER_PREVIEW, voucherProblem: PROBLEM });
+      discountMocks.listOrderDiscounts.mockResolvedValue([VOUCHER_ROW]);
+      await openWithVoucherRights();
+      const button = await screen.findByRole('button', { name: 'Send to Bar & Checkout' });
+      // The first answer said all was well; by the time the cashier presses the button it is not.
+      await waitFor(() => expect(button).toBeEnabled());
+      await userEvent.click(button);
+      expect(mocks.settleOrder).not.toHaveBeenCalled();
+      expect(await screen.findAllByText(/was disabled\. Nothing was charged/)).not.toHaveLength(0);
     });
   });
 });

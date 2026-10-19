@@ -1,6 +1,7 @@
 /** Words for discounts and comps, shared by the Register, the Supermarket till and the reports. */
 
 export const KIND_LABELS = { discount: 'Discount', comp: 'Comp' };
+export const VOUCHER_KIND_LABEL = 'Voucher';
 
 export const STATUS_LABELS = {
   pending_approval: 'Waiting for a manager',
@@ -13,7 +14,18 @@ export const STATUS_LABELS = {
 /** "10%" or the fixed amount's text; a comp reads "Comp". */
 export function describeRule(discount, formatAmount) {
   if (discount.kind === 'comp') return 'Comp (100%)';
+  if (discount.kind === 'voucher') return `Voucher ${discount.voucher_code ?? ''} · ${discount.type === 'percent' ? `${Number(discount.value)}%` : formatAmount(discount.value)}`.replace('  ', ' ');
   return discount.type === 'percent' ? `${Number(discount.value)}%` : formatAmount(discount.value);
+}
+
+/**
+ * A discount's line on a receipt: "Discount · Promotion", "Comp · Staff meal", or "Voucher ABCD-EFGH-JKLM" (a voucher
+ * names its code; its reason is always just "Voucher").
+ */
+export function receiptDiscountLabel(discount) {
+  const code = discount.voucherCode ?? discount.voucher_code;
+  if (discount.kind === 'voucher') return code ? `Voucher ${code}` : 'Voucher';
+  return `${discount.kind === 'comp' ? 'Comp' : 'Discount'} · ${discount.reason}`;
 }
 
 /** A reason is allowed for the kind when its own kind is that one or "both". */

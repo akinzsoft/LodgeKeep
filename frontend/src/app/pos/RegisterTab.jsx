@@ -5,7 +5,8 @@ import { Money, formatMoney } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney, percentOfMoney } from '../../shared/money.js';
 import { posApi, discountsApi, ApiError } from '../../shared/api/index.js';
 import { DiscountDialog } from '../discounts/DiscountDialog.jsx';
-import { approvalConsequence } from '../discounts/discountText.js';
+import { VoucherDialog } from '../discounts/VoucherDialog.jsx';
+import { approvalConsequence, receiptDiscountLabel } from '../discounts/discountText.js';
 import { DiscountList } from '../discounts/DiscountList.jsx';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { CategoryIcon, AllCategoriesIcon, PaymentMethodIcon, TrashIcon } from './registerCategoryIcons.jsx';
@@ -64,7 +65,7 @@ function discountsOnReceipt(settled) {
   return {
     grossTotal: sumMoney(settled.map((group) => group.gross)),
     discountTotal: sumMoney(settled.map((group) => group.discountTotal)),
-    discounts: settled.flatMap((group) => group.discounts.map((discount) => ({ key: `${group.settlementId}:${discount.discountId}`, kind: discount.kind, reason: discount.reason, amount: discount.amount }))),
+    discounts: settled.flatMap((group) => group.discounts.map((discount) => ({ key: `${group.settlementId}:${discount.discountId}`, kind: discount.kind, reason: discount.reason, amount: discount.amount, voucherCode: discount.voucherCode }))),
   };
 }
 
@@ -248,6 +249,10 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   // Discounts and comps on the active check (the SERVER prices them; this only lists them and asks for new ones).
   const [discounts, setDiscounts] = useState([]);
   const [discountDialog, setDiscountDialog] = useState(null); // { lineId }
+  const [voucherDialogOpen, setVoucherDialogOpen] = useState(false);
+  // A voucher on the check that can no longer be used (the server tells us in the settlement preview), so the cashier
+  // can re-price BEFORE a card terminal is tapped, not after.
+  const [voucherProblem, setVoucherProblem] = useState(null);
   const [approvingDiscount, setApprovingDiscount] = useState(null);
   const [removingDiscount, setRemovingDiscount] = useState(null);
   const discountsRequestIdRef = useRef(0);
@@ -722,10 +727,12 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     const requestId = ++previewRequestIdRef.current;
     setSettlementPreview(null);
     setPreviewError(null);
+    setVoucherProblem(null);
     try {
       const preview = await posApi.getSettlementPreview(orderId);
       if (previewRequestIdRef.current !== requestId) return; // superseded — a later fetch started, or the order changed
       setSettlementPreview(preview.groups);
+      setVoucherProblem(preview.voucherProblem ?? null);
       // An older server sends no rate: keep the long-standing 7.5 rather than silently charging none.
       setServiceChargePercent(preview.serviceChargePercent ?? '7.5');
     } catch (caught) {
@@ -797,6 +804,16 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     // already-built map to `confirmStockOverride`'s own retry, below.
     const paymentIds = new Map();
     try {
+      // A voucher on the check is re-checked with the server right before any payment step, so a card terminal is never
+      // tapped for a price that is about to change.
+      if (discounts.some((discount) => discount.kind === 'voucher')) {
+        const fresh = await posApi.getSettlementPreview(activeOrderId);
+        if (fresh.voucherProblem) {
+          setVoucherProblem(fresh.voucherProblem);
+          setError(fresh.voucherProblem.message);
+          return;
+        }
+      }
       // Card/NQR checks are paid through Paystack first, one at a time; the
       // tab only settles once every one of them has captured money.
       for (const form of settlementForms) {
@@ -917,6 +934,15 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
       // Discounts and comps given, from the amounts the server froze on the sale (absent when there were none).
       ...discountsOnReceipt(result.discounts),
     };
+  }
+
+  /**
+   * Choosing how to pay re-asks the server about a voucher on the check, so a voucher that has stopped working is found
+   * now, while the customer can still be re-priced, and not after they have tapped a card terminal.
+   */
+  function handlePatchTender(splitGroup, patch) {
+    patchSettlementForm(splitGroup, patch);
+    if (patch.method && discounts.some((discount) => discount.kind === 'voucher')) fetchSettlementPreview(activeOrderId);
   }
 
   /** Patches one settlement-form entry by its split-group key — every field below uses this instead of each repeating its own clone-and-map. */
@@ -1398,6 +1424,12 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                     Discount or comp
                   </button>
                 )}
+                {canDiscount && unvoidedItems.length > 0 && canChangeTab(activeOrder.order) && activeTabWorkable && (
+                  <button type="button" className={styles.manageSplitButton} onClick={() => setVoucherDialogOpen(true)} disabled={isOffline || settling}>
+                    Voucher
+                  </button>
+                )}
+                {voucherProblem && <PreviewErrorBanner message={voucherProblem.message} onRetry={() => fetchSettlementPreview(activeOrderId)} />}
                 <DiscountList
                   discounts={discounts}
                   currencyCode={activeProperty.base_currency}
@@ -1444,7 +1476,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                             grandTotal={grandTotalFor(singleSettlementForm)}
                             currencyCode={activeProperty.base_currency}
                             isOffline={isOffline}
-                            onPatch={(patch) => patchSettlementForm(singleSettlementForm.splitGroup, patch)}
+                            onPatch={(patch) => handlePatchTender(singleSettlementForm.splitGroup, patch)}
                             terminalAccounts={terminalAccounts}
                             onGuestSearch={(query) => handleGuestSearch(singleSettlementForm.splitGroup, query)}
                           />
@@ -1454,7 +1486,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                                 Split bill
                               </button>
                             )}
-                            <button type="submit" className={styles.checkoutButton} disabled={isOffline || settling || !previewReadyFor(settlementForms)}>
+                            <button type="submit" className={styles.checkoutButton} disabled={isOffline || settling || Boolean(voucherProblem) || !previewReadyFor(settlementForms)}>
                               {settling ? (paymentStage ?? 'Settling…') : 'Send to Bar & Checkout'}
                             </button>
                           </div>
@@ -1535,7 +1567,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                       grandTotal={grandTotalFor(form)}
                       currencyCode={activeProperty.base_currency}
                       isOffline={isOffline}
-                      onPatch={(patch) => patchSettlementForm(form.splitGroup, patch)}
+                      onPatch={(patch) => handlePatchTender(form.splitGroup, patch)}
                       terminalAccounts={terminalAccounts}
                       onGuestSearch={(query) => handleGuestSearch(form.splitGroup, query)}
                     />
@@ -1698,6 +1730,18 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
             />
           )}
 
+          {voucherDialogOpen && (
+            <VoucherDialog
+              isOffline={isOffline}
+              apply={(code) => discountsApi.applyOrderVoucher(activeOrderId, { code, overrideReason: overrideReasonOf(activeOrderId) })}
+              onDone={async () => {
+                setVoucherDialogOpen(false);
+                await discountsChanged();
+              }}
+              onCancel={() => setVoucherDialogOpen(false)}
+            />
+          )}
+
           {approvingDiscount && (
             <ManagerApprovalDialog
               action="pos.discount_approval"
@@ -1786,7 +1830,7 @@ function PrintableReceipt({ receipt }) {
           {receipt.discounts.map((discount) => (
             <p key={discount.key} className={styles.printRow}>
               <span>
-                {discount.kind === 'comp' ? 'Comp' : 'Discount'} · {discount.reason}
+                {receiptDiscountLabel(discount)}
               </span>
               <span>
                 −<Money amount={discount.amount} currencyCode={currencyCode} />
@@ -1942,7 +1986,7 @@ function SettlementReceipt({ receipt, onNewSale }) {
           {receipt.discounts.map((discount) => (
             <div key={discount.key} className={styles.settlementLine}>
               <span>
-                {discount.kind === 'comp' ? 'Comp' : 'Discount'} · {discount.reason}
+                {receiptDiscountLabel(discount)}
               </span>
               <span>
                 −<Money amount={discount.amount} currencyCode={receipt.currencyCode} />
@@ -2057,7 +2101,7 @@ function SettlementFields({ terminalAccounts = [], form, preview, serviceAmount,
               {preview.discounts.map((discount) => (
                 <div key={discount.discountId} className={styles.settlementLine}>
                   <span>
-                    {discount.kind === 'comp' ? 'Comp' : 'Discount'} · {discount.reason}
+                    {receiptDiscountLabel(discount)}
                   </span>
                   <span>
                     −<Money amount={discount.amount} currencyCode={currencyCode} />

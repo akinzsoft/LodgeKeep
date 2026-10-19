@@ -65,6 +65,60 @@ export function removeDiscount(id, reason, { overrideReason } = {}) {
   return request(`/discounts/${id}/remove`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey() }, body: { reason, override_reason: overrideReason || undefined } });
 }
 
+// ---------------------------------------------------------------- vouchers
+
+/** A manager's vouchers, newest first, with their use counts. */
+export function listVouchers() {
+  return request('/discounts/vouchers');
+}
+
+/**
+ * `{type: 'percent'|'fixed', value, validTo, validFrom?, maxAmount?, maxTotalUses?, outletIds?, note?, overrideLimit?}`.
+ * The SERVER generates the code and resolves to the voucher with it. `overrideLimit` needs comp authority.
+ */
+export function createVoucher({ type, value, validTo, validFrom, maxAmount, maxTotalUses, outletIds, note, overrideLimit }) {
+  return request('/discounts/vouchers', {
+    method: 'POST',
+    body: {
+      type,
+      value,
+      valid_to: validTo,
+      valid_from: validFrom || undefined,
+      max_amount: maxAmount || undefined,
+      max_total_uses: maxTotalUses || undefined,
+      outlet_ids: outletIds?.length ? outletIds : undefined,
+      note: note || undefined,
+      override_limit: overrideLimit ? true : undefined,
+    },
+  });
+}
+
+export function disableVoucher(id, reason) {
+  return request(`/discounts/vouchers/${id}/disable`, { method: 'POST', body: { reason } });
+}
+
+export function enableVoucher(id) {
+  return request(`/discounts/vouchers/${id}/enable`, { method: 'POST', body: {} });
+}
+
+/** The cashier types a code on an open Register check; nothing else is sent (the server knows the voucher's value). */
+export function applyOrderVoucher(orderId, { code, overrideReason }) {
+  return request(`/pos/orders/${orderId}/voucher`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey() },
+    body: { code, override_reason: overrideReason || undefined },
+  });
+}
+
+/** A code typed at the supermarket till BEFORE the sale: `items` is `[{menu_item_id, quantity}]`. */
+export function applyCartVoucher({ outletId, items, code }) {
+  return request('/supermarket/voucher', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey() },
+    body: { outlet_id: outletId, items, code },
+  });
+}
+
 export function getReport({ dateFrom, dateTo, outletId }) {
   const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
   if (outletId) params.set('outlet_id', outletId);
