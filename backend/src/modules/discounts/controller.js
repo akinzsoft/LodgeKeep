@@ -9,6 +9,7 @@
 const { ok } = require('../../shared/response');
 const { ValidationError } = require('../../shared/errors');
 const { runIdempotentMutation } = require('../../shared/mutation');
+const { retryOnDeadlock } = require('../../shared/retry-deadlock');
 const { scopedDb } = require('../../db');
 const { assertPermission } = require('../../auth');
 const { PermissionDeniedError } = require('../../auth/errors');
@@ -18,8 +19,10 @@ const { claimApproval } = require('../approvals');
 const posService = require('../pos/service');
 const supermarketService = require('../supermarket/service');
 const service = require('./service');
+const vouchers = require('./vouchers');
 const { computeDiscountReport, CSV_COLUMNS } = require('./report');
 const errors = require('./errors');
+const { formatVoucherCode } = require('../../shared/voucher-code');
 
 async function holdsPermission(context, key) {
   try {
@@ -93,6 +96,9 @@ const createOrderDiscount = wrap(async (req, res) => {
   let override = {};
   await runIdempotentMutation(req, res, {
     operationType: 'discounts.create_order_discount',
+    // Read committed: these requests lock a check's discounts with a locking read and then insert one; under repeatable read
+    // the gap locks of two requests on different checks collide and one dies as a deadlock victim.
+    isolationLevel: 'read committed',
     entityType: 'discounts',
     action: 'discount_request',
     auditExtras: () => override,
@@ -170,6 +176,9 @@ const removeDiscount = wrap(async (req, res) => {
 const createCartDiscount = wrap(async (req, res) => {
   await runIdempotentMutation(req, res, {
     operationType: 'discounts.create_cart_discount',
+    // Read committed: these requests lock a check's discounts with a locking read and then insert one; under repeatable read
+    // the gap locks of two requests on different checks collide and one dies as a deadlock victim.
+    isolationLevel: 'read committed',
     entityType: 'discounts',
     action: 'discount_request',
     handler: async (trx) => {
@@ -178,6 +187,68 @@ const createCartDiscount = wrap(async (req, res) => {
       return { status: 201, body: ok({ ...discount, amount, approvalRequired, approvalAction }) };
     },
   });
+});
+
+// ---------------------------------------------------------------- vouchers
+
+const listVouchers = wrap(async (req, res) => {
+  res.status(200).json(ok(await vouchers.listVouchers({ db: scopedDb().for(req.context) })));
+});
+
+const createVoucher = wrap(async (req, res) => {
+  const voucher = await scopedDb().for(req.context).transaction((trx) => vouchers.createVoucher({ trx, raw: req.body ?? {}, userId: req.context.userId }));
+  await req.audit({ entityType: 'vouchers', entityId: voucher.id, action: 'voucher_created', afterState: voucher });
+  res.status(201).json(ok(voucher));
+});
+
+const disableVoucher = wrap(async (req, res) => {
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to disable a voucher.', [{ field: 'reason', issue: 'missing' }]);
+  const { before, after } = await scopedDb().for(req.context).transaction((trx) => vouchers.setVoucherStatus({ trx, id: req.params.id, to: 'disabled', userId: req.context.userId, reason }));
+  await req.audit({ entityType: 'vouchers', entityId: after.id, action: 'voucher_disabled', beforeState: before, afterState: after, reason });
+  res.status(200).json(ok(after));
+});
+
+const enableVoucher = wrap(async (req, res) => {
+  const { before, after } = await scopedDb().for(req.context).transaction((trx) => vouchers.setVoucherStatus({ trx, id: req.params.id, to: 'active', userId: req.context.userId, reason: null }));
+  await req.audit({ entityType: 'vouchers', entityId: after.id, action: 'voucher_enabled', beforeState: before, afterState: after });
+  res.status(200).json(ok(after));
+});
+
+/** The cashier types a code; nothing else is read from the request (the type, value and cap are the voucher's). */
+const applyOrderVoucher = wrap(async (req, res) => {
+  const { actor, assertTab } = await tabRule(req);
+  let override = {};
+  await retryOnDeadlock(() => runIdempotentMutation(req, res, {
+    operationType: 'discounts.apply_order_voucher',
+    // Read committed: these requests lock a check's discounts with a locking read and then insert one; under repeatable read
+    // the gap locks of two requests on different checks collide and one dies as a deadlock victim.
+    isolationLevel: 'read committed',
+    entityType: 'discounts',
+    action: 'voucher_apply',
+    auditExtras: () => override,
+    handler: async (trx) => {
+      const { discount, amount, ownerOverride, voucher } = await vouchers.attachToOrder({ trx, orderId: req.params.id, code: req.body?.code, userId: req.context.userId, assertTab });
+      override = ownerOverride == null ? {} : { reason: actor.overrideReason, afterState: { owner_user_id: ownerOverride } };
+      return { status: 201, body: ok({ ...discount, reason_name: vouchers.VOUCHER_REASON.name, voucher_code: formatVoucherCode(voucher.code), amount, approvalRequired: false, approvalAction: null }) };
+    },
+  }));
+});
+
+const applyCartVoucher = wrap(async (req, res) => {
+  await retryOnDeadlock(() => runIdempotentMutation(req, res, {
+    operationType: 'discounts.apply_cart_voucher',
+    // Read committed: these requests lock a check's discounts with a locking read and then insert one; under repeatable read
+    // the gap locks of two requests on different checks collide and one dies as a deadlock victim.
+    isolationLevel: 'read committed',
+    entityType: 'discounts',
+    action: 'voucher_apply',
+    handler: async (trx) => {
+      const outlet = await supermarketService.requireSupermarketOutlet({ db: trx, context: req.context, outletId: req.body?.outlet_id });
+      const { discount, amount, voucher } = await vouchers.attachToCart({ trx, outlet, cart: req.body?.items, code: req.body?.code, userId: req.context.userId });
+      return { status: 201, body: ok({ ...discount, reason_name: vouchers.VOUCHER_REASON.name, voucher_code: formatVoucherCode(voucher.code), amount, approvalRequired: false, approvalAction: null }) };
+    },
+  }));
 });
 
 // ---------------------------------------------------------------- report
@@ -207,5 +278,11 @@ module.exports = {
   approveDiscount,
   removeDiscount,
   createCartDiscount,
+  listVouchers,
+  createVoucher,
+  disableVoucher,
+  enableVoucher,
+  applyOrderVoucher,
+  applyCartVoucher,
   report,
 };

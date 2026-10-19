@@ -9,6 +9,8 @@
 const { ValidationError } = require('../../shared/errors');
 const { sumMoney, toCents, fromCents } = require('../../shared/money');
 const { effectivePercent } = require('../../shared/discount-pricing');
+const { codesForDiscounts } = require('./voucher-store');
+const { formatVoucherCode } = require('../../shared/voucher-code');
 
 const MAX_RANGE_DAYS = 92;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -63,6 +65,7 @@ async function computeDiscountReport({ db, dateFrom, dateTo, outletId = null }) 
   const settlements = await salesQuery.select('subtotal');
   const netSales = sumMoney(settlements.map((s) => s.subtotal));
 
+  const voucherCodes = await codesForDiscounts(db, rows.filter((row) => row.kind === 'voucher').map((row) => row.discount_id));
   const total = sumMoney(rows.map((row) => row.amount));
   const comps = rows.filter((row) => row.kind === 'comp');
   const lines = rows.map((row) => ({
@@ -78,6 +81,8 @@ async function computeDiscountReport({ db, dateFrom, dateTo, outletId = null }) 
     base_before: String(row.base_before),
     amount: String(row.amount),
     reason: row.reason_name,
+    // Only a voucher line carries its code; every other line keeps its old shape.
+    ...(row.kind === 'voucher' && voucherCodes.has(String(row.discount_id)) ? { voucherCode: formatVoucherCode(voucherCodes.get(String(row.discount_id))) } : {}),
     given_by: userName.get(String(row.applied_by_user_id)) ?? '',
     approved_by: row.approved_by_user_id ? userName.get(String(row.approved_by_user_id)) ?? '' : '',
     currency: row.currency,
@@ -93,6 +98,8 @@ async function computeDiscountReport({ db, dateFrom, dateTo, outletId = null }) 
       discounts: sumMoney(rows.filter((row) => row.kind === 'discount').map((row) => row.amount)),
       comps: sumMoney(comps.map((row) => row.amount)),
       compCount: comps.length,
+      // Only a range that redeemed a voucher gains these, so every other summary keeps its shape.
+      ...(rows.some((row) => row.kind === 'voucher') ? { vouchers: sumMoney(rows.filter((row) => row.kind === 'voucher').map((row) => row.amount)), voucherCount: rows.filter((row) => row.kind === 'voucher').length } : {}),
       netSales,
       // Of what would have been sold at full price: the discount over (net sales + discounts).
       percentOfSales: effectivePercent({ amount: total, base: sumMoney([netSales, total]) }),
@@ -101,11 +108,11 @@ async function computeDiscountReport({ db, dateFrom, dateTo, outletId = null }) 
     byGiver: group(rows, (r) => r.applied_by_user_id, (r) => userName.get(String(r.applied_by_user_id)) ?? ''),
     byApprover: group(rows.filter((r) => r.approved_by_user_id), (r) => r.approved_by_user_id, (r) => userName.get(String(r.approved_by_user_id)) ?? ''),
     byOutlet: group(rows, (r) => r.outlet_id, (r) => outletName.get(String(r.outlet_id)) ?? ''),
-    byKind: group(rows, (r) => r.kind, (r) => (r.kind === 'comp' ? 'Comps' : 'Discounts')),
+    byKind: group(rows, (r) => r.kind, (r) => (r.kind === 'comp' ? 'Comps' : r.kind === 'voucher' ? 'Vouchers' : 'Discounts')),
     lines,
   };
 }
 
-const CSV_COLUMNS = ['business_date', 'outlet', 'kind', 'scope', 'type', 'value', 'base_before', 'amount', 'currency', 'reason', 'given_by', 'approved_by', 'settlement_id', 'order_id'];
+const CSV_COLUMNS = ['business_date', 'outlet', 'kind', 'scope', 'type', 'value', 'base_before', 'amount', 'currency', 'reason', 'voucherCode', 'given_by', 'approved_by', 'settlement_id', 'order_id'];
 
 module.exports = { computeDiscountReport, CSV_COLUMNS, MAX_RANGE_DAYS };

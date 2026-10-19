@@ -114,6 +114,9 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'notification_log',
   'mfa_login_codes',
   'manager_approvals', // references users and properties
+  'voucher_redemptions', // references vouchers, discounts, settlements, outlets and users
+  'voucher_outlets',
+  'vouchers',
   'settlement_discounts', // references settlements, discounts, reasons
   'discounts',
   'discount_limits',

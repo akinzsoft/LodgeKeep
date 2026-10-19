@@ -137,6 +137,8 @@ async function summaryForShift(db, shiftId) {
     discounts: sumMoney(of('discount').map((row) => row.amount)),
     comps: sumMoney(of('comp').map((row) => row.amount)),
     compCount: of('comp').length,
+    // Only a shift that redeemed a voucher gains these, so every other cash-up keeps its shape.
+    ...(of('voucher').length ? { vouchers: sumMoney(of('voucher').map((row) => row.amount)), voucherCount: of('voucher').length } : {}),
   };
 }
 

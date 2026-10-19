@@ -68,6 +68,7 @@ const { OrderNotOpenError, SettlementAlreadyVoidedError } = require('../pos/erro
 // need the identical deduction hook, or a card-paid QR guest order would
 // silently never deduct stock at all.
 const stockService = require('../stock/service');
+const voucherStore = require('../discounts/voucher-store');
 const { writeOutboxEvent } = require('../../shared/outbox');
 const { notifyStaff } = require('../notifications/staff-notifications');
 const { notifyGuestOrderReceived } = require('../qr-ordering/staff-alert');
@@ -1635,6 +1636,9 @@ async function applyProcessedRefundEffects({ trx, intent, original, reason, user
       // The sale is void, so the stock it took goes back — the same reversal `pos/service.js voidSettlement` makes.
       // Only a FULL refund reaches this branch; a partial amount says nothing about which line came back.
       await stockService.reverseStockForSettlement({ trx, settlementId: settlement.id, userId });
+      // The sale is void, so a voucher on it gives its use back, in this same transaction. A PARTIAL refund keeps the
+      // sale (the branch below) and so keeps the use.
+      await voucherStore.restoreForSettlement(trx, { settlementId: settlement.id, userId });
     } else if (settlement) {
       // Flagged, not hidden: money went back but the sale stands, and NO stock is put back — a partial amount says
       // nothing about which line the guest returned.

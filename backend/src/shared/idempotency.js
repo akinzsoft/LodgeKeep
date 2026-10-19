@@ -78,7 +78,7 @@ function parseStoredBody(value) {
  *   Does the actual mutation using the transaction-bound accessor it is given, and returns the response to store/replay.
  * @returns {Promise<{status: number, body: *, replayed: boolean}>}
  */
-async function withIdempotency({ context, operationType, key, payload, handler }) {
+async function withIdempotency({ context, operationType, key, payload, handler, isolationLevel }) {
   const requestHash = hashPayload(payload);
   const outerDb = scopedDb().for(context);
 
@@ -113,7 +113,7 @@ async function withIdempotency({ context, operationType, key, payload, handler }
     });
 
     return { status: result.status, body: result.body, replayed: false };
-  });
+  }, isolationLevel ? { isolationLevel } : {});
 }
 
 module.exports = { withIdempotency, IdempotencyKeyReuseError, RETENTION_HOURS };

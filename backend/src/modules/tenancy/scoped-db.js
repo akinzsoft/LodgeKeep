@@ -704,7 +704,7 @@ function accessorFor(connection, context) {
      * that work inside a transaction is scoped identically to work outside one —
      * there is no second, laxer path that appears once you open a transaction.
      */
-    transaction(callback) {
+    transaction(callback, options = {}) {
       if (connection.isTransaction) {
         // Already inside one. knex would open a savepoint; the callers this
         // layer serves want one transaction per operation (§4), and a nested
@@ -712,7 +712,9 @@ function accessorFor(connection, context) {
         // confusing way to find that out.
         return callback(accessor);
       }
-      return connection.transaction((trx) => callback(accessorFor(trx, context)));
+      // `options.isolationLevel` (e.g. 'read committed') is for the rare operation whose locking reads must not take gap
+      // locks; every other caller keeps the default.
+      return connection.transaction((trx) => callback(accessorFor(trx, context)), options.isolationLevel ? { isolationLevel: options.isolationLevel } : undefined);
     },
   };
 

@@ -64,6 +64,9 @@ const { assertTipAmount } = require('../../shared/tip-amount');
 // breaks.
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
 const discountStore = require('../discounts/store');
+const voucherStore = require('../discounts/voucher-store');
+const discountErrors = require('../discounts/errors');
+const { formatVoucherCode } = require('../../shared/voucher-code');
 const { registerServiceChargePercent, serviceChargeApplies, parseServiceChargePercent, parseQrMode } = require('../../shared/service-charge');
 const { resolveOrderLine, normalizeModifierCatalogue, modifiersForInsert } = require('../../shared/pos-line-input');
 const { outletScopeForUser, scopeCovers, usersCoveringOutlets } = require('../../shared/outlet-assignments');
@@ -1261,7 +1264,7 @@ function chargeForBase({ baseAmount, taxVersions, discounted }) {
 }
 
 /** What a settled/previewed group shows about its discounts, or nothing when it had none (so the old shape is unchanged). */
-function discountView(group, rows, reasonNames) {
+function discountView(group, rows, reasonNames, voucherCodes = new Map()) {
   if (!group || compareMoney(group.discount, '0.00') === 0) return null;
   const byId = new Map(rows.map((row) => [String(row.id), row]));
   return {
@@ -1269,7 +1272,15 @@ function discountView(group, rows, reasonNames) {
     discountTotal: group.discount,
     discounts: group.parts.map((part) => {
       const row = byId.get(String(part.discountId));
-      return { discountId: String(row.id), kind: row.kind, scope: row.scope, reason: reasonNames.get(String(row.reason_id)) ?? '', amount: part.amount };
+      return {
+        discountId: String(row.id),
+        kind: row.kind,
+        scope: row.scope,
+        reason: reasonNames.get(String(row.reason_id)) ?? '',
+        amount: part.amount,
+        // Only a voucher carries its code, so every other entry keeps its old shape.
+        ...(row.kind === 'voucher' && voucherCodes.has(String(row.id)) ? { voucherCode: formatVoucherCode(voucherCodes.get(String(row.id))) } : {}),
+      };
     }),
   };
 }
@@ -1292,13 +1303,17 @@ async function previewSettlement({ context, orderId }) {
   const discountRows = await discountStore.activeForOrder(db, orderId);
   const pricing = discountStore.priceOrNull(items, discountRows);
   const reasonNames = pricing ? await discountStore.reasonNamesFor(db, discountRows) : null;
+  const voucherCodes = pricing ? await voucherStore.codesForDiscounts(db, discountRows.filter((row) => row.kind === 'voucher').map((row) => row.id)) : new Map();
+  // Checked here, BEFORE any money is taken (the cashier asks for this when choosing how to pay), so a voucher that has
+  // gone stale is found while the customer can still be re-priced, not after a card terminal has been tapped.
+  const voucherProblem = pricing ? await voucherStore.previewProblem(db, { orderId, outletId: order.outlet_id, propertyId: order.property_id }) : null;
 
   const groupKeys = [...new Set(items.map((item) => groupKey(item.split_group)))];
   const groups = groupKeys.map((key) => {
     const splitGroup = key === 'null' ? null : Number(key);
     const groupItems = items.filter((item) => groupKey(item.split_group) === key);
     const baseAmount = pricing ? pricing.groups[key].base : sumMoney(groupItems.map(computeItemLineTotal));
-    const view = pricing ? discountView(pricing.groups[key], discountRows, reasonNames) : null;
+    const view = pricing ? discountView(pricing.groups[key], discountRows, reasonNames, voucherCodes) : null;
     const { netAmount, taxLines } = chargeForBase({ baseAmount, taxVersions, discounted: Boolean(view) });
     const taxAmount = sumMoney(taxLines.map((t) => t.amount));
     const serviceCharge = percentOfMoney(netAmount, serviceChargePercent);
@@ -1308,7 +1323,8 @@ async function previewSettlement({ context, orderId }) {
   // Sent only when it differs from the long-standing 7.50, so an ordinary outlet's response is unchanged;
   // the Register treats a missing rate as 7.5.
   const rateField = Number(serviceChargePercent) === 7.5 ? {} : { serviceChargePercent };
-  return { orderId: order.id, currency: property?.base_currency, groups, ...rateField };
+  const problemField = voucherProblem ? { voucherProblem: { code: 'BUSINESS_RULE_VOUCHER_NO_LONGER_AVAILABLE', ...voucherProblem, message: new discountErrors.VoucherNoLongerAvailableError(voucherProblem.reason, voucherProblem.discountId).message } } : {};
+  return { orderId: order.id, currency: property?.base_currency, groups, ...rateField, ...problemField };
 }
 
 /** Methods `settleOrder` accepts. `terminal` = a card sale taken on the hotel's own physical terminal (no gateway). */
@@ -1416,10 +1432,19 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
 
   // Active discounts come off each group's item base before tax. An unapproved one is checked against its giver's
   // limit again here, because the check may have shrunk since it was given.
+  await voucherStore.lockVouchersFirst(trx, orderId); // before the locking read of the discounts below; see its header
   const discountRows = await discountStore.activeForOrder(trx, orderId, { lock: true });
   const pricing = discountStore.priceOrNull(items, discountRows);
   const reasonNames = pricing ? await discountStore.reasonNamesFor(trx, discountRows) : null;
   if (pricing) await discountStore.assertUnapprovedWithinLimit(trx, { rows: discountRows, pricing, propertyId: order.property_id });
+  const voucherCodes = pricing ? await voucherStore.codesForDiscounts(trx, discountRows.filter((row) => row.kind === 'voucher').map((row) => row.id)) : new Map();
+  const voucherDiscountIds = discountRows.filter((row) => row.kind === 'voucher').map((row) => row.id);
+  if (voucherDiscountIds.length > 0) {
+    // A voucher is not offered with a card or QR payment (deferred); and its use is consumed here, under the order lock,
+    // BEFORE anything is written: a voucher that stopped working fails the whole settlement with nothing recorded.
+    if (settlements.some((settlement) => settlement.method === 'card')) throw new discountErrors.VoucherNotOnCardError();
+    await voucherStore.redeemForOrder(trx, { discountRows, pricing, orderId, outletId: order.outlet_id, propertyId: order.property_id, userId: settledByUserId });
+  }
   const discountSummary = [];
 
   // Cash-up attribution: record which shift was open on this terminal when
@@ -1443,7 +1468,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
 
     const groupItems = items.filter((item) => groupKey(item.split_group) === groupKey(settlement.splitGroup));
     const baseAmount = pricing ? pricing.groups[groupKey(settlement.splitGroup)].base : sumMoney(groupItems.map(computeItemLineTotal));
-    const groupView = pricing ? discountView(pricing.groups[groupKey(settlement.splitGroup)], discountRows, reasonNames) : null;
+    const groupView = pricing ? discountView(pricing.groups[groupKey(settlement.splitGroup)], discountRows, reasonNames, voucherCodes) : null;
     const tipAmount = tipAmounts[settlementIndex];
     // The server always works the service charge out from the net below; nothing the client sends is
     // used. A guest QR settlement passes `serviceChargePercent` (the rate frozen when the guest placed
@@ -1597,6 +1622,7 @@ async function settleOrder({ trx, orderId, settledByUserId, settlements, stockOv
 
     const [settlementId] = await trx.table('pos_order_settlements').insert(fields);
     results.push(await trx.table('pos_order_settlements').where({ id: settlementId }).first());
+    if (voucherDiscountIds.length > 0 && results.length === 1) await voucherStore.linkSettlement(trx, { discountIds: voucherDiscountIds, settlementId });
     if (groupView) {
       // The amounts are frozen on the settlement: reports, receipts and refunds read these, never recompute them.
       await discountStore.recordSettlementDiscounts(trx, {
@@ -1707,6 +1733,7 @@ async function prepareRegisterPayment({ trx, orderId, splitGroup, tender, idempo
   const taxVersions = resolveApplicableTaxVersions({ allTaxRows: await trx.table('taxes'), businessDate: property?.current_business_date, chargeType: taxChargeTypeForOutlet(saleOutlet) });
   // The intent amount follows the same discounted base the settlement will use, so the exact-amount claim still matches.
   const discountRows = await discountStore.activeForOrder(trx, orderId, { lock: true });
+  if (discountRows.some((row) => row.kind === 'voucher')) throw new discountErrors.VoucherNotOnCardError();
   const pricing = discountStore.priceOrNull(items, discountRows);
   const discounted = Boolean(pricing) && compareMoney(pricing.groups[groupKey(splitGroup)].discount, '0.00') > 0;
   const baseAmount = pricing ? pricing.groups[groupKey(splitGroup)].base : sumMoney(groupItems.map(computeItemLineTotal));
@@ -1825,6 +1852,8 @@ async function voidSettlement({ trx, settlementId, reason, userId }) {
   // the quantity it consumed under its OWN original cost/business_date
   // (see `stockService.reverseStockForSettlement`'s own header).
   await stockService.reverseStockForSettlement({ trx, settlementId, userId });
+  // A voucher on the sale gives its use back (the last standing settlement of a split check does).
+  await voucherStore.restoreForSettlement(trx, { settlementId, userId });
 
   await trx.table('pos_order_settlements').where({ id: settlementId }).update({
     voided_at: new Date(),
