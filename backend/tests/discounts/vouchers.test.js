@@ -205,11 +205,6 @@ describe('vouchers', () => {
       expect(await t.trx('audit_log').where({ entity_type: 'vouchers', entity_id: v.id, action: 'voucher_enabled' })).toHaveLength(1);
     });
 
-    it('a voucher is never edited: there is no update route', async () => {
-      const v = await makeVoucher();
-      expect((await t.request.patch(`/api/v1/discounts/vouchers/${v.id}`).set('Authorization', `Bearer ${tokenFor(users.manager)}`).send({ value: '99' })).status).toBe(404);
-    });
-
     it("another tenant's vouchers are invisible", async () => {
       const v = await makeVoucher();
       const [otherUser] = await t.trx('users').insert({ tenant_id: ctx.b.id, email: `b-${next()}@example.com`, first_name: 'B', last_name: 'M', password_hash: 'x', status: 'active' });
@@ -219,6 +214,290 @@ describe('vouchers', () => {
       expect(list.body.data.map((row) => row.id)).not.toContain(v.id);
       const off = await as(otherUser, ctx.b.id, ctx.b.properties[0].id).post(`/api/v1/discounts/vouchers/${v.id}/disable`).send({ reason: 'x' });
       expect(off.status).toBe(404);
+    });
+  });
+
+  describe('editing and deleting (PR 3)', () => {
+    const patch = (userId, id, body, tenantId, property) => t.request.patch(`/api/v1/discounts/vouchers/${id}`).set('Authorization', `Bearer ${tokenFor(userId, tenantId, property)}`).send(body);
+    const del = (userId, id, tenantId, property) => as(userId, tenantId, property).post(`/api/v1/discounts/vouchers/${id}/delete`).send({});
+    const audits = (id, action) => t.trx('audit_log').where({ entity_type: 'vouchers', entity_id: id, action });
+    async function used({ voided = false, ...options } = {}) {
+      const v = await makeVoucher({ value: '10', max_total_uses: 5, ...options });
+      const orderId = await openTab(users.operator, [[outlet.beer, 2]]);
+      expect((await applyVoucher(users.operator, orderId, v.code)).status).toBe(201);
+      const settled = await settleCash(users.operator, orderId);
+      expect(settled.status).toBe(200);
+      const settlementId = settled.body.data.settlements[0].id;
+      if (voided) {
+        const approval = await managerApproval(t.request, { token: tokenFor(users.operator), approverUserId: users.manager, action: 'pos.void_settlement', targetId: settlementId });
+        const res = await as(users.operator).post(`/api/v1/pos/orders/${orderId}/settlements/${settlementId}/void`).set('X-Manager-Approval', approval).send({ reason: 'Changed mind' });
+        expect(res.status).toBe(200);
+      }
+      return { v, orderId, settlementId };
+    }
+
+    describe('edit while unused', () => {
+      it('changes every field, keeps the code, audits only what changed and never logs the full code', async () => {
+        const v = await makeVoucher({ value: '10', note: 'old' });
+        const res = await patch(users.manager, v.id, {
+          code: 'HACKED123456', type: 'fixed', value: '50', max_amount: '40', valid_from: '2027-08-02', valid_to: '2031-01-31', max_total_uses: 7, outlet_ids: [String(outlet.outletId)], note: ' new note ',
+        });
+        expect(res.status).toBe(200);
+        expect(res.body.data).toMatchObject({ code: v.code, type: 'fixed', value: '50.00', max_amount: '40.00', valid_from: '2027-08-02', valid_to: '2031-01-31', max_total_uses: 7, note: 'new note', outlet_ids: [String(outlet.outletId)] });
+        expect((await voucherRow(v.id)).code).toBe(v.code.replace(/-/g, ''));
+        const [audit] = await audits(v.id, 'voucher_updated');
+        expect(String(audit.user_id)).toBe(String(users.manager));
+        const before = typeof audit.before_state === 'string' ? JSON.parse(audit.before_state) : audit.before_state;
+        const after = typeof audit.after_state === 'string' ? JSON.parse(audit.after_state) : audit.after_state;
+        expect(before).toMatchObject({ type: 'percent', value: '10.00', note: 'old' });
+        expect(after).toMatchObject({ type: 'fixed', value: '50.00', note: 'new note' });
+        expect(JSON.stringify([audit.before_state, audit.after_state])).not.toContain(v.code.replace(/-/g, ''));
+        expect(after.code).toBe(`****${v.code.slice(-4)}`);
+      });
+
+      it('lists only the changed fields in the audit row', async () => {
+        const v = await makeVoucher();
+        expect((await patch(users.manager, v.id, { note: 'only this' })).status).toBe(200);
+        const [audit] = await audits(v.id, 'voucher_updated');
+        const after = typeof audit.after_state === 'string' ? JSON.parse(audit.after_state) : audit.after_state;
+        expect(Object.keys(after).sort()).toEqual(['code', 'note', 'voucherId']);
+      });
+
+      it('an edit that changes nothing writes no audit row', async () => {
+        const v = await makeVoucher({ note: 'same' });
+        expect((await patch(users.manager, v.id, { note: 'same', value: '10', type: 'percent' })).status).toBe(200);
+        expect(await audits(v.id, 'voucher_updated')).toHaveLength(0);
+      });
+
+      it('replaces the outlet list, and an empty list means every outlet again', async () => {
+        const v = await makeVoucher({ outlet_ids: [String(outlet.outletId)] });
+        expect((await patch(users.manager, v.id, { outlet_ids: [String(otherOutlet.outletId)] })).body.data.outlet_ids).toEqual([String(otherOutlet.outletId)]);
+        expect(await t.trx('voucher_outlets').where({ voucher_id: v.id })).toHaveLength(1);
+        expect((await patch(users.manager, v.id, { outlet_ids: [] })).body.data.outlet_ids).toEqual([]);
+        expect(await t.trx('voucher_outlets').where({ voucher_id: v.id })).toHaveLength(0);
+      });
+
+      it.each([
+        ['an unknown type', { type: 'bogus' }],
+        ['a zero value', { value: '0' }],
+        ['a percent above 100', { value: '101' }],
+        ['a JSON number value', { value: 10 }],
+        ['three decimals', { value: '10.123' }],
+        ['a max_amount of zero', { max_amount: '0' }],
+        ['valid_to before valid_from', { valid_to: '2027-07-01' }],
+        ['a malformed date', { valid_to: '31/12/2030' }],
+        ['max_total_uses of 0', { max_total_uses: 0 }],
+        ['an outlet of nowhere', { outlet_ids: ['999999999'] }],
+        ['a note that is far too long', { note: 'x'.repeat(300) }],
+      ])('refuses %s and changes nothing', async (_name, body) => {
+        const v = await makeVoucher({ valid_to: '2030-12-31' });
+        const res = await patch(users.manager, v.id, body);
+        expect(res.status).toBe(400);
+        expect(res.body.error.code).toBe('VALIDATION_INVALID_VOUCHER');
+        expect(await audits(v.id, 'voucher_updated')).toHaveLength(0);
+        expect(String((await voucherRow(v.id)).value)).toBe('10.00');
+      });
+
+      it('a disabled voucher can be edited and stays disabled until re-enabled', async () => {
+        const v = await makeVoucher();
+        expect((await as(users.manager).post(`/api/v1/discounts/vouchers/${v.id}/disable`).send({ reason: 'paused' })).status).toBe(200);
+        expect((await patch(users.manager, v.id, { note: 'edited while off' })).body.data).toMatchObject({ status: 'disabled', note: 'edited while off' });
+        expect((await voucherRow(v.id)).status).toBe('disabled');
+        const on = await as(users.manager).post(`/api/v1/discounts/vouchers/${v.id}/enable`).send({});
+        expect(on.body.data).toMatchObject({ status: 'active', note: 'edited while off' });
+      });
+    });
+
+    describe('edit once used', () => {
+      it('the list says which vouchers have their money terms fixed', async () => {
+        const fresh = await makeVoucher();
+        const { v, } = await used({ voided: true });
+        const rows = (await as(users.manager).get('/api/v1/discounts/vouchers')).body.data;
+        expect(rows.find((row) => row.id === fresh.id).money_locked).toBe(false);
+        expect(rows.find((row) => row.id === v.id).money_locked).toBe(true); // reversed still counts
+      });
+
+      it('locks type, value and start date after a redemption, changing nothing', async () => {
+        const { v } = await used();
+        for (const body of [{ type: 'fixed' }, { value: '20' }, { valid_from: '2027-08-05' }]) {
+          const res = await patch(users.manager, v.id, body);
+          expect(res.status).toBe(409);
+          expect(res.body.error.code).toBe('CONFLICT_VOUCHER_LOCKED');
+        }
+        // Sending the same value back is not a change.
+        expect((await patch(users.manager, v.id, { type: 'percent', value: '10', valid_from: BUSINESS_DATE })).status).toBe(200);
+        expect(String((await voucherRow(v.id)).value)).toBe('10.00');
+      });
+
+      it('still allows the end date, total uses, outlets and note', async () => {
+        const { v } = await used();
+        const res = await patch(users.manager, v.id, { valid_to: '2032-02-02', max_total_uses: 9, outlet_ids: [String(outlet.outletId)], note: 'still editable' });
+        expect(res.status).toBe(200);
+        expect(res.body.data).toMatchObject({ valid_to: '2032-02-02', max_total_uses: 9, outlet_ids: [String(outlet.outletId)], note: 'still editable', used_count: 1 });
+      });
+
+      it('stays locked after the sale is voided and the use given back (a reversed redemption counts)', async () => {
+        const { v } = await used({ voided: true });
+        expect((await voucherRow(v.id)).used_count).toBe(0);
+        const res = await patch(users.manager, v.id, { value: '20' });
+        expect(res.status).toBe(409);
+        expect(res.body.error.code).toBe('CONFLICT_VOUCHER_LOCKED');
+      });
+
+      it('is locked while the code is on an open check, but not after the code was taken off before settling', async () => {
+        const v = await makeVoucher();
+        const orderId = await openTab();
+        const applied = await applyVoucher(users.operator, orderId, v.code);
+        expect(applied.status).toBe(201);
+        expect((await patch(users.manager, v.id, { value: '20' })).status).toBe(409);
+        expect((await as(users.operator).post(`/api/v1/discounts/${applied.body.data.id}/remove`).send({ reason: 'Wrong voucher' })).status).toBe(200);
+        expect((await redemption(v.id)).status).toBe('released');
+        expect((await patch(users.manager, v.id, { value: '20' })).status).toBe(200);
+      });
+
+      it('raises or removes the max-off cap but never lowers or adds one', async () => {
+        const capped = await used({ max_amount: '50' });
+        const lower = await patch(users.manager, capped.v.id, { max_amount: '30' });
+        expect(lower.status).toBe(409);
+        expect(lower.body.error.code).toBe('CONFLICT_VOUCHER_LOCKED');
+        expect((await patch(users.manager, capped.v.id, { max_amount: '80' })).body.data.max_amount).toBe('80.00');
+        expect((await patch(users.manager, capped.v.id, { max_amount: null })).body.data.max_amount).toBeNull();
+        const uncapped = await used();
+        expect((await patch(users.manager, uncapped.v.id, { max_amount: '30' })).status).toBe(409);
+      });
+
+      it('total uses can never go below the number already used', async () => {
+        const { v } = await used({ max_total_uses: 3 });
+        const below = await patch(users.manager, v.id, { max_total_uses: 0 });
+        expect(below.status).toBe(400);
+        const res = await patch(users.manager, v.id, { max_total_uses: 1 });
+        expect(res.status).toBe(200); // exactly the used count is allowed
+        const twoMore = await makeVoucher({ max_total_uses: 5 });
+        for (let i = 0; i < 2; i += 1) {
+          const orderId = await openTab();
+          await applyVoucher(users.operator, orderId, twoMore.code);
+          expect((await settleCash(users.operator, orderId)).status).toBe(200);
+        }
+        const refused = await patch(users.manager, twoMore.id, { max_total_uses: 1 });
+        expect(refused.status).toBe(422);
+        expect(refused.body.error.code).toBe('VALIDATION_VOUCHER_USES_BELOW_USED');
+        expect((await voucherRow(twoMore.id)).max_total_uses).toBe(5);
+        expect((await patch(users.manager, twoMore.id, { max_total_uses: null })).body.data.max_total_uses).toBeNull();
+      });
+    });
+
+    describe('comp authority on edit', () => {
+      it('a user without discount.comp cannot raise a voucher above their limit or to 100%', async () => {
+        const [permission] = await t.trx('permissions').where({ permission_key: 'discount.manage' }).select('id');
+        const [role] = await t.trx('roles').where({ tenant_id: ctx.a.id, code: 'pos_operator' }).select('id');
+        await t.trx('role_permissions').insert({ tenant_id: ctx.a.id, role_id: role.id, permission_id: permission.id });
+        const v = await makeVoucher({ value: '3' });
+        expect((await patch(users.operator, v.id, { value: '4' })).status).toBe(200);
+        const above = await patch(users.operator, v.id, { value: '10' });
+        expect(above.status).toBe(422);
+        expect(above.body.error.code).toBe('BUSINESS_RULE_VOUCHER_ABOVE_LIMIT');
+        const whole = await patch(users.operator, v.id, { value: '100' });
+        expect(whole.status).toBe(403);
+        expect(whole.body.error.code).toBe('FORBIDDEN_VOUCHER_NEEDS_COMP');
+        expect((await patch(users.operator, v.id, { value: '4', override_limit: true })).status).toBe(403);
+        expect(String((await voucherRow(v.id)).value)).toBe('4.00');
+        // Their note edits still work: only a change to the money terms is checked.
+        const big = await makeVoucher({ value: '20' });
+        expect((await patch(users.operator, big.id, { note: 'fine' })).status).toBe(200);
+        await t.trx('role_permissions').where({ tenant_id: ctx.a.id, role_id: role.id, permission_id: permission.id }).delete();
+      });
+
+      it('a user with comp authority can make it a 100% voucher', async () => {
+        const v = await makeVoucher();
+        const res = await patch(users.manager, v.id, { value: '100' });
+        expect(res.status).toBe(200);
+        expect((await voucherRow(v.id)).check_percent_cap).toBe('100.00');
+      });
+    });
+
+    describe('permissions and tenants', () => {
+      it('editing needs discount.manage; a cashier and a front-desk user get 403', async () => {
+        const v = await makeVoucher();
+        expect((await patch(users.operator, v.id, { note: 'x' })).status).toBe(403);
+        expect((await patch(users.cashierNoDiscount, v.id, { note: 'x' })).status).toBe(403);
+      });
+
+      it("another tenant's voucher is a 404 to edit or delete, and an unknown id too", async () => {
+        const v = await makeVoucher();
+        const [otherUser] = await t.trx('users').insert({ tenant_id: ctx.b.id, email: `b-${next()}@example.com`, first_name: 'B', last_name: 'M', password_hash: 'x', status: 'active' });
+        await t.trx('user_property_access').insert({ tenant_id: ctx.b.id, property_id: ctx.b.properties[0].id, user_id: otherUser, role: 'super_admin' });
+        expect((await patch(otherUser, v.id, { note: 'x' }, ctx.b.id, ctx.b.properties[0].id)).status).toBe(404);
+        expect((await del(otherUser, v.id, ctx.b.id, ctx.b.properties[0].id)).status).toBe(404);
+        expect((await patch(users.manager, '999999999', { note: 'x' })).status).toBe(404);
+        expect((await del(users.superAdmin, '999999999')).status).toBe(404);
+        expect(await voucherRow(v.id)).toBeDefined();
+      });
+    });
+
+    describe('delete', () => {
+      it('only a super_admin can delete: manager, admin, cashier and front desk get 403 and nothing is deleted', async () => {
+        const v = await makeVoucher();
+        for (const userId of [users.manager, users.admin, users.operator, users.cashierNoDiscount]) {
+          expect((await del(userId, v.id)).status).toBe(403);
+        }
+        expect(await voucherRow(v.id)).toBeDefined();
+        expect(await audits(v.id, 'voucher_deleted')).toHaveLength(0);
+      });
+
+      it('the key is held by the super_admin role alone (fixtures mirror the migration and default RBAC)', async () => {
+        const holders = await t.trx('role_permissions')
+          .join('permissions', 'permissions.id', 'role_permissions.permission_id')
+          .join('roles', 'roles.id', 'role_permissions.role_id')
+          .where({ 'permissions.permission_key': 'discount.voucher_delete', 'role_permissions.tenant_id': ctx.a.id })
+          .select('roles.code');
+        expect(holders.map((row) => row.code)).toEqual(['super_admin']);
+        const { DEFAULT_ROLE_PERMISSIONS } = require('../../src/modules/tenancy/default-rbac');
+        const withKey = Object.entries(DEFAULT_ROLE_PERMISSIONS).filter(([, keys]) => keys.includes('discount.voucher_delete')).map(([role]) => role);
+        expect(withKey).toEqual(['super_admin']);
+      });
+
+      it('deletes an unused voucher with its outlet links in one go and audits it without the full code', async () => {
+        const v = await makeVoucher({ outlet_ids: [String(outlet.outletId), String(otherOutlet.outletId)] });
+        const res = await del(users.superAdmin, v.id);
+        expect(res.status).toBe(200);
+        expect(res.body.data).toEqual({ id: v.id, deleted: true });
+        expect(await voucherRow(v.id)).toBeUndefined();
+        expect(await t.trx('voucher_outlets').where({ voucher_id: v.id })).toHaveLength(0);
+        const [audit] = await audits(v.id, 'voucher_deleted');
+        expect(String(audit.user_id)).toBe(String(users.superAdmin));
+        expect(JSON.stringify(audit.before_state)).not.toContain(v.code.replace(/-/g, ''));
+        expect(JSON.stringify(audit.before_state)).toContain(`****${v.code.slice(-4)}`);
+        // The code no longer works at the till.
+        const orderId = await openTab();
+        expect((await applyVoucher(users.operator, orderId, v.code)).status).toBe(422);
+      });
+
+      it('is refused, with a Disable-instead message, once the voucher was redeemed', async () => {
+        const { v } = await used();
+        const res = await del(users.superAdmin, v.id);
+        expect(res.status).toBe(409);
+        expect(res.body.error.code).toBe('CONFLICT_VOUCHER_HAS_HISTORY');
+        expect(res.body.error.message).toMatch(/Disable it instead/);
+        expect(await voucherRow(v.id)).toBeDefined();
+        expect(await audits(v.id, 'voucher_deleted')).toHaveLength(0);
+      });
+
+      it('is refused after a reversed redemption (the sale was voided), and nothing else is touched', async () => {
+        const { v, orderId } = await used({ voided: true });
+        const discountsBefore = await t.trx('discounts').where({ pos_order_id: orderId, kind: 'voucher' });
+        expect((await del(users.superAdmin, v.id)).status).toBe(409);
+        expect(await t.trx('discounts').where({ pos_order_id: orderId, kind: 'voucher' })).toHaveLength(discountsBefore.length);
+        expect(await t.trx('voucher_redemptions').where({ voucher_id: v.id })).toHaveLength(1);
+      });
+
+      it('is refused while the code sits on an open check, and after a code was typed and taken off', async () => {
+        const v = await makeVoucher();
+        const orderId = await openTab();
+        const applied = await applyVoucher(users.operator, orderId, v.code);
+        expect((await del(users.superAdmin, v.id)).status).toBe(409);
+        await as(users.operator).post(`/api/v1/discounts/${applied.body.data.id}/remove`).send({ reason: 'Wrong voucher' });
+        expect((await del(users.superAdmin, v.id)).status).toBe(409); // a 'released' row still points at it
+      });
     });
   });
 

@@ -45,6 +45,9 @@ function discountsRouter() {
   // Vouchers: a manager makes and disables them; a cashier only types a code.
   router.get('/discounts/vouchers', requirePermission('discount.manage'), controller.listVouchers);
   router.post('/discounts/vouchers', requirePermission('discount.manage'), controller.createVoucher);
+  router.patch('/discounts/vouchers/:id', requirePermission('discount.manage'), controller.updateVoucher);
+  // Deleting is super_admin only: a dedicated key seeded to that role alone (discount.manage is not enough).
+  router.post('/discounts/vouchers/:id/delete', requirePermission('discount.manage'), requirePermission('discount.voucher_delete'), controller.deleteVoucher);
   router.post('/discounts/vouchers/:id/disable', requirePermission('discount.manage'), controller.disableVoucher);
   router.post('/discounts/vouchers/:id/enable', requirePermission('discount.manage'), controller.enableVoucher);
 

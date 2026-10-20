@@ -458,7 +458,7 @@ exports.seed = async function seed(knex) {
    * genuinely meaning "every permission." `reports.view_chain` (PLAN.md
    * Phase 6's chain-wide roll-up) is the second such exception.
    */
-  const ADMIN_EXCLUDED_PERMISSIONS = new Set(['room_types.update', 'reports.view_chain', 'security.manage', 'tax.manage']);
+  const ADMIN_EXCLUDED_PERMISSIONS = new Set(['room_types.update', 'reports.view_chain', 'security.manage', 'tax.manage', 'discount.voucher_delete']);
 
   async function ensureAdminSuperAdminFullAccess(tenantId) {
     const allPermissions = await knex('permissions').select('id', 'permission_key');

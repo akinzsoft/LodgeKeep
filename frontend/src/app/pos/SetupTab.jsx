@@ -63,7 +63,7 @@ const OUTLET_SECTIONS = [
   { key: 'service', label: 'Service charge' },
 ];
 
-export function SetupTab({ activeProperty, isOffline = false, canManageAccounts = true, canManageServiceCharge = true, canManageDiscounts = true }) {
+export function SetupTab({ activeProperty, isOffline = false, canManageAccounts = true, canManageServiceCharge = true, canManageDiscounts = true, canDeleteVouchers = false }) {
   const [outlets, setOutlets] = useState(null);
   const [terminals, setTerminals] = useState(null);
   const [selectedOutletId, setSelectedOutletId] = useState(null);
@@ -302,7 +302,7 @@ export function SetupTab({ activeProperty, isOffline = false, canManageAccounts 
       />
 
       {discountsOpen ? (
-        <DiscountsCard isOffline={isOffline} canManage={canManageDiscounts} currencyCode={activeProperty.base_currency} />
+        <DiscountsCard isOffline={isOffline} canManage={canManageDiscounts} canDeleteVouchers={canDeleteVouchers} currencyCode={activeProperty.base_currency} />
       ) : (
         <div>
           <Button type="button" variant="secondary" onClick={() => setDiscountsOpen(true)}>

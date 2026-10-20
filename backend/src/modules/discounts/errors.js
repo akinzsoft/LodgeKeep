@@ -132,7 +132,37 @@ class VoucherNotFoundError extends AppError {
   }
 }
 
+/** The voucher has been put on a check at some point, so the part that decides its money cannot change. */
+class VoucherLockedError extends AppError {
+  constructor(fields) {
+    super('CONFLICT_VOUCHER_LOCKED', `This voucher has already been used, so ${fields.join(' and ')} cannot be changed. You can still change who it is for, when it ends, how many times it can be used, its outlets and its note.`, 409, { fields });
+  }
+}
+
+class VoucherUsesBelowUsedError extends AppError {
+  constructor(used) {
+    super('VALIDATION_VOUCHER_USES_BELOW_USED', `Total uses cannot be less than the ${used} time(s) this voucher has already been used.`, 422, { used });
+  }
+}
+
+/** A voucher with any history cannot be deleted: receipts, reports and the audit trail point at it. */
+class VoucherHasHistoryError extends AppError {
+  constructor() {
+    super('CONFLICT_VOUCHER_HAS_HISTORY', 'This voucher has been put on a check, so it cannot be deleted (receipts and reports refer to it). Disable it instead.', 409);
+  }
+}
+
+class VoucherCapLoweredError extends AppError {
+  constructor() {
+    super('CONFLICT_VOUCHER_LOCKED', 'This voucher has already been used, so its max-off cap can only be raised or removed, not lowered or added.', 409, { fields: ['max_amount'] });
+  }
+}
+
 module.exports = {
+  VoucherCapLoweredError,
+  VoucherLockedError,
+  VoucherUsesBelowUsedError,
+  VoucherHasHistoryError,
   VoucherInvalidError,
   VoucherNoLongerAvailableError,
   VoucherCheckTooSmallError,

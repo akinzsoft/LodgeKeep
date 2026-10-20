@@ -10,6 +10,9 @@
  *   CONC-VCH-4  N supermarket sales, each with its own request for one single-use voucher: exactly one wins.
  *   CONC-VCH-5  a use handed back by a void racing the next redemption: the count always equals the standing redemptions.
  *   CONC-VCH-6  the same code typed on N checks at once all attach (advisory), but still only one can settle.
+ *   CONC-VCH-E1 an edit lowering total uses racing the last settlement: exactly one wins, the limit is never passed.
+ *   CONC-VCH-E2 a delete racing a code typed on a check: either the code attaches and the delete is refused, or the reverse.
+ *   CONC-VCH-E3 an outlet change committed while a settlement waits on the voucher lock is seen by that settlement.
  */
 
 const request = require('supertest');
@@ -29,6 +32,7 @@ describe('Vouchers: real connections', () => {
   let propertyId;
   let managerId;
   let cashierId;
+  let superAdminId;
   let barId;
   let terminalId;
   let beerId;
@@ -52,6 +56,7 @@ describe('Vouchers: real connections', () => {
     };
     await grant('manager', ['pos.operate', 'pos.manage', 'supermarket.sales', 'supermarket.manage', 'discount.apply', 'discount.approve', 'discount.comp', 'discount.manage']);
     await grant('pos_operator', ['pos.operate', 'supermarket.sales', 'discount.apply']);
+    await grant('super_admin', ['pos.operate', 'pos.manage', 'discount.apply', 'discount.manage', 'discount.voucher_delete']);
     const mkUser = async (label, role) => {
       const [id] = await db()('users').insert({ tenant_id: tenantId, email: `${label}-${suffix}@example.com`, password_hash: `$2b$12$${'x'.repeat(53)}`, first_name: label, last_name: 'Race', status: 'active' });
       await db()('user_property_access').insert({ tenant_id: tenantId, property_id: propertyId, user_id: id, role });
@@ -59,6 +64,7 @@ describe('Vouchers: real connections', () => {
     };
     managerId = await mkUser('manager', 'manager');
     cashierId = await mkUser('cashier', 'pos_operator');
+    superAdminId = await mkUser('superadmin', 'super_admin');
     await setApprovalPin(db(), { tenantId, userId: managerId });
 
     [barId] = await db()('pos_outlets').insert({ tenant_id: tenantId, property_id: propertyId, code: 'VBAR', name: 'Voucher Bar', type: 'bar' });
@@ -233,5 +239,99 @@ describe('Vouchers: real connections', () => {
       const asked = await Promise.all(orders.map((orderId) => post(cashierId, `/api/v1/pos/orders/${orderId}/discounts`).send({ scope: 'order', type: 'percent', value: '3', reason_id: String(reasons.id) })));
       expect(asked.map((r) => r.status)).toEqual(Array(6).fill(201));
     }
+  });
+  const patchVoucher = (userId, id, body) => req.patch(`/api/v1/discounts/vouchers/${id}`).set('Authorization', `Bearer ${tokenFor(userId)}`).send(body);
+
+  it('CONC-VCH-E1: an edit lowering total uses racing the last settlement: exactly one wins and the limit is never passed', async () => {
+    for (let round = 0; round < ROUNDS; round += 1) {
+      const v = await makeVoucher({ max_total_uses: 2 });
+      const first = await barCheckWith(v.code);
+      expect((await settle(first)).status).toBe(200);
+      const second = await barCheckWith(v.code);
+      const [edit, settled] = await Promise.all([patchVoucher(managerId, v.id, { max_total_uses: 1 }), settle(second)]);
+      expect([edit.status, settled.status].sort()).toEqual([200, 422]);
+      const row = await voucher(v.id);
+      if (edit.status === 200) {
+        expect(settled.body.error.code).toBe('BUSINESS_RULE_VOUCHER_NO_LONGER_AVAILABLE');
+        expect(row.used_count).toBe(1);
+      } else {
+        expect(edit.body.error.code).toBe('VALIDATION_VOUCHER_USES_BELOW_USED');
+        expect(row.used_count).toBe(2);
+        expect(row.max_total_uses).toBe(2);
+      }
+      expect(row.used_count).toBeLessThanOrEqual(row.max_total_uses);
+    }
+  });
+
+  it('CONC-VCH-E2: a delete racing a code typed on a check: one wins, never both', async () => {
+    for (let round = 0; round < ROUNDS; round += 1) {
+      const v = await makeVoucher();
+      const orderId = await barCheckWith(null);
+      const [removed, attached] = await Promise.all([
+        post(superAdminId, `/api/v1/discounts/vouchers/${v.id}/delete`).send({}),
+        post(cashierId, `/api/v1/pos/orders/${orderId}/voucher`).send({ code: v.code }),
+      ]);
+      if (removed.status === 200) {
+        expect(attached.status).toBe(422);
+        expect(await voucher(v.id)).toBeUndefined();
+        expect(await db()('voucher_redemptions').where({ voucher_id: v.id })).toHaveLength(0);
+      } else {
+        expect(removed.status).toBe(409);
+        expect(attached.status).toBe(201);
+        expect(await voucher(v.id)).toBeDefined();
+        expect(await db()('voucher_redemptions').where({ voucher_id: v.id })).toHaveLength(1);
+      }
+    }
+  });
+
+  it('CONC-VCH-E3: outlets changed while a settlement waits for the voucher lock are seen by that settlement', async () => {
+    const v = await makeVoucher({ outlet_ids: [String(barId)] });
+    const orderId = await barCheckWith(v.code);
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    let settledEarly = false;
+    let holderReady;
+    const ready = new Promise((resolve) => { holderReady = resolve; });
+    const holder = db().transaction(async (trx) => {
+      await trx('vouchers').where({ id: v.id }).forUpdate().first();
+      holderReady();
+      await held;
+      await trx('voucher_outlets').where({ voucher_id: v.id }).delete();
+      await trx('voucher_outlets').insert({ tenant_id: tenantId, property_id: propertyId, voucher_id: v.id, outlet_id: martId });
+    });
+    await ready;
+    const settling = settle(orderId).then((res) => { settledEarly = true; return res; });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(settledEarly).toBe(false); // queued behind the lock, snapshot already taken
+    release();
+    await holder;
+    const result = await settling;
+    expect(result.status).toBe(422);
+    expect(result.body.error.code).toBe('BUSINESS_RULE_VOUCHER_NO_LONGER_AVAILABLE');
+    expect((await voucher(v.id)).used_count).toBe(0);
+  });
+  it('CONC-VCH-E4: an edit queued behind a redemption re-reads the voucher under its lock (total uses cannot drop below the use that just landed)', async () => {
+    const v = await makeVoucher({ max_total_uses: 5 });
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    let holderReady;
+    const ready = new Promise((resolve) => { holderReady = resolve; });
+    const holder = db().transaction(async (trx) => {
+      await trx('vouchers').where({ id: v.id }).forUpdate().first();
+      holderReady();
+      await held;
+      await trx('vouchers').where({ id: v.id }).update({ used_count: 2 });
+    });
+    await ready;
+    let answered = false;
+    const editing = patchVoucher(managerId, v.id, { max_total_uses: 1 }).then((res) => { answered = true; return res; });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(answered).toBe(false);
+    release();
+    await holder;
+    const result = await editing;
+    expect(result.status).toBe(422);
+    expect(result.body.error.code).toBe('VALIDATION_VOUCHER_USES_BELOW_USED');
+    expect((await voucher(v.id)).max_total_uses).toBe(5);
   });
 });
