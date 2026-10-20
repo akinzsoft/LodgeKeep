@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button, DataTable, ConfirmDialog } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { discountsApi, posApi, ApiError } from '../../shared/api/index.js';
+import { VoucherEditForm } from './VoucherEditForm.jsx';
 import formStyles from './POSForm.module.css';
 
 const VALUE_PATTERN = /^\d+(\.\d{1,2})?$/;
@@ -27,9 +28,10 @@ const EMPTY_FORM = { type: 'percent', value: '', maxAmount: '', validFrom: '', v
 /**
  * VouchersSection — a manager (`discount.manage`) makes vouchers and switches them off. The SERVER generates the code
  * (shown once in the list, with dashes) and decides what the creator's own discount limit allows; a cashier only types
- * the code at the till. A voucher is never edited: a different voucher is a new one.
+ * the code at the till. A manager can edit one (a used voucher keeps its type, amount and start date); only a super admin
+ * can delete one, and only if it was never put on a check.
  */
-export function VouchersSection({ currencyCode, isOffline = false }) {
+export function VouchersSection({ currencyCode, isOffline = false, canDelete = false }) {
   const [vouchers, setVouchers] = useState(undefined); // undefined loading, null failed
   const [outlets, setOutlets] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -37,6 +39,9 @@ export function VouchersSection({ currencyCode, isOffline = false }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [disabling, setDisabling] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [editError, setEditError] = useState(null);
+  const [deleting, setDeleting] = useState(null);
 
   async function load() {
     try {
@@ -104,6 +109,35 @@ export function VouchersSection({ currencyCode, isOffline = false }) {
     }
   }
 
+  async function handleSaveEdit(changes) {
+    setBusy(true);
+    setEditError(null);
+    try {
+      await discountsApi.updateVoucher(editing.id, changes);
+      setEditing(null);
+      await load();
+    } catch (caught) {
+      setEditError(caught instanceof ApiError ? caught.message : 'Could not save the voucher.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete(voucher) {
+    setDeleting(null);
+    setBusy(true);
+    setError(null);
+    try {
+      await discountsApi.deleteVoucher(voucher.id);
+      if (editing?.id === voucher.id) setEditing(null);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not delete the voucher. Disable it instead.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function toggleOutlet(id) {
     setForm((current) => ({ ...current, outletIds: current.outletIds.includes(id) ? current.outletIds.filter((candidate) => candidate !== id) : [...current.outletIds, id] }));
   }
@@ -140,21 +174,44 @@ export function VouchersSection({ currencyCode, isOffline = false }) {
           {
             key: 'actions',
             label: '',
-            render: (row) =>
-              row.status === 'active' ? (
-                <Button type="button" variant="ghost" disabled={isOffline || busy} onClick={() => setDisabling(row)}>
-                  Disable
+            render: (row) => (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={isOffline || busy}
+                  onClick={() => {
+                    setEditError(null);
+                    setEditing(row);
+                  }}
+                >
+                  Edit
                 </Button>
-              ) : (
-                <Button type="button" variant="ghost" disabled={isOffline || busy} onClick={() => handleToggle(row)}>
-                  Enable
-                </Button>
-              ),
+                {row.status === 'active' ? (
+                  <Button type="button" variant="ghost" disabled={isOffline || busy} onClick={() => setDisabling(row)}>
+                    Disable
+                  </Button>
+                ) : (
+                  <Button type="button" variant="ghost" disabled={isOffline || busy} onClick={() => handleToggle(row)}>
+                    Enable
+                  </Button>
+                )}
+                {canDelete && (
+                  <Button type="button" variant="ghost" disabled={isOffline || busy} onClick={() => setDeleting(row)}>
+                    Delete
+                  </Button>
+                )}
+              </>
+            ),
           },
         ]}
         rows={vouchers ?? []}
         rowKey={(row) => row.id}
       />
+
+      {editing && (
+        <VoucherEditForm key={editing.id} voucher={editing} outlets={outlets} busy={busy} error={editError} isOffline={isOffline} onSave={handleSaveEdit} onCancel={() => setEditing(null)} />
+      )}
 
       <form className={formStyles.form} onSubmit={handleCreate} aria-label="New voucher">
         <div className={formStyles.row}>
@@ -213,6 +270,15 @@ export function VouchersSection({ currencyCode, isOffline = false }) {
         </div>
       </form>
 
+      {deleting && (
+        <ConfirmDialog
+          title="Delete this voucher?"
+          consequence={`Voucher ${deleting.code} is removed for good. This only works if it was never put on a check; if it was, disable it instead.`}
+          confirmLabel="Delete"
+          onConfirm={() => handleDelete(deleting)}
+          onCancel={() => setDeleting(null)}
+        />
+      )}
       {disabling && (
         <ConfirmDialog
           title="Disable this voucher?"

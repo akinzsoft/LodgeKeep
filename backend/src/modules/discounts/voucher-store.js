@@ -28,8 +28,11 @@ function problemFor(voucher, { outletId, businessDate, outletIds }) {
   return null;
 }
 
-async function outletIdsOf(db, voucherId) {
-  return (await db.table('voucher_outlets').where({ voucher_id: voucherId })).map((row) => row.outlet_id);
+async function outletIdsOf(db, voucherId, { lock = false } = {}) {
+  // A locking read when a settlement is about to rely on it: a plain one shows the transaction's older snapshot, so an
+  // outlet change committed while the settlement waited for the voucher lock would be missed.
+  const query = db.table('voucher_outlets').where({ voucher_id: voucherId });
+  return (await (lock ? query.forShare() : query)).map((row) => row.outlet_id);
 }
 
 async function propertyBusinessDate(db, propertyId) {
@@ -92,7 +95,7 @@ async function redeemForOrder(trx, { discountRows, pricing, orderId, outletId, p
   for (const discount of vouchers) {
     const link = await trx.table('voucher_redemptions').where({ discount_id: discount.id }).forUpdate().first();
     if (!link || link.status !== 'attached') throw new errors.VoucherNoLongerAvailableError('missing', discount.id);
-    const outletIds = await outletIdsOf(trx, link.voucher_id);
+    const outletIds = await outletIdsOf(trx, link.voucher_id, { lock: true });
     // The voucher row is locked for the rest of this transaction, so two registers redeeming the last use serialise here:
     // the second sees the first's count and is refused. (A locking read: a plain one would show the transaction's older
     // snapshot, taken before the lock was granted.)

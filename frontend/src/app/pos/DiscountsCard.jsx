@@ -18,7 +18,7 @@ export function isValidLimit(text) {
  * DiscountsCard — the reasons staff choose from when they give a discount or comp, and how much each role may give
  * without a manager. A change to a limit is audited. Without `discount.manage` it only shows what applies.
  */
-export function DiscountsCard({ isOffline = false, canManage = true, currencyCode = 'NGN' }) {
+export function DiscountsCard({ isOffline = false, canManage = true, canDeleteVouchers = false, currencyCode = 'NGN' }) {
   const [reasons, setReasons] = useState(undefined); // undefined loading, null failed
   const [limits, setLimits] = useState(undefined);
   const [drafts, setDrafts] = useState({});
@@ -178,7 +178,7 @@ export function DiscountsCard({ isOffline = false, canManage = true, currencyCod
         </form>
       )}
 
-      {canManage && <VouchersSection currencyCode={currencyCode} isOffline={isOffline} />}
+      {canManage && <VouchersSection currencyCode={currencyCode} isOffline={isOffline} canDelete={canDeleteVouchers} />}
 
       {toast && (
         <div className={formStyles.toastLayer}>

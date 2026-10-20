@@ -201,6 +201,30 @@ const createVoucher = wrap(async (req, res) => {
   res.status(201).json(ok(voucher));
 });
 
+/** Only the audited fields that differ, before and after (the code is masked). */
+function changedFields(before, after) {
+  const a = vouchers.auditShape(before);
+  const b = vouchers.auditShape(after);
+  const keys = Object.keys(b).filter((key) => key !== 'code' && JSON.stringify(a[key]) !== JSON.stringify(b[key]));
+  return {
+    beforeState: { voucherId: before.id, code: a.code, ...Object.fromEntries(keys.map((key) => [key, a[key]])) },
+    afterState: { voucherId: after.id, code: b.code, ...Object.fromEntries(keys.map((key) => [key, b[key]])) },
+  };
+}
+
+const updateVoucher = wrap(async (req, res) => {
+  const { before, after, changed } = await scopedDb().for(req.context).transaction((trx) => vouchers.updateVoucher({ trx, id: req.params.id, raw: req.body ?? {}, userId: req.context.userId }));
+  if (changed) await req.audit({ entityType: 'vouchers', entityId: after.id, action: 'voucher_updated', ...changedFields(before, after) });
+  res.status(200).json(ok(after));
+});
+
+const deleteVoucher = wrap(async (req, res) => {
+  const removed = await scopedDb().for(req.context).transaction((trx) => vouchers.deleteVoucher({ trx, id: req.params.id }));
+  const shaped = vouchers.auditShape(removed);
+  await req.audit({ entityType: 'vouchers', entityId: removed.id, action: 'voucher_deleted', beforeState: { voucherId: removed.id, ...shaped }, afterState: null });
+  res.status(200).json(ok({ id: removed.id, deleted: true }));
+});
+
 const disableVoucher = wrap(async (req, res) => {
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
   if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to disable a voucher.', [{ field: 'reason', issue: 'missing' }]);
@@ -280,6 +304,8 @@ module.exports = {
   createCartDiscount,
   listVouchers,
   createVoucher,
+  updateVoucher,
+  deleteVoucher,
   disableVoucher,
   enableVoucher,
   applyOrderVoucher,

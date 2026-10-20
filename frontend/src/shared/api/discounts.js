@@ -93,6 +93,29 @@ export function createVoucher({ type, value, validTo, validFrom, maxAmount, maxT
   });
 }
 
+/**
+ * Changes a voucher. Only the fields given are sent; the code never changes. A voucher that has been used refuses a new
+ * type, amount or start date (409). `maxAmount: null` removes the cap, `maxTotalUses: null` removes the limit.
+ */
+export function updateVoucher(id, changes) {
+  const body = {};
+  if (changes.type !== undefined) body.type = changes.type;
+  if (changes.value !== undefined) body.value = changes.value;
+  if (changes.maxAmount !== undefined) body.max_amount = changes.maxAmount;
+  if (changes.validFrom !== undefined) body.valid_from = changes.validFrom;
+  if (changes.validTo !== undefined) body.valid_to = changes.validTo;
+  if (changes.maxTotalUses !== undefined) body.max_total_uses = changes.maxTotalUses;
+  if (changes.outletIds !== undefined) body.outlet_ids = changes.outletIds;
+  if (changes.note !== undefined) body.note = changes.note;
+  if (changes.overrideLimit) body.override_limit = true;
+  return request(`/discounts/vouchers/${id}`, { method: 'PATCH', body });
+}
+
+/** Super admin only. Refused (409) once the voucher has ever been put on a check: disable it instead. */
+export function deleteVoucher(id) {
+  return request(`/discounts/vouchers/${id}/delete`, { method: 'POST', body: {} });
+}
+
 export function disableVoucher(id, reason) {
   return request(`/discounts/vouchers/${id}/disable`, { method: 'POST', body: { reason } });
 }

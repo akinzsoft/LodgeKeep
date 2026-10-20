@@ -172,7 +172,10 @@ async function listVouchers({ db }) {
   const links = rows.length ? await db.table('voucher_outlets').whereIn('voucher_id', rows.map((row) => row.id)) : [];
   const byVoucher = new Map();
   for (const link of links) byVoucher.set(String(link.voucher_id), [...(byVoucher.get(String(link.voucher_id)) ?? []), link.outlet_id]);
-  return rows.map((row) => shapeVoucher(row, byVoucher.get(String(row.id)) ?? []));
+  // Whether each voucher's money terms are fixed (same rule as an edit), so the screen can say so before the manager tries.
+  const history = rows.length ? await db.table('voucher_redemptions').whereIn('voucher_id', rows.map((row) => row.id)).select('voucher_id', 'status') : [];
+  const lockedIds = new Set(history.filter((link) => link.status !== 'released').map((link) => String(link.voucher_id)));
+  return rows.map((row) => ({ ...shapeVoucher(row, byVoucher.get(String(row.id)) ?? []), money_locked: Number(row.used_count) > 0 || lockedIds.has(String(row.id)) }));
 }
 
 async function setVoucherStatus({ trx, id, to, userId, reason }) {
@@ -186,6 +189,169 @@ async function setVoucherStatus({ trx, id, to, userId, reason }) {
   }
   const after = await trx.table('vouchers').where({ id }).first();
   return { before: shapeVoucher(before, await voucherStore.outletIdsOf(trx, id)), after: shapeVoucher(after, await voucherStore.outletIdsOf(trx, id)) };
+}
+
+// ---------------------------------------------------------------- edit and delete
+
+/** The code as the audit trail may show it: the last four characters only. */
+const maskedCode = (code) => `****${String(code).slice(-4)}`;
+
+const hasOwn = (body, key) => Object.prototype.hasOwnProperty.call(body, key);
+
+/** The part of a voucher that is audited (never the full code). */
+function auditShape(shaped) {
+  return {
+    code: maskedCode(shaped.code.replace(/-/g, '')),
+    type: shaped.type, value: shaped.value, max_amount: shaped.max_amount, check_percent_cap: shaped.check_percent_cap,
+    valid_from: shaped.valid_from, valid_to: shaped.valid_to, max_total_uses: shaped.max_total_uses, note: shaped.note, outlet_ids: [...shaped.outlet_ids].sort(),
+  };
+}
+
+/** Whether any check ever carried this voucher (read under the lock: a plain read would show an older snapshot). */
+async function usageOf(trx, voucher) {
+  const rows = await trx.table('voucher_redemptions').where({ voucher_id: voucher.id }).forShare().select('status');
+  const statuses = rows.map((row) => row.status);
+  return {
+    // Anything that priced a check, or is on one now, fixes the money terms. A code typed and taken off again ('released') priced nothing.
+    locked: Number(voucher.used_count) > 0 || statuses.some((status) => status !== 'released'),
+    any: statuses.length > 0,
+  };
+}
+
+/**
+ * Edits a voucher. Takes the voucher row lock first (the settlement's order: it locks the voucher before reading
+ * anything else of the voucher), so an edit cannot interleave with a redemption or an attach.
+ *
+ * Unused: everything but the code can change. Once any check has carried it (even a reversed one) its type, value and
+ * start date are fixed: past checks, receipts and the report all quote them. Its end date, total uses (never below the
+ * count already used), outlets, note and max-off cap (only raised or left, because lowering it would change what an
+ * attached check can take off) stay editable. Changing the type or value runs the same comp-authority rules as create.
+ */
+async function updateVoucher({ trx, id, raw, userId }) {
+  const body = raw ?? {};
+  const before = await trx.table('vouchers').where({ id }).forUpdate().first();
+  if (!before) throw new errors.VoucherNotFoundError();
+  const beforeOutlets = await voucherStore.outletIdsOf(trx, id, { lock: true });
+  const usage = await usageOf(trx, before);
+
+  const patch = {};
+  const locked = [];
+  if (hasOwn(body, 'type')) {
+    if (!['percent', 'fixed'].includes(body.type)) throw invalid('"type" must be percent or fixed.', 'type');
+    if (body.type !== before.type) { if (usage.locked) locked.push('type'); else patch.type = body.type; }
+  }
+  const nextType = patch.type ?? before.type;
+  if (hasOwn(body, 'value')) {
+    if (!decimal(body.value)) throw invalid('"value" must be an amount with at most 2 decimal places, e.g. "10" or "2.50".', 'value');
+    const value = body.value.trim();
+    if (toCents(value) !== toCents(String(before.value))) { if (usage.locked) locked.push('value'); else patch.value = value; }
+  }
+  if (hasOwn(body, 'valid_from') && body.valid_from !== String(before.valid_from).slice(0, 10)) {
+    if (typeof body.valid_from !== 'string' || !isRealDate(body.valid_from)) throw invalid('"valid_from" must be a date, YYYY-MM-DD.', 'valid_from');
+    if (usage.locked) locked.push('valid_from'); else patch.valid_from = body.valid_from;
+  }
+  if (locked.length > 0) throw new errors.VoucherLockedError(locked);
+
+  const nextValue = patch.value ?? String(before.value);
+  const cents = toCents(nextValue);
+  if (patch.type !== undefined || patch.value !== undefined) {
+    if (cents <= 0n) throw invalid('"value" must be above zero.', 'value', 'not_positive');
+    if (nextType === 'percent' && cents > 10000n) throw invalid('A percent voucher cannot be more than 100.', 'value', 'too_large');
+    if (nextType === 'fixed' && cents > toCents(maxDiscountAmount())) throw invalid(`A fixed voucher must not exceed ${maxDiscountAmount()}.`, 'value', 'too_large');
+  }
+
+  if (hasOwn(body, 'max_amount')) {
+    if (body.max_amount === null) {
+      patch.max_amount = null; // no cap: a raise
+    } else {
+      if (!decimal(body.max_amount) || toCents(body.max_amount.trim()) <= 0n) throw invalid('"max_amount" must be an amount above zero with at most 2 decimals.', 'max_amount');
+      patch.max_amount = body.max_amount.trim();
+    }
+    const current = before.max_amount === null ? null : toCents(String(before.max_amount));
+    const next = patch.max_amount === null ? null : toCents(patch.max_amount);
+    if (usage.locked && current !== null && (next !== null && next < current)) throw new errors.VoucherCapLoweredError();
+    if (usage.locked && current === null && next !== null) throw new errors.VoucherCapLoweredError();
+    if (current === next) delete patch.max_amount;
+  }
+
+  const validFrom = patch.valid_from ?? String(before.valid_from).slice(0, 10);
+  if (hasOwn(body, 'valid_to')) {
+    if (typeof body.valid_to !== 'string' || !isRealDate(body.valid_to)) throw invalid('"valid_to" must be a date, YYYY-MM-DD.', 'valid_to');
+    if (body.valid_to !== String(before.valid_to).slice(0, 10)) patch.valid_to = body.valid_to;
+  }
+  const validTo = patch.valid_to ?? String(before.valid_to).slice(0, 10);
+  if (validTo < validFrom) throw invalid('"valid_to" must not be before "valid_from".', 'valid_to', 'before_valid_from');
+
+  if (hasOwn(body, 'max_total_uses')) {
+    if (body.max_total_uses === null) {
+      patch.max_total_uses = null;
+    } else {
+      if (!Number.isInteger(body.max_total_uses) || body.max_total_uses < 1 || body.max_total_uses > MAX_USES) throw invalid('"max_total_uses" must be a whole number of at least 1.', 'max_total_uses');
+      if (body.max_total_uses < Number(before.used_count)) throw new errors.VoucherUsesBelowUsedError(Number(before.used_count));
+      patch.max_total_uses = body.max_total_uses;
+    }
+    if (patch.max_total_uses === (before.max_total_uses === null ? null : Number(before.max_total_uses))) delete patch.max_total_uses;
+  }
+
+  if (hasOwn(body, 'note')) {
+    if (body.note !== null && (typeof body.note !== 'string' || body.note.trim().length > 200)) throw invalid('"note" must be text of at most 200 characters.', 'note');
+    const note = body.note === null ? null : body.note.trim() || null;
+    if (note !== (before.note ?? null)) patch.note = note;
+  }
+
+  let nextOutlets = beforeOutlets.map(String);
+  if (hasOwn(body, 'outlet_ids')) {
+    if (!Array.isArray(body.outlet_ids) || body.outlet_ids.length > 100 || body.outlet_ids.some((outletId) => !/^\d+$/.test(String(outletId)))) throw invalid('"outlet_ids" must be a list of outlets.', 'outlet_ids');
+    const unique = [...new Set(body.outlet_ids.map(String))];
+    const found = unique.length ? await trx.table('pos_outlets').whereIn('id', unique).select('id') : [];
+    if (found.length !== unique.length) throw invalid('One of the outlets is not an outlet of this property.', 'outlet_ids', 'not_found');
+    nextOutlets = unique;
+  }
+
+  // Comp authority: the same rules as create, applied when the money terms change.
+  if (patch.type !== undefined || patch.value !== undefined || body.override_limit === true) {
+    const role = await roleAtProperty(trx, trx.context, userId, trx.context.propertyId);
+    const limit = role ? await store.limitPercentFor(trx, role) : '0.00';
+    const holdsComp = role ? await hasPermission(trx, role, 'discount.comp') : false;
+    const overrideLimit = body.override_limit === true;
+    if (overrideLimit && !holdsComp) throw new errors.VoucherNeedsCompError();
+    const wholeBill = nextType === 'percent' && cents === 10000n;
+    if (wholeBill && !holdsComp) throw new errors.VoucherNeedsCompError();
+    if (nextType === 'percent' && !overrideLimit && !wholeBill && !isWithinPercentLimit({ amount: nextValue, base: '100.00', limitPercent: limit })) {
+      throw new errors.VoucherAboveLimitError(limit);
+    }
+    patch.check_percent_cap = overrideLimit || wholeBill ? '100.00' : limit;
+  }
+
+  const outletsChanged = [...nextOutlets].sort().join(',') !== beforeOutlets.map(String).sort().join(',');
+  if (Object.keys(patch).length === 0 && !outletsChanged) {
+    const shaped = shapeVoucher(before, beforeOutlets);
+    return { before: shaped, after: shaped, changed: false };
+  }
+  if (Object.keys(patch).length > 0) await trx.table('vouchers').where({ id }).update(patch);
+  if (outletsChanged) {
+    await trx.table('voucher_outlets').where({ voucher_id: id }).delete();
+    for (const outletId of nextOutlets) await trx.table('voucher_outlets').insert({ voucher_id: id, outlet_id: outletId });
+  }
+  const after = await trx.table('vouchers').where({ id }).first();
+  return { before: shapeVoucher(before, beforeOutlets), after: shapeVoucher(after, nextOutlets), changed: true };
+}
+
+/**
+ * Deletes a voucher that was never put on a check. Under the voucher lock; any redemption row of any status (attached,
+ * redeemed, reversed or released) refuses, because receipts, reports and the audit trail point at it, and the database
+ * would refuse the delete anyway. A redemption row is the only way a `discounts` row (kind voucher) is ever tied to a
+ * voucher, so a voucher without one has no discount row to remove.
+ */
+async function deleteVoucher({ trx, id }) {
+  const before = await trx.table('vouchers').where({ id }).forUpdate().first();
+  if (!before) throw new errors.VoucherNotFoundError();
+  const usage = await usageOf(trx, before);
+  if (usage.any || Number(before.used_count) > 0) throw new errors.VoucherHasHistoryError();
+  const outletIds = await voucherStore.outletIdsOf(trx, id, { lock: true });
+  await trx.table('voucher_outlets').where({ voucher_id: id }).delete();
+  await trx.table('vouchers').where({ id }).delete();
+  return shapeVoucher(before, outletIds);
 }
 
 // ---------------------------------------------------------------- redeeming a code at the till
@@ -289,4 +455,4 @@ async function attachToCart({ trx, outlet, cart, code, userId }) {
   return { discount: row, amount: evaluation.amount, voucher };
 }
 
-module.exports = { createVoucher, listVouchers, setVoucherStatus, attachToOrder, attachToCart, ensureVoucherReason, shapeVoucher, VOUCHER_REASON };
+module.exports = { createVoucher, listVouchers, setVoucherStatus, updateVoucher, deleteVoucher, auditShape, maskedCode, attachToOrder, attachToCart, ensureVoucherReason, shapeVoucher, VOUCHER_REASON };

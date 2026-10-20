@@ -2245,6 +2245,7 @@ async function seedTwoTenants(trx) {
     ['discount.approve', 'discount'],
     ['discount.comp', 'discount'],
     ['discount.manage', 'discount'],
+    ['discount.voucher_delete', 'discount'],
     ['reports.view_discounts', 'reports'],
     ['room_types.update', 'setup'],
     ['ar.view', 'ar'],
@@ -2468,6 +2469,7 @@ async function seedTwoTenants(trx) {
     ]) {
       for (const key of keys) grantRows.push({ tenant_id: t.id, role_id: t.roles[role], permission_id: permissions[key] });
     }
+    grantRows.push({ tenant_id: t.id, role_id: t.roles.super_admin, permission_id: permissions['discount.voucher_delete'] });
     await trx('role_permissions').insert(grantRows);
   }
 
