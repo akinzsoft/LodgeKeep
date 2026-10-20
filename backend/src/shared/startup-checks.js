@@ -44,6 +44,7 @@
 
 const { signAccessToken } = require('../auth/tokens');
 const { encrypt, decrypt } = require('./encryption');
+const { appDomains } = require('./app-domains');
 
 function validateStartupConfig() {
   const problems = [];
@@ -61,6 +62,12 @@ function validateStartupConfig() {
     }
   } catch (error) {
     problems.push(`ENCRYPTION_KEY — ${error.message}`);
+  }
+
+  try {
+    appDomains();
+  } catch (error) {
+    problems.push(`APP_DOMAIN / PRIMARY_APP_DOMAIN / ADDITIONAL_APP_DOMAINS — ${error.message}`);
   }
 
   if (!process.env.TURNSTILE_SECRET_KEY || process.env.TURNSTILE_SECRET_KEY.trim() === '') {

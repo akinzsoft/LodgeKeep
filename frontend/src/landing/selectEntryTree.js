@@ -28,19 +28,23 @@ function normalizeHost(host) {
   return String(host ?? '').trim().toLowerCase().replace(/\.$/, '');
 }
 
-/** True only for the exact bare app domain. */
-export function isMarketingHost(hostname, appDomain) {
-  const domain = normalizeHost(appDomain);
-  if (!domain) return false;
-  return normalizeHost(hostname) === domain;
+/**
+ * True only for the exact bare host of an accepted app domain: the primary (`VITE_APP_DOMAIN`) or any additional one
+ * (`VITE_ADDITIONAL_APP_DOMAINS`, comma-separated). Exact equality each, never a suffix match.
+ */
+export function isMarketingHost(hostname, appDomain, additionalDomains) {
+  const host = normalizeHost(hostname);
+  if (!host) return false;
+  const domains = [appDomain, ...String(additionalDomains ?? '').split(',')].map(normalizeHost).filter(Boolean);
+  return domains.includes(host);
 }
 
 /**
- * @param {{hostname: string, pathname: string, appDomain?: string}} where
+ * @param {{hostname: string, pathname: string, appDomain?: string, additionalDomains?: string}} where
  * @returns {'landing'|'portal'|'platform'|'qr-order'|'signup'|'app'}
  */
-export function selectEntryTree({ hostname, pathname, appDomain }) {
-  if (pathname === '/' && isMarketingHost(hostname, appDomain)) return 'landing';
+export function selectEntryTree({ hostname, pathname, appDomain, additionalDomains }) {
+  if (pathname === '/' && isMarketingHost(hostname, appDomain, additionalDomains)) return 'landing';
   // The same order and prefix checks `main.jsx` has always used (so /portalx is the portal too).
   if (pathname.startsWith('/portal')) return 'portal';
   if (pathname.startsWith('/platform')) return 'platform';

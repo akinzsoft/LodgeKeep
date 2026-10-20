@@ -96,3 +96,41 @@ describe('isMarketingHost', () => {
     expect(isMarketingHost(undefined, 'lodgekeep.planmsys.com')).toBe(false);
   });
 });
+
+describe('selectEntryTree — several accepted app domains', () => {
+  const pickMany = (hostname, pathname = '/') => selectEntryTree({ hostname, pathname, appDomain: 'lodgekeep.ng', additionalDomains: 'lodgekeep.planmsys.com, Other.Example' });
+
+  it('shows the landing page at the exact bare host of EVERY accepted domain', () => {
+    expect(pickMany('lodgekeep.ng')).toBe('landing');
+    expect(pickMany('lodgekeep.planmsys.com')).toBe('landing');
+    expect(pickMany('OTHER.EXAMPLE.')).toBe('landing');
+  });
+
+  it.each([
+    'alpha-motel.lodgekeep.ng',
+    'alpha-motel.lodgekeep.planmsys.com',
+    'x.lodgekeep.ng.evil.com',
+    'lodgekeep.ng.evil.com',
+    'evillodgekeep.ng',
+    'a.b.lodgekeep.ng',
+    'ng',
+    'planmsys.com',
+  ])('%s never gets the landing page', (host) => {
+    expect(pickMany(host)).toBe('app');
+  });
+
+  it('only at the path /, and the other trees still win on the bare host', () => {
+    expect(pickMany('lodgekeep.ng', '/signup')).toBe('signup');
+    expect(pickMany('lodgekeep.ng', '/platform')).toBe('platform');
+    expect(pickMany('lodgekeep.ng', '/dashboard')).toBe('app');
+  });
+
+  it('nothing configured shows no landing page, whatever the additional list says', () => {
+    expect(selectEntryTree({ hostname: 'lodgekeep.ng', pathname: '/', appDomain: undefined, additionalDomains: undefined })).toBe('app');
+  });
+
+  it('isMarketingHost takes the additional list too, exactly', () => {
+    expect(isMarketingHost('lodgekeep.ng', 'lodgekeep.planmsys.com', 'lodgekeep.ng')).toBe(true);
+    expect(isMarketingHost('a.lodgekeep.ng', 'lodgekeep.planmsys.com', 'lodgekeep.ng')).toBe(false);
+  });
+});

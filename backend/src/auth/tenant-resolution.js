@@ -33,20 +33,19 @@
 const { fail } = require('../shared/response');
 const { isTenantResolvable } = require('../shared/tenant-lifecycle');
 
+const { appDomains, matchTenantSubdomain } = require('../shared/app-domains');
+
+/** The PRIMARY app domain (kept for callers that want one); every accepted domain is `appDomains().all`. */
 function currentAppDomain() {
-  const value = process.env.APP_DOMAIN;
-  if (!value) throw new Error('APP_DOMAIN is not set. See .env.example.');
-  return value;
+  return appDomains().primary;
 }
 
-function subdomainOf(hostname, appDomain) {
-  const suffix = `.${appDomain}`;
-  if (!hostname.endsWith(suffix)) return null;
-  const subdomain = hostname.slice(0, -suffix.length);
-  // A bare second-level match ("lodgekeep.app" itself, or an empty label from
-  // "..lodgekeep.app") is not a tenant subdomain.
-  if (!subdomain || subdomain.includes('.')) return null;
-  return subdomain;
+/**
+ * The tenant slug in front of ANY accepted app domain (primary or additional), or null. One label and nothing else:
+ * the bare domain itself, an empty label, a multi-label host and a lookalike suffix are not tenant subdomains.
+ */
+function subdomainOf(hostname) {
+  return matchTenantSubdomain(hostname);
 }
 
 async function resolveByCustomDomain(scoped, hostname) {
@@ -67,8 +66,8 @@ async function resolveByCustomDomain(scoped, hostname) {
  * to this hostname resolve to a tenant" must never be able to silently
  * drift into two different answers for the same input.
  */
-async function resolveTenantRowForHostname({ scoped, hostname, appDomain }) {
-  const subdomain = subdomainOf(hostname, appDomain);
+async function resolveTenantRowForHostname({ scoped, hostname }) {
+  const subdomain = subdomainOf(hostname);
   const row = subdomain ? await scoped.bootstrap('tenants', 'slug', subdomain) : await resolveByCustomDomain(scoped, hostname);
   // A `purging`/`purged` tenant resolves to nothing: there is nothing left to
   // reach, and the Caddy on-demand-TLS ask endpoint shares this function, so a
@@ -138,7 +137,7 @@ function resolveTenant({ db, systemContext }) {
 
       const candidateRow = devOverride
         ? await scoped.bootstrap('tenants', 'slug', devOverride)
-        : await resolveTenantRowForHostname({ scoped, hostname: req.hostname, appDomain: currentAppDomain() });
+        : await resolveTenantRowForHostname({ scoped, hostname: req.hostname });
       const tenantRow = isTenantResolvable(candidateRow) ? candidateRow : null;
 
       if (!tenantRow) {

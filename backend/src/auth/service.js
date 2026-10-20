@@ -67,6 +67,7 @@ const {
 // `attachAudit()` request pipeline (this file's own `/auth/*` routes never
 // reach that middleware — see `updateMyProfile`'s own header for why).
 const { recordAuditEntry } = require('../audit');
+const { tenantBaseUrl } = require('../shared/app-domains');
 
 function hoursFromNow(hours) {
   return new Date(Date.now() + hours * 3600 * 1000);
@@ -1327,7 +1328,7 @@ async function requestGuestPasswordReset({ tenantId, propertySlug, email, ip, us
       // `seeds/01_dev_tenants.js`'s printed dev-login URL already expect
       // of a human running it.
       const resetUrl = tenant?.slug
-        ? `http://${tenant.slug}.${process.env.APP_DOMAIN}/portal/${propertySlug}/reset-password?token=${token}`
+        ? `${tenantBaseUrl(tenant.slug)}/portal/${propertySlug}/reset-password?token=${token}`
         : null;
 
       await writeOutboxEvent({

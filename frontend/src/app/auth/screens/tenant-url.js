@@ -1,3 +1,5 @@
+import { parseAppDomains, isAcceptedAppHost } from '../../../shared/appDomains.js';
+
 /**
  * Builds the URL a brand-new tenant signs in at, from the slug `SignupScreen`
  * just created and the browser's own current location — `tenant-label.js`'s
@@ -51,15 +53,17 @@ export function buildTenantLoginUrl(
   slug,
   location = typeof window !== 'undefined' ? window.location : null,
   appDomain = import.meta.env?.VITE_APP_DOMAIN || undefined,
+  additionalDomains = import.meta.env?.VITE_ADDITIONAL_APP_DOMAINS || undefined,
 ) {
   if (!location) return null;
   const port = location.port ? `:${location.port}` : '';
 
   if (appDomain) {
-    const hostLower = location.hostname.toLowerCase();
-    const domainLower = appDomain.toLowerCase();
-    if (hostLower === domainLower || hostLower.endsWith(`.${domainLower}`)) {
-      return `${location.protocol}//${slug}.${appDomain}${port}/`;
+    // Two-domain support: signing up (or searching for a company) from ANY accepted host builds
+    // `<slug>.<primary>`, never a guess from the host's own labels (which turned `lodgekeep.ng` into `<slug>.ng`).
+    const { primary, all } = parseAppDomains(appDomain, additionalDomains);
+    if (primary && isAcceptedAppHost(location.hostname, all)) {
+      return `${location.protocol}//${slug}.${primary}${port}/`;
     }
   }
 
