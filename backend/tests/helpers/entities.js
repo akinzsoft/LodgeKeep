@@ -4049,6 +4049,115 @@ const ENTITIES = [
   },
 
   {
+    table: 'vouchers',
+    uniqueKeys: [['tenant_id', 'property_id', 'code']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      code: `NEWVOUCHER${t.slug}`.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24),
+      type: 'fixed',
+      value: '5.00',
+      check_percent_cap: '25.00',
+      valid_from: '2026-01-01',
+      valid_to: '2030-12-31',
+      created_by_user_id: t.users[0].id,
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      code: `FIXTUREA${t.slug}`.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24),
+      type: 'fixed',
+      value: '5.00',
+      check_percent_cap: '25.00',
+      valid_from: '2026-01-01',
+      valid_to: '2030-12-31',
+      created_by_user_id: t.users[0].id,
+    }),
+    crossTenant: [
+      {
+        name: "is created by another tenant's user",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          code: `CROSS${own.slug}`.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24),
+          type: 'fixed',
+          value: '5.00',
+          check_percent_cap: '25.00',
+          valid_from: '2026-01-01',
+          valid_to: '2030-12-31',
+          created_by_user_id: other.users[0].id,
+        }),
+      },
+    ],
+  },
+
+  {
+    table: 'voucher_outlets',
+    uniqueKeys: [['voucher_id', 'outlet_id']],
+    newRow: (ctx, t) => ({ tenant_id: t.id, property_id: t.properties[0].id, voucher_id: t.vouchers[1].id, outlet_id: t.posOutlets[0].id }),
+    duplicateRow: (ctx, t) => ({ tenant_id: t.id, property_id: t.properties[0].id, voucher_id: t.vouchers[0].id, outlet_id: t.posOutlets[0].id }),
+    crossTenant: [
+      {
+        name: "scopes another tenant's voucher to an outlet",
+        row: (ctx, own, other) => ({ tenant_id: own.id, property_id: own.properties[0].id, voucher_id: other.vouchers[1].id, outlet_id: own.posOutlets[0].id }),
+      },
+      {
+        name: "scopes a voucher to another tenant's outlet",
+        row: (ctx, own, other) => ({ tenant_id: own.id, property_id: own.properties[0].id, voucher_id: own.vouchers[1].id, outlet_id: other.posOutlets[0].id }),
+      },
+    ],
+  },
+
+  {
+    table: 'voucher_redemptions',
+    uniqueKeys: [['voucher_id', 'discount_id']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      voucher_id: t.vouchers[1].id,
+      discount_id: t.discounts[0].id,
+      outlet_id: t.posOutlets[0].id,
+      code: 'NEWREDEMPTION',
+      attached_by_user_id: t.users[0].id,
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      property_id: t.properties[0].id,
+      voucher_id: t.vouchers[0].id,
+      discount_id: t.discounts[0].id,
+      outlet_id: t.posOutlets[0].id,
+      code: 'CLASH',
+      attached_by_user_id: t.users[0].id,
+    }),
+    crossTenant: [
+      {
+        name: "redeems another tenant's voucher",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          voucher_id: other.vouchers[1].id,
+          discount_id: own.discounts[0].id,
+          outlet_id: own.posOutlets[0].id,
+          code: 'CROSS',
+          attached_by_user_id: own.users[0].id,
+        }),
+      },
+      {
+        name: "attaches a voucher to another tenant's discount",
+        row: (ctx, own, other) => ({
+          tenant_id: own.id,
+          property_id: own.properties[0].id,
+          voucher_id: own.vouchers[1].id,
+          discount_id: other.discounts[0].id,
+          outlet_id: own.posOutlets[0].id,
+          code: 'CROSS2',
+          attached_by_user_id: own.users[0].id,
+        }),
+      },
+    ],
+  },
+
+  {
     table: 'settlement_discounts',
     uniqueKeys: [['settlement_id', 'discount_id']],
     newRow: (ctx, t) => ({

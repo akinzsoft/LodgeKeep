@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
 const discountMocks = vi.hoisted(() => ({
   listReasons: vi.fn(),
   createCartDiscount: vi.fn(),
+  applyCartVoucher: vi.fn(),
   approveDiscount: vi.fn(),
   removeDiscount: vi.fn(),
 }));
@@ -949,6 +950,46 @@ describe('<SupermarketScreen>', () => {
       expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ discountIds: ['41'] }));
       const receipt = await screen.findByTestId('supermarket-receipt');
       expect(within(receipt).getByText(/Discount · Promotion/)).toBeInTheDocument();
+    });
+
+    describe('vouchers', () => {
+      const VOUCHER = { id: '42', scope: 'order', kind: 'voucher', type: 'percent', value: '10.00', status: 'active', reason_name: 'Voucher', voucher_code: 'ABCD-EFGH-JKLM', amount: '10.75', approvalRequired: false, approvalAction: null, menu_item_id: null };
+
+      it('offers the voucher button only to someone who may give discounts', async () => {
+        mocks.lookupBarcode.mockResolvedValue(RICE);
+        render(<SupermarketScreen activeProperty={PROPERTY} permissions={SELLER} />);
+        await userEvent.type(await screen.findByLabelText(/scan a barcode/i), '6001{Enter}');
+        await screen.findByRole('button', { name: 'Complete sale' });
+        expect(screen.queryByRole('button', { name: 'Voucher' })).not.toBeInTheDocument();
+      });
+
+      it('sends the code with the cart (never an amount), lists the voucher and sends its id with the sale', async () => {
+        discountMocks.applyCartVoucher.mockResolvedValue(VOUCHER);
+        mocks.createSale.mockResolvedValue({ ...SALE, gross: '107.50', discount_total: '10.75', discounts: [{ kind: 'voucher', reason: 'Voucher', amount: '10.75', voucher_code: 'ABCD-EFGH-JKLM' }] });
+        await cartWithRice();
+        await userEvent.click(await screen.findByRole('button', { name: 'Voucher' }));
+        const dialog = await screen.findByRole('dialog');
+        await userEvent.type(within(dialog).getByLabelText('Voucher code'), 'abcd efgh jklm');
+        await userEvent.click(within(dialog).getByRole('button', { name: 'Use voucher' }));
+
+        expect(discountMocks.applyCartVoucher).toHaveBeenCalledWith({ outletId: '5', items: [{ menu_item_id: '11', quantity: 1 }], code: 'abcd efgh jklm' });
+        const list = await screen.findByRole('list', { name: 'Discounts on this sale' });
+        expect(within(list).getByText(/Voucher ABCD-EFGH-JKLM/)).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', { name: 'Complete sale' }));
+        expect(mocks.createSale).toHaveBeenCalledWith(expect.objectContaining({ discountIds: ['42'] }));
+        const receipt = await screen.findByTestId('supermarket-receipt');
+        expect(within(receipt).getByText('Voucher ABCD-EFGH-JKLM')).toBeInTheDocument();
+      });
+
+      it('shows the one generic message for a code that cannot be used', async () => {
+        discountMocks.applyCartVoucher.mockRejectedValue(new ApiError({ code: 'BUSINESS_RULE_VOUCHER_INVALID', message: 'That voucher code cannot be used here.' }));
+        await cartWithRice();
+        await userEvent.click(await screen.findByRole('button', { name: 'Voucher' }));
+        const dialog = await screen.findByRole('dialog');
+        await userEvent.type(within(dialog).getByLabelText('Voucher code'), 'NOSUCHCODE12');
+        await userEvent.click(within(dialog).getByRole('button', { name: 'Use voucher' }));
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent('That voucher code cannot be used here.');
+      });
     });
 
     it('never sends an amount the client worked out, only the type, the value and the reason', async () => {

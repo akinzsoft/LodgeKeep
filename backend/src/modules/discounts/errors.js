@@ -69,7 +69,77 @@ class DiscountLimitInvalidError extends AppError {
   }
 }
 
+/**
+ * ONE answer for every way a typed code can fail at the till (no such code, expired, not yet valid, wrong outlet,
+ * disabled, used up, not text), so a code cannot be probed for what it is.
+ */
+class VoucherInvalidError extends AppError {
+  constructor() {
+    super('BUSINESS_RULE_VOUCHER_INVALID', 'That voucher code cannot be used here.', 422);
+  }
+}
+
+const NO_LONGER_REASON_TEXT = {
+  disabled: 'was disabled',
+  expired: 'has expired',
+  not_yet: 'is not valid yet',
+  used_up: 'has been used up',
+  wrong_outlet: 'does not work at this outlet',
+  missing: 'no longer exists',
+};
+
+/** The voucher was fine when put on the check but is not now. The check is left as it was and the voucher removable. */
+class VoucherNoLongerAvailableError extends AppError {
+  constructor(reason, discountId = null) {
+    const why = NO_LONGER_REASON_TEXT[reason] ?? 'can no longer be used';
+    super(
+      'BUSINESS_RULE_VOUCHER_NO_LONGER_AVAILABLE',
+      `The voucher on this check ${why}. Nothing was charged. Remove the voucher from the check and ring it up again at the full price.`,
+      422,
+      { reason, discountId: discountId === null ? null : String(discountId) }
+    );
+  }
+}
+
+/** A fixed voucher is worth more than this check can take off (the cap its creator was allowed). Add items, or use another. */
+class VoucherCheckTooSmallError extends AppError {
+  constructor(limitPercent) {
+    super('BUSINESS_RULE_VOUCHER_CHECK_TOO_SMALL', `This voucher is worth more than this check can take off (at most ${limitPercent}% of a check). Add items to the check, or use another voucher.`, 422, { limitPercent });
+  }
+}
+
+class VoucherNotOnCardError extends AppError {
+  constructor() {
+    super('BUSINESS_RULE_VOUCHER_NOT_ON_CARD', 'A voucher cannot be used with a card or QR payment yet. Remove the voucher, or pay by cash, a card terminal or a room charge.', 422);
+  }
+}
+
+class VoucherAboveLimitError extends AppError {
+  constructor(limit) {
+    super('BUSINESS_RULE_VOUCHER_ABOVE_LIMIT', `A voucher can take off at most ${limit}% (your discount limit). A higher voucher needs comp authority.`, 422, { limit });
+  }
+}
+
+class VoucherNeedsCompError extends AppError {
+  constructor() {
+    super('FORBIDDEN_VOUCHER_NEEDS_COMP', 'A voucher above your discount limit, or for the whole bill, needs comp authority (discount.comp).', 403);
+  }
+}
+
+class VoucherNotFoundError extends AppError {
+  constructor() {
+    super('VALIDATION_VOUCHER_NOT_FOUND', 'That voucher does not exist.', 404);
+  }
+}
+
 module.exports = {
+  VoucherInvalidError,
+  VoucherNoLongerAvailableError,
+  VoucherCheckTooSmallError,
+  VoucherNotOnCardError,
+  VoucherAboveLimitError,
+  VoucherNeedsCompError,
+  VoucherNotFoundError,
   DiscountNotFoundError,
   DiscountReasonInvalidError,
   DiscountStateError,

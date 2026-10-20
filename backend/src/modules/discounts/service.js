@@ -24,7 +24,9 @@ const { hasPermission } = require('../../auth/rbac');
 const posErrors = require('../pos/errors');
 const { scopedDb } = require('../../db');
 const store = require('./store');
+const voucherStore = require('./voucher-store');
 const errors = require('./errors');
+const { formatVoucherCode } = require('../../shared/voucher-code');
 
 const KINDS = ['discount', 'comp'];
 const REASON_KINDS = ['discount', 'comp', 'both'];
@@ -50,7 +52,8 @@ async function ensureDefaultReasons(db) {
 async function listReasons({ context, includeArchived = false }) {
   const db = scopedDb().for(context);
   await ensureDefaultReasons(db);
-  const query = db.table('discount_reasons').orderBy('name');
+  // The property's own "Voucher" reason (kind `voucher`) is not something a cashier picks.
+  const query = db.table('discount_reasons').whereNot({ kind: 'voucher' }).orderBy('name');
   return includeArchived ? query : query.where({ status: 'active' });
 }
 
@@ -326,13 +329,17 @@ async function removeDiscount({ trx, discountId, userId, reason, assertTab }) {
     .whereIn('status', ['pending_approval', 'active'])
     .update({ status: 'removed', removed_by_user_id: userId, removed_at: new Date() });
   if (changed !== 1) throw new errors.DiscountStateError(row.id, 'decided');
+  // A voucher taken off before the check settled frees its attachment (no use was ever counted).
+  if (row.kind === 'voucher') await voucherStore.releaseForDiscount(trx, row.id);
   return { before: row, after: await trx.table('discounts').where({ id: discountId }).first(), reason, ownerOverride };
 }
 
 /** A discount in the shape the screens read, with its reason's name. */
 async function describe(db, rows, amounts = new Map()) {
   const names = await store.reasonNamesFor(db, rows);
+  const codes = await voucherStore.codesForDiscounts(db, rows.filter((row) => row.kind === 'voucher').map((row) => row.id));
   return rows.map((row) => ({
+    ...(codes.has(String(row.id)) ? { voucher_code: formatVoucherCode(codes.get(String(row.id))) } : {}),
     id: String(row.id),
     scope: row.scope,
     kind: row.kind,
@@ -399,6 +406,8 @@ function cartPricingInput(cartLines, grantRows) {
 async function priceCartWithGrants({ trx, cartLines, grantIds, userId, outletId }) {
   const grantRows = await loadCartGrants({ trx, grantIds, userId, outletId });
   if (grantRows.length === 0) return null;
+  // A voucher would need a hold at checkout start and a release on cancel/expiry: not offered on the online (Paystack) path.
+  if (grantRows.some((row) => row.kind === 'voucher')) throw new errors.VoucherNotOnCardError();
   const { items, discounts } = cartPricingInput(cartLines, grantRows);
   return applyDiscounts({ items, discounts });
 }

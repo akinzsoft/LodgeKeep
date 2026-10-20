@@ -122,6 +122,9 @@ async function seedTwoTenants(trx) {
     discountLimits: [],
     discounts: [],
     settlementDiscounts: [],
+    vouchers: [],
+    voucherOutlets: [],
+    voucherRedemptions: [],
     mfaDevices: [],
     invitations: [],
     auditLog: [],
@@ -2061,6 +2064,45 @@ async function seedTwoTenants(trx) {
         reason_name: 'Fixture reason',
         applied_by_user_id: t.users[0].id,
         currency: 'NGN',
+      }),
+      property_id: property.id,
+    });
+
+    // Vouchers: one that works at the fixture bar and has been redeemed on the fixture settlement, and a second, unused
+    // one, so the isolation suite can add a NEW row against each.
+    for (const [index, label] of ['A', 'B'].entries()) {
+      t.vouchers.push({
+        id: await insertReturningId(trx, 'vouchers', {
+          tenant_id: t.id,
+          property_id: property.id,
+          code: `FIXTURE${label}${t.slug}`.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24),
+          type: 'percent',
+          value: '10.00',
+          check_percent_cap: '25.00',
+          valid_from: '2026-01-01',
+          valid_to: '2030-12-31',
+          used_count: index === 0 ? 1 : 0,
+          created_by_user_id: t.users[0].id,
+        }),
+        property_id: property.id,
+      });
+    }
+    t.voucherOutlets.push({
+      id: await insertReturningId(trx, 'voucher_outlets', { tenant_id: t.id, property_id: property.id, voucher_id: t.vouchers[0].id, outlet_id: t.posOutlets[0].id }),
+      property_id: property.id,
+    });
+    t.voucherRedemptions.push({
+      id: await insertReturningId(trx, 'voucher_redemptions', {
+        tenant_id: t.id,
+        property_id: property.id,
+        voucher_id: t.vouchers[0].id,
+        discount_id: t.discounts[0].id,
+        outlet_id: t.posOutlets[0].id,
+        settlement_id: t.posOrderSettlements[0].id,
+        code: 'FIXTURE',
+        amount: '2.22',
+        status: 'redeemed',
+        attached_by_user_id: t.users[0].id,
       }),
       property_id: property.id,
     });

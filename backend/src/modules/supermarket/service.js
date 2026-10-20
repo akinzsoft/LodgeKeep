@@ -27,6 +27,8 @@ const { allocateLineNetAndTax } = require('../../shared/line-allocation');
 const { outletScopeForUser, scopeCovers } = require('../../shared/outlet-assignments');
 const posService = require('../pos/service');
 const discounts = require('../discounts/service');
+const voucherStore = require('../discounts/voucher-store');
+const { formatVoucherCode } = require('../../shared/voucher-code');
 const stockService = require('../stock/service');
 const errors = require('./errors');
 
@@ -353,10 +355,12 @@ async function getSaleWith(db, saleId) {
   const payment = settlement?.payment_id ? await db.table('payments').where({ id: settlement.payment_id }).first('id', 'provider_channel', 'status') : null;
   // The discounts given on this sale, only when there were any (a receipt without one keeps its old shape).
   const given = await db.table('settlement_discounts').where({ settlement_id: sale.settlement_id }).orderBy('id', 'asc');
+  const voucherCodes = await voucherStore.codesForDiscounts(db, given.filter((row) => row.kind === 'voucher').map((row) => row.discount_id));
   const discountView = given.length
     ? {
         gross: sumMoney(lines.map((line) => line.line_total)),
-        discounts: given.map((row) => ({ kind: row.kind, reason: row.reason_name, amount: String(row.amount) })),
+        // A voucher's receipt line names its code; every other discount keeps the shape it always had.
+        discounts: given.map((row) => ({ kind: row.kind, reason: row.reason_name, amount: String(row.amount), ...(voucherCodes.has(String(row.discount_id)) ? { voucher_code: formatVoucherCode(voucherCodes.get(String(row.discount_id))) } : {}) })),
         discount_total: sumMoney(given.map((row) => row.amount)),
       }
     : {};

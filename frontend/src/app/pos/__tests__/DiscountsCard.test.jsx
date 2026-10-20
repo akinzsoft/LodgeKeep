@@ -3,11 +3,11 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DiscountsCard, isValidLimit } from '../DiscountsCard.jsx';
 
-const mocks = vi.hoisted(() => ({ listReasons: vi.fn(), listLimits: vi.fn(), createReason: vi.fn(), updateReason: vi.fn(), setLimit: vi.fn() }));
+const mocks = vi.hoisted(() => ({ listReasons: vi.fn(), listLimits: vi.fn(), createReason: vi.fn(), updateReason: vi.fn(), setLimit: vi.fn(), listVouchers: vi.fn(), listOutlets: vi.fn() }));
 
 vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
-  return { ...actual, discountsApi: mocks };
+  return { ...actual, discountsApi: mocks, posApi: { listOutlets: mocks.listOutlets } };
 });
 
 const REASONS = [
@@ -33,6 +33,20 @@ describe('<DiscountsCard>', () => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
     mocks.listReasons.mockResolvedValue(REASONS);
     mocks.listLimits.mockResolvedValue(LIMITS);
+    mocks.listVouchers.mockResolvedValue([]);
+    mocks.listOutlets.mockResolvedValue([]);
+  });
+
+  it('shows the vouchers section to someone who manages discounts, and not to anyone else', async () => {
+    const { unmount } = render(<DiscountsCard />);
+    expect(await screen.findByRole('region', { name: 'Vouchers' })).toBeInTheDocument();
+    expect(mocks.listVouchers).toHaveBeenCalled();
+    unmount();
+    mocks.listVouchers.mockClear();
+    render(<DiscountsCard canManage={false} />);
+    await screen.findByText('Promotion');
+    expect(screen.queryByRole('region', { name: 'Vouchers' })).not.toBeInTheDocument();
+    expect(mocks.listVouchers).not.toHaveBeenCalled();
   });
 
   it("lists the reasons and each role's limit", async () => {

@@ -17,6 +17,7 @@ import { StockRequestsTab } from '../pos/StockRequestsTab.jsx';
 import { StockWastageTab } from '../pos/StockWastageTab.jsx';
 import { OnlineCardDialog } from './OnlineCardDialog.jsx';
 import { DiscountDialog } from '../discounts/DiscountDialog.jsx';
+import { VoucherDialog } from '../discounts/VoucherDialog.jsx';
 import { approvalConsequence } from '../discounts/discountText.js';
 import { DiscountList } from '../discounts/DiscountList.jsx';
 import { OnlineReviewCard } from './OnlineReviewCard.jsx';
@@ -82,6 +83,7 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
   // Discount requests priced (by the server) against a particular cart; one made for a different cart no longer counts.
   const [cartDiscounts, setCartDiscounts] = useState([]);
   const [discountDialogOpen, setDiscountDialogOpen] = useState(false);
+  const [voucherDialogOpen, setVoucherDialogOpen] = useState(false);
   const [approvingDiscount, setApprovingDiscount] = useState(null);
   const [removingDiscount, setRemovingDiscount] = useState(null);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -806,6 +808,11 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
                     Discount or comp
                   </button>
                 )}
+                {canDiscount && (
+                  <button type="button" className={styles.discountButton} onClick={() => setVoucherDialogOpen(true)} disabled={isOffline || submitting}>
+                    Voucher
+                  </button>
+                )}
                 {staleDiscounts && currentDiscounts.length === 0 && <p className={styles.taxNote}>The cart changed, so its discounts were cleared. Ask for them again.</p>}
                 <DiscountList
                   discounts={currentDiscounts}
@@ -1067,6 +1074,18 @@ export function SupermarketScreen({ activeProperty, isOffline = false, permissio
           }}
           onPending={rememberDiscount}
           onCancel={() => setDiscountDialogOpen(false)}
+        />
+      )}
+
+      {voucherDialogOpen && (
+        <VoucherDialog
+          isOffline={isOffline}
+          apply={(code) => discountsApi.applyCartVoucher({ outletId, items: cart.map((line) => ({ menu_item_id: line.menuItem.id, quantity: line.quantity })), code })}
+          onDone={(result) => {
+            rememberDiscount(result);
+            setVoucherDialogOpen(false);
+          }}
+          onCancel={() => setVoucherDialogOpen(false)}
         />
       )}
 

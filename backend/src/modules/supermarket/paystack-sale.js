@@ -50,6 +50,7 @@ const QRCode = require('qrcode');
 const { scopedDb } = require('../../db');
 const { ValidationError, AppError } = require('../../shared/errors');
 const discounts = require('../discounts/service');
+const voucherStore = require('../discounts/voucher-store');
 const { sumMoney, compareMoney } = require('../../shared/money');
 const { computeItemLineTotal } = require('../../shared/pos-pricing');
 const { generateUlid } = require('../../shared/ulid');
@@ -514,6 +515,9 @@ async function voidOnlineSale({ context, saleId, reason, userId, idempotencyKey,
       const lockedSale = await trx.table('supermarket_sales').where({ id: saleId }).forUpdate().first();
       if (lockedSale.voided_at) throw new errors.SupermarketSaleAlreadyVoidedError();
       await stockService.reverseStockForSettlement({ trx, settlementId: settlement.id, userId });
+      // No voucher can be on an online sale (not offered with Paystack), but a settlement void always asks, so a future
+      // change that allows one cannot forget to give its use back.
+      await voucherStore.restoreForSettlement(trx, { settlementId: settlement.id, userId });
       await trx.table('pos_order_settlements').where({ id: settlement.id }).update({ voided_at: new Date(), void_reason: cleanReason, voided_by_user_id: userId });
       await trx.table('supermarket_sales').where({ id: saleId }).update({ voided_at: new Date() });
     },

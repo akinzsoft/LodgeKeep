@@ -456,6 +456,11 @@ const TABLE_SCOPES = Object.freeze({
   discount_limits: { scope: SCOPES.PROPERTY },
   discounts: { scope: SCOPES.PROPERTY },
   settlement_discounts: { scope: SCOPES.PROPERTY },
+
+  // Vouchers — 20261205090000_create_voucher_tables.
+  vouchers: { scope: SCOPES.PROPERTY },
+  voucher_outlets: { scope: SCOPES.PROPERTY },
+  voucher_redemptions: { scope: SCOPES.PROPERTY },
 });
 
 /** Throws for an undeclared table — there is no unscoped query path. */

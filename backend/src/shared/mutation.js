@@ -34,9 +34,10 @@ function requireIdempotencyKey(req) {
  * @param {string|number} [params.entityId]  Falls back to `result.body.data.id` when omitted (a create, where the id isn't known until the handler runs).
  * @param {string} params.action  `audit_log.action`.
  * @param {(trx: object) => Promise<{status: number, body: object}>} params.handler
+ * @param {string} [params.isolationLevel]  e.g. 'read committed' for an operation whose locking reads must not take gap locks (discount and voucher requests on different checks at once).
  * @param {() => {reason?: string, afterState?: object}} [params.auditExtras]  Called only for a non-replayed call, after the handler ran: a reason and extra after-state fields the handler only learns inside the transaction (e.g. a manager's tab-owner override).
  */
-async function runIdempotentMutation(req, res, { operationType, entityType, entityId, action, handler, auditExtras }) {
+async function runIdempotentMutation(req, res, { operationType, entityType, entityId, action, handler, auditExtras, isolationLevel }) {
   const key = requireIdempotencyKey(req);
   const result = await withIdempotency({
     context: req.context,
@@ -44,6 +45,7 @@ async function runIdempotentMutation(req, res, { operationType, entityType, enti
     key,
     payload: req.body,
     handler,
+    isolationLevel,
   });
   if (!result.replayed) {
     const extras = auditExtras ? auditExtras() : {};
