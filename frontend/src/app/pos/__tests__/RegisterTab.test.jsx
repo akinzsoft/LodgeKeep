@@ -1126,6 +1126,23 @@ describe('<RegisterTab>', () => {
     expect(within(ticket).getByText('Voided')).toBeInTheDocument();
   });
 
+  it('shows both lines of a two-item ticket with name, quantity, unit price and line amount', async () => {
+    const SPRITE = { id: '5', name: 'SPRITE', price: '1000.00', is_available: true, category: 'Drinks' };
+    const SOUP = { id: '6', name: 'EGUISI SOUP', price: '2500.00', is_available: true, category: 'Drinks' };
+    mocks.listMenuItems.mockResolvedValue([SPRITE, SOUP]);
+    await openNewTab([
+      orderItem({ id: '1', menu_item_id: '6', unit_price: '2500.00' }),
+      orderItem({ id: '2', menu_item_id: '5', unit_price: '1000.00' }),
+    ]);
+    const ticket = await screen.findByRole('region', { name: 'Order ticket' });
+    const soup = (await within(ticket).findByText('EGUISI SOUP')).closest('[class*="_ticketLine_"]');
+    const sprite = within(ticket).getByText('SPRITE').closest('[class*="_ticketLine_"]');
+    expect(soup).toHaveTextContent(/2,500\.00\s*× 1\s*=\s*.?2,500\.00/);
+    expect(sprite).toHaveTextContent(/1,000\.00\s*× 1\s*=\s*.?1,000\.00/);
+    expect(within(soup).getByLabelText('Remove one EGUISI SOUP')).toBeInTheDocument();
+    expect(within(ticket).getByText('2 items')).toBeInTheDocument();
+  });
+
   it('shows the server\'s service charge and total, not its own arithmetic', async () => {
     mocks.getSettlementPreview.mockResolvedValue({ orderId: '9', currency: 'NGN', groups: [{ splitGroup: null, subtotal: '20.00', taxAmount: '1.50', serviceCharge: '9.99', total: '31.49' }] });
     await openNewTab([orderItem({ id: '1' })]);

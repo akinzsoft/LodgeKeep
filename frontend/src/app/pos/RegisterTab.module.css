@@ -397,7 +397,14 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  flex: 1;
+
+  /* Flexible AND scrollable, but never squeezed out. A scroll container's automatic minimum
+     height is 0, so in the ticket's column the lines list was the first thing flex shrank when
+     the totals, payment buttons and checkout button took the room: on a 1450x740 screen it
+     collapsed to a 35px sliver and no line was visible. The floor keeps about three lines on
+     screen; beyond it the ticket itself scrolls, with the checkout form pinned below. */
+  flex: 1 1 auto;
+  min-height: 10.5rem;
   overflow-y: auto;
 }
 
@@ -1109,4 +1116,36 @@
   font-size: var(--text-label-size);
   font-weight: 600;
   color: var(--pos-register-text-primary);
+}
+
+/* Short desktop screens (a 740px-high POS display leaves the panel about 580px): give the lines
+   the room by tightening everything under them. Targets stay at the 44px minimum; only gaps,
+   padding and the stacking of the tender buttons shrink. */
+@media (width >= 900px) and (height <= 860px) {
+  .ticket {
+    gap: var(--space-2);
+    padding: var(--space-3);
+  }
+
+  .checkoutForm {
+    gap: var(--space-1);
+    padding-top: var(--space-2);
+  }
+
+  .paymentMethodRow {
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-1);
+  }
+
+  .paymentButton {
+    padding: var(--space-1);
+  }
+
+  .settlementGrandTotal {
+    padding-top: var(--space-1);
+  }
+
+  .ticketLine {
+    padding: var(--space-1) 0;
+  }
 }
