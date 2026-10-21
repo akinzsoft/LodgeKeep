@@ -101,6 +101,9 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
+      # Includes the optional mail variables (SMTP_HOST, SMTP_PORT, SMTP_SECURE,
+      # SMTP_USER, SMTP_PASS, MAIL_FROM_ADDRESS, PLATFORM_REPLY_TO): env_file
+      # passes every key through, so none need listing below.
       - .env.production
     environment:
       # Hardcoded to the real Docker-network values on purpose — these must

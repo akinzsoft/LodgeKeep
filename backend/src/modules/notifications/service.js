@@ -19,6 +19,7 @@ const crypto = require('crypto');
 const { scopedDb } = require('../../db');
 const { AppError } = require('../../shared/errors');
 const { workerContext } = require('../tenancy');
+const { audienceForEvent } = require('../../shared/email-audience');
 const { resolveEmailAdapter, isUndeliverable, undeliverableReason, safeErrorText, NoMailboxConfiguredError, EmailSendFailedError } = require('./email-adapter');
 const { reservePlatformSend, classifyEvent, EmailLimitError } = require('../../shared/email-quota');
 const { escapeHtml, heading, paragraph, note, details, button, codeBlock, loadEmailBranding, renderEmailShell, preheaderFrom } = require('./email-layout');
@@ -481,7 +482,7 @@ async function dispatchOne({ tenantDb, propertyDb, event }) {
         throw limitError;
       }
     }
-    const { providerRef, status } = await adapter.send({ to: recipientEmail, subject, html, attachments });
+    const { providerRef, status } = await adapter.send({ to: recipientEmail, subject, html, attachments, audience: audienceForEvent(event.event_type) });
 
     await propertyDb.table('notification_log').insert({
         outbox_event_id: event.id,
@@ -669,7 +670,7 @@ async function resendNotification({ context, id }) {
   let providerRef;
   let status;
   try {
-    ({ providerRef, status } = await adapter.send({ to: failed.recipient_email, subject, html, attachments }));
+    ({ providerRef, status } = await adapter.send({ to: failed.recipient_email, subject, html, attachments, audience: audienceForEvent(eventTypeForTemplate(failed.template_key)) }));
   } catch (error) {
     throw new EmailSendFailedError(safeErrorText(adapter, error));
   }

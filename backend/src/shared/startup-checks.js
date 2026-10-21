@@ -100,4 +100,22 @@ function warnAboutPlatformEmail(env = process.env, log = console.error) {
   return message;
 }
 
-module.exports = { validateStartupConfig, warnAboutPlatformEmail };
+/**
+ * One boot line saying where platform mail goes: the provider and SMTP host/port only,
+ * never a user name, password or key. Returns the line (also logged), or null for a
+ * non-SMTP provider.
+ */
+function logPlatformEmailTransport(env = process.env, log = console.log) {
+  const { platformSmtpEnv } = require('../modules/notifications/email-adapter');
+  if (env.EMAIL_PROVIDER !== 'smtp') {
+    const line = `[email] platform mail transport: ${env.EMAIL_PROVIDER || 'console'} (nothing is sent over SMTP)`;
+    log(line);
+    return null;
+  }
+  const cfg = platformSmtpEnv(env);
+  const line = `[email] platform mail transport: smtp host=${cfg.host || '(not set)'} port=${cfg.port} security=${cfg.security}`;
+  log(line);
+  return line;
+}
+
+module.exports = { validateStartupConfig, warnAboutPlatformEmail, logPlatformEmailTransport };

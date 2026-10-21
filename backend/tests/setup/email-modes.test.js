@@ -230,7 +230,7 @@ describe('Email modes: platform and custom SMTP', () => {
       expect(saved.body.data.smtp_from).toBeNull();
       // Even a custom From left in the row (e.g. from an earlier custom setup) is never used in platform mode.
       await t.trx('email_settings').where({ property_id: ctx.a.properties[1].id }).update({ smtp_from: 'ceo@bank.example', smtp_from_name: 'The Bank' });
-      await queue(ctx.a, 'staff.invited', 'new@staff.example', { invitationUrl: 'https://x.example/i', propertyName: 'Grand Palm Hotel', role: 'front_desk' });
+      await queue(ctx.a, 'reservation.confirmed', 'new@staff.example', { propertyName: 'Grand Palm Hotel' });
       await dispatch();
       expect(sent).toHaveLength(1);
       expect(sent[0]).toMatch(/^From: "?Grand Palm Hotel"? <noreply@platform\.example>$/m);
@@ -242,7 +242,7 @@ describe('Email modes: platform and custom SMTP', () => {
       await t.trx('user_property_access').where({ user_id: ctx.a.users[1].id, property_id: ctx.a.properties[1].id }).del();
       await t.trx('user_property_access').insert({ tenant_id: ctx.a.id, property_id: ctx.a.properties[1].id, user_id: ctx.a.users[1].id, role: 'super_admin' });
       await put({ mode: 'platform', reply_to: null });
-      await queue(ctx.a, 'staff.invited', 'n@staff.example', { invitationUrl: 'https://x.example/i' });
+      await queue(ctx.a, 'reservation.confirmed', 'n@staff.example');
       await dispatch();
       expect(sent[0]).toContain(`Reply-To: ${ctx.a.users[1].email}`);
     });
@@ -250,7 +250,7 @@ describe('Email modes: platform and custom SMTP', () => {
     it('a property name containing a newline cannot add headers', async () => {
       await t.trx('properties').where({ id: ctx.a.properties[1].id }).update({ name: 'Evil Inn\r\nBcc: victim@example.com\r\nX-Injected: yes' });
       await put({ mode: 'platform', reply_to: 'front@evil.example' });
-      await queue(ctx.a, 'staff.invited', 'n@staff.example', { invitationUrl: 'https://x.example/i' });
+      await queue(ctx.a, 'reservation.confirmed', 'n@staff.example');
       await dispatch();
       const headers = sent[0].split('\n\n')[0];
       // Every header line is a known header or a folded continuation; none was injected.
