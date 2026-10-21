@@ -22,25 +22,12 @@
  * inject markup.
  */
 
-const fs = require('fs');
 const imageStore = require('../../shared/image-store');
 
 const LOGO_CID = 'property-logo';
 
 /** The email header's logo area: wide logos fill the width, tall or square ones the height. */
 const LOGO_BOX = { width: 240, height: 72 };
-
-/** The first bytes of a file — enough for any image header readImageSize needs. */
-function readHead(filePath) {
-  const fd = fs.openSync(filePath, 'r');
-  try {
-    const buffer = Buffer.alloc(64 * 1024);
-    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
-    return buffer.subarray(0, bytesRead);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
 
 const COLORS = {
   page: '#F4F1EA',
@@ -125,19 +112,34 @@ function codeBlock(code) {
 async function loadEmailBranding({ db, propertyId }) {
   if (!db || !propertyId) return { name: null, address: null, logoAttachment: null };
   const property = await db.table('properties').where({ id: propertyId }).first('name', 'address', 'logo_url');
-  const fileName = imageStore.fileNameFromUrl('property-logos', property?.logo_url);
-  const filePath = imageStore.imageFilePath('property-logos', fileName);
-  const extension = fileName ? fileName.split('.').pop() : null;
-  // Exact display size inside the header's logo box, from the file's own header bytes.
-  const logoSize = filePath ? imageStore.fitInside(imageStore.readImageSize(readHead(filePath)), LOGO_BOX.width, LOGO_BOX.height) : null;
+  const logo = readLogo(property?.logo_url);
   return {
     name: property?.name ?? null,
     address: property?.address ?? null,
-    logoSize,
-    logoAttachment: filePath
-      ? { filename: `logo.${extension}`, path: filePath, cid: LOGO_CID, contentType: imageStore.CONTENT_TYPES[extension], contentDisposition: 'inline' }
-      : null,
+    logoSize: logo?.size ?? null,
+    logoAttachment: logo?.attachment ?? null,
   };
+}
+
+/**
+ * The property's logo as an IN-MEMORY inline attachment (`content` + `cid`), or null. The mail transports run with nodemailer's
+ * `disableFileAccess` on (a file `path` on an attachment is rejected: "File access rejected"), and that must stay on, so the bytes
+ * are read here through the image store (which only opens files it generated, checks size and type) and handed over as a buffer.
+ * A missing, unreadable or invalid logo is simply no logo: mail without one is fine, mail that fails because of one is not.
+ */
+function readLogo(logoUrl) {
+  try {
+    const fileName = imageStore.fileNameFromUrl('property-logos', logoUrl);
+    const image = fileName ? imageStore.readImage('property-logos', fileName) : null;
+    if (!image) return null;
+    return {
+      size: imageStore.fitInside(imageStore.readImageSize(image.buffer), LOGO_BOX.width, LOGO_BOX.height),
+      attachment: { filename: `logo.${image.type}`, content: image.buffer, cid: LOGO_CID, contentType: imageStore.CONTENT_TYPES[image.type], contentDisposition: 'inline' },
+    };
+  } catch (error) {
+    console.error('[email] logo skipped:', error?.message);
+    return null;
+  }
 }
 
 /**
