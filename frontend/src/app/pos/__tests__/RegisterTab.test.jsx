@@ -1034,68 +1034,119 @@ describe('<RegisterTab>', () => {
     expect(within(ticket).getAllByText('House Cocktail')).toHaveLength(1);
   });
 
-  it('the "−" stepper voids only the most recently added unit through a real ConfirmDialog, requiring a reason', async () => {
+  const missingReason = () => new ApiError({ code: 'VALIDATION_MISSING_FIELD', message: 'A reason is required.' });
+
+  it('the "−" stepper removes only the most recently added unit at once, with no reason asked', async () => {
     const order = await openNewTab([orderItem({ id: '1' }), orderItem({ id: '2' })]);
-    mocks.getOrder.mockResolvedValueOnce({ order, items: [orderItem({ id: '1' })], settlements: [] });
+    mocks.voidOrderItem.mockResolvedValue({});
+    mocks.getOrder.mockResolvedValueOnce({ order, items: [orderItem({ id: '1' }), orderItem({ id: '2', voided_at: '2027-01-01T10:00:00Z' })], settlements: [] });
     const ticket = await screen.findByRole('region', { name: 'Order ticket' });
 
     await within(ticket).findByText('2');
     await userEvent.click(screen.getByRole('button', { name: 'Remove one House Cocktail' }));
 
-    expect(screen.getByText('Void item')).toBeInTheDocument();
-    const confirmButton = screen.getByRole('button', { name: 'Void' });
-    expect(confirmButton).toBeDisabled();
-
-    await userEvent.type(screen.getByLabelText('Reason'), 'Guest changed their mind');
-    await userEvent.click(confirmButton);
-
-    // The LAST-added row only (id "2"), not the whole line.
-    expect(mocks.voidOrderItem).toHaveBeenCalledExactlyOnceWith('9', '2', 'Guest changed their mind');
-    expect(await within(ticket).findByText('1')).toBeInTheDocument();
+    // The LAST-added row only (id "2"), no typed reason, no dialog: the server decides whether one is needed.
+    expect(mocks.voidOrderItem).toHaveBeenCalledExactlyOnceWith('9', '2', undefined);
+    expect(screen.queryByText('Remove item')).not.toBeInTheDocument();
+    expect(await within(ticket).findByText('Voided')).toBeInTheDocument();
   });
 
-  it('the trash icon voids the WHOLE line (every unit) in one action, distinct from the "−" stepper', async () => {
+  it('asks for a quick-pick reason when the server says one is needed, then sends it', async () => {
+    const order = await openNewTab([orderItem({ id: '1' })]);
+    mocks.voidOrderItem.mockRejectedValueOnce(missingReason()).mockResolvedValueOnce({});
+    mocks.getOrder.mockResolvedValue({ order, items: [orderItem({ id: '1' })], settlements: [] });
+    await screen.findByRole('region', { name: 'Order ticket' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Remove one House Cocktail' }));
+
+    expect(await screen.findByText('Remove item')).toBeInTheDocument();
+    const confirm = screen.getByRole('button', { name: 'Remove' });
+    expect(confirm).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Wrong item' }));
+    await userEvent.click(confirm);
+    expect(mocks.voidOrderItem).toHaveBeenLastCalledWith('9', '1', 'Wrong item');
+  });
+
+  it('"Other" needs text and is sent as "Other: <text>"', async () => {
+    const order = await openNewTab([orderItem({ id: '1' })]);
+    mocks.voidOrderItem.mockRejectedValueOnce(missingReason()).mockResolvedValueOnce({});
+    mocks.getOrder.mockResolvedValue({ order, items: [orderItem({ id: '1' })], settlements: [] });
+    await screen.findByRole('region', { name: 'Order ticket' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Remove one House Cocktail' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Other' }));
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled();
+    await userEvent.type(screen.getByLabelText('Other reason'), 'guest left');
+    await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(mocks.voidOrderItem).toHaveBeenLastCalledWith('9', '1', 'Other: guest left');
+  });
+
+  it('the trash icon removes the WHOLE line (every unit) in one action, distinct from the "−" stepper', async () => {
     const order = await openNewTab([orderItem({ id: '1' }), orderItem({ id: '2' })]);
+    mocks.voidOrderItem.mockResolvedValue({});
     mocks.getOrder.mockResolvedValueOnce({ order, items: [], settlements: [] });
     const ticket = await screen.findByRole('region', { name: 'Order ticket' });
 
     await within(ticket).findByText('2');
     await userEvent.click(screen.getByRole('button', { name: 'Void House Cocktail' }));
 
-    expect(screen.getByText('Void item')).toBeInTheDocument();
-    expect(screen.getByText(/This removes all 2 "House Cocktail"/)).toBeInTheDocument();
-
-    await userEvent.type(screen.getByLabelText('Reason'), 'Wrong table');
-    await userEvent.click(screen.getByRole('button', { name: 'Void' }));
-
     // Both rows, not just the last one.
-    expect(mocks.voidOrderItem).toHaveBeenCalledWith('9', '1', 'Wrong table');
-    expect(mocks.voidOrderItem).toHaveBeenCalledWith('9', '2', 'Wrong table');
+    expect(mocks.voidOrderItem).toHaveBeenCalledWith('9', '1', undefined);
+    expect(mocks.voidOrderItem).toHaveBeenCalledWith('9', '2', undefined);
     expect(await within(ticket).findByText('Tap a menu item to add it to this ticket.')).toBeInTheDocument();
   });
 
-  it('bug fix: a whole-line void where ONE of several rows genuinely fails still reloads the real state and surfaces the error, never leaving the ticket stale', async () => {
+  it('bug fix: a whole-line removal where ONE of several rows genuinely fails still reloads the real state and surfaces the error, never leaving the ticket stale', async () => {
     const order = await openNewTab([orderItem({ id: '1' }), orderItem({ id: '2' })]);
     // Row "1" already voided by a concurrent terminal — a real, reachable
     // partial failure, not a contrived one.
     mocks.voidOrderItem.mockImplementation((_orderId, id) =>
       id === '1' ? Promise.reject(new ApiError({ code: 'BUSINESS_RULE_ALREADY_VOIDED', message: 'Already voided.' })) : Promise.resolve({})
     );
-    // The reload after this partial failure reflects reality: row "1" was
-    // already gone, row "2" is now gone too — an empty ticket.
     mocks.getOrder.mockResolvedValueOnce({ order, items: [], settlements: [] });
     const ticket = await screen.findByRole('region', { name: 'Order ticket' });
 
     await within(ticket).findByText('2');
     await userEvent.click(screen.getByRole('button', { name: 'Void House Cocktail' }));
-    await userEvent.type(screen.getByLabelText('Reason'), 'Cleanup');
-    await userEvent.click(screen.getByRole('button', { name: 'Void' }));
 
-    // The real error surfaces...
     expect(await screen.findByText('Already voided.')).toBeInTheDocument();
-    // ...but the ticket is still reloaded to reflect true server state,
-    // never left showing the stale pre-void ×2 line.
     expect(await within(ticket).findByText('Tap a menu item to add it to this ticket.')).toBeInTheDocument();
+  });
+
+  it('shows the line amount, the item count and, struck through with a "Voided" label, a removed line that no longer counts', async () => {
+    const order = await openNewTab([
+      orderItem({ id: '1', quantity: 1 }),
+      orderItem({ id: '2', quantity: 1 }),
+      orderItem({ id: '3', menu_item_id: '4', unit_price: '40.00', voided_at: '2027-01-01T10:00:00Z' }),
+    ]);
+    expect(order.id).toBe('9');
+    const ticket = await screen.findByRole('region', { name: 'Order ticket' });
+    expect(await within(ticket).findByText('2 items')).toBeInTheDocument();
+    expect(ticket).toHaveTextContent(/20\.00\s*× 2\s*=\s*.?40\.00/);
+    expect(within(ticket).getByText('Voided')).toBeInTheDocument();
+  });
+
+  it('shows the server\'s service charge and total, not its own arithmetic', async () => {
+    mocks.getSettlementPreview.mockResolvedValue({ orderId: '9', currency: 'NGN', groups: [{ splitGroup: null, subtotal: '20.00', taxAmount: '1.50', serviceCharge: '9.99', total: '31.49' }] });
+    await openNewTab([orderItem({ id: '1' })]);
+    const ticket = await screen.findByRole('region', { name: 'Order ticket' });
+    expect(await within(ticket).findByText(/₦31\.49/)).toBeInTheDocument();
+    expect(within(ticket).getByText(/₦9\.99/)).toBeInTheDocument();
+  });
+
+  it('ignores a second tap while an add request is still in flight', async () => {
+    const order = await openNewTab();
+    let finish;
+    mocks.addItem.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    mocks.getOrder.mockResolvedValue({ order, items: [orderItem({ id: '1' })], settlements: [] });
+    const tile = screen.getByRole('button', { name: 'Add House Cocktail' });
+    await userEvent.click(tile);
+    await userEvent.click(tile);
+    expect(mocks.addItem).toHaveBeenCalledTimes(1);
+    finish({});
+    await screen.findByRole('button', { name: 'Remove one House Cocktail' });
+    await userEvent.click(tile);
+    expect(mocks.addItem).toHaveBeenCalledTimes(2);
   });
 
   it('shows a sold-out item visibly, disabled, rather than hiding it', async () => {

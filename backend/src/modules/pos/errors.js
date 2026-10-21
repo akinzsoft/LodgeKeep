@@ -21,6 +21,13 @@ class OrderItemAlreadyVoidedError extends AppError {
   }
 }
 
+/** A card/NQR payment was captured for this check: changing its lines now would leave money taken for a different bill. */
+class OrderPaymentInProgressError extends AppError {
+  constructor(orderId) {
+    super('BUSINESS_RULE_POS_ORDER_PAYMENT_IN_PROGRESS', 'A card payment for this check has already been taken. Settle it, or refund it, before adding or removing items.', 422, { orderId: String(orderId) });
+  }
+}
+
 /** PRODUCT_REQUIREMENTS.md §3.4: "Reject if the folio is closed, the guest has checked out, or the room has no in-house reservation." */
 class RoomChargeRejectedError extends AppError {
   constructor(reason) {
@@ -243,6 +250,7 @@ module.exports = {
   StoreOutletConversionBlockedError,
   OrderNotOpenError,
   OrderItemAlreadyVoidedError,
+  OrderPaymentInProgressError,
   RoomChargeRejectedError,
   SettlementGroupsMismatchError,
   ShiftAlreadyOpenError,

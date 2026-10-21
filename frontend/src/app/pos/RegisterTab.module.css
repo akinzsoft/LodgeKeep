@@ -1085,3 +1085,28 @@
     display: none;
   }
 }
+
+.ticketLineVoided {
+  opacity: 0.6;
+}
+
+.ticketLineVoided .ticketLineName,
+.ticketLineVoided .ticketLineUnitPrice {
+  text-decoration: line-through;
+}
+
+.voidedLabel {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--pos-register-card-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-caption-size);
+  color: var(--pos-register-text-secondary);
+  text-transform: uppercase;
+}
+
+.ticketItemCount {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  color: var(--pos-register-text-primary);
+}

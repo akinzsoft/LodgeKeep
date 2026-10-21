@@ -702,10 +702,11 @@ async function addItem(req, res, next) {
 
 async function voidOrderItem(req, res, next) {
   try {
-    const reason = require_(req.body, 'reason');
+    // A missing reason is accepted only inside the server's grace window (see service.voidOrderItem).
+    const reason = req.body?.reason;
     const canActForOthers = await holdsPermission(req.context, 'pos.manage');
     const item = await service.voidOrderItem({ context: req.context, orderItemId: req.params.itemId, reason, userId: req.context.userId, canActForOthers });
-    await req.audit({ entityType: 'pos_order_items', entityId: req.params.itemId, action: 'void', afterState: item, reason });
+    await req.audit({ entityType: 'pos_order_items', entityId: req.params.itemId, action: 'void', afterState: item, reason: item.void_reason });
     res.status(200).json(ok(item));
   } catch (error) {
     next(error);
