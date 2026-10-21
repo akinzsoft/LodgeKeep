@@ -45,6 +45,7 @@
 const { signAccessToken } = require('../auth/tokens');
 const { encrypt, decrypt } = require('./encryption');
 const { appDomains, lifecycleDomains } = require('./app-domains');
+const { feeBearer } = require('./paystack-fee-bearer');
 
 function validateStartupConfig() {
   const problems = [];
@@ -69,6 +70,12 @@ function validateStartupConfig() {
     lifecycleDomains();
   } catch (error) {
     problems.push(`APP_DOMAIN / PRIMARY_APP_DOMAIN / ADDITIONAL_APP_DOMAINS / TRIAL_APP_DOMAIN / SUBSCRIBED_APP_DOMAIN — ${error.message}`);
+  }
+
+  try {
+    feeBearer();
+  } catch (error) {
+    problems.push(`PAYSTACK_FEE_BEARER — ${error.message}`);
   }
 
   if (!process.env.TURNSTILE_SECRET_KEY || process.env.TURNSTILE_SECRET_KEY.trim() === '') {

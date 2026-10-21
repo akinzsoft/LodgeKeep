@@ -12,6 +12,7 @@
 
 require('dotenv').config();
 
+const { logFeeBearer } = require('./shared/paystack-fee-bearer');
 const { validateStartupConfig, warnAboutPlatformEmail, logPlatformEmailTransport } = require('./shared/startup-checks');
 
 // Security-review finding: fail fast, loudly, before ever listening —
@@ -28,6 +29,7 @@ try {
 
 warnAboutPlatformEmail();
 logPlatformEmailTransport();
+logFeeBearer();
 
 const { createApp } = require('./app');
 const { startOutboxWorker, scheduleOutboxSweep } = require('./jobs/outbox-dispatcher');
