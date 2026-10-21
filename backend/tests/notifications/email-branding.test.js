@@ -70,7 +70,9 @@ describe('branded emails', () => {
     await t.trx('properties').where({ id: propertyId }).update({ logo_url: `/api/v1/media/property-logos/${fileName}` });
 
     const email = await composeEmail({ db, propertyId, templateKey: 'checked_out', variables: { ...booking, folioBalance: '0.00' } });
-    expect(email.attachments).toEqual([expect.objectContaining({ cid: 'property-logo', filename: 'logo.png', contentType: 'image/png', path: path.join(storage, fileName) })]);
+    expect(email.attachments).toEqual([expect.objectContaining({ cid: 'property-logo', filename: 'logo.png', contentType: 'image/png', content: fs.readFileSync(path.join(storage, fileName)) })]);
+    // In memory, never a file path: the SMTP transports run with `disableFileAccess` (a `path` is rejected at send time).
+    expect(email.attachments[0]).not.toHaveProperty('path');
     expect(email.html).toContain('src="cid:property-logo"');
     expect(email.html).toContain('alt="Harbour View Hotel"');
     expect(email.html).toContain('width="216" height="72"');

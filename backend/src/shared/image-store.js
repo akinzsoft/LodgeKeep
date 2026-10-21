@@ -148,6 +148,26 @@ function imageFilePath(kind, fileName) {
   return fs.existsSync(filePath) ? filePath : null;
 }
 
+/**
+ * A stored image's bytes, read into memory and validated: the name must be one this module generated, the file at most
+ * MAX_IMAGE_BYTES, and its own leading bytes must say it is the type its extension claims. Returns `{ buffer, type }`, or null for
+ * a missing, oversized, unreadable or mismatched file. Never throws, and never takes a path: callers that need the bytes (e-mail
+ * logos) use this instead of handing a file path to another library.
+ */
+function readImage(kind, fileName) {
+  try {
+    const filePath = imageFilePath(kind, fileName);
+    if (!filePath) return null;
+    if (fs.statSync(filePath).size > MAX_IMAGE_BYTES) return null;
+    const buffer = fs.readFileSync(filePath);
+    const type = sniffImageType(buffer);
+    if (!type || type !== fileName.split('.').pop()) return null;
+    return { buffer, type };
+  } catch {
+    return null;
+  }
+}
+
 /** The stored file name inside one of this module's own public URLs, or null for anything else (e.g. an external URL). */
 function fileNameFromUrl(kind, url) {
   if (typeof url !== 'string' || !url.startsWith(`${MEDIA_PREFIX}${kind}/`)) return null;
@@ -206,6 +226,7 @@ module.exports = {
   removeImageStrict,
   imageUrl,
   imageFilePath,
+  readImage,
   fileNameFromUrl,
   receiveImage,
   mediaRouter,
