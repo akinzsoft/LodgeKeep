@@ -12,7 +12,7 @@
 
 require('dotenv').config();
 
-const { validateStartupConfig, warnAboutPlatformEmail } = require('./shared/startup-checks');
+const { validateStartupConfig, warnAboutPlatformEmail, logPlatformEmailTransport } = require('./shared/startup-checks');
 
 // Security-review finding: fail fast, loudly, before ever listening —
 // `startup-checks.js`'s own header has the full reasoning. A misconfigured
@@ -27,6 +27,7 @@ try {
 }
 
 warnAboutPlatformEmail();
+logPlatformEmailTransport();
 
 const { createApp } = require('./app');
 const { startOutboxWorker, scheduleOutboxSweep } = require('./jobs/outbox-dispatcher');

@@ -32,6 +32,7 @@ const {
   scrubSecrets,
   SMTP_SECURITY_MODES,
 } = require('../../shared/smtp-guard');
+const { platformReplyTo } = require('../../shared/email-audience');
 
 /**
  * Gap closure (user-reported, live-tested): "the mail goin to my spam."
@@ -101,6 +102,41 @@ const SEND_TIMEOUTS = { connectionTimeout: 10000, greetingTimeout: 10000, socket
 
 let smtpTransport = null;
 
+const DEFAULT_MAIL_FROM_ADDRESS = 'lodgekeep@planmsys.com';
+
+/**
+ * The platform mailbox settings from the environment. Provider-neutral names win; the
+ * original names still work, so an existing .env needs no change:
+ *   password: SMTP_PASS, else SMTP_PASSWORD
+ *   From:     MAIL_FROM_ADDRESS, else SMTP_FROM, else SMTP_USER when it is an address,
+ *             else lodgekeep@planmsys.com (a provider's SMTP user is often not an address)
+ *   security: SMTP_SECURE (true/tls = implicit TLS, false/starttls = upgrade), else by port
+ */
+function platformSmtpEnv(env = process.env) {
+  const port = Number(env.SMTP_PORT || 587);
+  const flag = String(env.SMTP_SECURE ?? '').trim().toLowerCase();
+  let security = port === 465 ? 'tls' : 'starttls';
+  if (['true', '1', 'yes', 'tls', 'ssl'].includes(flag)) security = 'tls';
+  else if (['false', '0', 'no', 'starttls'].includes(flag)) security = 'starttls';
+  const user = env.SMTP_USER || undefined;
+  const from = env.MAIL_FROM_ADDRESS || env.SMTP_FROM || (user && isSingleEmailAddress(user) ? user : DEFAULT_MAIL_FROM_ADDRESS);
+  return {
+    host: env.SMTP_HOST,
+    port,
+    security,
+    user,
+    password: env.SMTP_PASS || env.SMTP_PASSWORD || undefined,
+    from,
+    fromName: env.SMTP_FROM_NAME || 'LodgeKeep',
+  };
+}
+
+/** Every platform-mailbox secret/identifier that must never appear in an error shown to a tenant. */
+function platformSecrets(env = process.env) {
+  const cfg = platformSmtpEnv(env);
+  return [cfg.password, cfg.user, cfg.host];
+}
+
 /** Pure transport construction. `servername` keeps certificate checks on the NAME when we connect to a vetted IP. */
 function buildTransport({ host, port, user, password, security, servername }) {
   if (!host) {
@@ -123,13 +159,8 @@ function buildTransport({ host, port, user, password, security, servername }) {
 
 function buildSmtpTransport() {
   if (!smtpTransport) {
-    smtpTransport = buildTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT || 587),
-      user: process.env.SMTP_USER,
-      password: process.env.SMTP_PASSWORD,
-      security: Number(process.env.SMTP_PORT || 587) === 465 ? 'tls' : 'starttls',
-    });
+    const cfg = platformSmtpEnv();
+    smtpTransport = buildTransport({ host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password, security: cfg.security });
   }
   return smtpTransport;
 }
@@ -140,9 +171,11 @@ async function sendViaTransport(transport, { to, subject, html, attachments, fro
   }
   // A display name makes a mailbox whose local part reads oddly for transactional
   // mail present as a real sender; it is sanitised so it can never add a header.
+  // A Reply-To that equals the recipient would send their reply back to themselves: never set.
+  const sameAsRecipient = replyTo && String(to).trim().toLowerCase() === String(replyTo).trim().toLowerCase();
   const info = await transport.sendMail({
     from: { name: sanitizeDisplayName(fromName), address: fromAddress },
-    ...(replyTo && isSingleEmailAddress(replyTo) ? { replyTo } : {}),
+    ...(replyTo && isSingleEmailAddress(replyTo) && !sameAsRecipient ? { replyTo } : {}),
     to,
     subject,
     html,
@@ -157,14 +190,9 @@ const smtpAdapter = {
   name: 'smtp',
   async send({ to, subject, html, attachments }) {
     const transport = buildSmtpTransport();
-    return sendViaTransport(transport, {
-      to,
-      subject,
-      html,
-      attachments,
-      fromAddress: process.env.SMTP_FROM || process.env.SMTP_USER,
-      fromName: process.env.SMTP_FROM_NAME || 'LodgeKeep',
-    });
+    const cfg = platformSmtpEnv();
+    // Platform mail (e.g. backups): replies go to the platform address, never to the recipient.
+    return sendViaTransport(transport, { to, subject, html, attachments, fromAddress: cfg.from, fromName: cfg.fromName, replyTo: platformReplyTo() });
   },
 };
 
@@ -189,11 +217,10 @@ function platformSmtpStatus(env = process.env) {
   const missing = [];
   if (env.EMAIL_PROVIDER !== 'smtp') missing.push('EMAIL_PROVIDER=smtp');
   if (!env.SMTP_HOST) missing.push('SMTP_HOST');
-  const port = Number(env.SMTP_PORT || 587);
-  if (!Number.isInteger(port) || port <= 0) missing.push('SMTP_PORT');
-  const from = env.SMTP_FROM || env.SMTP_USER;
-  if (!from || !isSingleEmailAddress(from)) missing.push('SMTP_FROM');
-  if (env.SMTP_USER && !env.SMTP_PASSWORD) missing.push('SMTP_PASSWORD');
+  const cfg = platformSmtpEnv(env);
+  if (!Number.isInteger(cfg.port) || cfg.port <= 0) missing.push('SMTP_PORT');
+  if (!isSingleEmailAddress(cfg.from)) missing.push('MAIL_FROM_ADDRESS');
+  if (cfg.user && !cfg.password) missing.push('SMTP_PASS');
   return { configured: missing.length === 0, missing };
 }
 
@@ -239,8 +266,9 @@ function buildPlatformAdapter({ identity }) {
     unavailableReason: status.configured ? null : PLATFORM_UNAVAILABLE_REASON,
     platformMissing: status.missing,
     // The platform's own credentials and host never reach a tenant, even inside an error message.
-    scrub: (text) => scrubSecrets(text, [process.env.SMTP_PASSWORD, process.env.SMTP_USER, process.env.SMTP_HOST]),
-    async send({ to, subject, html, attachments }) {
+    scrub: (text) => scrubSecrets(text, platformSecrets()),
+    // `audience`: 'guest' = sent for a hotel (its contact is the Reply-To); anything else is platform mail.
+    async send({ to, subject, html, attachments, audience }) {
       if (!status.configured) throw new Error(PLATFORM_UNAVAILABLE_REASON);
       return sendViaTransport(buildSmtpTransport(), {
         to,
@@ -248,9 +276,9 @@ function buildPlatformAdapter({ identity }) {
         html,
         attachments,
         // Forced: the From address is never taken from a tenant.
-        fromAddress: process.env.SMTP_FROM || process.env.SMTP_USER,
+        fromAddress: platformSmtpEnv().from,
         fromName: identity.displayName,
-        replyTo: identity.replyTo,
+        replyTo: audience === 'guest' ? identity.replyTo : platformReplyTo(),
       });
     },
   };
@@ -392,6 +420,7 @@ module.exports = {
   NoMailboxConfiguredError,
   consoleAdapter,
   smtpAdapter,
+  platformSmtpEnv,
   htmlToText,
   __closeSmtpTransportForTesting,
 };

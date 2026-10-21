@@ -108,6 +108,8 @@ describe('email-adapter', () => {
         // The other half of that same gap closure — an HTML-only send is
         // its own spam signal; a plain-text alternative is always included.
         text: '123456',
+        // Platform mail: replies go to the platform address, never to the recipient.
+        replyTo: 'info@planmsys.com',
       });
       expect(result).toEqual({ providerRef: 'real-message-id-123', status: 'sent' });
     });
@@ -158,13 +160,16 @@ describe('email-adapter', () => {
       expect(nodemailer.createTransport).not.toHaveBeenCalled();
     });
 
-    it('rejects with a clear error when neither SMTP_FROM nor SMTP_USER is set', async () => {
+    it('falls back to lodgekeep@planmsys.com when no From address and no address-shaped SMTP_USER is set', async () => {
       process.env.EMAIL_PROVIDER = 'smtp';
       process.env.SMTP_HOST = 'smtp.example.com';
       delete process.env.SMTP_USER;
       delete process.env.SMTP_FROM;
-      nodemailer.createTransport.mockReturnValue({ sendMail: jest.fn(), close: jest.fn() });
-      await expect(getEmailAdapter().send({ to: 'a@example.com', subject: 's', html: 'h' })).rejects.toThrow(/SMTP_FROM/);
+      delete process.env.MAIL_FROM_ADDRESS;
+      const sendMail = jest.fn().mockResolvedValue({ messageId: 'x' });
+      nodemailer.createTransport.mockReturnValue({ sendMail, close: jest.fn() });
+      await getEmailAdapter().send({ to: 'a@example.com', subject: 's', html: 'h' });
+      expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ from: { name: 'LodgeKeep', address: 'lodgekeep@planmsys.com' } }));
     });
   });
 });
