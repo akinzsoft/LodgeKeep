@@ -55,7 +55,8 @@ const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { RedisStore } = require('rate-limit-redis');
 const { rateLimitRedisConnection } = require('./rate-limit-redis-connection');
 const { ok, fail } = require('./response');
-const { resolveTenantRowForHostname, currentAppDomain } = require('../auth/tenant-resolution');
+const { resolveTenantRowForHostname } = require('../auth/tenant-resolution');
+const { isBareAppDomain } = require('./app-domains');
 
 const MAX_HOSTNAME_LENGTH = 253; // RFC 1035.
 
@@ -85,16 +86,16 @@ function tenantDomainAskRouter({ db, systemContext }) {
         return;
       }
 
-      const appDomain = currentAppDomain().toLowerCase();
-      if (hostname === appDomain) {
-        // The platform's own bare domain — /signup and /platform both live
-        // here with no tenant to resolve; see this file's own header.
+      if (isBareAppDomain(hostname)) {
+        // One of the platform's own bare domains (primary or additional) —
+        // /signup and /platform both live here with no tenant to resolve;
+        // see this file's own header.
         res.status(200).json(ok({ status: 'ok' }));
         return;
       }
 
       const scoped = db.for(systemContext());
-      const tenantRow = await resolveTenantRowForHostname({ scoped, hostname, appDomain });
+      const tenantRow = await resolveTenantRowForHostname({ scoped, hostname });
 
       if (!tenantRow) {
         res.status(404).json(fail(null, 'Unknown host.'));

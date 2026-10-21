@@ -153,20 +153,24 @@
 		# this is its twin for headers). It gets its own strict policy: no
 		# camera, no WebAssembly, no payment script — it only needs its own
 		# files, plus a self-hosted demo video (`media-src 'self'`). The host
-		# comes from APP_DOMAIN (passed to this container in docker-compose);
-		# if that variable is missing the default below can never match a real
-		# host, so every host keeps the staff-app policy exactly as before.
+		# is LANDING_HOSTS: the primary domain plus every additional accepted one,
+		# space-separated, worked out from APP_DOMAIN and ADDITIONAL_APP_DOMAINS
+		# by docker/frontend/entrypoint.sh (a Caddy host matcher cannot split a
+		# comma list). Both @landing and @staffApp's exclusion read the SAME
+		# list, so a bare domain gets exactly one policy, never two. If it is
+		# empty the default below can never match a real host, so every host
+		# keeps the staff-app policy exactly as before.
 		# `@staffApp` excludes the landing request, so the two never overlap
 		# (Caddy `header` directives would otherwise add, not replace).
 		@landing {
-			host {$APP_DOMAIN:no-landing.invalid}
+			host {$LANDING_HOSTS:no-landing.invalid}
 			path /
 		}
 		@strictApps path /portal* /platform* /qr-order* /signup*
 		@staffApp {
 			not path /portal* /platform* /qr-order* /signup*
 			not {
-				host {$APP_DOMAIN:no-landing.invalid}
+				host {$LANDING_HOSTS:no-landing.invalid}
 				path /
 			}
 		}

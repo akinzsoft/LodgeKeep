@@ -89,4 +89,40 @@ describe('buildTenantLoginUrl', () => {
       expect(url).toBe('https://riverside.some-other-hotel-group.com/');
     });
   });
+  // Two-domain support: the slug always goes onto the PRIMARY, from any accepted host.
+  describe('with a primary and additional accepted domains', () => {
+    const PRIMARY = 'lodgekeep.ng';
+    const ADDITIONAL = 'lodgekeep.planmsys.com';
+    const build = (hostname, port = '') => buildTenantLoginUrl('alpha-motel', { hostname, protocol: 'https:', port }, PRIMARY, ADDITIONAL);
+
+    it('signing up from the new bare domain builds <slug>.lodgekeep.ng, never <slug>.ng', () => {
+      expect(build('lodgekeep.ng')).toBe('https://alpha-motel.lodgekeep.ng/');
+    });
+
+    it('signing up from the OLD bare domain also goes to the primary', () => {
+      expect(build('lodgekeep.planmsys.com')).toBe('https://alpha-motel.lodgekeep.ng/');
+    });
+
+    it('a tenant host on either domain gets its slug replaced, never nested', () => {
+      expect(build('riverside.lodgekeep.ng')).toBe('https://alpha-motel.lodgekeep.ng/');
+      expect(build('riverside.lodgekeep.planmsys.com')).toBe('https://alpha-motel.lodgekeep.ng/');
+    });
+
+    it('is case-insensitive', () => {
+      expect(build('LodgeKeep.NG')).toBe('https://alpha-motel.lodgekeep.ng/');
+    });
+
+    it('a lookalike or multi-label host is NOT treated as accepted (falls to the old guess)', () => {
+      expect(build('x.lodgekeep.ng.evil.com')).not.toContain('.lodgekeep.ng/');
+      expect(build('evillodgekeep.ng')).toBe('https://alpha-motel.ng/');
+    });
+
+    it('with only the old domain configured (additional not yet set) the new host is unaccepted, as before', () => {
+      expect(buildTenantLoginUrl('alpha-motel', { hostname: 'lodgekeep.ng', protocol: 'https:', port: '' }, 'lodgekeep.planmsys.com')).toBe('https://alpha-motel.ng/');
+    });
+
+    it('ignores a malformed additional entry instead of widening what is accepted', () => {
+      expect(buildTenantLoginUrl('alpha-motel', { hostname: 'lodgekeep.ng', protocol: 'https:', port: '' }, 'lodgekeep.planmsys.com', '*.lodgekeep.ng,https://lodgekeep.ng')).toBe('https://alpha-motel.ng/');
+    });
+  });
 });

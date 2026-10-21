@@ -48,6 +48,9 @@ ENV VITE_TURNSTILE_SITE_KEY=$VITE_TURNSTILE_SITE_KEY
 # docker-compose.prod.yml's own top-level APP_DOMAIN value.
 ARG VITE_APP_DOMAIN
 ENV VITE_APP_DOMAIN=$VITE_APP_DOMAIN
+# Two-domain support: the other accepted app domains (comma-separated, may be empty).
+ARG VITE_ADDITIONAL_APP_DOMAINS=""
+ENV VITE_ADDITIONAL_APP_DOMAINS=$VITE_ADDITIONAL_APP_DOMAINS
 RUN npm run build
 
 ################################################################################
@@ -74,4 +77,9 @@ RUN npm run build
 FROM caddy:2.11-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
 COPY --from=build /app/dist /srv
 COPY docker/frontend/Caddyfile /etc/caddy/Caddyfile
+# Splits the accepted app domains into the Caddyfile's LANDING_HOSTS, then runs caddy.
+COPY docker/frontend/entrypoint.sh /usr/local/bin/lodgekeep-entrypoint.sh
+RUN chmod +x /usr/local/bin/lodgekeep-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/lodgekeep-entrypoint.sh"]
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
 EXPOSE 80 443

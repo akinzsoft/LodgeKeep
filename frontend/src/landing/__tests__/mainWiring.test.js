@@ -11,7 +11,7 @@ import source from '../../main.jsx?raw';
 describe('main.jsx entry wiring', () => {
   it('chooses the tree only through selectEntryTree, with the build-time app domain', () => {
     expect(source).toMatch(/import \{ selectEntryTree \} from '\.\/landing\/selectEntryTree\.js'/);
-    expect(source).toMatch(/selectEntryTree\(\{\s*hostname: window\.location\.hostname,\s*pathname: window\.location\.pathname,\s*appDomain: import\.meta\.env\.VITE_APP_DOMAIN,?\s*\}\)/);
+    expect(source).toMatch(/selectEntryTree\(\{\s*hostname: window\.location\.hostname,\s*pathname: window\.location\.pathname,\s*appDomain: import\.meta\.env\.VITE_APP_DOMAIN,\s*additionalDomains: import\.meta\.env\.VITE_ADDITIONAL_APP_DOMAINS,?\s*\}\)/);
   });
 
   it('loads the landing page lazily (never in the staff app bundle)', () => {

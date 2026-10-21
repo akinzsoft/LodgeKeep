@@ -29,6 +29,7 @@ const notifications = require('../notifications/service');
 const { reserveInvitationResend } = require('../../shared/email-quota');
 const { RoleEscalationError, UserRankError, SelfRoleChangeError, SelfDeactivationError, LastSuperAdminError, InvitationNotPendingError, InvitationResendLimitError } = require('./errors');
 const { describeEmailDelivery } = require('../notifications/email-adapter');
+const { tenantBaseUrl } = require('../../shared/app-domains');
 
 const INVITATION_TTL_DAYS = 7;
 
@@ -162,7 +163,7 @@ async function inviteUser({ context, email, role, invitedByUserId, actorRole }) 
     // ":5173" appended by hand, the same manual step `seeds/01_dev_tenants.js`'s
     // own printed dev-login URL already expects of a human running it.
     const invitationUrl = tenant?.slug
-      ? `http://${tenant.slug}.${process.env.APP_DOMAIN}/?invite_token=${token}`
+      ? `${tenantBaseUrl(tenant.slug)}/?invite_token=${token}`
       : null;
 
     await writeOutboxEvent({
@@ -235,7 +236,7 @@ async function resendInvitation({ context, id, actorRole }) {
         guestEmail: invitation.email,
         role: invitation.role,
         propertyName: property?.name ?? null,
-        invitationUrl: tenant?.slug ? `http://${tenant.slug}.${process.env.APP_DOMAIN}/?invite_token=${token}` : null,
+        invitationUrl: tenant?.slug ? `${tenantBaseUrl(tenant.slug)}/?invite_token=${token}` : null,
       },
     });
     return {

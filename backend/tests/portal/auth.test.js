@@ -218,6 +218,7 @@ describe('Guest portal auth (PLAN.md Phase 4)', () => {
       const payload = typeof outboxEvent.payload === 'string' ? JSON.parse(outboxEvent.payload) : outboxEvent.payload;
       expect(payload.guestEmail).toBe('forgot-me@example.com');
       expect(typeof payload.resetUrl).toBe('string');
+      expect(payload.resetUrl).toMatch(new RegExp(`^https://${ctx.a.slug}\\.${process.env.APP_DOMAIN.replace(/\./g, '\\.')}/portal/`));
 
       const authEvent = await t.trx('auth_events').where({ tenant_id: ctx.a.id, event_type: 'password_reset_requested', audience: 'guest' }).orderBy('id', 'desc').first();
       expect(authEvent).toBeDefined();

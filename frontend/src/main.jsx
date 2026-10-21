@@ -496,6 +496,7 @@ const entryTree = selectEntryTree({
   hostname: window.location.hostname,
   pathname: window.location.pathname,
   appDomain: import.meta.env.VITE_APP_DOMAIN,
+  additionalDomains: import.meta.env.VITE_ADDITIONAL_APP_DOMAINS,
 });
 
 function EntryTree() {

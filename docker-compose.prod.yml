@@ -149,13 +149,20 @@ services:
       # lodgekeep.app) — see that file's own header for the full story.
       args:
         VITE_TURNSTILE_SITE_KEY: ${VITE_TURNSTILE_SITE_KEY}
-        VITE_APP_DOMAIN: ${APP_DOMAIN}
+        # The PRIMARY domain: PRIMARY_APP_DOMAIN when set, else APP_DOMAIN (so nothing changes until it is set).
+        VITE_APP_DOMAIN: ${PRIMARY_APP_DOMAIN:-${APP_DOMAIN}}
+        # Other accepted domains, comma-separated. Empty by default: only the primary is accepted.
+        VITE_ADDITIONAL_APP_DOMAINS: ${ADDITIONAL_APP_DOMAINS:-}
     restart: unless-stopped
     environment:
       ACME_EMAIL: ${ACME_EMAIL}
-      # The bare app domain, for the Caddyfile's landing-page header rule
-      # (the same value the build gets as VITE_APP_DOMAIN above).
-      APP_DOMAIN: ${APP_DOMAIN}
+      # The bare app domains, for the Caddyfile's landing-page header rule
+      # (the same values the build gets as VITE_APP_DOMAIN and
+      # VITE_ADDITIONAL_APP_DOMAINS above). docker/frontend/entrypoint.sh turns
+      # them into the Caddyfile's LANDING_HOSTS; empty/invalid entries can
+      # never match a real host.
+      APP_DOMAIN: ${PRIMARY_APP_DOMAIN:-${APP_DOMAIN}}
+      ADDITIONAL_APP_DOMAINS: ${ADDITIONAL_APP_DOMAINS:-}
     ports:
       - "80:80"
       - "443:443"

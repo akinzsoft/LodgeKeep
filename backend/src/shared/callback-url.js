@@ -51,6 +51,7 @@
  */
 
 const { ValidationError } = require('./errors');
+const { matchTenantSubdomain } = require('./app-domains');
 
 function invalidCallbackUrlError() {
   return new ValidationError('INVALID_CALLBACK_URL', 'The supplied callback_url does not belong to this organization.', [{ field: 'callback_url', issue: 'not_allowed' }]);
@@ -84,11 +85,9 @@ async function assertAllowedCallbackUrl(db, { callbackUrl }) {
 
   const hostname = parsed.hostname.toLowerCase();
 
-  const appDomain = process.env.APP_DOMAIN;
-  if (appDomain) {
-    const tenant = await db.table('tenants').first('slug');
-    if (tenant && hostname === `${tenant.slug}.${appDomain}`.toLowerCase()) return;
-  }
+  // The calling tenant's own subdomain on ANY accepted app domain (primary or additional).
+  const tenant = await db.table('tenants').first('slug');
+  if (tenant && matchTenantSubdomain(hostname) === String(tenant.slug).toLowerCase()) return;
 
   const claimedDomain = await db.table('tenant_domains').where({ domain: hostname }).whereNotNull('verified_at').first('id');
   if (claimedDomain) return;
