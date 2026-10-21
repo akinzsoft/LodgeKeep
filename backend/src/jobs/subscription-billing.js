@@ -65,6 +65,8 @@ async function runSubscriptionBillingSweep(now = new Date()) {
   const due = await knex()('subscriptions')
     .join('tenants', 'tenants.id', 'subscriptions.tenant_id')
     .whereNot('subscriptions.status', 'canceled')
+    // A manually-paid (cash / transfer) subscription has no card to charge; dunning it would suspend the tenant.
+    .andWhere(function notManual() { this.whereNull('subscriptions.payment_method_provider').orWhereNot('subscriptions.payment_method_provider', 'manual'); })
     .whereNotIn('tenants.status', INACTIVE_SWEEP_STATUSES)
     .andWhere('subscriptions.current_period_start', '<=', now)
     .select('subscriptions.tenant_id');

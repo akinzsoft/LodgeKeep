@@ -2733,6 +2733,9 @@ async function seedTwoTenants(trx) {
   // established for their own parents.
   // ------------------------------------------------------------------
   for (const t of both) {
+    // One lifecycle-email idempotency row per tenant (`kind` 'fixture' so the isolation suite's own 'subscribed' rows never collide).
+    await trx('tenant_lifecycle_emails').insert({ tenant_id: t.id, kind: 'fixture', user_id: t.users[0].id });
+
     t.importRuns.push({
       id: await insertReturningId(trx, 'import_runs', {
         tenant_id: t.id,

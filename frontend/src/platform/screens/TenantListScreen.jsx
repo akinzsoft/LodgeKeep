@@ -26,11 +26,14 @@ function describeTrial(row) {
 export function TenantListScreen({ onSelectTenant, onOpenBackups, onLogout }) {
   const [tenants, setTenants] = useState(null);
   const [error, setError] = useState(null);
+  const [expiring, setExpiring] = useState([]);
 
   async function reload() {
     setError(null);
     try {
       setTenants(await platformApi.listTenants());
+      // Manually-paid tenants near or past their paid-until date. A list to act on yourself; nothing is suspended automatically.
+      platformApi.listExpiringSubscriptions(14).then((result) => setExpiring(result.items ?? [])).catch(() => setExpiring([]));
     } catch (caught) {
       setTenants([]);
       setError(caught instanceof ApiError ? caught.message : 'Could not load tenants.');
@@ -61,6 +64,27 @@ export function TenantListScreen({ onSelectTenant, onOpenBackups, onLogout }) {
         <p role="alert" className={styles.errorBanner}>
           {error}
         </p>
+      )}
+      {expiring.length > 0 && (
+        <DataTable
+          title="Paid-until within 14 days or overdue (manual payments)"
+          state="success"
+          columns={[
+            { key: 'name', label: 'Name' },
+            { key: 'slug', label: 'Slug' },
+            { key: 'paidUntil', label: 'Paid until' },
+            {
+              key: 'daysLeft',
+              label: 'Status',
+              render: (row) => (row.overdue
+                ? <StatusPill tone="danger" label={`Overdue ${Math.abs(row.daysLeft)}d`} />
+                : <StatusPill tone="warning" label={`${row.daysLeft}d left`} />),
+            },
+            { key: 'open', label: '', render: (row) => <Button variant="secondary" onClick={() => onSelectTenant(row.tenantId)}>Open</Button> },
+          ]}
+          rows={expiring}
+          rowKey={(row) => row.tenantId}
+        />
       )}
       <DataTable
         title="All tenants"

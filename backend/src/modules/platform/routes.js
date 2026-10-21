@@ -32,6 +32,19 @@
 const { Router } = require('express');
 const controller = require('./controller');
 const { requirePermission, requirePlatformRole } = require('../../auth');
+const { redisRateLimiter } = require('../../shared/rate-limit');
+
+// Recording a manual payment e-mails every user of a tenant, so it is rate-limited per platform user (and per IP).
+const manualPaymentLimiters = [
+  redisRateLimiter({ windowMs: 60_000, limit: 20, prefix: 'platform-manual-payment:ip:', message: 'Too many payment recordings — please wait a moment.' }),
+  redisRateLimiter({
+    windowMs: 60_000,
+    limit: 10,
+    prefix: 'platform-manual-payment:user:',
+    message: 'Too many payment recordings — please wait a moment.',
+    keyGenerator: (req) => `u${req.context?.platformUserId ?? 'anon'}`,
+  }),
+];
 
 function platformConsoleRouter() {
   const router = Router();
@@ -46,6 +59,10 @@ function platformConsoleRouter() {
   router.post('/tenants/:id/suspend', requirePlatformRole('admin'), controller.suspendTenant);
   router.post('/tenants/:id/reactivate', requirePlatformRole('admin'), controller.reactivateTenant);
   router.post('/tenants/:id/extend-trial', requirePlatformRole('admin'), controller.extendTrial);
+  router.post('/tenants/:id/mark-subscribed', requirePlatformRole('admin'), ...manualPaymentLimiters, controller.markSubscribed);
+  router.post('/tenants/:id/record-payment', requirePlatformRole('admin'), ...manualPaymentLimiters, controller.recordPayment);
+  router.post('/tenants/:id/move-domain', requirePlatformRole('admin'), ...manualPaymentLimiters, controller.moveDomain);
+  router.get('/subscriptions/expiring', controller.listExpiringSubscriptions);
   router.post('/tenants/:id/offboard', requirePlatformRole('admin'), controller.offboardTenant);
   // Whole-database backups, emailed (user-requested): starting one is admin-only — it sends
   // every hotel's data out of the server; the history is readable by both tiers.

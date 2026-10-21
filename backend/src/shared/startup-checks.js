@@ -44,7 +44,7 @@
 
 const { signAccessToken } = require('../auth/tokens');
 const { encrypt, decrypt } = require('./encryption');
-const { appDomains } = require('./app-domains');
+const { appDomains, lifecycleDomains } = require('./app-domains');
 
 function validateStartupConfig() {
   const problems = [];
@@ -66,8 +66,9 @@ function validateStartupConfig() {
 
   try {
     appDomains();
+    lifecycleDomains();
   } catch (error) {
-    problems.push(`APP_DOMAIN / PRIMARY_APP_DOMAIN / ADDITIONAL_APP_DOMAINS — ${error.message}`);
+    problems.push(`APP_DOMAIN / PRIMARY_APP_DOMAIN / ADDITIONAL_APP_DOMAINS / TRIAL_APP_DOMAIN / SUBSCRIBED_APP_DOMAIN — ${error.message}`);
   }
 
   if (!process.env.TURNSTILE_SECRET_KEY || process.env.TURNSTILE_SECRET_KEY.trim() === '') {

@@ -201,6 +201,7 @@ async function getTenantWithProperties({ context, tenantId }) {
           current_period_start: subscription.current_period_start,
           current_period_end: subscription.current_period_end,
           consecutive_failed_attempts: subscription.consecutive_failed_attempts,
+          manual: subscription.payment_method_provider === 'manual',
         }
       : null,
     recent_invoices: invoices.map((invoice) => ({

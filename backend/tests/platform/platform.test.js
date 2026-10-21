@@ -250,6 +250,7 @@ describe('Platform console + impersonation (PLAN.md Phase 5)', () => {
         current_period_start: '2027-01-01',
         current_period_end: '2027-02-01',
         consecutive_failed_attempts: 0,
+        manual: false,
       });
       // The deliberate exclusion, proven directly: real payment-method
       // fields exist on the underlying row (seeded above) but never

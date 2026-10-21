@@ -59,6 +59,7 @@ describe('signup atomicity on real MySQL connections (ARCHITECTURE.md §4)', () 
   async function cleanupTenant(slug) {
     const tenant = await db()('tenants').where({ slug }).first('id');
     if (!tenant) return;
+    await db()('outbox_events').where({ tenant_id: tenant.id }).delete();
     await db()('user_property_access').where({ tenant_id: tenant.id }).delete();
     await db()('role_permissions').where({ tenant_id: tenant.id }).delete();
     await db()('roles').where({ tenant_id: tenant.id }).delete();

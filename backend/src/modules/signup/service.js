@@ -46,6 +46,8 @@ const { recordAuditEntry } = require('../../audit');
 const { trialEndsAtFromNow } = require('../../shared/tenant-lifecycle');
 const { withDuplicateMapping, ValidationError } = require('../../shared/errors');
 const { SignupEmailAlreadyUsedError } = require('./errors');
+const { writeOutboxEvent } = require('../../shared/outbox');
+const { lifecycleDomains, tenantBaseUrlFor } = require('../../shared/app-domains');
 
 const REQUIRED_FIELDS = [
   'companyName', 'slug', 'timezone', 'baseCurrency',
@@ -102,6 +104,8 @@ async function signupTenant(input) {
   const adminEmail = input.adminEmail.trim().toLowerCase();
   const propertyName = input.propertyName?.trim() || `${input.companyName.trim()} — Main Property`;
   const trialEndsAt = trialEndsAtFromNow();
+  const trialDomain = lifecycleDomains().trial;
+  const loginUrl = tenantBaseUrlFor({ slug: input.slug, app_domain: trialDomain });
 
   // Ordered deliberately so each of the three ARCHITECTURE.md §4 rollback
   // guarantees this module promises has one real, distinct, testable
@@ -127,6 +131,7 @@ async function signupTenant(input) {
           slug: input.slug,
           status: 'trial',
           trial_ends_at: trialEndsAt,
+          app_domain: trialDomain,
         })
       );
 
@@ -223,6 +228,24 @@ async function signupTenant(input) {
         userAgent: input.userAgent,
       });
 
+      // The welcome e-mail: where to sign in, which login e-mail, when the trial ends. Never a password or a token (the admin
+      // chose their own password just now). Written in this transaction, so a failed signup sends nothing.
+      await writeOutboxEvent({
+        trx: propertyDb,
+        eventType: 'tenant.trial_started',
+        aggregateType: 'tenants',
+        aggregateId: tenantId,
+        propertyId,
+        payload: {
+          recipientEmail: adminEmail,
+          loginEmail: adminEmail,
+          loginUrl,
+          companyName: input.companyName.trim(),
+          propertyName,
+          trialEndsOn: new Date(trialEndsAt).toISOString().slice(0, 10),
+        },
+      });
+
       return { tenantId, propertyId, adminUserId, trialEndsAt };
   });
 
@@ -258,11 +281,19 @@ async function signupTenant(input) {
     requestId: input.requestId,
   });
 
+  try {
+    // Best-effort: the periodic outbox sweep delivers the welcome e-mail within a minute if this is lost.
+    await require('../../jobs/outbox-dispatcher').enqueueOutboxDispatch({ tenantId: result.tenantId, propertyId: result.propertyId });
+  } catch (error) {
+    console.error('[signup] could not enqueue the welcome e-mail dispatch:', error?.message);
+  }
+
   return {
     ...session,
     tenantId: String(result.tenantId),
     propertyId: String(result.propertyId),
     trialEndsAt: result.trialEndsAt,
+    loginUrl,
   };
 }
 

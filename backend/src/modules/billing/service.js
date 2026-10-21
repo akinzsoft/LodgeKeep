@@ -71,6 +71,8 @@ const { recordAuditEntry } = require('../../audit');
 const { generateUlid } = require('../../shared/ulid');
 const { isDunningAttemptDue, isDunningExhausted, nextAttemptDate } = require('./dunning');
 const { writeOutboxEvent } = require('../../shared/outbox');
+const { lifecycleDomains } = require('../../shared/app-domains');
+const { queueLifecycleEmails } = require('../../shared/tenant-lifecycle-emails');
 const { enqueueOutboxDispatch } = require('../../jobs/outbox-dispatcher');
 const { assertAllowedCallbackUrl } = require('../../shared/callback-url');
 const {
@@ -365,7 +367,15 @@ async function completeAddPaymentMethod({ context, reference, requestId, ip, use
       // counter so a fresh, valid card gets a clean slate at the very next
       // scheduled attempt, rather than inheriting a dunning count run up
       // against the OLD card.
-      await trx.platform().table('subscriptions').where({ id: existing.id }).update({ ...paymentMethodFields, consecutive_failed_attempts: 0 });
+      // A manually-paid tenant switching to a card: the card is first charged when the manual paid-until date arrives
+      // (never earlier, and never against the period already paid for in cash).
+      const manualToCard = existing.payment_method_provider === 'manual';
+      const manualEnd = manualToCard ? String(existing.current_period_end instanceof Date ? existing.current_period_end.toISOString().slice(0, 10) : existing.current_period_end).slice(0, 10) : null;
+      await trx.platform().table('subscriptions').where({ id: existing.id }).update({
+        ...paymentMethodFields,
+        consecutive_failed_attempts: 0,
+        ...(manualToCard ? { current_period_start: manualEnd > today() ? manualEnd : today(), current_period_end: addOneMonth(manualEnd > today() ? manualEnd : today()) } : {}),
+      });
       subscriptionId = existing.id;
     } else {
       // First-ever payment method for this tenant — creates the
@@ -468,6 +478,8 @@ async function processTenantBillingCycle({ tenantId, now = new Date() }) {
   const step1 = await bootstrapDb.transaction(async (trx) => {
     const subscription = await trx.platform().table('subscriptions').where({ tenant_id: tenantId }).forUpdate().first();
     if (!subscription || subscription.status === 'canceled') return { action: 'skip' };
+    // A manually-paid (cash / transfer) subscription has no card; dunning it would suspend the tenant (see platform/subscribe.js).
+    if (subscription.payment_method_provider === 'manual') return { action: 'skip_manual' };
     if (new Date(subscription.current_period_start) > now) return { action: 'skip' }; // not due yet
 
     // A tenant that is offboarding, being purged or already purged is never
@@ -624,8 +636,19 @@ async function applyChargeOutcome({ tenantId, paymentId, success, providerPaymen
       // SUCCESSFUL charge against a still-`trial` tenant is what actually
       // converts it, not the moment a card was added.
       if (tenant.status === 'trial') {
-        await tenantDb.table('tenants').where({ id: tenantId }).update({ status: 'active', plan_id: subscription.plan_id });
+        const subscribedDomain = lifecycleDomains().subscribed;
+        await tenantDb.table('tenants').where({ id: tenantId }).update({ status: 'active', plan_id: subscription.plan_id, app_domain: subscribedDomain, subscribed_at: tenant.subscribed_at ?? new Date() });
         await recordAuditEntry(tenantDb, { entityType: 'tenants', entityId: tenantId, action: 'trial_converted', source: 'job', beforeState: { status: 'trial' }, afterState: { status: 'active' } });
+        // The same "your subscription is active" e-mail the console's Mark subscribed sends (one per active user, never twice).
+        const convertedPlan = await trx.reference().table('plans').where({ id: subscription.plan_id }).first();
+        await queueLifecycleEmails({
+          platformDb: trx,
+          tenantDb,
+          tenant: { ...tenant, app_domain: subscribedDomain },
+          kindKey: 'subscribed',
+          eventType: 'tenant.subscribed',
+          payload: { planName: convertedPlan?.name ?? 'LodgeKeep', paidUntil: addOneMonth(newPeriodStart), amount: String(payment.amount), currency: payment.currency, method: 'card', reference: 'Card payment' },
+        });
       }
 
       await recordAuditEntry(tenantDb, { entityType: 'subscription_payments', entityId: paymentId, action: 'captured', source: 'job', afterState: { amount: payment.amount } });

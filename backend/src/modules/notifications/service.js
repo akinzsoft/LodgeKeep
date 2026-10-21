@@ -98,6 +98,12 @@ const EVENT_TEMPLATE_KEYS = {
   // Recipient is staff (manager/admin/super_admin), so `recipientEmail`
   // like `ar.*`/`billing.*`/`door_access.*` above.
   'night_audit.overdue': 'night_audit_overdue',
+  // Tenant lifecycle e-mails (src/modules/platform/subscribe.js, src/modules/signup): the recipient is staff, so
+  // `recipientEmail`. None carries a password, a code or a token — only the tenant's login address, the user's login e-mail and dates.
+  'tenant.trial_started': 'tenant_trial_started',
+  'tenant.subscribed': 'tenant_subscribed',
+  'tenant.payment_recorded': 'tenant_payment_recorded',
+  'tenant.domain_moved': 'tenant_domain_moved',
 };
 
 /**
@@ -178,6 +184,62 @@ const DEFAULT_TEMPLATES = {
       paragraph('We received a request to reset the password for your {{propertyName}} guest account.') +
       button('{{resetUrl}}', 'Reset your password') +
       note('This link expires in {{expiresInHours}} hour(s). If you did not request a reset, you can safely ignore this email — your password will not change.'),
+  },
+  tenant_trial_started: {
+    subject: 'Your LodgeKeep trial has started — {{companyName}}',
+    body_html:
+      heading('Welcome to LodgeKeep') +
+      paragraph('Your free trial for {{companyName}} is ready. Sign in with the address below.') +
+      button('{{loginUrl}}', 'Open LodgeKeep') +
+      details([
+        ['Sign-in address', '{{loginUrl}}'],
+        ['Your login email', '{{loginEmail}}'],
+        ['Trial ends', '{{trialEndsOn}}'],
+      ]) +
+      note('Your password is the one you chose when you signed up; we never send passwords by email. If you forget it, use "Forgot password" on the sign-in page and we will email you a one-time code.'),
+  },
+  tenant_subscribed: {
+    subject: 'Your LodgeKeep subscription is active — {{companyName}}',
+    body_html:
+      heading('Your subscription is active') +
+      paragraph('Thank you. {{companyName}} is now on the {{planName}} plan, paid until {{paidUntil}}.') +
+      paragraph('LodgeKeep now lives at a new address. Please use it from now on; the old address keeps working for the time being.') +
+      button('{{loginUrl}}', 'Open LodgeKeep') +
+      details([
+        ['New sign-in address', '{{loginUrl}}'],
+        ['Your login email', '{{loginEmail}}'],
+        ['Your role', '{{role}}'],
+        ['Paid until', '{{paidUntil}}'],
+      ]) +
+      note('You will need to sign in once on the new address. Your password has not changed; if you have forgotten it, use "Forgot password" on the sign-in page and we will email you a one-time code. We never send passwords by email.'),
+  },
+  // The console's "Move to new domain": no payment or paid-until line (the tenant may have no subscription at all). The renderer
+  // has no conditionals, so this is its own template rather than the subscribed one with a blank line.
+  tenant_domain_moved: {
+    subject: 'LodgeKeep has a new address for {{companyName}}',
+    body_html:
+      heading('LodgeKeep has a new address') +
+      paragraph('{{companyName}} now signs in at a new address. Please use it from now on; the old address keeps working for the time being.') +
+      button('{{loginUrl}}', 'Open LodgeKeep') +
+      details([
+        ['New sign-in address', '{{loginUrl}}'],
+        ['Your login email', '{{loginEmail}}'],
+        ['Your role', '{{role}}'],
+      ]) +
+      note('You will need to sign in once on the new address. Your password has not changed; if you have forgotten it, use "Forgot password" on the sign-in page and we will email you a one-time code. We never send passwords by email.'),
+  },
+  tenant_payment_recorded: {
+    subject: 'Payment received — {{companyName}} is paid until {{paidUntil}}',
+    body_html:
+      heading('Payment received') +
+      paragraph('We have recorded your payment for {{companyName}} ({{planName}} plan).') +
+      details([
+        ['Amount', '{{amount}} {{currency}}'],
+        ['Method', '{{method}}'],
+        ['Reference', '{{reference}}'],
+        ['Paid until', '{{paidUntil}}'],
+      ]) +
+      note('Keep this email as your receipt. If anything looks wrong, reply to this email.'),
   },
   staff_mfa_code: {
     subject: 'Your LodgeKeep verification code',
