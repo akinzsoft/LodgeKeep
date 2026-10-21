@@ -81,6 +81,7 @@
 const crypto = require('crypto');
 const { AppError } = require('../../shared/errors');
 const { decrypt } = require('../../shared/encryption');
+const { feeBearer } = require('../../shared/paystack-fee-bearer');
 
 const PAYSTACK_BASE_URL = 'https://api.paystack.co';
 
@@ -182,7 +183,8 @@ function buildAdapter(secretKey) {
    * those payment methods; omitted, Paystack offers every channel the
    * account supports. `subaccount` (optional) is the property's own
    * Paystack Subaccount code — when supplied, Paystack auto-splits this
-   * charge at settlement per that subaccount's own `percentage_charge`.
+   * charge at settlement per that subaccount's own `percentage_charge`;
+   * `bearer` (PAYSTACK_FEE_BEARER) then says who pays Paystack's fee.
    */
   async function initializeTransaction({ email, amount, currency, reference, callbackUrl, channels, subaccount }) {
     const data = await paystackFetch('/transaction/initialize', {
@@ -194,7 +196,8 @@ function buildAdapter(secretKey) {
         reference,
         callback_url: callbackUrl,
         ...(channels ? { channels } : {}),
-        ...(subaccount ? { subaccount } : {}),
+        // `bearer` only means something with a split; transaction_charge is deliberately never sent.
+        ...(subaccount ? { subaccount, bearer: feeBearer() } : {}),
       },
     });
     return { authorizationUrl: data.authorization_url, accessCode: data.access_code, reference: data.reference };
