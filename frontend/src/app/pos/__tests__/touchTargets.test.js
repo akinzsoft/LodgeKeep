@@ -57,6 +57,20 @@ describe('POS register touch targets and layout (CSS rules)', () => {
     expect(declaration(block, 'background')).toBeTruthy(); // opaque, or lines would show through it
   });
 
+  it('the lines list can never be squeezed out of the ticket: it keeps a floor of about three lines and the ticket scrolls beyond it', () => {
+    const block = rule('.ticketLines');
+    // A scroll container's automatic minimum height is 0, so without an explicit floor flex shrank the list to a sliver
+    // (35px on a 1450x740 screen) the moment the totals and payment buttons filled the panel.
+    expect(declaration(block, 'min-height')).toMatch(/^\d+(\.\d+)?rem$/);
+    expect(Number.parseFloat(declaration(block, 'min-height'))).toBeGreaterThanOrEqual(9);
+    expect(declaration(block, 'overflow-y')).toBe('auto');
+    expect(declaration(rule('.ticket'), 'overflow-y')).toBe('auto');
+  });
+
+  it('on short desktop screens the tender buttons share one row so the lines keep their room', () => {
+    expect(css).toMatch(/@media \(width >= 900px\) and \(height <= 860px\)\s*\{[\s\S]*\.paymentMethodRow\s*\{\s*grid-template-columns:\s*repeat\(3, 1fr\)/);
+  });
+
   it('the wide panel never grows taller than the room left on screen', () => {
     expect(css).toMatch(/height:\s*min\(78vh,\s*calc\(100dvh\s*-\s*9rem\)\)/);
   });
