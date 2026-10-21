@@ -3,10 +3,8 @@
 /**
  * Route wiring for the cashiering module — PLAN.md Phase 2.5. Mounted
  * under `/api/v1` in `src/app.js`, after `authenticate('staff')` and
- * `attachAudit()`, same as every other business module — EXCEPT
- * `paystackWebhookRouter()`, which is mounted separately, BEFORE
- * `authenticate('staff')` (API.md §7: a webhook authenticates by signature,
- * never a bearer token).
+ * `attachAudit()`, same as every other business module.
+ * The Paystack webhook lives in `modules/paystack-webhook` (one dispatcher for both integrations).
  *
  * SECURITY.md §5's matrix row for Cashiering, "Limited" defined per that
  * section's own example: front_desk gets `cashiering.post_charge` only
@@ -56,11 +54,4 @@ function cashieringRouter() {
   return router;
 }
 
-/** Public — mounted BEFORE `authenticate('staff')` (see file header and API.md §7). */
-function paystackWebhookRouter() {
-  const router = Router();
-  router.post('/webhooks/paystack', controller.receivePaystackWebhook);
-  return router;
-}
-
-module.exports = { cashieringRouter, paystackWebhookRouter };
+module.exports = { cashieringRouter };

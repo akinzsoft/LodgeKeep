@@ -397,13 +397,13 @@ describe('Billing (PLAN.md Phase 5)', () => {
   // ------------------------------------------------------------------
 
   describe('POST /webhooks/billing-paystack', () => {
-    it('always responds 200 once persisted, regardless of signature validity (API.md §7)', async () => {
+    it('a genuine event is acknowledged 200; a request no key signs is refused 401 yet kept as unverified evidence', async () => {
       gateway.verifyWebhookSignature.mockReturnValue(false);
       const res = await t.request
         .post('/api/v1/webhooks/billing-paystack')
         .set('x-paystack-signature', 'bad-signature')
         .send({ event: 'charge.success', data: { id: 999001, reference: 'no-such-reference' } });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(401);
 
       const row = await t.trx('subscription_webhook_events').where({ provider: 'paystack', provider_event_id: '999001' }).first();
       expect(row).toBeTruthy();

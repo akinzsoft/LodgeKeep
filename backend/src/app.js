@@ -46,7 +46,8 @@ const { reservationsRouter } = require('./modules/reservations');
 const { housekeepingRouter } = require('./modules/housekeeping');
 const { notificationsRouter } = require('./modules/notifications');
 const { reportingRouter } = require('./modules/reporting');
-const { cashieringRouter, paystackWebhookRouter } = require('./modules/cashiering');
+const { cashieringRouter } = require('./modules/cashiering');
+const { paystackWebhookRouter } = require('./modules/paystack-webhook');
 const { nightAuditRouter } = require('./modules/night-audit');
 const { profilesRouter } = require('./modules/profiles');
 const { portalPublicRouter, portalAccountRouter } = require('./modules/portal');
@@ -59,7 +60,7 @@ const { groupBlocksRouter } = require('./modules/group-blocks');
 const { platformConsoleRouter, staffImpersonationRouter } = require('./modules/platform');
 const { signupRouter } = require('./modules/signup');
 const { mediaRouter } = require('./shared/image-store');
-const { billingRouter, billingWebhookRouter } = require('./modules/billing');
+const { billingRouter } = require('./modules/billing');
 const { offboardingRouter } = require('./modules/offboarding');
 const { migrationRouter } = require('./modules/migration');
 const { accessMonitoringRouter } = require('./modules/access-monitoring');
@@ -74,8 +75,8 @@ function buildStaffRouter() {
   router.use('/auth', staffAuthRouter({ resolveTenant: tenantMiddleware }));
   // API.md §7: a webhook authenticates by signature, never a bearer token —
   // mounted here, before authenticate('staff'), same as /auth above.
+  // ONE dispatcher serves both Paystack integrations (see modules/paystack-webhook).
   router.use(paystackWebhookRouter());
-  router.use(billingWebhookRouter());
   router.use(authenticate('staff'));
   // PLAN.md Phase 5 (Platform Foundation) — mounted BEFORE the read-only
   // guard below: "end my own impersonation grant" is the one mutation an

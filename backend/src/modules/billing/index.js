@@ -1,5 +1,5 @@
 'use strict';
 
-const { billingRouter, billingWebhookRouter } = require('./routes');
+const { billingRouter } = require('./routes');
 
-module.exports = { billingRouter, billingWebhookRouter };
+module.exports = { billingRouter };

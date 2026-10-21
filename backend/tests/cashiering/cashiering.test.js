@@ -659,7 +659,7 @@ describe('Cashiering (PLAN.md Phase 2.5)', () => {
 
       const webhookBody = { event: 'charge.success', data: { id: 777, reference: 'ref-does-not-exist', status: 'success' } };
       const res = await t.request.post('/api/v1/webhooks/paystack').set('x-paystack-signature', 'bad-signature').send(webhookBody);
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(401); // refused, yet kept below as unverified evidence
 
       const eventRow = await t.trx('payment_webhook_events').where({ provider_event_id: '777' }).first();
       expect(eventRow.verified).toBe(0);
