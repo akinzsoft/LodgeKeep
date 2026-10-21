@@ -70,27 +70,6 @@ async function completeAddPaymentMethod(req, res, next) {
   }
 }
 
-/**
- * Public — no staff auth (API.md §7, mounted before `authenticate('staff')`
- * in `src/app.js`, matching `cashiering`'s own `receivePaystackWebhook`
- * exactly). Verified by signature, not a bearer token; `req.rawBody` is
- * the same globally-captured raw-body buffer `src/app.js` already stashes
- * for the guest-payment webhook.
- */
-async function receiveWebhook(req, res, next) {
-  try {
-    await service.receiveBillingWebhook({
-      rawBody: req.rawBody ?? JSON.stringify(req.body),
-      signatureHeader: req.get('x-paystack-signature'),
-      payload: req.body,
-    });
-    // API.md §7: respond 200 once persisted, regardless of processing outcome.
-    res.status(200).json(ok({ received: true }));
-  } catch (error) {
-    next(error);
-  }
-}
-
 module.exports = {
   getOverview,
   listPlans,
@@ -98,5 +77,4 @@ module.exports = {
   listPaymentsForInvoice,
   startAddPaymentMethod,
   completeAddPaymentMethod,
-  receiveWebhook,
 };

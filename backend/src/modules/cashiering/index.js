@@ -30,6 +30,6 @@
  * has followed.
  */
 
-const { cashieringRouter, paystackWebhookRouter } = require('./routes');
+const { cashieringRouter } = require('./routes');
 
-module.exports = { cashieringRouter, paystackWebhookRouter };
+module.exports = { cashieringRouter };

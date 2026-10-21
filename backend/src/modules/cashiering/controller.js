@@ -520,26 +520,6 @@ async function clearStuckRefund(req, res, next) {
   }
 }
 
-/**
- * Public — no staff auth (API.md §7, mounted before `authenticate('staff')`
- * in `src/app.js`). Verified by signature, not by bearer token.
- * `req.rawBody` is captured by `src/app.js`'s raw-body-preserving JSON
- * parser for exactly this route (Paystack's HMAC is over the raw bytes).
- */
-async function receivePaystackWebhook(req, res, next) {
-  try {
-    await service.handlePaystackWebhook({
-      rawBody: req.rawBody ?? JSON.stringify(req.body),
-      signatureHeader: req.get('x-paystack-signature'),
-      parsedBody: req.body,
-    });
-    // API.md §7: respond 200 once persisted, regardless of processing outcome.
-    res.status(200).json(ok({ received: true }));
-  } catch (error) {
-    next(error);
-  }
-}
-
 module.exports = {
   captureTerminalPayment,
   listTerminalAccounts,
@@ -561,5 +541,4 @@ module.exports = {
   verifyPayment,
   refundPayment,
   clearStuckRefund,
-  receivePaystackWebhook,
 };

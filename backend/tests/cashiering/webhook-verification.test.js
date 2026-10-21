@@ -365,7 +365,8 @@ describe('Paystack webhook — verified against Paystack’s own record (guest p
     it('never calls Paystack for an unsigned event', async () => {
       const { payment } = await pendingPayment();
       const { res, eventId } = await postWebhook({ payment, signed: false });
-      expect(res.status).toBe(200);
+      // Unified dispatcher: a request no key signs is refused, but kept as evidence.
+      expect(res.status).toBe(401);
       expect(paystack.verifyTransaction).not.toHaveBeenCalled();
       const row = await eventRow(eventId);
       expect(row.verified).toBe(0);
