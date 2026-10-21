@@ -3,6 +3,8 @@ import { Card, DataTable, Button, StatusPill } from '../../shared/components/ind
 import { Money } from '../../shared/format/money.jsx';
 import { platformApi, ApiError } from '../../shared/api/index.js';
 import { usePlatformAuth } from '../auth/PlatformAuthContext.jsx';
+import { ManualPaymentForm } from './ManualPaymentForm.jsx';
+import { MoveDomainForm } from './MoveDomainForm.jsx';
 import styles from './PlatformScreens.module.css';
 
 const STATUS_TONE = { trial: 'warning', active: 'success', suspended: 'danger', offboarding: 'neutral', purging: 'danger', purged: 'neutral' };
@@ -253,6 +255,19 @@ export function TenantDetailScreen({ tenantId, onBack, onLogout }) {
                 Reactivate tenant
               </Button>
             </form>
+          )}
+
+          {(tenant.status === 'trial' || tenant.status === 'suspended') && (!tenant.subscription || tenant.subscription.manual) && (
+            <ManualPaymentForm tenantId={tenantId} mode="subscribe" onDone={reload} />
+          )}
+
+          {tenant.status === 'active' && <MoveDomainForm tenantId={tenantId} currentDomain={tenant.app_domain} onDone={reload} />}
+
+          {tenant.status === 'active' && tenant.subscription?.manual && (
+            <>
+              <p className={styles.hint}>Paid until {String(tenant.subscription.current_period_end).slice(0, 10)}.</p>
+              <ManualPaymentForm tenantId={tenantId} mode="renew" onDone={reload} />
+            </>
           )}
 
           {(tenant.status === 'trial' || tenant.status === 'suspended') && !tenant.subscription && (

@@ -75,4 +75,33 @@ function tenantBaseUrl(slug, env = process.env) {
   return `https://${slug}.${appDomains(env).primary}`;
 }
 
-module.exports = { AppDomainConfigError, normaliseDomain, appDomains, matchTenantSubdomain, isBareAppDomain, tenantBaseUrl };
+/**
+ * The two lifecycle domains: where a tenant lives while on trial and once subscribed. Each defaults to the primary
+ * (so nothing changes until they are set) and must be one of the accepted domains, otherwise it is a config error
+ * (a link to a domain the server does not answer on would be a dead link in every email).
+ */
+function lifecycleDomains(env = process.env) {
+  const { primary, all } = appDomains(env);
+  const pick = (variable) => {
+    const raw = (env[variable] ?? '').trim();
+    if (!raw) return primary;
+    const domain = normaliseDomain(raw, variable);
+    if (!all.includes(domain)) throw new AppDomainConfigError(variable, domain, 'it is not one of the accepted app domains (PRIMARY_APP_DOMAIN / ADDITIONAL_APP_DOMAINS)');
+    return domain;
+  };
+  return { trial: pick('TRIAL_APP_DOMAIN'), subscribed: pick('SUBSCRIBED_APP_DOMAIN') };
+}
+
+/** The domain a tenant row is reached at in outgoing mail: its stored `app_domain` while that is still accepted, else the primary. */
+function tenantDomainFor(tenant, env = process.env) {
+  const { primary, all } = appDomains(env);
+  const stored = String(tenant?.app_domain ?? '').trim().toLowerCase();
+  return stored && all.includes(stored) ? stored : primary;
+}
+
+/** `https://{slug}.{the tenant's own domain}` — pass the tenants row (`slug`, `app_domain`). */
+function tenantBaseUrlFor(tenant, env = process.env) {
+  return `https://${tenant.slug}.${tenantDomainFor(tenant, env)}`;
+}
+
+module.exports = { AppDomainConfigError, normaliseDomain, appDomains, matchTenantSubdomain, isBareAppDomain, tenantBaseUrl, lifecycleDomains, tenantDomainFor, tenantBaseUrlFor };

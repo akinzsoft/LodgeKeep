@@ -28,6 +28,10 @@ const CAPPED_EVENT_TYPES = new Set([
   'guest.checked_out',
   'ar.invoice_generated',
   'ar.payment_received',
+  'tenant.trial_started',
+  'tenant.subscribed',
+  'tenant.payment_recorded',
+  'tenant.domain_moved',
 ]);
 
 function classifyEvent(eventType) {

@@ -30,6 +30,7 @@
  *   tenant_signups                the one-signup-per-email guard
  *   subscriptions / _invoices /   Planmsys's own billing records. The subscription is
  *   _payments                     cancelled and its stored payment-method token cleared
+ *   manual_payment_records        how a manual subscription payment was made (extends the billing records)
  *   subscription_webhook_events   raw provider events, attributed to the tenant id only
  *   platform_users                not tenant data
  *   platform_backups              the platform's own log of whole-database backups; no tenant column
@@ -62,6 +63,7 @@ const RETAINED_TABLES = Object.freeze([
   'subscriptions',
   'subscription_invoices',
   'subscription_payments',
+  'manual_payment_records',
   'subscription_webhook_events',
   'platform_users',
   'platform_backups',
@@ -224,6 +226,7 @@ const TENANT_PURGE_ORDER = Object.freeze([
   'guests',
   'company_profiles',
   'billing_payment_method_checkouts',
+  'tenant_lifecycle_emails',
   'impersonation_sessions',
   // -- the CLEAR of tenant_data_exports.requested_by_user_id happens here (see runPurgeTick) --
   'user_property_access',

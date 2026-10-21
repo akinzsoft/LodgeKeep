@@ -62,6 +62,22 @@ describe('POST /api/v1/signup', () => {
     };
   }
 
+  it('queues a welcome e-mail with the trial login address and login e-mail, and never a password or token', async () => {
+    const body = validBody();
+    const res = await t.request.post('/api/v1/signup').send(body);
+    expect(res.status).toBe(201);
+    const { lifecycleDomains } = require('../../src/shared/app-domains');
+    expect(res.body.data.loginUrl).toBe(`https://${body.slug}.${lifecycleDomains().trial}`);
+    const tenant = await t.trx('tenants').where({ id: res.body.data.tenantId }).first();
+    expect(tenant.app_domain).toBe(lifecycleDomains().trial);
+    const events = await t.trx('outbox_events').where({ tenant_id: res.body.data.tenantId, event_type: 'tenant.trial_started' });
+    expect(events).toHaveLength(1);
+    const payload = typeof events[0].payload === 'string' ? JSON.parse(events[0].payload) : events[0].payload;
+    expect(payload).toMatchObject({ recipientEmail: body.admin_email.toLowerCase(), loginEmail: body.admin_email.toLowerCase(), loginUrl: res.body.data.loginUrl });
+    expect(JSON.stringify(payload)).not.toContain(body.admin_password);
+    expect(JSON.stringify(payload)).not.toMatch(/token|code/i);
+  });
+
   it('creates a tenant, its first admin, and an empty property, and signs the admin in', async () => {
     const body = validBody();
     const res = await t.request.post('/api/v1/signup').send(body);

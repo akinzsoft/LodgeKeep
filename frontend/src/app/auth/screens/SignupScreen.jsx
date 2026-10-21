@@ -101,7 +101,7 @@ export function SignupScreen({ isOffline = false }) {
     setError(null);
     try {
       const response = await authApi.signup({ ...form, captchaToken });
-      setResult({ slug: form.slug, trialEndsAt: response.trialEndsAt });
+      setResult({ slug: form.slug, trialEndsAt: response.trialEndsAt, loginUrl: response.loginUrl });
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not create your organization.');
       // A Turnstile response token is single-use, consumed the moment the
@@ -118,7 +118,9 @@ export function SignupScreen({ isOffline = false }) {
   const slugPreviewUrl = form.slug ? buildTenantLoginUrl(form.slug) : null;
 
   if (result) {
-    const loginUrl = buildTenantLoginUrl(result.slug);
+    // The server knows which domain this tenant lives on (its trial domain); the browser's own build-time guess is the
+    // fallback, and the only option on a plain-http dev origin (the server's URL is always https).
+    const loginUrl = result.loginUrl && window.location.protocol === 'https:' ? `${result.loginUrl}/` : buildTenantLoginUrl(result.slug);
     const trialEndsLabel = result.trialEndsAt ? new Date(result.trialEndsAt).toLocaleDateString() : null;
     return (
       <div className={styles.page}>

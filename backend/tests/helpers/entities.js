@@ -3432,6 +3432,40 @@ const ENTITIES = [
   },
 
   {
+    table: 'tenant_lifecycle_emails',
+    // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns). UNIQUE(tenant_id, kind, user_id) is the idempotency guard;
+    // like `tenant_purges`, `duplicateRow` collides with the row `newRow` inserted moments earlier.
+    uniqueKeys: [['tenant_id', 'kind', 'user_id']],
+    newRow: (ctx) => ({ tenant_id: ctx.b.id, kind: 'subscribed', user_id: ctx.b.users[0].id }),
+    duplicateRow: (ctx) => ({ tenant_id: ctx.b.id, kind: 'subscribed', user_id: ctx.b.users[0].id }),
+  },
+
+  {
+    table: 'manual_payment_records',
+    // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns). References tenant a's fixture subscription_payments row; only `a`
+    // has one (see fixtures.js), so rows are written for `a`. UNIQUE(subscription_payment_id).
+    uniqueKeys: [['subscription_payment_id']],
+    newRow: (ctx, t) => ({
+      tenant_id: t.id,
+      subscription_payment_id: t.subscriptionPayments[0].id,
+      plan_id: ctx.plans.standard,
+      kind: 'subscribe',
+      method: 'cash',
+      reference_note: 'Isolation-suite receipt',
+      paid_until: '2027-12-31',
+    }),
+    duplicateRow: (ctx, t) => ({
+      tenant_id: t.id,
+      subscription_payment_id: t.subscriptionPayments[0].id,
+      plan_id: ctx.plans.standard,
+      kind: 'renewal',
+      method: 'cash',
+      reference_note: 'Isolation-suite receipt (duplicate)',
+      paid_until: '2028-01-31',
+    }),
+  },
+
+  {
     table: 'tenant_data_exports',
     // PLATFORM_SCOPED, mandatory tenant_id (unscopedColumns) — reached only
     // through hand-written queries in src/modules/offboarding/service.js

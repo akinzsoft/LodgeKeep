@@ -358,6 +358,11 @@ const TABLE_SCOPES = Object.freeze({
   // only through hand-written queries in `src/modules/billing/service.js`.
   billing_payment_method_checkouts: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
 
+  // 20261207090000_tenant_app_domain_and_manual_subscriptions. Both PLATFORM_SCOPED with a mandatory tenant_id, like
+  // `subscriptions`; reached only through hand-written queries in src/modules/platform/subscribe.js.
+  tenant_lifecycle_emails: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
+  manual_payment_records: { scope: SCOPES.PLATFORM, unscopedColumns: ['tenant_id'] },
+
   // Tenant offboarding — PLAN.md Phase 5, PRODUCT_REQUIREMENTS.md §3.22.
   // 20260925091000_create_tenant_data_exports. PLATFORM_SCOPED with
   // `tenant_id` an `unscopedColumns` mandatory business column — the same

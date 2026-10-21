@@ -21,6 +21,10 @@ const knexFactory = require('knex');
 const config = require('../../knexfile');
 
 module.exports = async function globalSetup() {
+  // The tenant app-domain migration refuses to run without an explicit TRIAL_APP_DOMAIN (no fallback to the primary). The test schema
+  // has no tenants to place, so any accepted domain will do.
+  if (!(process.env.TRIAL_APP_DOMAIN ?? '').trim()) process.env.TRIAL_APP_DOMAIN = process.env.PRIMARY_APP_DOMAIN || process.env.APP_DOMAIN;
+
   const database = config.test.connection.database;
 
   // The guard. knexfile.js checks this too; both exist because a mistyped

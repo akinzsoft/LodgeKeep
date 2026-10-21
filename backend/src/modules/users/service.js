@@ -29,7 +29,7 @@ const notifications = require('../notifications/service');
 const { reserveInvitationResend } = require('../../shared/email-quota');
 const { RoleEscalationError, UserRankError, SelfRoleChangeError, SelfDeactivationError, LastSuperAdminError, InvitationNotPendingError, InvitationResendLimitError } = require('./errors');
 const { describeEmailDelivery } = require('../notifications/email-adapter');
-const { tenantBaseUrl } = require('../../shared/app-domains');
+const { tenantBaseUrlFor } = require('../../shared/app-domains');
 
 const INVITATION_TTL_DAYS = 7;
 
@@ -156,14 +156,14 @@ async function inviteUser({ context, email, role, invitedByUserId, actorRole }) 
     const devOnlyToken = process.env.NODE_ENV !== 'production' ? token : null;
 
     const property = await trx.table('properties').where({ id: context.propertyId }).first('name');
-    const tenant = await trx.table('tenants').first('slug');
+    const tenant = await trx.table('tenants').first('slug', 'app_domain');
 
     // No port here deliberately — this resolves correctly for a production
     // deployment; a local dev run of the Vite dev server still needs
     // ":5173" appended by hand, the same manual step `seeds/01_dev_tenants.js`'s
     // own printed dev-login URL already expects of a human running it.
     const invitationUrl = tenant?.slug
-      ? `${tenantBaseUrl(tenant.slug)}/?invite_token=${token}`
+      ? `${tenantBaseUrlFor(tenant)}/?invite_token=${token}`
       : null;
 
     await writeOutboxEvent({
@@ -225,7 +225,7 @@ async function resendInvitation({ context, id, actorRole }) {
     await blankInvitationLinks(trx, [invitation.id]);
 
     const property = await trx.table('properties').where({ id: context.propertyId }).first('name');
-    const tenant = await trx.table('tenants').first('slug');
+    const tenant = await trx.table('tenants').first('slug', 'app_domain');
     const eventId = await writeOutboxEvent({
       trx,
       eventType: 'staff.invited',
@@ -236,7 +236,7 @@ async function resendInvitation({ context, id, actorRole }) {
         guestEmail: invitation.email,
         role: invitation.role,
         propertyName: property?.name ?? null,
-        invitationUrl: tenant?.slug ? `${tenantBaseUrl(tenant.slug)}/?invite_token=${token}` : null,
+        invitationUrl: tenant?.slug ? `${tenantBaseUrlFor(tenant)}/?invite_token=${token}` : null,
       },
     });
     return {

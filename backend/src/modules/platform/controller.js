@@ -19,6 +19,7 @@ function require_(body, field) {
 }
 
 const backup = require('./backup');
+const subscribe = require('./subscribe');
 
 function requestMeta(req) {
   return { ip: req.ip, userAgent: req.get('User-Agent'), requestId: req.requestId };
@@ -115,6 +116,38 @@ async function extendTrial(req, res, next) {
   }
 }
 
+async function markSubscribed(req, res, next) {
+  try {
+    res.status(200).json(ok(await subscribe.markSubscribed({ context: req.context, tenantId: req.params.id, input: req.body, ...requestMeta(req) })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function moveDomain(req, res, next) {
+  try {
+    res.status(200).json(ok(await subscribe.moveToNewDomain({ context: req.context, tenantId: req.params.id, reason: req.body?.reason, ...requestMeta(req) })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function recordPayment(req, res, next) {
+  try {
+    res.status(200).json(ok(await subscribe.recordPayment({ context: req.context, tenantId: req.params.id, input: req.body, ...requestMeta(req) })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function listExpiringSubscriptions(req, res, next) {
+  try {
+    res.status(200).json(ok(await subscribe.listExpiring({ context: req.context, withinDays: req.query.within_days })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function offboardTenant(req, res, next) {
   try {
     const result = await service.offboardTenant({
@@ -190,5 +223,9 @@ module.exports = {
   suspendTenant,
   reactivateTenant,
   extendTrial,
+  markSubscribed,
+  recordPayment,
+  moveDomain,
+  listExpiringSubscriptions,
   offboardTenant,
 };

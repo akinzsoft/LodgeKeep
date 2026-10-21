@@ -67,7 +67,7 @@ const {
 // `attachAudit()` request pipeline (this file's own `/auth/*` routes never
 // reach that middleware — see `updateMyProfile`'s own header for why).
 const { recordAuditEntry } = require('../audit');
-const { tenantBaseUrl } = require('../shared/app-domains');
+const { tenantBaseUrlFor } = require('../shared/app-domains');
 
 function hoursFromNow(hours) {
   return new Date(Date.now() + hours * 3600 * 1000);
@@ -1321,14 +1321,14 @@ async function requestGuestPasswordReset({ tenantId, propertySlug, email, ip, us
 
       if (process.env.NODE_ENV !== 'production') devOnlyToken = token;
 
-      const tenant = await trx.table('tenants').where({ id: tenantId }).first('slug');
+      const tenant = await trx.table('tenants').where({ id: tenantId }).first('slug', 'app_domain');
       // No port here deliberately — resolves correctly in production; a
       // local dev run of the Vite dev server still needs ":5173" appended
       // by hand, the same manual step `inviteUser`'s own invitationUrl and
       // `seeds/01_dev_tenants.js`'s printed dev-login URL already expect
       // of a human running it.
       const resetUrl = tenant?.slug
-        ? `${tenantBaseUrl(tenant.slug)}/portal/${propertySlug}/reset-password?token=${token}`
+        ? `${tenantBaseUrlFor(tenant)}/portal/${propertySlug}/reset-password?token=${token}`
         : null;
 
       await writeOutboxEvent({

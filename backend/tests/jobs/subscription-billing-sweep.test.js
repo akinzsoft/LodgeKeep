@@ -45,7 +45,10 @@ describe('processTenantBillingCycle (PLAN.md Phase 5, real MySQL)', () => {
         await db()('subscription_invoices').where({ tenant_id: id }).delete();
         await db()('subscriptions').where({ tenant_id: id }).delete();
       }
+      await db()('tenant_lifecycle_emails').where({ tenant_id: id }).delete();
       await db()('outbox_events').where({ tenant_id: id }).delete();
+      await db()('user_property_access').where({ tenant_id: id }).delete();
+      await db()('roles').where({ tenant_id: id }).delete();
       await db()('audit_log').where({ tenant_id: id }).delete();
       await db()('users').where({ tenant_id: id }).delete();
       await db()('properties').where({ tenant_id: id }).delete();
@@ -122,6 +125,35 @@ describe('processTenantBillingCycle (PLAN.md Phase 5, real MySQL)', () => {
     expect(String(tenant.plan_id)).toBe(String(planId));
     const conversionEntry = await db()('audit_log').where({ tenant_id: tenantId, action: 'trial_converted' }).first();
     expect(conversionEntry).toBeTruthy();
+  });
+
+  it('the card conversion queues the same one-per-user "subscription active" e-mail as the console, once', async () => {
+    const { tenantId } = await makeTenantWithSubscription({ tenantStatus: 'trial', currentPeriodStart: '2027-01-01', withBillingContact: true });
+    const property = await db()('properties').where({ tenant_id: tenantId }).first('id');
+    const user = await db()('users').where({ tenant_id: tenantId }).first('id', 'email');
+    await db()('roles').insert({ tenant_id: tenantId, code: 'super_admin', name: 'Super Admin', is_system: true });
+    await db()('user_property_access').insert({ tenant_id: tenantId, property_id: property.id, user_id: user.id, role: 'super_admin' });
+    gateway.chargeAuthorization.mockResolvedValue({ status: 'success', providerPaymentId: 'PSK_3', gatewayResponse: 'Successful' });
+
+    await processTenantBillingCycle({ tenantId, now: new Date('2027-01-01T00:00:00Z') });
+
+    const events = await db()('outbox_events').where({ tenant_id: tenantId, event_type: 'tenant.subscribed' });
+    expect(events).toHaveLength(1);
+    expect(typeof events[0].payload === 'string' ? JSON.parse(events[0].payload) : events[0].payload).toMatchObject({ recipientEmail: user.email, loginEmail: user.email });
+    expect((await db()('tenants').where({ id: tenantId }).first()).subscribed_at).not.toBeNull();
+    expect(await db()('tenant_lifecycle_emails').where({ tenant_id: tenantId, kind: 'subscribed' })).toHaveLength(1);
+  });
+
+  it('a manually-paid subscription is never charged or dunned by the billing cycle', async () => {
+    const { tenantId, subscriptionId } = await makeTenantWithSubscription({ currentPeriodStart: '2027-01-01' });
+    await db()('subscriptions').where({ id: subscriptionId }).update({ payment_method_provider: 'manual', payment_method_authorization_code: null });
+
+    const outcome = await processTenantBillingCycle({ tenantId, now: new Date('2027-03-01T00:00:00Z') });
+
+    expect(outcome.action).toBe('skip_manual');
+    expect(gateway.chargeAuthorization).not.toHaveBeenCalled();
+    expect(await db()('subscription_invoices').where({ subscription_id: subscriptionId })).toHaveLength(0);
+    expect((await db()('tenants').where({ id: tenantId }).first()).status).toBe('active');
   });
 
   it('a failed charge bumps the invoice attempt_count and the subscription into past_due, without exhausting the schedule on the first failure', async () => {

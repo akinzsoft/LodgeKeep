@@ -97,6 +97,26 @@ export function extendTrial(tenantId, days, reason) {
   return request(`/platform/tenants/${tenantId}/extend-trial`, { method: 'POST', body: { days: Number(days), reason } });
 }
 
+/** Manual (cash / bank transfer / other) subscription — admin tier. The payment is validated server-side. */
+export function markSubscribed(tenantId, payment) {
+  return request(`/platform/tenants/${tenantId}/mark-subscribed`, { method: 'POST', body: payment });
+}
+
+/** Another manual payment for an already-subscribed manual tenant — extends paid-until (admin tier). */
+export function recordPayment(tenantId, payment) {
+  return request(`/platform/tenants/${tenantId}/record-payment`, { method: 'POST', body: payment });
+}
+
+/** Moves an ACTIVE tenant to the subscribed domain and e-mails every active user the new address (admin tier). Touches no status or billing. */
+export function moveToNewDomain(tenantId, reason) {
+  return request(`/platform/tenants/${tenantId}/move-domain`, { method: 'POST', body: { reason } });
+}
+
+/** Manually-paid subscriptions near or past their paid-until date (both tiers). Nothing is suspended automatically. */
+export function listExpiringSubscriptions(withinDays = 14) {
+  return request(`/platform/subscriptions/expiring?within_days=${encodeURIComponent(withinDays)}`);
+}
+
 /** PLAN.md Phase 5 (tenant offboarding) — the platform-initiated half; `src/modules/offboarding/service.js`'s own `requestOwnOffboarding` is the tenant self-service half. */
 export function offboardTenant(tenantId, reason) {
   return request(`/platform/tenants/${tenantId}/offboard`, { method: 'POST', body: { reason: reason || undefined } });
