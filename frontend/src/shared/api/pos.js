@@ -263,7 +263,7 @@ export function addItem(orderId, { menuItemId, quantity, modifiers, stockOverrid
 }
 
 export function voidOrderItem(orderId, itemId, reason) {
-  return request(`/pos/orders/${orderId}/items/${itemId}/void`, { method: 'POST', body: { reason } });
+  return request(`/pos/orders/${orderId}/items/${itemId}/void`, { method: 'POST', body: { reason: reason || undefined } });
 }
 
 export function assignItemSplitGroup(orderId, itemId, splitGroup, { overrideReason } = {}) {

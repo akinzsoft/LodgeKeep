@@ -90,6 +90,7 @@ function settlementTotal(settlement) {
 const {
   OrderNotOpenError,
   OrderItemAlreadyVoidedError,
+  OrderPaymentInProgressError,
   RoomChargeRejectedError,
   SettlementGroupsMismatchError,
   ShiftAlreadyOpenError,
@@ -902,6 +903,8 @@ async function addItem({ context, orderId, menuItemId, quantity, modifiers, stoc
     if (!order) throw new OrderNotFoundError();
     if (order.status !== 'open') throw new OrderNotOpenError(orderId, order.status);
     const ownerOverride = assertCanChangeTab(order, { userId, canActForOthers, overrideReason });
+    // Money already taken for this bill must not stop matching it.
+    if (await discountStore.hasCapturedUnsettledPayment(trx, orderId)) throw new OrderPaymentInProgressError(orderId);
 
     // Matched in the WHERE clause, not fetched-then-compared in JS — see
     // `openOrder`'s own comment on why.
@@ -1120,18 +1123,68 @@ async function transferTabs({ context, orderIds, toUserId, userId, canActForOthe
   });
 }
 
+/** Seconds after an item is added during which the Register may remove it without a typed reason (env POS_VOID_GRACE_SECONDS). */
+function voidGraceSeconds() {
+  const parsed = Number.parseInt(process.env.POS_VOID_GRACE_SECONDS ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 120;
+}
+
+/** Stored as the reason when a line is removed inside the grace window with nothing typed. */
+const GRACE_VOID_REASON = 'Removed within grace window';
+
+/**
+ * A reasonless void is accepted only when BOTH hold: the line was added within the grace window AND the tab's kitchen
+ * ticket is not marked done. The server decides; the client's idea of "unsent" is never trusted.
+ */
+function withinGraceWindow(order, item, now = Date.now()) {
+  if (order.ticket_done_at) return false;
+  const addedAt = new Date(item.created_at).getTime();
+  return Number.isFinite(addedAt) && now - addedAt <= voidGraceSeconds() * 1000;
+}
+
+/**
+ * Line discounts and order discounts that could no longer apply once lines are gone: a line discount whose product
+ * has no unvoided row left, and every order-level discount or voucher when the check is empty. They are taken off
+ * (status `removed`, the row stays for the audit trail; a voucher is released) so nothing prices a removed item.
+ */
+async function removeOrphanedDiscounts(trx, { orderId, userId }) {
+  const live = await trx.table('discounts').where({ pos_order_id: orderId }).whereIn('status', ['pending_approval', 'active']).forUpdate();
+  if (live.length === 0) return [];
+  const remaining = await trx.table('pos_order_items').where({ pos_order_id: orderId }).whereNull('voided_at');
+  const orphaned = live.filter((row) => {
+    if (remaining.length === 0) return true;
+    if (row.scope !== 'line') return false;
+    return !remaining.some((item) => (row.menu_item_id ? String(item.menu_item_id) === String(row.menu_item_id) : String(item.id) === String(row.pos_order_item_id)));
+  });
+  for (const row of orphaned) {
+    await trx.table('discounts').where({ id: row.id }).update({ status: 'removed', removed_by_user_id: userId, removed_at: new Date() });
+    if (row.kind === 'voucher') await voucherStore.releaseForDiscount(trx, row.id);
+  }
+  return orphaned.map((row) => ({ id: row.id, kind: row.kind, scope: row.scope, type: row.type, value: row.value }));
+}
+
 async function voidOrderItem({ context, orderItemId, reason, userId, canActForOthers = false }) {
-  if (!reason) throw new ValidationError('MISSING_FIELD', '"reason" is required to void an order item.', [{ field: 'reason', issue: 'missing' }]);
+  const typedReason = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 255) : null;
   const db = scopedDb().for(context);
   return db.transaction(async (trx) => {
-    const { order } = await lockOrderAndItem({ trx, orderItemId });
+    const { order, item } = await lockOrderAndItem({ trx, orderItemId });
     assertCanChangeTab(order, { userId, canActForOthers, reasonRequired: false });
+    if (await discountStore.hasCapturedUnsettledPayment(trx, order.id)) throw new OrderPaymentInProgressError(order.id);
+    let storedReason = typedReason;
+    if (!storedReason) {
+      if (!withinGraceWindow(order, item)) {
+        throw new ValidationError('MISSING_FIELD', '"reason" is required to void an order item that was added more than a moment ago or already sent to the kitchen or bar.', [{ field: 'reason', issue: 'missing' }]);
+      }
+      storedReason = GRACE_VOID_REASON;
+    }
     await trx.table('pos_order_items').where({ id: orderItemId }).update({
       voided_at: new Date(),
-      void_reason: reason,
+      void_reason: storedReason,
       voided_by_user_id: userId,
     });
-    return trx.table('pos_order_items').where({ id: orderItemId }).first();
+    const discountsRemoved = await removeOrphanedDiscounts(trx, { orderId: order.id, userId });
+    const voided = await trx.table('pos_order_items').where({ id: orderItemId }).first();
+    return discountsRemoved.length ? { ...voided, discounts_removed: discountsRemoved } : voided;
   });
 }
 

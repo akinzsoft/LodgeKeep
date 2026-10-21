@@ -8,6 +8,7 @@ import { DiscountDialog } from '../discounts/DiscountDialog.jsx';
 import { VoucherDialog } from '../discounts/VoucherDialog.jsx';
 import { approvalConsequence, receiptDiscountLabel } from '../discounts/discountText.js';
 import { DiscountList } from '../discounts/DiscountList.jsx';
+import { RemoveReasonDialog } from './RemoveReasonDialog.jsx';
 import { openPaystackPopup } from '../../shared/paystack.js';
 import { CategoryIcon, AllCategoriesIcon, PaymentMethodIcon, TrashIcon } from './registerCategoryIcons.jsx';
 import { EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
@@ -555,7 +556,12 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     loadActiveOrder(order.id);
   }
 
+  // One add request at a time: a double-tap or a retry on a slow connection must not put two units on the bill.
+  const addInFlight = useRef(false);
+
   async function handleAddItem(menuItemId) {
+    if (addInFlight.current) return;
+    addInFlight.current = true;
     setError(null);
     try {
       await posApi.addItem(activeOrderId, { menuItemId, quantity: 1, overrideReason: overrideReasonOf(activeOrderId) });
@@ -570,6 +576,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
         return;
       }
       setError(caught instanceof ApiError ? caught.message : 'Could not add this item.');
+    } finally {
+      addInFlight.current = false;
     }
   }
 
@@ -639,16 +647,21 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
    * server-side; a real failure is still surfaced, but never leaves the
    * display stale.
    */
-  async function confirmVoid(reason) {
-    const { ids } = voidingRow;
-    setVoidingRow(null);
+  async function removeRows(ids, name, reason) {
     setError(null);
     const results = await Promise.allSettled(ids.map((id) => posApi.voidOrderItem(activeOrderId, id, reason)));
-    const failure = results.find((result) => result.status === 'rejected');
-    if (failure) {
-      setError(failure.reason instanceof ApiError ? failure.reason.message : 'Could not void one or more items.');
-    }
+    // Outside the server's grace window (or already sent) a reason is required: ask for it for exactly the rows that were refused.
+    const needReason = ids.filter((id, index) => results[index].status === 'rejected' && results[index].reason instanceof ApiError && results[index].reason.code === 'VALIDATION_MISSING_FIELD');
+    const failure = results.find((result) => result.status === 'rejected' && !(result.reason instanceof ApiError && result.reason.code === 'VALIDATION_MISSING_FIELD'));
+    if (failure) setError(failure.reason instanceof ApiError ? failure.reason.message : 'Could not remove one or more items.');
     await loadActiveOrder(activeOrderId);
+    if (needReason.length > 0) setVoidingRow({ ids: needReason, name });
+  }
+
+  async function confirmVoid(reason) {
+    const { ids, name } = voidingRow;
+    setVoidingRow(null);
+    await removeRows(ids, name, reason);
   }
 
   async function handleAssignGroup(item, group) {
@@ -981,6 +994,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   // stale, still-loading tab's numbers during that gap.
   const orderLoaded = activeOrder && String(activeOrder.order.id) === String(activeOrderId);
   const unvoidedItems = orderLoaded ? activeOrder.items.filter((item) => !item.voided_at) : [];
+  const voidedItems = orderLoaded ? activeOrder.items.filter((item) => item.voided_at) : [];
+  const itemCount = unvoidedItems.reduce((count, row) => count + row.quantity, 0);
   const shownOrderId = orderLoaded ? activeOrder.order.id : null;
   useEffect(() => {
     if (shownOrderId == null) return;
@@ -1079,13 +1094,17 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   /** The real, fixed 7.5% service-charge amount for one group, computed against that group's own real, server-verified subtotal. Factored out (code-review fix) since this exact computation was being repeated at three separate call sites. */
   function serviceAmountForGroup(splitGroup) {
     const preview = previewForGroup(splitGroup);
-    return preview && serviceChargePercent !== null ? percentOfMoney(preview.subtotal, serviceChargePercent) : null;
+    if (!preview) return null;
+    // The server's own figure; the local calculation only covers a preview that predates the field.
+    if (preview.serviceCharge !== undefined) return preview.serviceCharge;
+    return serviceChargePercent !== null ? percentOfMoney(preview.subtotal, serviceChargePercent) : null;
   }
 
   function grandTotalFor(form) {
     const preview = previewForGroup(form.splitGroup);
     const serviceAmount = serviceAmountForGroup(form.splitGroup);
     if (!preview || serviceAmount === null) return null;
+    if (preview.total !== undefined) return preview.total;
     return sumMoney([preview.subtotal, preview.taxAmount, serviceAmount]);
   }
 
@@ -1372,6 +1391,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                           <span className={styles.ticketLineName}>{menuItemName(group.menuItemId)}</span>
                           <span className={styles.ticketLineUnitPrice}>
                             <Money amount={group.rows[0].unit_price} currencyCode={activeProperty.base_currency} /> × {quantity}
+                            {' = '}
+                            <Money amount={sumMoney(group.rows.map((row) => multiplyMoney(row.unit_price, row.quantity)))} currencyCode={activeProperty.base_currency} />
                           </span>
                         </div>
                         <div className={styles.ticketLineActions}>
@@ -1379,7 +1400,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                             <button
                               type="button"
                               className={styles.stepperButton}
-                              onClick={() => setVoidingRow({ ids: [lastRow.id], name: menuItemName(group.menuItemId) })}
+                              onClick={() => removeRows([lastRow.id], menuItemName(group.menuItemId))}
                               disabled={isOffline}
                               aria-label={`Remove one ${menuItemName(group.menuItemId)}`}
                             >
@@ -1405,7 +1426,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                             <button
                               type="button"
                               className={styles.removeButton}
-                              onClick={() => setVoidingRow({ ids: group.rows.map((row) => row.id), name: menuItemName(group.menuItemId) })}
+                              onClick={() => removeRows(group.rows.map((row) => row.id), menuItemName(group.menuItemId))}
                               disabled={isOffline}
                               aria-label={`Void ${menuItemName(group.menuItemId)}`}
                             >
@@ -1416,8 +1437,24 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                       </div>
                     );
                   })}
+                  {voidedItems.length > 0 &&
+                    groupOrderItems(voidedItems).map((group) => (
+                      <div key={`voided:${group.menuItemId}:${group.splitGroup ?? 'none'}`} className={`${styles.ticketLine} ${styles.ticketLineVoided}`}>
+                        <div className={styles.ticketLineInfo}>
+                          <span className={styles.ticketLineName}>{menuItemName(group.menuItemId)}</span>
+                          <span className={styles.ticketLineUnitPrice}>× {group.rows.reduce((sum, row) => sum + row.quantity, 0)}</span>
+                        </div>
+                        <span className={styles.voidedLabel}>Voided</span>
+                      </div>
+                    ))}
                   {unvoidedItems.length === 0 && <p className={styles.ticketEmpty}>Tap a menu item to add it to this ticket.</p>}
                 </div>
+
+                {unvoidedItems.length > 0 && (
+                  <p className={styles.ticketItemCount}>
+                    {itemCount} item{itemCount === 1 ? '' : 's'}
+                  </p>
+                )}
 
                 {canDiscount && unvoidedItems.length > 0 && canChangeTab(activeOrder.order) && activeTabWorkable && (
                   <button type="button" className={styles.manageSplitButton} onClick={() => setDiscountDialog({ lineId: null })} disabled={isOffline || settling}>
@@ -1698,15 +1735,12 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
           )}
 
           {voidingRow && (
-            <ConfirmDialog
-              title="Void item"
+            <RemoveReasonDialog
               consequence={
                 voidingRow.ids.length > 1
-                  ? `This removes all ${voidingRow.ids.length} "${voidingRow.name}" from the tab. This cannot be undone.`
-                  : `This removes one "${voidingRow.name}" from the tab. This cannot be undone.`
+                  ? `This removes all ${voidingRow.ids.length} "${voidingRow.name}" from the tab. A reason is needed because it was added a while ago or already sent.`
+                  : `This removes one "${voidingRow.name}" from the tab. A reason is needed because it was added a while ago or already sent.`
               }
-              requireReason
-              confirmLabel="Void"
               onConfirm={confirmVoid}
               onCancel={() => setVoidingRow(null)}
             />
