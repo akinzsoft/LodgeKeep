@@ -314,11 +314,12 @@ describe('POS Register — Paystack card/NQR checkout', () => {
       const { orderId, menuItemId } = await openTabWithItem();
       const started = await startCheckout(orderId, { tender: 'card' });
       await capture(started.body.data.id);
-      await t.request
-        .post(`/api/v1/pos/orders/${orderId}/items`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({ menu_item_id: menuItemId, quantity: 1 })
-        .expect(200);
+      // Adding a line after capture is now refused up front (BUSINESS_RULE_POS_ORDER_PAYMENT_IN_PROGRESS), so the
+      // settlement-time amount check is exercised by changing the bill underneath the captured payment instead.
+      const blocked = await t.request.post(`/api/v1/pos/orders/${orderId}/items`).set('Authorization', `Bearer ${token}`).send({ menu_item_id: menuItemId, quantity: 1 });
+      expect(blocked.status).toBe(422);
+      expect(blocked.body.error.code).toBe('BUSINESS_RULE_POS_ORDER_PAYMENT_IN_PROGRESS');
+      await t.trx('pos_order_items').where({ pos_order_id: orderId }).update({ quantity: 2 });
 
       const res = await settle(orderId, { method: 'card', service_charge: '3.00', payment_id: started.body.data.id });
       expect(res.status).toBe(422);
