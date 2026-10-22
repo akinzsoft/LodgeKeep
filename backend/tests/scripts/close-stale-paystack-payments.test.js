@@ -55,7 +55,7 @@ describe('scripts/close-stale-paystack-payments', () => {
       amount: '100.00',
       currency: 'NGN',
       status: 'PENDING',
-      created_at: new Date(BEFORE.getTime() - 48 * HOUR),
+      created_at: new Date(BEFORE.getTime() - 60 * HOUR), // 84h old: mid-way through "3d", so second truncation or test duration cannot flip it
       ...overrides,
     });
     return id;
