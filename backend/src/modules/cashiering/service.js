@@ -1192,6 +1192,46 @@ async function applyGatewayResult({ trx, payment, gatewayStatus, providerPayment
   return trx.table('payments').where({ id: payment.id }).first();
 }
 
+const DEFAULT_RECORD_NOT_FOUND_MIN_AGE_DAYS = 7;
+
+/** `PAYMENT_RECORD_NOT_FOUND_MIN_AGE_DAYS` (default 7); a garbage or non-positive value falls back to the default. */
+function recordNotFoundMinAgeMs() {
+  const days = Number(process.env.PAYMENT_RECORD_NOT_FOUND_MIN_AGE_DAYS);
+  return (Number.isFinite(days) && days > 0 ? days : DEFAULT_RECORD_NOT_FOUND_MIN_AGE_DAYS) * 24 * 60 * 60 * 1000;
+}
+
+function isOlderThanRecordNotFoundAge(createdAt) {
+  return Date.now() - new Date(createdAt).getTime() >= recordNotFoundMinAgeMs();
+}
+
+/**
+ * Paystack definitively has no record of an old, unpaid payment: close it as CANCELLED. The update
+ * is conditional on the payment still being unpaid, so a capture that lands meanwhile is never overwritten.
+ */
+async function closePaymentUnknownToGateway({ db, payment, userId }) {
+  return db.transaction(async (trx) => {
+    const closed = await trx
+      .table('payments')
+      .where({ id: payment.id })
+      .whereIn('status', ['INITIATED', 'PENDING'])
+      .update({ status: 'CANCELLED', failure_code: 'gateway_record_not_found', failure_reason: 'Paystack has no record of this payment.' });
+    if (closed > 0) {
+      await recordAuditEntry(trx, {
+        entityType: 'payments',
+        entityId: payment.id,
+        propertyId: payment.property_id,
+        userId: userId ?? null,
+        action: 'gateway_payment_closed',
+        source: 'api',
+        beforeState: { status: payment.status },
+        afterState: { status: 'CANCELLED', code: 'gateway_record_not_found' },
+        reason: 'Paystack reported no such transaction for a payment older than the allowed age.',
+      });
+    }
+    return trx.table('payments').where({ id: payment.id }).first();
+  });
+}
+
 /** The manual/fallback sync path (`src/modules/cashiering/paystack-adapter.js`'s own header explains why this exists alongside the webhook). */
 async function verifyPayment({ context, paymentId, userId }) {
   const db = scopedDb().for(context);
@@ -1203,7 +1243,17 @@ async function verifyPayment({ context, paymentId, userId }) {
   if (TERMINAL_PAYMENT_STATUSES.has(payment.status)) return payment;
 
   const { adapter } = await paystack.resolveAdapterForCurrency(db, payment.currency);
-  const result = await adapter.verifyTransaction({ reference: payment.provider_reference });
+  let result;
+  try {
+    result = await adapter.verifyTransaction({ reference: payment.provider_reference });
+  } catch (error) {
+    // "Paystack has no such transaction" is definitive only for an OLD payment (e.g. one made
+    // with a test key before a live cutover). A recent one may just not have propagated yet.
+    if (interpretGatewayError(error) === 'record_not_found' && isOlderThanRecordNotFoundAge(payment.created_at)) {
+      return closePaymentUnknownToGateway({ db, payment, userId });
+    }
+    throw error;
+  }
 
   // Paystack's record must AGREE with the local payment before anything is
   // applied — the same check the webhook path makes (`src/shared/gateway-record.js`).
