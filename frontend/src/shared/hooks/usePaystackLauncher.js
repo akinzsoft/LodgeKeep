@@ -24,6 +24,7 @@ export function usePaystackLauncher({ fallbackMs = CHECKOUT_FALLBACK_MS } = {}) 
   const [opening, setOpening] = useState(false);
   const [fallbackUrl, setFallbackUrl] = useState(null);
   const inFlight = useRef(false);
+  const currentLaunch = useRef(0);
   const timer = useRef(null);
   const mounted = useRef(true);
 
@@ -39,10 +40,14 @@ export function usePaystackLauncher({ fallbackMs = CHECKOUT_FALLBACK_MS } = {}) 
     ({ accessCode, authorizationUrl }) => {
       if (inFlight.current) return Promise.resolve('ignored');
       inFlight.current = true;
+      currentLaunch.current += 1;
+      const launchId = currentLaunch.current;
       setOpening(true);
       setFallbackUrl(null);
       const url = authorizationUrl || paystackCheckoutUrl(accessCode);
       const finish = () => {
+        // A launch that was replaced after its timeout must not reset the newer one.
+        if (launchId !== currentLaunch.current) return;
         clearTimeout(timer.current);
         inFlight.current = false;
         if (mounted.current) {
@@ -51,7 +56,12 @@ export function usePaystackLauncher({ fallbackMs = CHECKOUT_FALLBACK_MS } = {}) 
         }
       };
       timer.current = setTimeout(() => {
-        if (mounted.current && url) setFallbackUrl(url);
+        // No window after the wait: show the link and release the guard so the user can press again.
+        inFlight.current = false;
+        if (mounted.current) {
+          setOpening(false);
+          if (url) setFallbackUrl(url);
+        }
       }, fallbackMs);
 
       return new Promise((resolve, reject) => {
@@ -60,6 +70,7 @@ export function usePaystackLauncher({ fallbackMs = CHECKOUT_FALLBACK_MS } = {}) 
           accessCode,
           onOpen: () => {
             // The window is up: no fallback needed, and the button no longer waits.
+            if (launchId !== currentLaunch.current) return;
             clearTimeout(timer.current);
             if (mounted.current) {
               setOpening(false);
@@ -77,6 +88,7 @@ export function usePaystackLauncher({ fallbackMs = CHECKOUT_FALLBACK_MS } = {}) 
           },
         }).catch((error) => {
           // Script failed to load: show the link at once rather than after the wait.
+          if (launchId !== currentLaunch.current) return reject(error);
           clearTimeout(timer.current);
           inFlight.current = false;
           if (mounted.current) {

@@ -227,6 +227,9 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
     setPrinting(false);
   }, [printing]);
   const isSettled = isBalanceSettled(folio.balance);
+  // A deposit is taken on a folio that owes nothing, so the checkout panel must not depend on the balance:
+  // it stays while its own payment is still unpaid, and goes once that payment is captured or ends.
+  const checkoutPaymentOpen = (payments ?? []).some((payment) => String(payment.id) === String(checkoutPaymentId) && ['INITIATED', 'PENDING'].includes(payment.status));
   const balanceState = describeBalanceState(folio.balance);
 
   // PLAN.md Phase 4 (Accounts Receivable) — `undefined` = not applicable
@@ -555,10 +558,14 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
         physically at this terminal. The popup's own success/close event is
         never trusted by itself (ARCHITECTURE.md §7); closing it always
         re-verifies through the real backend endpoint, the same one the
-        "Verify" action above already uses. Hidden once the folio settles —
-        nothing left to pay.
+        "Verify" action above already uses. Shown while the folio owes money
+        or its own checkout payment is still unpaid (a deposit is taken on a
+        folio that owes nothing); hidden once that payment ends.
       */}
-      {checkoutUrl && !isSettled && (
+      {/* While the payment is being created there is no panel yet: say so. */}
+      {startingCheckoutUi && !checkoutUrl && <PaystackLaunchStatus opening className={formStyles.disabledNotice} />}
+
+      {checkoutUrl && (!isSettled || checkoutPaymentOpen) && (
         <div className={formStyles.paymentPanel}>
           <p className={formStyles.paymentPanelHint}>Complete payment securely via Paystack — the popup opens on this page.</p>
           <div className={formStyles.actionsRow}>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CashieringScreen } from '../CashieringScreen.jsx';
 import { approveInDialog, TEST_APPROVERS, TEST_APPROVAL_TOKEN } from '../../approvals/__tests__/approveInDialog.js';
@@ -427,6 +427,76 @@ describe('<CashieringScreen>', () => {
 
       await act(async () => release({ id: '31', authorizationUrl: 'https://paystack.test/pay/abc', accessCode: 'access-abc' }));
       expect(await screen.findByRole('button', { name: 'Pay now' })).toBeInTheDocument();
+    });
+
+    it('a deposit on a settled folio (nothing owing) still shows the Paystack panel and opens the window', async () => {
+      // Production case: the folio had a credit after the first deposit, so "Take a deposit" is the button.
+      mocks.listFoliosForReservation.mockResolvedValue([{ ...FOLIO, balance: '-1000.00' }]);
+      mocks.getFolio.mockResolvedValue({ ...FOLIO, balance: '-1000.00', lineItems: [LINE_ITEM], payments: [{ id: '159', provider: 'paystack', status: 'PENDING', amount: '1000.00', currency: 'NGN' }] });
+      mocks.capturePaystackPayment.mockResolvedValue({ id: '159', status: 'PENDING', authorizationUrl: 'https://paystack.test/pay/dep', accessCode: 'access-dep' });
+      mocks.openPaystackPopup.mockImplementation(() => new Promise(() => {}));
+      await loadReservation();
+      await screen.findByText('Room 101');
+      await userEvent.click(screen.getByRole('button', { name: 'Take a deposit' }));
+      await userEvent.selectOptions(screen.getByLabelText('Method'), 'paystack');
+      await userEvent.type(screen.getByLabelText('Guest email'), 'guest@example.com');
+      await userEvent.type(screen.getByLabelText(/^Amount/), '1000.00');
+      await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
+
+      const payNow = await screen.findByRole('button', { name: 'Pay now' });
+      expect(screen.getByRole('link', { name: 'Open payment page in a new tab' })).toHaveAttribute('href', 'https://paystack.test/pay/dep');
+      await userEvent.click(payNow);
+      expect(mocks.openPaystackPopup).toHaveBeenCalledWith(expect.objectContaining({ accessCode: 'access-dep' }));
+      expect(screen.getByRole('status')).toHaveTextContent('Opening payment page…');
+    });
+
+    it('press, complete the popup, press again with a reused PENDING payment: the window opens a second time', async () => {
+      mocks.listFoliosForReservation.mockResolvedValue([{ ...FOLIO, balance: '0.00' }]);
+      // The folio lists the payment as PENDING until it is verified, then it is gone from the open ones.
+      let listed = [];
+      mocks.getFolio.mockImplementation(async () => ({ ...FOLIO, balance: '0.00', lineItems: [LINE_ITEM], payments: listed }));
+      mocks.capturePaystackPayment.mockImplementation(async () => {
+        const next = listed.length === 0 && mocks.capturePaystackPayment.mock.calls.length === 1 ? { id: '158', authorizationUrl: 'https://paystack.test/pay/1', accessCode: 'access-1' } : { id: '159', status: 'PENDING', authorizationUrl: 'https://checkout.paystack.com/access-2', accessCode: 'access-2' };
+        listed = [{ id: next.id, provider: 'paystack', status: 'PENDING', amount: '1000.00', currency: 'NGN' }];
+        return next;
+      });
+      mocks.verifyPayment.mockImplementation(async (id) => {
+        listed = [{ id, provider: 'paystack', status: 'CAPTURED', amount: '1000.00', currency: 'NGN' }];
+        return { id, status: 'CAPTURED' };
+      });
+      mocks.openPaystackPopup.mockImplementation(async ({ onClose }) => onClose());
+      await loadReservation();
+      await screen.findByText('Room 101');
+
+      for (const code of ['access-1', 'access-2']) {
+        // The form stays open after a card capture, so only the first round opens it.
+        if (!screen.queryByLabelText('Method')) await userEvent.click(screen.getByRole('button', { name: 'Take a deposit' }));
+        await userEvent.selectOptions(screen.getByLabelText('Method'), 'paystack');
+        const email = screen.getByLabelText('Guest email');
+        await userEvent.clear(email);
+        await userEvent.type(email, 'guest@example.com');
+        await userEvent.clear(screen.getByLabelText(/^Amount/));
+        await userEvent.type(screen.getByLabelText(/^Amount/), '1000.00');
+        await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
+        await userEvent.click(await screen.findByRole('button', { name: 'Pay now' }));
+        await waitFor(() => expect(mocks.openPaystackPopup).toHaveBeenCalledWith(expect.objectContaining({ accessCode: code })));
+        await waitFor(() => expect(screen.queryByRole('button', { name: 'Pay now' })).not.toBeInTheDocument());
+      }
+      expect(mocks.openPaystackPopup).toHaveBeenCalledTimes(2);
+    });
+
+    it('when the Paystack script is blocked the link shows at once and pressing Pay now again tries again', async () => {
+      mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+      mocks.capturePaystackPayment.mockResolvedValue({ id: '31', authorizationUrl: 'https://paystack.test/pay/abc', accessCode: 'access-abc' });
+      mocks.openPaystackPopup.mockRejectedValue(new Error('blocked'));
+      await startPaystackCapture();
+      await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
+
+      const payNow = await screen.findByRole('button', { name: 'Pay now' });
+      await userEvent.click(payNow);
+      expect(await screen.findByRole('link', { name: 'Open payment page' })).toHaveAttribute('href', 'https://paystack.test/pay/abc');
+      await userEvent.click(payNow);
+      await waitFor(() => expect(mocks.openPaystackPopup).toHaveBeenCalledTimes(2));
     });
 
     it('shows "Opening payment page…" and then an "Open payment page" link when the window never appears', async () => {
