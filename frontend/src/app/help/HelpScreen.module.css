@@ -2,7 +2,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
-  max-width: 48rem;
+  max-width: 64rem;
 }
 
 .title {
@@ -133,4 +133,21 @@
   color: var(--text-primary);
   font: inherit;
   cursor: pointer;
+}
+
+/* Text and media sit side by side when there is room, stacked on a phone; the steps are never hidden. */
+.articleBody {
+  display: grid;
+  gap: var(--space-5);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.text {
+  min-width: 0;
+}
+
+@media (width >= 960px) {
+  .articleBody:has(aside) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 24rem);
+  }
 }

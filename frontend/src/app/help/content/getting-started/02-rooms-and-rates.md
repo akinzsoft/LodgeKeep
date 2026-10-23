@@ -1,3 +1,12 @@
+---
+images:
+  - file: getting-started/02-rooms-and-rates/1-room-types.webp
+    alt: The Room Types tab listing a Standard Room and a Deluxe Room
+    caption: Setup → Room Types
+  - file: getting-started/02-rooms-and-rates/2-rooms.webp
+    alt: The Rooms tab listing rooms with their room type and status
+    caption: Setup → Rooms
+---
 # Room types, rooms and rates
 
 ## What it is for

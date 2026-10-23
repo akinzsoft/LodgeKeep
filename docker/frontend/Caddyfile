@@ -176,7 +176,10 @@
 		}
 		header @landing Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		header @staffApp Permissions-Policy "camera=(self), microphone=(), geolocation=(), payment=(self)"
-		header @staffApp Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://js.paystack.co https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		# Help guides' video embeds (YouTube no-cookie, Vimeo, Loom, Cloudflare Stream) are
+		# framed only after the reader presses play, and a direct mp4 needs `media-src https:`.
+		# Staff app only: the portal/QR/signup policy below is unchanged.
+		header @staffApp Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://js.paystack.co https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co https://challenges.cloudflare.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.loom.com https://iframe.videodelivery.net https://*.cloudflarestream.com; media-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		header @strictApps Content-Security-Policy "default-src 'self'; script-src 'self' https://js.paystack.co https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.paystack.co https://js.paystack.co; frame-src https://checkout.paystack.com https://standard.paystack.co https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 		# Caching, so a deploy actually reaches a reload (user-reported: a

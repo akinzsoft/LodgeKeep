@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Card } from '../../shared/components/index.js';
+import { GuideMedia } from './GuideMedia.jsx';
 import { Markdown } from './markdown.jsx';
 import { getGuide, listGuides } from './guides.js';
 import { STEPS } from './gettingStarted.js';
@@ -36,7 +37,12 @@ export function HelpScreen({ activeProperty, currentUserId }) {
         </button>
         <article className={styles.article}>
           {stepForGuide >= 0 && <p className={styles.stepLabel}>Step {stepForGuide + 1} of {STEPS.length}</p>}
-          <Markdown source={guide.source} onOpenGuide={setOpenSlug} />
+          <div className={styles.articleBody}>
+            <div className={styles.text}>
+              <Markdown source={guide.source} onOpenGuide={setOpenSlug} />
+            </div>
+            <GuideMedia video={guide.video} videoTitle={guide.videoTitle} images={guide.images} />
+          </div>
           {stepForGuide >= 0 && (
             <nav className={styles.stepNav} aria-label="Getting started steps">
               {stepForGuide > 0 && (

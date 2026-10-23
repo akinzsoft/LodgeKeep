@@ -120,4 +120,10 @@ export default [
       },
     },
   },
+
+  {
+    // Node script that drives a browser; `document` is used inside page.evaluate callbacks.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: { URL: 'readonly', console: 'readonly', document: 'readonly' } },
+  },
 ];
