@@ -138,6 +138,7 @@
 const { scopedDb } = require('../../db');
 const { sumMoney, negateMoney, percentOfMoney, compareMoney } = require('../../shared/money');
 const { ValidationError } = require('../../shared/errors');
+const { refundDates } = require('../../shared/refund-date');
 const { listStandingSettlements, listUnsettledCardPayments } = require('../pos/sales-report');
 
 const MAX_RANGE_DAYS = 92;
@@ -230,7 +231,7 @@ async function resolveRoomNumbers({ db, reservationIds }) {
  * other query surfaces it once voided) and the refund (its own NEGATIVE
  * line) are returned.
  */
-async function listPosRefundLines({ db, dateFrom, dateTo }) {
+async function listPosRefundLines({ db, dateFrom, dateTo, timeZone }) {
   const refunds = await db
     .table('payments')
     .whereIn('settlement_target', ['pos_order', 'pos_register', 'supermarket_sale'])
@@ -274,22 +275,21 @@ async function listPosRefundLines({ db, dateFrom, dateTo }) {
   const outlets = outletIds.length ? await db.table('pos_outlets').whereIn('id', outletIds).select('id', 'name') : [];
   const outletNameById = new Map(outlets.map((row) => [String(row.id), row.name]));
 
+  const dateOfRefund = await refundDates({ db, refunds: refunds.map((row) => ({ id: row.payment_id, captured_at: row.captured_at })), timeZone });
   const lines = [];
   const reconstructedParentIds = new Set();
   for (const refund of refunds) {
     const settlement = settlementByParentId.get(String(refund.parent_payment_id));
     const outletName = settlement?.outlet_id ? outletNameById.get(String(settlement.outlet_id)) ?? null : null;
-    // A refund's own resolved business_date always prefers the ORIGINAL
-    // settlement's — the day the money was actually earned/owed — falling
-    // back to the refund's own capture date only if that settlement can no
-    // longer be found at all (should not happen in practice: voiding a
-    // settlement never deletes it).
-    const businessDate = settlement?.business_date ?? new Date(refund.captured_at).toISOString().slice(0, 10);
+    // A refund counts on the day it was PROCESSED (its own capture date in the property's timezone), never the sale's
+    // day, so a closed day is not changed after the fact. The sale it refunds stays a positive line on its own day
+    // (a voided-by-refund settlement is listed by `buildReconciliation` like any other).
+    const businessDate = dateOfRefund.get(String(refund.payment_id));
 
     const parent = parentById.get(String(refund.parent_payment_id));
-    // The original charge is rebuilt here only when its settlement was voided (a full refund) or is gone: a payment
-    // refunded in part keeps its settlement standing, and that settlement already supplies the charge line.
-    if (parent && (!settlement || settlement.voided_at) && !reconstructedParentIds.has(String(parent.id))) {
+    // The original charge is rebuilt here only when its settlement is gone altogether (should not happen: voiding a
+    // settlement never deletes it). A settlement, voided or standing, already supplies the charge line.
+    if (parent && !settlement && !reconstructedParentIds.has(String(parent.id))) {
       reconstructedParentIds.add(String(parent.id));
       if (businessDate >= dateFrom && businessDate <= dateTo) {
         lines.push({
@@ -625,7 +625,7 @@ function summarizeByMethod(lines) {
 async function buildReconciliation({ context, dateFrom, dateTo }) {
   assertReasonableRange(dateFrom, dateTo);
   const db = scopedDb().for(context);
-  const property = await db.table('properties').where({ id: context.propertyId }).first('base_currency');
+  const property = await db.table('properties').where({ id: context.propertyId }).first('base_currency', 'timezone');
 
   const folioRows = await listFolioPaymentLines({ db, dateFrom, dateTo });
   const reservationIds = [...new Set(folioRows.map((row) => String(row.reservation_id)))];
@@ -637,7 +637,9 @@ async function buildReconciliation({ context, dateFrom, dateTo }) {
   const folioLines = folioRows.map((row) => toFolioLine(row, roomNumberByReservation, folioParentFeeById));
 
   const settlementRows = await listStandingSettlements({ db, dateFrom, dateTo });
-  const standingPosRows = settlementRows.filter((row) => row.method !== 'room_charge');
+  // A sale refunded in full keeps its line on its own day (the money really was taken); its refund is a negative line on the refund's day.
+  const refundedSettlementRows = await listStandingSettlements({ db, dateFrom, dateTo, refundedOriginals: true });
+  const standingPosRows = [...settlementRows, ...refundedSettlementRows].filter((row) => row.method !== 'room_charge');
   const posSettlementLines = standingPosRows.map(toPosSettlementLine);
 
   const unsettled = await listUnsettledCardPayments({ db });
@@ -651,7 +653,7 @@ async function buildReconciliation({ context, dateFrom, dateTo }) {
     })
     .map((row) => toOrphanedCaptureLine(row, unsettledOutletNameById));
 
-  const posRefundRows = await listPosRefundLines({ db, dateFrom, dateTo });
+  const posRefundRows = await listPosRefundLines({ db, dateFrom, dateTo, timeZone: property?.timezone });
   const posRefundLines = posRefundRows.map(toPosRefundLine);
 
   const outletByLine = new Map();

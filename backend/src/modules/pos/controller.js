@@ -24,6 +24,7 @@ const { assertPermission } = require('../../auth');
 const { PermissionDeniedError } = require('../../auth/errors');
 const { computeSalesReport } = require('./sales-report');
 const { listStrandedRegisterPayments } = require('./stranded-payments');
+const cardSaleRefund = require('./card-sale-refund');
 const { computeCostOfSalesMargin } = require('../stock/reporting');
 const { toCsv } = require('../reporting/service');
 const { claimApproval, approvalConsumer } = require('../approvals');
@@ -612,6 +613,69 @@ async function listStrandedPayments(req, res, next) {
   }
 }
 
+function requireDateRange(req) {
+  const dateFrom = req.query?.date_from;
+  const dateTo = req.query?.date_to;
+  const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+  if (!isoDate.test(dateFrom ?? '') || !isoDate.test(dateTo ?? '') || dateFrom > dateTo) {
+    throw new ValidationError('INVALID_DATE_RANGE', '"date_from" and "date_to" are required, as YYYY-MM-DD, with the start not after the end.', [{ field: 'date_from', issue: 'invalid' }]);
+  }
+  return { dateFrom, dateTo };
+}
+
+/** Settled card sales in a business-date range with where each one's refund stands. */
+async function listCardSales(req, res, next) {
+  try {
+    const { dateFrom, dateTo } = requireDateRange(req);
+    const outletIds = await outletScope.scopeForRequest(req);
+    res.status(200).json(ok(await cardSaleRefund.listCardSales({ context: req.context, dateFrom, dateTo, outletId: req.query.outlet_id || null, outletIds })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Full refund of a settled card sale. No amount is read from the request. The manager's PIN approval is claimed inside
+ * the refund (`pos.refund_payment`, bound to this payment); who started the refund and who approved it go on the audit row.
+ */
+async function refundCardSale(req, res, next) {
+  try {
+    const reason = cardSaleRefund.buildRefundReason({ reasonCode: req.body?.reason_code, reasonNote: req.body?.reason_note });
+    let approval = null;
+    await runIdempotentMutation(req, res, {
+      operationType: 'pos.refund_card_sale',
+      entityType: 'payments',
+      action: 'refund_card_sale',
+      handler: async () => {
+        const refund = await cardSaleRefund.refundCardSale({
+          context: req.context,
+          paymentId: req.params.paymentId,
+          reason,
+          idempotencyKey: req.get('Idempotency-Key'),
+          userId: req.context.userId,
+          approve: async (trx) => {
+            approval = await claimApproval(req, trx, 'pos.refund_payment', req.params.paymentId);
+            return approval;
+          },
+        });
+        return { status: 201, body: ok(refund) };
+      },
+      auditExtras: () => ({
+        reason,
+        afterState: {
+          refunded_payment_id: String(req.params.paymentId),
+          reason_code: req.body.reason_code,
+          started_by_user_id: String(req.context.userId),
+          ...(approval ? { approved_by_user_id: String(approval.approverUserId), approval_id: String(approval.approvalId) } : {}),
+        },
+      }),
+    });
+  } catch (error) {
+    if (error instanceof cardSaleRefund.CardSaleNotFoundError) return notFound(res);
+    next(error);
+  }
+}
+
 async function listKitchenTickets(req, res, next) {
   try {
     const outletIds = await outletScope.scopeForRequest(req);
@@ -913,6 +977,11 @@ const SALES_CSV_SECTIONS = {
   items: { columns: ['name', 'quantity', 'sales', 'cost', 'profit'], rows: (report) => report.topItems },
   tenders: { columns: ['tender', 'checks', 'total'], rows: (report) => report.byTender },
   outlets: { columns: ['name', 'tabs', 'checks', 'subtotal', 'tax', 'serviceCharge', 'tips', 'total'], rows: (report) => report.byOutlet },
+  // Card refunds processed in the range, as negative amounts on the day they were processed.
+  refunds: {
+    columns: ['refundDate', 'originalBusinessDate', 'refundedAt', 'tableLabel', 'outletName', 'tender', 'amount', 'subtotal', 'tax', 'serviceCharge', 'tips', 'reason', 'providerReference'],
+    rows: (report) => (report.refunds?.lines ?? []).map((line) => ({ ...line, refundedAt: new Date(line.refundedAt).toISOString() })),
+  },
 };
 
 /**
@@ -939,7 +1008,7 @@ async function salesReport(req, res, next) {
 
     if (req.query?.format === 'csv') {
       const section = SALES_CSV_SECTIONS[req.query?.section ?? 'tabs'];
-      if (!section) throw new ValidationError('INVALID_SECTION', '"section" must be tabs, items, tenders, or outlets.', [{ field: 'section', issue: 'invalid' }]);
+      if (!section) throw new ValidationError('INVALID_SECTION', '"section" must be tabs, items, tenders, outlets, or refunds.', [{ field: 'section', issue: 'invalid' }]);
       const name = req.query?.section ?? 'tabs';
       res
         .status(200)
@@ -1088,6 +1157,8 @@ module.exports = {
   findInHouseForCharge,
   listOrders,
   listStrandedPayments,
+  listCardSales,
+  refundCardSale,
   listKitchenTickets,
   markTicketDone,
   getOrder,

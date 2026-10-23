@@ -7,9 +7,18 @@
  * `routes.js`).
  *
  * Filters on `pos_order_settlements.business_date` (ARCHITECTURE.md §6),
- * never the wall clock. Voided settlements are excluded everywhere: a
- * voided check was reversed and took no money. On a split tab, only the
- * items of checks that still stand count toward top sellers.
+ * never the wall clock. A settlement voided by hand was reversed and took no
+ * money, so it is excluded everywhere. A settlement voided by a full card
+ * refund is different: the sale really happened, so it stays in the money
+ * totals (tenders, outlets, settled tabs) on its own business date, and the
+ * refund is a separate negative line (`refunds`) on the day it was processed
+ * (`shared/refund-date.js`). Net = sales settled in the range minus refunds
+ * processed in the range, so a closed day never changes after the fact.
+ * Item rows follow the same rule (so they add up to the summary); PROFIT and
+ * margin are worked out only on checks that still stand (the refund reversed
+ * that stock, so there is no cost to set against a refunded sale). On a split
+ * tab, only the items of checks that were not hand-voided count toward top
+ * sellers.
  *
  * Money is summed exactly (`shared/money.js`), never as floats. Totals are
  * in the property's `base_currency` — POS rows carry no currency of their
@@ -28,6 +37,7 @@ const { isPointOfSaleOutlet, SUPERMARKET_OUTLET_TYPE } = require('../../shared/o
 const { allocateLineNetAndTax } = require('../../shared/line-allocation');
 const { applyDiscounts } = require('../../shared/discount-pricing');
 const cashieringService = require('../cashiering/service');
+const { refundDates } = require('../../shared/refund-date');
 
 const TENDERS = ['cash', 'card', 'nqr', 'terminal', 'room_charge'];
 const TOP_ITEMS_LIMIT = 20;
@@ -51,15 +61,17 @@ function cashierName(row) {
   return name || null;
 }
 
-async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
+async function listStandingSettlements({ db, dateFrom, dateTo, outletId, refundedOriginals = false }) {
   let query = db
     .table('pos_order_settlements')
     .joinScoped('pos_orders', (join) => join.on('pos_orders.id', '=', 'pos_order_settlements.pos_order_id'))
     .joinScoped('pos_outlets', (join) => join.on('pos_outlets.id', '=', 'pos_orders.outlet_id'), { type: 'left' })
     .joinScoped('users', (join) => join.on('users.id', '=', 'pos_order_settlements.settled_by_user_id'), { type: 'left' })
     .joinScoped('payments', (join) => join.on('payments.id', '=', 'pos_order_settlements.payment_id'), { type: 'left' })
-    .whereNull('pos_order_settlements.voided_at')
     .whereBetween('pos_order_settlements.business_date', [dateFrom, dateTo]);
+  // Only a gateway-paid settlement is ever voided by a refund (a hand void of one is refused), so a voided settlement
+  // whose payment is REFUNDED is a sale that was refunded in full.
+  query = refundedOriginals ? query.whereNotNull('pos_order_settlements.voided_at').where('payments.status', 'REFUNDED') : query.whereNull('pos_order_settlements.voided_at');
   if (outletId) query = query.where('pos_orders.outlet_id', outletId);
   const rows = await query
     .select(
@@ -96,7 +108,91 @@ async function listStandingSettlements({ db, dateFrom, dateTo, outletId }) {
       'users.last_name as cashier_last_name'
     )
     .orderBy('pos_order_settlements.settled_at', 'desc');
+  if (refundedOriginals) return rows.map((row) => ({ ...row, refunded: true }));
   return withPartialRefunds({ db, rows });
+}
+
+/**
+ * Full card refunds of Register / guest-order sales PROCESSED in the range, each as a negative line on the day the
+ * refund was captured (never the sale's day). A refund is only a line here when its sale's settlement was voided by it
+ * (a full refund); a partial refund leaves the sale standing and stays a `partiallyRefunded` note on the payment.
+ * Amounts are negative; the components (before tax, tax, service, tip) are the refunded sale's own.
+ */
+async function listRefundLines({ db, dateFrom, dateTo, outletId, timeZone }) {
+  const day = 24 * 60 * 60 * 1000;
+  // A refund counts on the business date recorded when it was processed, else on its capture date in the property's
+  // timezone. So fetch the refunds recorded in range, plus those captured near it (a day either side), then settle each one's date.
+  const from = new Date(Date.parse(`${dateFrom}T00:00:00Z`) - day);
+  const to = new Date(Date.parse(`${dateTo}T00:00:00Z`) + 2 * day);
+  const recordedIds = (await db.table('refund_reconciliations').whereBetween('business_date', [dateFrom, dateTo]).select('payment_id')).map((row) => row.payment_id);
+  const refunds = await db
+    .table('payments')
+    .whereIn('settlement_target', ['pos_register', 'pos_order', 'supermarket_sale'])
+    .whereNotNull('parent_payment_id')
+    .where({ status: 'CAPTURED' })
+    .where((group) => (recordedIds.length ? group.whereBetween('captured_at', [from, to]).orWhereIn('id', recordedIds) : group.whereBetween('captured_at', [from, to])))
+    .select('id', 'parent_payment_id', 'tender', 'amount', 'currency', 'captured_at', 'provider_reference');
+  const dateOf = await refundDates({ db, refunds, timeZone });
+  const dated = refunds.map((refund) => ({ refund, date: dateOf.get(String(refund.id)) })).filter(({ date }) => date >= dateFrom && date <= dateTo);
+  if (dated.length === 0) return [];
+
+  const parentIds = [...new Set(dated.map(({ refund }) => String(refund.parent_payment_id)))];
+  let settlementQuery = db
+    .table('pos_order_settlements')
+    .joinScoped('pos_orders', (join) => join.on('pos_orders.id', '=', 'pos_order_settlements.pos_order_id'))
+    .joinScoped('pos_outlets', (join) => join.on('pos_outlets.id', '=', 'pos_orders.outlet_id'), { type: 'left' })
+    .whereIn('pos_order_settlements.payment_id', parentIds)
+    .whereNotNull('pos_order_settlements.voided_at');
+  if (outletId) settlementQuery = settlementQuery.where('pos_orders.outlet_id', outletId);
+  const settlements = await settlementQuery.select(
+    'pos_order_settlements.payment_id as payment_id',
+    'pos_order_settlements.pos_order_id as pos_order_id',
+    'pos_order_settlements.business_date as business_date',
+    'pos_order_settlements.tender as tender',
+    'pos_order_settlements.method as method',
+    'pos_order_settlements.subtotal as subtotal',
+    'pos_order_settlements.tax_amount as tax_amount',
+    'pos_order_settlements.tip_amount as tip_amount',
+    'pos_order_settlements.service_charge as service_charge',
+    'pos_orders.table_label as table_label',
+    'pos_orders.outlet_id as outlet_id',
+    'pos_outlets.name as outlet_name'
+  );
+  const settlementsByPayment = new Map();
+  for (const row of settlements) settlementsByPayment.set(String(row.payment_id), [...(settlementsByPayment.get(String(row.payment_id)) ?? []), row]);
+
+  const reconciliations = await db.table('refund_reconciliations').whereIn('payment_id', dated.map(({ refund }) => refund.id)).select('payment_id', 'reason');
+  const reasonByRefund = new Map(reconciliations.map((row) => [String(row.payment_id), row.reason]));
+
+  return dated
+    .filter(({ refund }) => settlementsByPayment.has(String(refund.parent_payment_id)))
+    .map(({ refund, date }) => {
+      const rows = settlementsByPayment.get(String(refund.parent_payment_id));
+      const first = rows[0];
+      return {
+        refundPaymentId: refund.id,
+        paymentId: refund.parent_payment_id,
+        orderId: first.pos_order_id,
+        tableLabel: first.table_label,
+        outletId: first.outlet_id,
+        outletName: first.outlet_name,
+        tender: first.tender ?? first.method ?? refund.tender,
+        currency: refund.currency,
+        providerReference: refund.provider_reference,
+        refundedAt: refund.captured_at,
+        refundDate: date,
+        originalBusinessDate: first.business_date,
+        reason: reasonByRefund.get(String(refund.id)) ?? null,
+        amount: negateMoney(refund.amount),
+        subtotal: negateMoney(sumMoney(rows.map((row) => row.subtotal))),
+        tax: negateMoney(sumMoney(rows.map((row) => row.tax_amount))),
+        serviceCharge: negateMoney(sumMoney(rows.map((row) => row.service_charge))),
+        tips: negateMoney(sumMoney(rows.map((row) => row.tip_amount))),
+      };
+    })
+    // Newest first. A refund time is whole seconds, so ties are common: the highest id (the later refund) goes first,
+    // which keeps the order the same on every run.
+    .sort((a, b) => new Date(b.refundedAt) - new Date(a.refundedAt) || Number(b.refundPaymentId) - Number(a.refundPaymentId));
 }
 
 /**
@@ -248,7 +344,7 @@ async function listUnsettledCardPayments({ db, outletId }) {
  * left out. `total` is the same figure as the report's `summary.total`
  * (items + tax + tip + service charge), so the rows add up to it.
  */
-async function buildOutletRows({ db, settlements, outletId }) {
+async function buildOutletRows({ db, settlements, outletId, refundLines = [] }) {
   let query = db.table('pos_outlets').select('id', 'name', 'type', 'status');
   if (outletId) query = query.where({ id: outletId });
   const outlets = (await query).filter(isPointOfSaleOutlet);
@@ -273,13 +369,24 @@ async function buildOutletRows({ db, settlements, outletId }) {
     entry.serviceCharge.push(row.service_charge);
     entry.tips.push(row.tip_amount);
   }
+  // Refunds processed in the range come off the outlet that made the sale (an outlet with only refunds still gets a row).
+  const refundsByOutlet = new Map();
+  for (const line of refundLines) {
+    const outlet = outlets.find((candidate) => String(candidate.id) === String(line.outletId));
+    if (!outlet) continue;
+    rowFor(line.outletId, outlet.name);
+    refundsByOutlet.set(String(line.outletId), [...(refundsByOutlet.get(String(line.outletId)) ?? []), line.amount]);
+  }
   return [...byOutlet.values()]
     .map((entry) => {
       const subtotal = sumMoney(entry.subtotal);
       const tax = sumMoney(entry.tax);
       const serviceCharge = sumMoney(entry.serviceCharge);
       const tips = sumMoney(entry.tips);
-      return { outletId: entry.outletId, name: entry.name, tabs: entry.orders.size, checks: entry.checks, subtotal, tax, serviceCharge, tips, total: sumMoney([subtotal, tax, serviceCharge, tips]) };
+      const total = sumMoney([subtotal, tax, serviceCharge, tips]);
+      const refunded = refundsByOutlet.has(String(entry.outletId)) ? sumMoney(refundsByOutlet.get(String(entry.outletId))) : null;
+      // `refunded`/`net` exist only on an outlet that had a refund in the range, so every other row keeps its old shape.
+      return { outletId: entry.outletId, name: entry.name, tabs: entry.orders.size, checks: entry.checks, subtotal, tax, serviceCharge, tips, total, ...(refunded === null ? {} : { refunded, net: sumMoney([total, refunded]) }) };
     })
     .sort((a, b) => compareMoney(b.total, a.total) || a.name.localeCompare(b.name));
 }
@@ -325,13 +432,18 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
   // one). Without it the report is exactly what it was before profit existed.
   const withProfit = unitCostByMenuItem instanceof Map;
   const db = scopedDb().for(context);
-  const property = await db.table('properties').where({ id: context.propertyId }).first('base_currency');
+  const property = await db.table('properties').where({ id: context.propertyId }).first('base_currency', 'timezone');
+  // `settlements` = checks that still stand (items, profit and discounts are worked out on these). Sales that were
+  // refunded in full stay in the money totals on their own day (`allSettlements`); the refund itself is a separate line.
   const settlements = await listStandingSettlements({ db, dateFrom, dateTo, outletId });
+  const refundedOriginals = await listStandingSettlements({ db, dateFrom, dateTo, outletId, refundedOriginals: true });
+  const refundLines = await listRefundLines({ db, dateFrom, dateTo, outletId, timeZone: property?.timezone });
+  const allSettlements = refundedOriginals.length === 0 ? settlements : [...settlements, ...refundedOriginals].sort((a, b) => new Date(b.settled_at) - new Date(a.settled_at));
   const roomTargets = await roomChargeTargets({ db, settlements });
 
   const byTender = new Map(TENDERS.map((tender) => [tender, { tender, checks: 0, amounts: [] }]));
   const tabs = new Map();
-  for (const row of settlements) {
+  for (const row of allSettlements) {
     const tender = row.tender ?? row.method;
     const total = sumMoney([row.subtotal, row.tax_amount, row.tip_amount, row.service_charge]);
     if (!byTender.has(tender)) byTender.set(tender, { tender, checks: 0, amounts: [] });
@@ -354,9 +466,14 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
         payments: [],
         amounts: [],
         groups: new Set(),
+        checks: 0,
+        refundedChecks: 0,
+        refundedGroups: new Set(),
       });
     }
     const tab = tabs.get(key);
+    tab.checks += 1;
+    if (row.refunded) tab.refundedChecks += 1;
     if (!tab.tenders.includes(tender)) tab.tenders.push(tender);
     // One entry per check: how it was paid, the Paystack channel the guest
     // actually used (a Card checkout can be paid by USSD or transfer), and,
@@ -376,6 +493,8 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
       roomNumber: target?.roomNumber ?? null,
       guestName: target?.guestName ?? null,
       total,
+      // Only a sale refunded in full carries this; its refund is a separate negative line (`refunds`).
+      ...(row.refunded ? { refunded: true } : {}),
       // Only a payment that was partly refunded carries this; every other entry keeps its old shape.
       ...(row.partially_refunded ? { partiallyRefunded: row.partially_refunded } : {}),
       // Only a payment with a card refund still waiting on Paystack carries this.
@@ -383,6 +502,7 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
     });
     tab.amounts.push(total);
     tab.groups.add(groupKey(row.split_group));
+    if (row.refunded) tab.refundedGroups.add(groupKey(row.split_group)); // its items are sold, but carry no profit
   }
 
   const items = tabs.size === 0
@@ -403,7 +523,7 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
         'pos_menu_items.name as name'
       );
 
-  await attachNetLineTotals({ db, settlements, items, orderIds: [...tabs.values()].map((tab) => tab.orderId), includeSupermarket: true });
+  await attachNetLineTotals({ db, settlements: allSettlements, items, orderIds: [...tabs.values()].map((tab) => tab.orderId), includeSupermarket: true });
 
   const itemTotals = new Map();
   for (const item of items) {
@@ -411,13 +531,15 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
     if (!tab.groups.has(groupKey(item.split_group))) continue; // that check was voided
     tab.itemCount = (tab.itemCount ?? 0) + item.quantity;
     const key = String(item.menu_item_id);
-    if (!itemTotals.has(key)) itemTotals.set(key, { menuItemId: item.menu_item_id, name: item.name ?? `#${item.menu_item_id}`, quantity: 0, amounts: [], costs: [], costKnown: true });
+    if (!itemTotals.has(key)) itemTotals.set(key, { menuItemId: item.menu_item_id, name: item.name ?? `#${item.menu_item_id}`, quantity: 0, amounts: [], standing: [], costs: [], costKnown: true });
     const entry = itemTotals.get(key);
     entry.quantity += item.quantity;
     const lineTotal = item.netLineTotal ?? computeItemLineTotal(item);
     entry.amounts.push(lineTotal);
 
-    if (withProfit) {
+    // A check refunded in full is sold (it is in the figures) but has no cost to set against it: no profit on it.
+    if (!tab.refundedGroups.has(groupKey(item.split_group))) entry.standing.push(lineTotal);
+    if (withProfit && !tab.refundedGroups.has(groupKey(item.split_group))) {
       const unitCost = unitCostByMenuItem.get(key) ?? null;
       tab.knownRevenue = tab.knownRevenue ?? [];
       tab.costs = tab.costs ?? [];
@@ -434,14 +556,16 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
     }
   }
 
-  const itemRows = [...itemTotals.values()].map(({ menuItemId, name, quantity, amounts, costs, costKnown }) => {
+  const itemRows = [...itemTotals.values()].map(({ menuItemId, name, quantity, amounts, standing, costs, costKnown }) => {
     const sales = sumMoney(amounts);
+    const standingSales = sumMoney(standing);
     const row = { menuItemId, name, quantity, sales };
     if (withProfit) {
       const cost = costKnown ? sumMoney(costs) : null;
-      const profit = cost === null ? null : sumMoney([sales, negateMoney(cost)]);
-      Object.assign(row, { cost, profit, marginPct: profit === null ? null : marginPercent(profit, sales) });
+      const profit = cost === null ? null : sumMoney([standingSales, negateMoney(cost)]);
+      Object.assign(row, { cost, profit, marginPct: profit === null ? null : marginPercent(profit, standingSales) });
     }
+    Object.defineProperty(row, 'standingSales', { value: standingSales, enumerable: false });
     return row;
   });
 
@@ -459,7 +583,7 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
       // Everything that sold has an unknown cost — profit is unknown, not a false zero.
       profitSummary = { revenue: null, cost: null, profit: null, marginPct: null, itemsWithUnknownCost: itemRows.length };
     } else {
-      const revenue = sumMoney(known.map((row) => row.sales));
+      const revenue = sumMoney(known.map((row) => row.standingSales));
       const cost = sumMoney(known.map((row) => row.cost));
       const profit = sumMoney([revenue, negateMoney(cost)]);
       profitSummary = { revenue, cost, profit, marginPct: marginPercent(profit, revenue), itemsWithUnknownCost: itemRows.length - known.length };
@@ -468,8 +592,8 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
 
   // Discounts and comps given on these checks, from the amounts frozen on each settlement. Only present when there were
   // any, so a report without discounts keeps its old shape.
-  const frozenDiscounts = settlements.length ? await db.table('settlement_discounts').whereIn('settlement_id', settlements.map((row) => row.id)) : [];
-  const orderOfSettlement = new Map(settlements.map((row) => [String(row.id), String(row.pos_order_id)]));
+  const frozenDiscounts = allSettlements.length ? await db.table('settlement_discounts').whereIn('settlement_id', allSettlements.map((row) => row.id)) : [];
+  const orderOfSettlement = new Map(allSettlements.map((row) => [String(row.id), String(row.pos_order_id)]));
   const discountByOrder = new Map();
   for (const row of frozenDiscounts) {
     const orderKey = orderOfSettlement.get(String(row.settlement_id));
@@ -478,6 +602,24 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
 
   const tenderRows = [...byTender.values()].map(({ tender, checks, amounts }) => ({ tender, checks, total: sumMoney(amounts) }));
 
+  // Refunds processed in the range, only when there were any (a report without refunds keeps its old shape).
+  let refunds = null;
+  if (refundLines.length > 0) {
+    const refundTenders = new Map();
+    for (const line of refundLines) refundTenders.set(line.tender, [...(refundTenders.get(line.tender) ?? []), line.amount]);
+    refunds = {
+      count: refundLines.length,
+      total: sumMoney(refundLines.map((line) => line.amount)),
+      subtotal: sumMoney(refundLines.map((line) => line.subtotal)),
+      tax: sumMoney(refundLines.map((line) => line.tax)),
+      serviceCharge: sumMoney(refundLines.map((line) => line.serviceCharge)),
+      tips: sumMoney(refundLines.map((line) => line.tips)),
+      byTender: [...refundTenders.entries()].map(([tender, amounts]) => ({ tender, checks: amounts.length, total: sumMoney(amounts) })),
+      lines: refundLines,
+    };
+  }
+  const grossTotal = sumMoney(tenderRows.map((row) => row.total));
+
   return {
     dateFrom,
     dateTo,
@@ -485,22 +627,25 @@ async function computeSalesReport({ context, dateFrom, dateTo, outletId, unitCos
     currency: property?.base_currency ?? null,
     summary: {
       tabs: tabs.size,
-      checks: settlements.length,
-      subtotal: sumMoney(settlements.map((row) => row.subtotal)),
-      tax: sumMoney(settlements.map((row) => row.tax_amount)),
-      serviceCharge: sumMoney(settlements.map((row) => row.service_charge)),
-      tips: sumMoney(settlements.map((row) => row.tip_amount)),
-      total: sumMoney(tenderRows.map((row) => row.total)),
+      checks: allSettlements.length,
+      subtotal: sumMoney(allSettlements.map((row) => row.subtotal)),
+      tax: sumMoney(allSettlements.map((row) => row.tax_amount)),
+      serviceCharge: sumMoney(allSettlements.map((row) => row.service_charge)),
+      tips: sumMoney(allSettlements.map((row) => row.tip_amount)),
+      total: grossTotal,
+      // Sales settled in the range minus refunds processed in it.
+      ...(refunds ? { refunds: { count: refunds.count, total: refunds.total }, netTotal: sumMoney([grossTotal, refunds.total]) } : {}),
       ...(frozenDiscounts.length
         ? { discounts: { count: frozenDiscounts.length, total: sumMoney(frozenDiscounts.map((row) => row.amount)), comps: sumMoney(frozenDiscounts.filter((row) => row.kind === 'comp').map((row) => row.amount)) } }
         : {}),
       ...(withProfit ? { profit: profitSummary } : {}),
     },
     byTender: tenderRows,
-    byOutlet: await buildOutletRows({ db, settlements, outletId }),
+    byOutlet: await buildOutletRows({ db, settlements: allSettlements, outletId, refundLines }),
+    ...(refunds ? { refunds } : {}),
     topItems,
-    tabs: [...tabs.values()].map(({ amounts, groups, itemCount, knownRevenue, costs, unknownCostLines, ...tab }) => {
-      const row = { ...tab, itemCount: itemCount ?? 0, total: sumMoney(amounts), ...(discountByOrder.has(String(tab.orderId)) ? { discountTotal: sumMoney(discountByOrder.get(String(tab.orderId))) } : {}) };
+    tabs: [...tabs.values()].map(({ amounts, groups, itemCount, knownRevenue, costs, unknownCostLines, checks, refundedChecks, refundedGroups, ...tab }) => {
+      const row = { ...tab, itemCount: itemCount ?? 0, total: sumMoney(amounts), ...(refundedChecks > 0 && refundedChecks === checks ? { refunded: true } : {}), ...(discountByOrder.has(String(tab.orderId)) ? { discountTotal: sumMoney(discountByOrder.get(String(tab.orderId))) } : {}) };
       if (withProfit) {
         // Profit on the items whose cost is known; `costComplete` says whether that was every item on the tab.
         // A tab with NO priced item has an unknown profit (null), not a false zero.
@@ -682,4 +827,5 @@ module.exports = {
   // pos_order_settlements/pos_orders/pos_outlets/payments join a second time.
   listStandingSettlements,
   listUnsettledCardPayments,
+  listRefundLines,
 };

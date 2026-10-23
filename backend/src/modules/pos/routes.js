@@ -98,6 +98,11 @@ function posRouter() {
   // supermarket sale is voided through the supermarket, which keeps its receipt in step).
   router.post('/pos/orders/:id/settlements/:settlementId/void', requirePermission('pos.operate'), scope.orderInScope, refuseSupermarketTab, controller.voidSettlement);
 
+  // Settled card sales and their refund state, and the full refund of one. The caller holds `cashiering.void_line`; the
+  // money still moves only after a manager's PIN approval (`pos.refund_payment`), claimed inside the refund.
+  router.get('/pos/card-sales', requirePermission('cashiering.void_line'), scope.queryOutletInScope, controller.listCardSales);
+  router.post('/pos/card-sales/:paymentId/refund', requirePermission('cashiering.void_line'), scope.cardSalePaymentInScope, controller.refundCardSale);
+
   // A reconciliation report, not a till action — manager tier, like the other POS overrides.
   // Profit on this report uses recipe/cost data that is otherwise `pos.stock_manage`-only. Today every role holding `pos.manage` also holds `pos.stock_manage`; if that ever changes, gate the profit fields separately.
   router.get('/pos/reports/sales', requirePermission('pos.manage'), controller.salesReport);
