@@ -103,6 +103,17 @@ describe('describeNotification', () => {
   });
 });
 
+describe('stranded Register payment notification', () => {
+  it('names the tab and amount, says what to do, and opens the Register', () => {
+    const notification = { type: 'payments.register_payment_unsettled', payload: { tableLabel: 'Table 10', amount: '23000.00', currency: 'NGN' } };
+    const text = describeNotification(notification);
+    expect(text.title).toBe('Card payment not settled — Table 10');
+    expect(text.detail).toContain('open the tab and press checkout, or refund');
+    expect(notificationTarget(notification.type)).toBe('pos');
+    expect(notificationIntent(notification)).toEqual({ posTab: 'register' });
+  });
+});
+
 describe('security notifications', () => {
   it('the verification-code-off alert names who and why, and opens Setup', () => {
     expect(describeNotification({ type: 'security.mfa_requirement_disabled', payload: { actorName: 'Ada Bello', reason: 'Mailbox down' } })).toEqual({

@@ -36,6 +36,9 @@ const { processBillingWebhookEvent } = require('../modules/billing/service');
 const { refreshOnlineRefunds } = require('../modules/supermarket/paystack-sale');
 const { reconcileRefundIntent, refundReconcileConfig } = require('../modules/cashiering/service');
 const { workerContext } = require('../modules/tenancy');
+const { scopedDb } = require('../db');
+const { notifyStaff } = require('../modules/notifications/staff-notifications');
+const { listStrandedRegisterPayments, strandedMinAgeMinutes } = require('../modules/pos/stranded-payments');
 
 const SWEEP_JOB_NAME = 'sweep';
 const SWEEP_INTERVAL_MS = Number(process.env.PAYMENT_WEBHOOK_SWEEP_INTERVAL_MS || 60_000);
@@ -132,6 +135,47 @@ async function runRefundReconciliationSweep(now = new Date()) {
   return results;
 }
 
+/**
+ * Register card payments Paystack captured whose tab never settled (see `pos/stranded-payments.js`). Alerts
+ * managers once per payment (the bell's dedup key makes a repeat tick write nothing). Detect and alert only:
+ * nothing is settled, refunded or changed. One property at a time, so one failure never blocks the rest.
+ */
+async function runStrandedRegisterPaymentSweep(now = new Date()) {
+  const cutoff = new Date(now.getTime() - strandedMinAgeMinutes() * 60_000);
+  const candidates = await knex()('payments as p')
+    .join('pos_orders as o', 'o.id', 'p.pos_order_id')
+    .where({ 'p.settlement_target': 'pos_register', 'p.status': 'CAPTURED', 'o.status': 'open' })
+    .whereNull('p.parent_payment_id')
+    .andWhere('p.captured_at', '<=', cutoff)
+    .distinct('p.tenant_id', 'p.property_id');
+  let alerted = 0;
+  for (const { tenant_id: tenantId, property_id: propertyId } of candidates) {
+    try {
+      const owner = await knex()('tenants').where({ id: tenantId }).first('status');
+      if (!owner || ['purging', 'purged', 'offboarding'].includes(owner.status)) continue;
+      const context = workerContext({ tenantId, propertyId });
+      alerted += await scopedDb()
+        .for(context)
+        .transaction(async (trx) => {
+          let written = 0;
+          for (const payment of await listStrandedRegisterPayments({ db: trx, now })) {
+            written += await notifyStaff({
+              trx,
+              eventType: 'payments.register_payment_unsettled',
+              payload: { paymentId: String(payment.id), orderId: String(payment.pos_order_id), tableLabel: payment.table_label ?? null, amount: payment.amount, currency: payment.currency },
+              dedupKey: `register-captured-unsettled:${payment.id}`,
+              outletIds: [payment.outlet_id],
+            });
+          }
+          return written;
+        });
+    } catch (error) {
+      console.error(`stranded register payment sweep failed for tenant ${tenantId} property ${propertyId}:`, error);
+    }
+  }
+  return alerted;
+}
+
 /** Registers the repeatable sweep — call once at process startup. Idempotent by scheduler id. */
 async function schedulePaymentWebhookSweep() {
   await paymentWebhooksQueue().upsertJobScheduler(SWEEP_SCHEDULER_ID, { every: SWEEP_INTERVAL_MS }, { name: SWEEP_JOB_NAME, data: {} });
@@ -144,6 +188,7 @@ function startPaymentWebhooksWorker() {
       await runPaymentWebhookRetrySweep();
       await runSupermarketRefundSweep();
       await runRefundReconciliationSweep();
+      await runStrandedRegisterPaymentSweep();
     },
     { connection: redisConnection() }
   );
@@ -153,6 +198,7 @@ module.exports = {
   runPaymentWebhookRetrySweep,
   runSupermarketRefundSweep,
   runRefundReconciliationSweep,
+  runStrandedRegisterPaymentSweep,
   schedulePaymentWebhookSweep,
   startPaymentWebhooksWorker,
   SWEEP_SCHEDULER_ID,

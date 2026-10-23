@@ -114,6 +114,13 @@ const NOTIFICATION_EVENTS = Object.freeze([
     defaultRoles: ['manager', 'admin', 'super_admin'],
   },
   {
+    eventType: 'payments.register_payment_unsettled',
+    group: 'Payments',
+    label: 'Register card payment not settled',
+    description: 'A customer paid a Register tab by card, but the tab was still not settled 15 minutes later. Open the tab and press checkout, or refund the payment.',
+    defaultRoles: ['manager', 'admin', 'super_admin'],
+  },
+  {
     eventType: 'supermarket.online_refund_failed',
     group: 'POS & QR orders',
     label: 'Supermarket online refund failed',

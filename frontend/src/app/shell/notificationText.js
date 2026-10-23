@@ -154,6 +154,11 @@ export function describeNotification(notification) {
         title: `Approval PIN locked — ${p.approverName ?? 'a manager'}`,
         detail: join(p.triedByName ? `Wrong PINs entered at ${p.triedByName}'s till` : 'Wrong PINs entered at a till', 'locked for 15 minutes'),
       };
+    case 'payments.register_payment_unsettled':
+      return {
+        title: `Card payment not settled — ${table}`,
+        detail: join(money(p.amount, p.currency), 'Customer paid by card but the tab is not settled: open the tab and press checkout, or refund.'),
+      };
     default:
       return { title: notification.type, detail: '' };
   }
@@ -161,7 +166,7 @@ export function describeNotification(notification) {
 
 /** Which screen a notification opens when clicked — a sidebar nav key. */
 export function notificationTarget(type) {
-  if (type.startsWith('qr_ordering.') || type.startsWith('pos.') || type.startsWith('stock.')) return 'pos';
+  if (type === 'payments.register_payment_unsettled' || type.startsWith('qr_ordering.') || type.startsWith('pos.') || type.startsWith('stock.')) return 'pos';
   if (type.startsWith('reservation.') || type.startsWith('guest.') || type.startsWith('front_desk.')) return 'booking';
   if (type.startsWith('room.') || type.startsWith('housekeeping.')) return 'housekeeping';
   if (type.startsWith('door_access.')) return 'door_access';
@@ -179,7 +184,7 @@ export function notificationTarget(type) {
  */
 export function notificationIntent(notification) {
   // Handed-over tabs are worked on at the Register.
-  if (notification.type === 'pos.tabs_handed_over') return { posTab: 'register' };
+  if (notification.type === 'pos.tabs_handed_over' || notification.type === 'payments.register_payment_unsettled') return { posTab: 'register' };
   if (!notification.type.startsWith('stock.transfer_request')) return null;
   const requestId = parsePayload(notification).requestId;
   return { posTab: 'stock', stockTab: 'requests', requestId: requestId == null ? null : String(requestId) };
