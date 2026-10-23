@@ -474,10 +474,14 @@ async function verifyPayment(req, res, next) {
 async function refundPayment(req, res, next) {
   try {
     const reason = require_(req.body, 'reason');
+    let approval = null;
     await runIdempotentMutation(req, res, {
       operationType: 'cashiering.refund_payment',
       entityType: 'payments',
       action: 'refund',
+      // Who started the refund and which manager approved it: only when an approval was claimed (a POS payment), so a
+      // folio refund's audit row is exactly what it always was.
+      auditExtras: () => (approval ? { afterState: { started_by_user_id: String(req.context.userId), approved_by_user_id: String(approval.approverUserId), approval_id: String(approval.approvalId) } } : {}),
       handler: async () => {
         // ARCHITECTURE.md §6.4: the real gateway call cannot live inside the
         // idempotency transaction — `refundPayment` opens its own around
@@ -491,7 +495,11 @@ async function refundPayment(req, res, next) {
           userId: req.context.userId,
           // A refund of a POS payment (a Register or QR guest-order card payment) needs a manager's PIN approval.
           // Folio refunds are unchanged.
-          approve: (trx, payment) => (POS_PAYMENT_TARGETS.has(payment.settlement_target) ? claimApproval(req, trx, 'pos.refund_payment', req.params.id) : null),
+          approve: async (trx, payment) => {
+            if (!POS_PAYMENT_TARGETS.has(payment.settlement_target)) return null;
+            approval = await claimApproval(req, trx, 'pos.refund_payment', req.params.id);
+            return approval;
+          },
         });
         return { status: 201, body: ok(payment) };
       },

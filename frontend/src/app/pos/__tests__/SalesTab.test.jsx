@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
   getSalesReport: vi.fn(),
   getSalesReportCsv: vi.fn(),
+  listCardSales: vi.fn(),
+  refundCardSale: vi.fn(),
   refundPayment: vi.fn(),
   clearStuckRefund: vi.fn(),
   triggerDownload: vi.fn(),
@@ -21,7 +23,7 @@ vi.mock('../../../shared/api/index.js', async () => {
   const actual = await vi.importActual('../../../shared/api/index.js');
   return {
     ...actual,
-    posApi: { listOutlets: mocks.listOutlets, getSalesReport: mocks.getSalesReport, getSalesReportCsv: mocks.getSalesReportCsv },
+    posApi: { listOutlets: mocks.listOutlets, getSalesReport: mocks.getSalesReport, getSalesReportCsv: mocks.getSalesReportCsv, listCardSales: mocks.listCardSales, refundCardSale: mocks.refundCardSale },
     cashieringApi: { refundPayment: mocks.refundPayment, clearStuckRefund: mocks.clearStuckRefund },
     approvalsApi: { listApprovers: mocks.listApprovers, requestApproval: mocks.requestApproval },
   };
@@ -399,5 +401,145 @@ describe('<SalesTab>', () => {
 
     expect(await screen.findByText('Card (external terminal) · Opay · Bar Opay ····2020')).toBeInTheDocument();
     expect(screen.getAllByText('Card (external terminal)').length).toBeGreaterThan(0);
+  });
+  describe('refund a settled card sale', () => {
+    const SALE = { paymentId: '90', orderId: '9', tableLabel: 'Table 1', outletId: '1', tender: 'card', amount: '46.00', currency: 'NGN', providerReference: 'PSK-REF-90', state: 'refundable', refundStatus: null, disabledReason: null };
+    const rowOf = async () => (await screen.findByText('#9 · Table 1')).closest('tr');
+
+    async function run(props = {}) {
+      render(<SalesTab activeProperty={PROPERTY} canRefundCardSales {...props} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+    }
+
+    beforeEach(() => {
+      mocks.listCardSales.mockResolvedValue([SALE]);
+      mocks.listApprovers.mockResolvedValue(TEST_APPROVERS);
+      mocks.requestApproval.mockResolvedValue({ token: TEST_APPROVAL_TOKEN });
+      mocks.refundCardSale.mockResolvedValue({});
+    });
+
+    it('shows no Refund column, and asks for no refund status, without cashiering.void_line', async () => {
+      render(<SalesTab activeProperty={PROPERTY} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+      await rowOfText();
+      expect(screen.queryByRole('columnheader', { name: 'Refund' })).not.toBeInTheDocument();
+      expect(mocks.listCardSales).not.toHaveBeenCalled();
+    });
+
+    async function rowOfText() {
+      return screen.findByText('#9 · Table 1');
+    }
+
+    it('shows the amount, the Paystack reference and that a manager PIN is needed; Continue waits for a reason', async () => {
+      await run();
+      await userEvent.click(within(await rowOf()).getByRole('button', { name: 'Refund' }));
+
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText(/46\.00/)).toBeInTheDocument();
+      expect(within(dialog).getByText('PSK-REF-90')).toBeInTheDocument();
+      expect(within(dialog).getByText(/A manager PIN is needed/)).toBeInTheDocument();
+      expect(within(dialog).queryByLabelText(/amount/i)).not.toBeInTheDocument(); // full refund only: no amount to type
+      const next = within(dialog).getByRole('button', { name: 'Continue to manager PIN' });
+      expect(next).toBeDisabled();
+
+      await userEvent.selectOptions(within(dialog).getByRole('combobox'), 'other');
+      expect(next).toBeDisabled(); // "Other" needs a few words
+      await userEvent.type(within(dialog).getByLabelText('Say why'), 'guest left unwell');
+      expect(next).toBeEnabled();
+    });
+
+    it('refunds with the picked reason once a manager approves with their PIN, sends no amount, then reruns the report', async () => {
+      await run();
+      await userEvent.click(within(await rowOf()).getByRole('button', { name: 'Refund' }));
+      const dialog = await screen.findByRole('alertdialog');
+      await userEvent.selectOptions(within(dialog).getByRole('combobox'), 'wrong_charge');
+      await userEvent.type(within(dialog).getByLabelText('Note (optional)'), 'charged twice');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Continue to manager PIN' }));
+
+      await approveInDialog({ reason: 'Checked the receipt', confirmLabel: 'Approve refund' });
+
+      expect(mocks.listApprovers).toHaveBeenCalledWith('pos.refund_payment');
+      expect(mocks.requestApproval).toHaveBeenCalledWith(expect.objectContaining({ action: 'pos.refund_payment', targetId: '90' }));
+      expect(mocks.refundCardSale).toHaveBeenCalledTimes(1);
+      expect(mocks.refundCardSale).toHaveBeenCalledWith('90', { reasonCode: 'wrong_charge', reasonNote: 'charged twice', approval: TEST_APPROVAL_TOKEN });
+      expect(mocks.refundCardSale.mock.calls[0][1]).not.toHaveProperty('amount');
+      expect(await screen.findByText('Refund sent to Paystack.')).toBeInTheDocument();
+      expect(mocks.getSalesReport).toHaveBeenCalledTimes(2);
+    });
+
+    it('cancelling before the PIN step sends nothing', async () => {
+      await run();
+      await userEvent.click(within(await rowOf()).getByRole('button', { name: 'Refund' }));
+      await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(mocks.requestApproval).not.toHaveBeenCalled();
+      expect(mocks.refundCardSale).not.toHaveBeenCalled();
+    });
+
+    it('shows a server refusal (for example a double press) instead of a success', async () => {
+      mocks.refundCardSale.mockRejectedValue(new ApiError({ code: 'CONFLICT_CARD_SALE_ALREADY_REFUNDED', message: 'This card sale has already been refunded.' }));
+      await run();
+      await userEvent.click(within(await rowOf()).getByRole('button', { name: 'Refund' }));
+      const dialog = await screen.findByRole('alertdialog');
+      await userEvent.selectOptions(within(dialog).getByRole('combobox'), 'customer_request');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Continue to manager PIN' }));
+      await approveInDialog({ reason: 'Customer asked', confirmLabel: 'Approve refund' });
+      expect(await screen.findByText('This card sale has already been refunded.')).toBeInTheDocument();
+      expect(screen.queryByText('Refund sent to Paystack.')).not.toBeInTheDocument();
+    });
+
+    it('a pending refund shows its status and a disabled button with the reason', async () => {
+      mocks.listCardSales.mockResolvedValue([{ ...SALE, state: 'refund_pending', refundStatus: 'pending', disabledReason: 'A refund for this sale is waiting on Paystack.' }]);
+      await run();
+      const row = await rowOf();
+      expect(within(row).getByText('Refund pending')).toBeInTheDocument();
+      expect(within(row).getByText('A refund for this sale is waiting on Paystack.')).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: 'Refund' })).toBeDisabled();
+    });
+
+    it('an already refunded sale shows Refunded and a disabled button with the reason', async () => {
+      mocks.listCardSales.mockResolvedValue([{ ...SALE, state: 'refunded', refundStatus: 'completed', disabledReason: 'This sale has already been refunded.' }]);
+      mocks.getSalesReport.mockResolvedValue({ ...REPORT, tabs: [{ ...REPORT.tabs[0], refunded: true }, ...REPORT.tabs.slice(1)] });
+      await run();
+      const row = await rowOf();
+      expect(within(row).getByText('Refunded')).toBeInTheDocument();
+      expect(within(row).getByText('This sale has already been refunded.')).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: 'Refund' })).toBeDisabled();
+      expect(within(row).getByText(/\(refunded\)/)).toBeInTheDocument();
+    });
+
+    it('disables the Refund button while offline', async () => {
+      await run({ isOffline: true });
+      expect(within(await rowOf()).getByRole('button', { name: 'Refund' })).toBeDisabled();
+    });
+
+    it('a failure loading refund status never hides the report, and shows no Refund button', async () => {
+      mocks.listCardSales.mockRejectedValue(new ApiError({ code: 'INTERNAL_ERROR', message: 'boom' }));
+      await run();
+      const row = await rowOf();
+      expect(within(row).queryByRole('button', { name: 'Refund' })).not.toBeInTheDocument();
+      expect(await screen.findByText(/Refund status could not be loaded/)).toBeInTheDocument();
+    });
+
+    it('shows refunds as their own negative line, with sales before refunds and net sales', async () => {
+      mocks.getSalesReport.mockResolvedValue({
+        ...REPORT,
+        summary: { ...REPORT.summary, total: '69.00', refunds: { count: 1, total: '-46.00' }, netTotal: '23.00' },
+        byOutlet: [{ ...REPORT.byOutlet[0], refunded: '-46.00', net: '23.00' }, REPORT.byOutlet[1]],
+        refunds: {
+          count: 1,
+          total: '-46.00',
+          lines: [{ refundPaymentId: '91', paymentId: '90', orderId: '9', tableLabel: 'Table 1', refundedAt: '2027-03-02T10:00:00Z', refundDate: '2027-03-02', originalBusinessDate: '2027-03-01', reason: 'Duplicate payment', amount: '-46.00', currency: 'NGN' }],
+        },
+      });
+      await run();
+      expect(await screen.findByText('Sales (before refunds)')).toBeInTheDocument();
+      expect(screen.getByText('Net sales')).toBeInTheDocument();
+      const table = (await screen.findByText('Refunds processed in this period')).closest('section, div');
+      expect(within(table).getByText('Duplicate payment')).toBeInTheDocument();
+      expect(within(table).getByText('2027-03-02')).toBeInTheDocument();
+      expect(within(table).getByText('2027-03-01')).toBeInTheDocument();
+      expect(within(table).getByText(/46\.00/)).toBeInTheDocument();
+    });
   });
 });

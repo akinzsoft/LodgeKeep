@@ -1668,6 +1668,17 @@ async function ensureRefundReconciliation({ trx, intent, userId = null, reason =
 }
 
 /**
+ * Records the property's business date on the refund's reconciliation row at the moment it is processed, so reports can
+ * date the refund on the day it happened. A refund has no business-date column of its own (its `payments` row is pinned).
+ */
+async function stampRefundBusinessDate({ trx, intent }) {
+  const property = await trx.table('properties').where({ id: intent.property_id }).first('current_business_date');
+  if (!property?.current_business_date) return;
+  const reconciliation = await ensureRefundReconciliation({ trx, intent });
+  await trx.table('refund_reconciliations').where({ id: reconciliation.id }).update({ business_date: property.current_business_date });
+}
+
+/**
  * The effects of a refund that Paystack has PROCESSED, applied exactly once by whichever path first sees it: the
  * refund call itself, the reconciliation sweep, a refund webhook or a manager. The caller holds the original payment's
  * row lock and has just claimed the intent (INITIATED/PENDING -> CAPTURED).
@@ -1806,6 +1817,7 @@ async function settleRefundIntent({ trx, intentId, outcome, refundId = null, rea
       failure_reason: null,
     });
     await applyProcessedRefundEffects({ trx, intent, original, reason: reason ?? 'Refund confirmed by Paystack', userId });
+    await stampRefundBusinessDate({ trx, intent });
   } else {
     await trx.table('payments').where({ id: intent.id }).update({ status: 'PENDING', provider_payment_id: refundId ?? intent.provider_payment_id ?? null });
   }

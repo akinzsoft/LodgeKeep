@@ -373,7 +373,27 @@ export function getSalesReport(filters) {
   return request(`/pos/reports/sales?${salesReportParams(filters)}`);
 }
 
-/** One section of the report as CSV — `section`: 'tabs' | 'items' | 'tenders'. */
+/**
+ * Settled card sales in a business-date range and where each one's refund stands (`state`: refundable, refund_pending,
+ * refunded, partially_refunded, not_refundable). Needs `cashiering.void_line`.
+ */
+export function listCardSales(filters) {
+  return request(`/pos/card-sales?${salesReportParams(filters)}`);
+}
+
+/**
+ * Full refund of a settled card sale. No amount is sent: the server refunds exactly what was captured. `approval` is a
+ * manager's single-use PIN approval token (action `pos.refund_payment`, for this payment).
+ */
+export function refundCardSale(paymentId, { reasonCode, reasonNote, approval }) {
+  return request(`/pos/card-sales/${paymentId}/refund`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey(), ...approvalHeaders(approval) },
+    body: { reason_code: reasonCode, reason_note: reasonNote || undefined },
+  });
+}
+
+/** One section of the report as CSV — `section`: 'tabs' | 'items' | 'tenders' | 'outlets' | 'refunds'. */
 export function getSalesReportCsv(filters, section) {
   return requestBlob(`/pos/reports/sales?${salesReportParams(filters, { format: 'csv', section })}`);
 }

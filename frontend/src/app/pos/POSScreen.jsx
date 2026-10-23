@@ -121,7 +121,7 @@ export function POSScreen({ activeProperty, isOffline = false, currentUserLabel,
             {tab === 'shifts' && (
               <ShiftsTab isOffline={isOffline} currentUserId={currentUserId} canCloseForOthers={permissions ? permissions.has('pos.manage') : false} />
             )}
-            {tab === 'sales' && <SalesTab activeProperty={activeProperty} isOffline={isOffline} canClearRefunds={permissions ? permissions.has('cashiering.refund_clear') : false} />}
+            {tab === 'sales' && <SalesTab activeProperty={activeProperty} isOffline={isOffline} canClearRefunds={permissions ? permissions.has('cashiering.refund_clear') : false} canRefundCardSales={permissions ? permissions.has('cashiering.void_line') : false} />}
             {tab === 'qr_codes' && <QrTokensTab />}
             {tab === 'stock' && <StockTab activeProperty={activeProperty} isOffline={isOffline} permissions={permissions} intent={intent} />}
             {tab === 'setup' && <SetupTab activeProperty={activeProperty} isOffline={isOffline} canManageAccounts={permissions ? permissions.has('setup.manage') : true} canManageServiceCharge={permissions ? permissions.has('pos.service_charge.manage') : true} canManageDiscounts={permissions ? permissions.has('discount.manage') : true} canDeleteVouchers={permissions ? permissions.has('discount.voucher_delete') : false} />}

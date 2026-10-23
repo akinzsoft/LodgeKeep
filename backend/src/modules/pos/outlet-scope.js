@@ -101,6 +101,12 @@ async function outletOfTerminal(db, terminalId) {
   return terminal ? terminal.outlet_id : undefined;
 }
 
+/** A card sale's payment decides (`:paymentId`): its tab's outlet. An unknown payment is the handler's own "not found". */
+const cardSalePaymentInScope = requireExistingInScope(async (db, req) => {
+  const payment = await db.table('payments').where({ id: req.params.paymentId }).first('pos_order_id');
+  return payment && payment.pos_order_id ? outletOfOrder(db, payment.pos_order_id) : undefined;
+});
+
 const orderInScope = requireExistingInScope((db, req) => outletOfOrder(db, req.params.id));
 
 /** A tab line's own order decides — the services act on the line id alone. */
@@ -144,6 +150,7 @@ module.exports = {
   scopeForRequest,
   describeScope,
   orderInScope,
+  cardSalePaymentInScope,
   orderItemInScope,
   guestOrderInScope,
   shiftInScope,

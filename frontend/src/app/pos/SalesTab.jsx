@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { DataTable, Button, Toast } from '../../shared/components/index.js';
+import { DataTable, Button, Toast, StatusPill } from '../../shared/components/index.js';
 import { ManagerApprovalDialog } from '../approvals/ManagerApprovalDialog.jsx';
+import { RefundCardSaleDialog } from './RefundCardSaleDialog.jsx';
 import { StuckRefundNote, ClearStuckRefundDialog } from '../cashiering/StuckRefund.jsx';
 import { terminalProviderLabel, terminalAccountText } from '../../shared/terminalProviders.js';
 import { Money } from '../../shared/format/money.jsx';
@@ -50,6 +51,36 @@ function formatTime(iso) {
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+const REFUND_STATE_PILL = {
+  refund_pending: { tone: 'warning', label: 'Refund pending' },
+  refunded: { tone: 'success', label: 'Refunded' },
+  partially_refunded: { tone: 'info', label: 'Partly refunded' },
+};
+
+/**
+ * The Refund control for one settled tab's card payments: a button for a refundable sale; for one that is not, the
+ * refund's status (pending / refunded) and the reason the button is off, in words.
+ */
+function CardSaleRefundCell({ sales, isOffline, onRefund }) {
+  if (sales.length === 0) return null;
+  return (
+    <div className={styles.refundCell}>
+      {sales.map((sale) => {
+        const pill = REFUND_STATE_PILL[sale.state];
+        return (
+          <div key={sale.paymentId} className={styles.refundCell}>
+            {pill && <StatusPill tone={pill.tone} label={pill.label} />}
+            <Button type="button" size="compact" variant="secondary" disabled={isOffline || sale.state !== 'refundable'} onClick={() => onRefund(sale)}>
+              Refund
+            </Button>
+            {sale.disabledReason && <span className={formStyles.hint}>{sale.disabledReason}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * SalesTab — what the Register took over a business-date range: totals per
  * tender, top-selling items, every settled tab, and CSV export of each.
@@ -63,8 +94,14 @@ function formatTime(iso) {
  * settlement uses — e.g. a guest who paid after their tab was removed. A
  * refund goes through Cashiering's own refund endpoint
  * (`cashiering.void_line`), with a required reason.
+ *
+ * A card sale that WAS settled is refunded from its row in "Settled tabs"
+ * (`canRefundCardSales` = the user holds `cashiering.void_line`): a reason
+ * picker, then a manager's PIN. The sale stays in the figures on its own day;
+ * the refund is a separate negative line on the day it was processed, so
+ * "Net sales" = sales settled in the range minus refunds processed in it.
  */
-export function SalesTab({ activeProperty, isOffline = false, canClearRefunds = false }) {
+export function SalesTab({ activeProperty, isOffline = false, canClearRefunds = false, canRefundCardSales = false }) {
   const defaultDate = activeProperty.current_business_date ?? new Date().toISOString().slice(0, 10);
   const currencyCode = activeProperty.base_currency;
 
@@ -78,6 +115,8 @@ export function SalesTab({ activeProperty, isOffline = false, canClearRefunds = 
   const [error, setError] = useState(null);
   const [exporting, setExporting] = useState(null);
   const [refunding, setRefunding] = useState(null);
+  const [cardSales, setCardSales] = useState([]);
+  const [refundingSale, setRefundingSale] = useState(null);
   const [clearing, setClearing] = useState(null);
   const [toast, setToast] = useState(null);
 
@@ -93,7 +132,15 @@ export function SalesTab({ activeProperty, isOffline = false, canClearRefunds = 
     setError(null);
     setLoading(true);
     try {
-      setReport(await posApi.getSalesReport({ dateFrom, dateTo, outletId: outletId || undefined }));
+      const filters = { dateFrom, dateTo, outletId: outletId || undefined };
+      const [nextReport, nextCardSales] = await Promise.all([
+        posApi.getSalesReport(filters),
+        // Where each settled card sale's refund stands. Only for someone who may start a refund; a failure here never hides the report.
+        canRefundCardSales ? posApi.listCardSales(filters).catch(() => null) : Promise.resolve([]),
+      ]);
+      setReport(nextReport);
+      setCardSales(nextCardSales ?? []);
+      if (nextCardSales === null) setError('Refund status could not be loaded, so the Refund buttons are hidden. Run the report again.');
     } catch (caught) {
       setReport(null);
       setError(caught instanceof ApiError ? caught.message : 'Could not load the sales report.');
@@ -131,6 +178,26 @@ export function SalesTab({ activeProperty, isOffline = false, canClearRefunds = 
       setError(caught instanceof ApiError ? caught.message : 'Could not refund this payment.');
     }
   }
+
+  // A manager approved this refund of a settled card sale with their PIN; the server refunds exactly what was captured.
+  async function confirmCardSaleRefund({ reasonCode, reasonNote, approval }) {
+    const sale = refundingSale;
+    setRefundingSale(null);
+    setError(null);
+    try {
+      await posApi.refundCardSale(sale.paymentId, { reasonCode, reasonNote, approval });
+      setToast('Refund sent to Paystack.');
+      await runReport();
+    } catch (caught) {
+      // Refresh first (it clears any message), then say why: the sale's status may have changed under the cashier.
+      await runReport();
+      setError(caught instanceof ApiError ? caught.message : 'Could not refund this card sale.');
+    }
+  }
+
+  const cardSalesByOrder = new Map();
+  for (const sale of cardSales) cardSalesByOrder.set(String(sale.orderId), [...(cardSalesByOrder.get(String(sale.orderId)) ?? []), sale]);
+  const refunds = report?.refunds ?? null;
 
   // Card refunds Paystack accepted (or may have taken) but never confirmed: listed so the guest's money is not lost track of.
   const refundsInFlight = (report?.tabs ?? []).flatMap((tab) => (tab.payments ?? []).filter((payment) => payment.refundInFlight).map((payment) => ({ tab, payment, refund: payment.refundInFlight })));
@@ -182,11 +249,27 @@ export function SalesTab({ activeProperty, isOffline = false, canClearRefunds = 
       {report && (
         <section className={styles.summary} aria-label="Sales summary">
           <div className={styles.stat}>
-            <span className={styles.statLabel}>Total sales</span>
+            <span className={styles.statLabel}>{report.summary.refunds ? 'Sales (before refunds)' : 'Total sales'}</span>
             <span className={styles.statValue}>
               <Money amount={report.summary.total} currencyCode={currencyCode} />
             </span>
           </div>
+          {report.summary.refunds && (
+            <>
+              <div className={styles.stat}>
+                <span className={styles.statLabel}>Refunds ({report.summary.refunds.count})</span>
+                <span className={styles.statValue}>
+                  <Money amount={report.summary.refunds.total} currencyCode={currencyCode} />
+                </span>
+              </div>
+              <div className={styles.stat}>
+                <span className={styles.statLabel}>Net sales</span>
+                <span className={styles.statValue}>
+                  <Money amount={report.summary.netTotal} currencyCode={currencyCode} />
+                </span>
+              </div>
+            </>
+          )}
           {profit && (
             <div className={styles.stat}>
               <span className={styles.statLabel}>Profit</span>
@@ -243,6 +326,12 @@ export function SalesTab({ activeProperty, isOffline = false, canClearRefunds = 
           { key: 'tax', label: 'Tax', align: 'right', render: (row) => <Money amount={row.tax} currencyCode={currencyCode} /> },
           { key: 'serviceCharge', label: 'Service charge', align: 'right', render: (row) => <Money amount={row.serviceCharge} currencyCode={currencyCode} /> },
           { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={currencyCode} /> },
+          ...(refunds
+            ? [
+                { key: 'refunded', label: 'Refunds', align: 'right', render: (row) => (row.refunded ? <Money amount={row.refunded} currencyCode={currencyCode} /> : '—') },
+                { key: 'net', label: 'Net', align: 'right', render: (row) => <Money amount={row.net ?? row.total} currencyCode={currencyCode} /> },
+              ]
+            : []),
         ]}
         rows={report?.byOutlet ?? []}
         rowKey={(row) => row.outletId}
@@ -303,10 +392,18 @@ export function SalesTab({ activeProperty, isOffline = false, canClearRefunds = 
         columns={[
           { key: 'settledAt', label: 'Settled', render: (row) => formatTime(row.settledAt) },
           { key: 'tableLabel', label: 'Tab', render: (row) => tabName(row) },
-          { key: 'tenders', label: 'Paid by', render: (row) => (row.payments?.length ? row.payments.map(describePayment).join(' + ') : row.tenders.map(tenderLabel).join(' + ')) },
+          {
+            key: 'tenders',
+            label: 'Paid by',
+            render: (row) => {
+              const text = row.payments?.length ? row.payments.map(describePayment).join(' + ') : row.tenders.map(tenderLabel).join(' + ');
+              return row.refunded ? `${text} (refunded)` : text;
+            },
+          },
           { key: 'itemCount', label: 'Items', align: 'right' },
           { key: 'cashier', label: 'Cashier', render: (row) => row.cashier ?? (row.source === 'guest' ? 'Guest order' : '—') },
           { key: 'total', label: 'Total', align: 'right', render: (row) => <Money amount={row.total} currencyCode={currencyCode} /> },
+          ...(canRefundCardSales ? [{ key: 'refund', label: 'Refund', align: 'right', render: (row) => <CardSaleRefundCell sales={cardSalesByOrder.get(String(row.orderId)) ?? []} isOffline={isOffline} onRefund={setRefundingSale} /> }] : []),
           ...(profit
             ? [
                 {
@@ -327,6 +424,28 @@ export function SalesTab({ activeProperty, isOffline = false, canClearRefunds = 
         rows={report?.tabs ?? []}
         rowKey={(row) => row.orderId}
       />
+
+      {refunds && (
+        <DataTable
+          title="Refunds processed in this period"
+          state="success"
+          toolbar={
+            <Button type="button" size="compact" variant="secondary" disabled={exporting !== null} loading={exporting === 'refunds'} onClick={() => handleExport('refunds')}>
+              Export CSV
+            </Button>
+          }
+          columns={[
+            { key: 'refundedAt', label: 'Refunded', render: (row) => formatTime(row.refundedAt) },
+            { key: 'refundDate', label: 'Counts on' },
+            { key: 'tab', label: 'Tab', render: (row) => tabName(row) },
+            { key: 'originalBusinessDate', label: 'Sold on' },
+            { key: 'reason', label: 'Reason', render: (row) => row.reason ?? '—' },
+            { key: 'amount', label: 'Refund', align: 'right', render: (row) => <Money amount={row.amount} currencyCode={row.currency} /> },
+          ]}
+          rows={refunds.lines}
+          rowKey={(row) => row.refundPaymentId}
+        />
+      )}
 
       {report && report.unsettledCardPayments.length > 0 && (
         <DataTable
@@ -395,6 +514,8 @@ export function SalesTab({ activeProperty, isOffline = false, canClearRefunds = 
           }}
         />
       )}
+
+      {refundingSale && <RefundCardSaleDialog sale={refundingSale} isOffline={isOffline} onApproved={confirmCardSaleRefund} onCancel={() => setRefundingSale(null)} />}
 
       {refunding && (
         <ManagerApprovalDialog

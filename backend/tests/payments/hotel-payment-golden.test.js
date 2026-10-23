@@ -107,6 +107,7 @@ const RANKED_TABLES = [
   'property_payment_subaccounts',
   'platform_payment_integrations',
   'pos_shifts',
+  'manager_approvals',
   'audit_log',
   'in_app_notifications',
 ];
@@ -117,6 +118,7 @@ const KEY_KIND_RULES = [
   [/^property_?id$/i, 'properties'],
   [/user_?id$/i, 'users'],
   [/terminal_?account_?id$/i, 'pos_outlet_terminal_accounts'],
+  [/^approval_?id$/i, 'manager_approvals'],
   [/payment_?subaccount_?id$/i, 'property_payment_subaccounts'],
   [/platform_?payment_?integration_?id$/i, 'platform_payment_integrations'],
   [/guest_?order_?id$/i, 'pos_guest_orders'],
