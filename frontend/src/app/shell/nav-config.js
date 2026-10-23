@@ -168,6 +168,15 @@ export const DEFAULT_NAV_GROUPS = [
       { key: 'expenses', label: 'Expenses', requiredPermission: 'expenses.view' },
     ],
   },
+  {
+    label: 'HELP',
+    items: [
+      // Help and Training: guides and the Getting started checklist. Open to
+      // every signed-in role (no permission); the checklist's automatic ticks
+      // use read-only endpoints and fall back to manual ticks on a 403.
+      { key: 'help', label: 'Help' },
+    ],
+  },
 ];
 
 /**

@@ -27,6 +27,7 @@ import { BookingScreen } from './app/booking/BookingScreen.jsx';
 import { HousekeepingScreen } from './app/housekeeping/HousekeepingScreen.jsx';
 import { RoomsScreen } from './app/rooms/RoomsScreen.jsx';
 import { StaffScreen } from './app/staff/StaffScreen.jsx';
+import { HelpScreen } from './app/help/HelpScreen.jsx';
 import { NoAccessScreen } from './app/shell/NoAccessScreen.jsx';
 import { ReportingScreen } from './app/reporting/ReportingScreen.jsx';
 import { CashieringScreen } from './app/cashiering/CashieringScreen.jsx';
@@ -421,6 +422,8 @@ function Demo() {
         />
       ) : screenKey === 'rooms' ? (
         <RoomsScreen activeProperty={activePropertyRecord} isOffline={!isOnline} />
+      ) : screenKey === 'help' ? (
+        <HelpScreen activeProperty={activePropertyRecord} currentUserId={user.userId} />
       ) : screenKey === 'staff' ? (
         <StaffScreen activeProperty={activePropertyRecord} isOffline={!isOnline} />
       ) : screenKey === 'reports' ? (

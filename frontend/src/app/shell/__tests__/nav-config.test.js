@@ -66,6 +66,10 @@ describe('DEFAULT_NAV_GROUPS', () => {
     expect(DEFAULT_NAV_GROUPS.every((group) => group.items.length > 0)).toBe(true);
   });
 
+  it('opens Help to every role', () => {
+    expect(isNavItemAllowed('help', new Set())).toBe(true);
+  });
+
   it('keeps Staff, which has a real screen', () => {
     expect(keys).toContain('staff');
   });
