@@ -1,3 +1,9 @@
+---
+images:
+  - file: getting-started/05-pos/1-pos-setup.webp
+    alt: POS Setup showing the Palm Bar outlet
+    caption: POS → Setup
+---
 # POS outlets, menu, terminals and QR codes
 
 ## What it is for

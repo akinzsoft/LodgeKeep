@@ -1,0 +1,75 @@
+{
+  "_comment": "Screens to capture for the Help guides. Run against the demo hotel (backend/scripts/seed-help-demo.js). See docs/help-screenshots.md.",
+  "baseUrl": "http://demo-help.localhost:5173",
+  "login": { "email": "manager@palm-grove.example.com", "password": "LodgeKeepDev123!" },
+  "viewport": { "width": 1280, "height": 800 },
+  "guides": [
+    {
+      "guide": "getting-started/01-property",
+      "shots": [
+        {
+          "name": "1-property",
+          "alt": "The Setup screen on the Property tab, showing the property's timezone and currency",
+          "caption": "Setup → Property: check the timezone and currency first",
+          "steps": [{ "click": { "role": "button", "name": "Setup" } }, { "click": { "role": "tab", "name": "Property" } }],
+          "highlight": { "role": "tab", "name": "Property" }
+        }
+      ]
+    },
+    {
+      "guide": "getting-started/02-rooms-and-rates",
+      "shots": [
+        {
+          "name": "1-room-types",
+          "alt": "The Room Types tab listing a Standard Room and a Deluxe Room",
+          "caption": "Setup → Room Types",
+          "steps": [{ "click": { "role": "button", "name": "Setup" } }, { "click": { "role": "tab", "name": "Room Types" } }],
+          "highlight": { "role": "tab", "name": "Room Types" }
+        },
+        {
+          "name": "2-rooms",
+          "alt": "The Rooms tab listing rooms with their room type and status",
+          "caption": "Setup → Rooms",
+          "steps": [{ "click": { "role": "button", "name": "Setup" } }, { "click": { "role": "tab", "name": "Rooms" } }],
+          "highlight": { "role": "tab", "name": "Rooms" }
+        }
+      ]
+    },
+    {
+      "guide": "getting-started/03-taxes-and-service-charge",
+      "shots": [
+        {
+          "name": "1-taxes",
+          "alt": "The Taxes tab listing VAT 7.5 percent",
+          "caption": "Setup → Taxes",
+          "steps": [{ "click": { "role": "button", "name": "Setup" } }, { "click": { "role": "tab", "name": "Taxes" } }],
+          "highlight": { "role": "tab", "name": "Taxes" }
+        }
+      ]
+    },
+    {
+      "guide": "getting-started/05-pos",
+      "shots": [
+        {
+          "name": "1-pos-setup",
+          "alt": "POS Setup showing the Palm Bar outlet",
+          "caption": "POS → Setup",
+          "steps": [{ "click": { "role": "button", "name": "POS" } }, { "click": { "role": "tab", "name": "Setup" } }],
+          "highlight": { "role": "tab", "name": "Setup" }
+        }
+      ]
+    },
+    {
+      "guide": "getting-started/06-staff-and-approvals",
+      "shots": [
+        {
+          "name": "1-staff",
+          "alt": "The Staff screen listing the demo team and their roles",
+          "caption": "Staff",
+          "steps": [{ "click": { "role": "button", "name": "Staff" } }],
+          "highlight": { "role": "heading", "name": "Staff" }
+        }
+      ]
+    }
+  ]
+}
