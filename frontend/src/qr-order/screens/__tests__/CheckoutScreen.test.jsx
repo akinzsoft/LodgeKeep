@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CheckoutScreen } from '../CheckoutScreen.jsx';
 import { ApiError } from '../../../shared/api/index.js';
@@ -82,6 +82,75 @@ describe('<CheckoutScreen>', () => {
       expect.objectContaining({ token: TOKEN, paymentMethod: 'card', guestContact: 'guest@example.com', items: [{ menu_item_id: '10', quantity: 2 }] })
     );
     expect(await screen.findByText('status screen')).toBeInTheDocument();
+  });
+
+  it('a double tap on Place order creates one order and opens one payment window', async () => {
+    let release;
+    mocks.createOrder.mockImplementation(() => new Promise((resolve) => (release = resolve)));
+    mocks.openPaystackPopup.mockImplementation(async ({ onClose }) => onClose());
+    renderScreen();
+
+    await userEvent.type(await screen.findByLabelText(/Email/), 'guest@example.com');
+    const form = screen.getByRole('button', { name: 'Place order' }).closest('form');
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+
+    await act(async () => release({ id: '77', accessCode: 'ac_1' }));
+    expect(await screen.findByText('status screen')).toBeInTheDocument();
+    expect(mocks.openPaystackPopup).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows "Opening payment page…" and then an "Open payment page" link if the window never appears', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.createOrder.mockResolvedValue({ id: '77', accessCode: 'ac_1', authorizationUrl: 'https://checkout.paystack.com/server-url' });
+      mocks.openPaystackPopup.mockImplementation(() => new Promise(() => {}));
+      renderScreen();
+
+      await userEvent.type(await screen.findByLabelText(/Email/), 'guest@example.com');
+      await userEvent.click(screen.getByRole('button', { name: 'Place order' }));
+
+      await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Opening payment page…'));
+      expect(screen.queryByRole('link', { name: 'Open payment page' })).not.toBeInTheDocument();
+
+      await act(async () => vi.advanceTimersByTime(5100));
+      const link = screen.getByRole('link', { name: 'Open payment page' });
+      expect(link).toHaveAttribute('href', 'https://checkout.paystack.com/server-url');
+      expect(link).toHaveAttribute('target', '_blank');
+
+      // The guest who paid on that page can still reach the order.
+      await userEvent.click(screen.getByRole('button', { name: 'I have paid, view order status' }));
+      expect(await screen.findByText('status screen')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('builds the link from the access code when the server sent no authorization URL', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.createOrder.mockResolvedValue({ id: '77', accessCode: 'ac_7' });
+      mocks.openPaystackPopup.mockImplementation(() => new Promise(() => {}));
+      renderScreen();
+      await userEvent.type(await screen.findByLabelText(/Email/), 'guest@example.com');
+      await userEvent.click(screen.getByRole('button', { name: 'Place order' }));
+      await waitFor(() => expect(mocks.openPaystackPopup).toHaveBeenCalled());
+      await act(async () => vi.advanceTimersByTime(5100));
+      expect(screen.getByRole('link', { name: 'Open payment page' })).toHaveAttribute('href', 'https://checkout.paystack.com/ac_7');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('falls back to the retry screen when the Paystack script cannot load', async () => {
+    mocks.createOrder.mockResolvedValue({ id: '77', accessCode: 'ac_1' });
+    mocks.openPaystackPopup.mockRejectedValue(new Error('no script'));
+    renderScreen();
+    await userEvent.type(await screen.findByLabelText(/Email/), 'guest@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(await screen.findByText(/Could not open the payment window/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry payment' })).toBeInTheDocument();
   });
 
   it('shows a real, actionable error on the honest-202 partial-success path, never a silent drop', async () => {
