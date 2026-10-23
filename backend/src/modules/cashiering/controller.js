@@ -265,6 +265,7 @@ async function captureCashPayment(req, res, next) {
     const amount = require_(req.body, 'amount');
     const currency = require_(req.body, 'currency');
     let deposit = false;
+    let reused = false;
     let resolved;
     await runIdempotentMutation(req, res, {
       operationType: 'cashiering.capture_cash_payment',
@@ -403,12 +404,15 @@ async function capturePaystackPayment(req, res, next) {
       payload: req.body,
       handler: async (trx) => {
         deposit = await exceedsFolioBalance(trx, req.params.folioId, amount);
-        const payment = await service.initiatePaystackPaymentIntent({ trx, folioId: req.params.folioId, amount, currency, idempotencyKey: key });
-        return { status: 201, body: ok(payment) };
+        const payment = await service.initiatePaystackPaymentIntent({ trx, folioId: req.params.folioId, amount, currency, idempotencyKey: key, reuseOpen: true });
+        // Pressing the button again reopens the unpaid payment instead of adding another row.
+        reused = Boolean(payment.reused);
+        const { reused: _reused, ...row } = payment;
+        return { status: 201, body: ok(row) };
       },
     });
     const intentResult = intentOutcome.body.data;
-    if (!intentOutcome.replayed) {
+    if (!intentOutcome.replayed && !reused) {
       await req.audit({ entityType: 'payments', entityId: intentResult.id, action: 'initiate_paystack_payment', afterState: deposit ? { ...intentResult, deposit: true } : intentResult });
     }
 
@@ -418,8 +422,9 @@ async function capturePaystackPayment(req, res, next) {
         paymentId: intentResult.id,
         guestEmail,
         callbackUrl: req.body?.callback_url,
+        resume: reused,
       });
-      if (!intentOutcome.replayed) {
+      if (!intentOutcome.replayed && !reused) {
         await req.audit({ entityType: 'payments', entityId: payment.id, action: 'start_checkout', afterState: payment });
       }
       // `accessCode` (new, gap closure — "same page ... instead of a url")

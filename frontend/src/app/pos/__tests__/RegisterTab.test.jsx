@@ -646,6 +646,49 @@ describe('<RegisterTab>', () => {
       expect(within(receipt).getByText('Paid by Card')).toBeInTheDocument();
     });
 
+    it('a double press on checkout starts one Paystack checkout', async () => {
+      await openNewTab([orderItem()]);
+      let release;
+      mocks.startPaystackCheckout.mockImplementation(() => new Promise((resolve) => (release = resolve)));
+      await screen.findByText('Subtotal');
+      await userEvent.click(screen.getByRole('button', { name: 'Card' }));
+      await userEvent.type(screen.getByLabelText('Customer email for receipt'), 'guest@example.com');
+
+      const form = screen.getByRole('button', { name: /Send to Bar & Checkout|Opening/ }).closest('form');
+      fireEvent.submit(form);
+      fireEvent.submit(form);
+      expect(mocks.startPaystackCheckout).toHaveBeenCalledTimes(1);
+
+      paystackMocks.openPaystackPopup.mockImplementation(async ({ onClose }) => onClose());
+      mocks.verifyPaystackPayment.mockResolvedValue(PAYMENT);
+      await act(async () => release({ payment: PAYMENT, accessCode: 'acc-1', checkoutError: null }));
+      await waitFor(() => expect(paystackMocks.openPaystackPopup).toHaveBeenCalledTimes(1));
+    });
+
+    it('offers an "Open payment page" link when the Paystack window does not appear within 5 seconds', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        await openNewTab([orderItem()]);
+        mocks.startPaystackCheckout.mockResolvedValue({ payment: PAYMENT, accessCode: 'acc-1', checkoutError: null });
+        paystackMocks.openPaystackPopup.mockImplementation(() => new Promise(() => {}));
+        await screen.findByText('Subtotal');
+        await userEvent.click(screen.getByRole('button', { name: 'Card' }));
+        await userEvent.type(screen.getByLabelText('Customer email for receipt'), 'guest@example.com');
+        await userEvent.click(screen.getByRole('button', { name: 'Send to Bar & Checkout' }));
+
+        await waitFor(() => expect(paystackMocks.openPaystackPopup).toHaveBeenCalledTimes(1));
+        expect(screen.getByRole('status')).toHaveTextContent('Opening payment page…');
+        expect(screen.queryByRole('link', { name: 'Open payment page' })).not.toBeInTheDocument();
+
+        await act(async () => vi.advanceTimersByTime(5100));
+        const link = screen.getByRole('link', { name: 'Open payment page' });
+        expect(link).toHaveAttribute('href', 'https://checkout.paystack.com/acc-1');
+        expect(link).toHaveAttribute('target', '_blank');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('never settles when the popup closes without payment, and says how to retry', async () => {
       await openNewTab([orderItem()]);
       mocks.startPaystackCheckout.mockResolvedValue({ payment: PAYMENT, accessCode: 'acc-1', checkoutError: null });

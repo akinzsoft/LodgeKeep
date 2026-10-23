@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CashieringScreen } from '../CashieringScreen.jsx';
 import { approveInDialog, TEST_APPROVERS, TEST_APPROVAL_TOKEN } from '../../approvals/__tests__/approveInDialog.js';
@@ -403,6 +403,58 @@ describe('<CashieringScreen>', () => {
     const link = await screen.findByRole('link', { name: 'Open payment page in a new tab' });
     expect(link).toHaveAttribute('href', 'https://paystack.test/pay/abc');
     expect(screen.queryByText('https://paystack.test/pay/abc')).not.toBeInTheDocument();
+  });
+
+  describe('opening the Paystack window', () => {
+    async function startPaystackCapture() {
+      await loadReservation();
+      await screen.findByText('Room 101');
+      await userEvent.click(screen.getByRole('button', { name: 'Capture a payment' }));
+      await userEvent.selectOptions(screen.getByLabelText('Method'), 'paystack');
+      await userEvent.type(screen.getByLabelText('Guest email'), 'guest@example.com');
+    }
+
+    it('a double press on Capture payment starts one checkout, not two', async () => {
+      mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+      let release;
+      mocks.capturePaystackPayment.mockImplementation(() => new Promise((resolve) => (release = resolve)));
+      await startPaystackCapture();
+
+      const form = screen.getByRole('button', { name: 'Capture payment' }).closest('form');
+      fireEvent.submit(form);
+      fireEvent.submit(form);
+      expect(mocks.capturePaystackPayment).toHaveBeenCalledTimes(1);
+
+      await act(async () => release({ id: '31', authorizationUrl: 'https://paystack.test/pay/abc', accessCode: 'access-abc' }));
+      expect(await screen.findByRole('button', { name: 'Pay now' })).toBeInTheDocument();
+    });
+
+    it('shows "Opening payment page…" and then an "Open payment page" link when the window never appears', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        mocks.listFoliosForReservation.mockResolvedValue([FOLIO]);
+        mocks.capturePaystackPayment.mockResolvedValue({ id: '31', authorizationUrl: 'https://paystack.test/pay/abc', accessCode: 'access-abc' });
+        // The popup never reports that it opened and never closes.
+        mocks.openPaystackPopup.mockImplementation(() => new Promise(() => {}));
+        await startPaystackCapture();
+        await userEvent.click(screen.getByRole('button', { name: 'Capture payment' }));
+
+        const payNow = await screen.findByRole('button', { name: 'Pay now' });
+        await userEvent.click(payNow);
+        expect(screen.getByRole('status')).toHaveTextContent('Opening payment page…');
+        // A second press while it is opening does nothing.
+        fireEvent.click(payNow);
+        expect(mocks.openPaystackPopup).toHaveBeenCalledTimes(1);
+        expect(screen.queryByRole('link', { name: 'Open payment page' })).not.toBeInTheDocument();
+
+        await act(async () => vi.advanceTimersByTime(5100));
+        const link = screen.getByRole('link', { name: 'Open payment page' });
+        expect(link).toHaveAttribute('href', 'https://paystack.test/pay/abc');
+        expect(link).toHaveAttribute('target', '_blank');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('disables mutating actions while offline', async () => {
