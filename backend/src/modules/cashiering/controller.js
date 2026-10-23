@@ -265,7 +265,6 @@ async function captureCashPayment(req, res, next) {
     const amount = require_(req.body, 'amount');
     const currency = require_(req.body, 'currency');
     let deposit = false;
-    let reused = false;
     let resolved;
     await runIdempotentMutation(req, res, {
       operationType: 'cashiering.capture_cash_payment',
@@ -395,6 +394,7 @@ async function capturePaystackPayment(req, res, next) {
     const guestEmail = require_(req.body, 'guest_email');
     const key = requireIdempotencyKey(req);
     let deposit = false;
+    let reused = false;
     let resolved;
 
     const intentOutcome = await withIdempotency({
