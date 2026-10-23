@@ -7,56 +7,84 @@
  *   docker compose exec -T -e REF=<reference> backend node scripts/paystack-verify-fees.js
  *
  * Reads the active NGN integration key from the database and refuses anything but a TEST key (sk_test_). Makes one
- * GET to /transaction/verify. Writes nothing. Never prints a key. Amounts are shown in naira (Paystack sends kobo).
+ * GET to /transaction/verify. Writes nothing. Never prints a key (nor any error text that could carry one). Amounts
+ * are shown in naira (Paystack sends kobo). Same database access as scripts/set-platform-paystack-key.js.
  */
 
-require('dotenv').config();
-const { scopedDb, destroy } = require('../src/db');
-const { systemContext } = require('../src/modules/tenancy');
 const { decrypt } = require('../src/shared/encryption');
 
-async function main() {
-  const reference = process.env.REF;
-  if (!reference) throw new Error('Set REF to the transaction reference (payments.provider_reference).');
+const TABLE = 'platform_payment_integrations';
 
-  const db = scopedDb.for(systemContext());
-  try {
-    const row = await db.table('platform_payment_integrations').where({ currency: 'NGN', is_active: true }).first();
-    if (!row) throw new Error('No active NGN Paystack integration row.');
-    const key = decrypt(row.secret_key_encrypted);
-    if (!key.startsWith('sk_test_')) throw new Error('Refusing: the NGN key is not a TEST key.');
-
-    const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
-      headers: { Authorization: `Bearer ${key}` },
-    });
-    const json = await response.json();
-    if (!json.status) throw new Error(`Paystack: ${json.message}`);
-    const d = json.data;
-    const naira = (kobo) => (kobo == null ? null : (Number(kobo) / 100).toFixed(2));
-    console.log(
-      JSON.stringify(
-        {
-          reference: d.reference,
-          status: d.status,
-          channel: d.channel,
-          amount: naira(d.amount),
-          requested_amount: naira(d.requested_amount),
-          fees: naira(d.fees),
-          fees_split: d.fees_split ?? null,
-          subaccount_code: d.subaccount?.subaccount_code ?? null,
-          subaccount_percentage_charge: d.subaccount?.percentage_charge ?? null,
-          split: d.split ?? null,
-        },
-        null,
-        2
-      )
-    );
-  } finally {
-    await destroy();
+/**
+ * @param {{ db: import('knex').Knex, env: Record<string,string|undefined>, out: (line: string) => void, fetchFn?: typeof fetch }} io
+ * @returns {Promise<number>} process exit code
+ */
+async function run({ db, env, out, fetchFn = fetch }) {
+  const reference = env.REF;
+  if (!reference) {
+    out('Set REF to the transaction reference (payments.provider_reference).');
+    return 2;
   }
+
+  const row = await db(TABLE).where({ currency: 'NGN', is_active: true }).first();
+  if (!row) {
+    out('No active NGN Paystack integration row.');
+    return 1;
+  }
+  let key;
+  try {
+    key = decrypt(row.secret_key_encrypted);
+  } catch {
+    out('Stored key could not be decrypted with this ENCRYPTION_KEY.');
+    return 1;
+  }
+  if (!key.startsWith('sk_test_')) {
+    out('Refusing: the NGN key is not a TEST key.');
+    return 1;
+  }
+
+  const response = await fetchFn(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
+    headers: { Authorization: `Bearer ${key}` },
+  });
+  const json = await response.json();
+  if (!json.status) {
+    out(`Paystack: ${json.message}`);
+    return 1;
+  }
+  const d = json.data;
+  const naira = (kobo) => (kobo == null ? null : (Number(kobo) / 100).toFixed(2));
+  out(
+    JSON.stringify(
+      {
+        reference: d.reference,
+        status: d.status,
+        channel: d.channel,
+        amount: naira(d.amount),
+        requested_amount: naira(d.requested_amount),
+        fees: naira(d.fees),
+        fees_split: d.fees_split ?? null,
+        subaccount_code: d.subaccount?.subaccount_code ?? null,
+        subaccount_percentage_charge: d.subaccount?.percentage_charge ?? null,
+        split: d.split ?? null,
+      },
+      null,
+      2
+    )
+  );
+  return 0;
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exit(1);
-});
+module.exports = { run };
+
+if (require.main === module) {
+  require('dotenv').config();
+  const { knex, destroy } = require('../src/db');
+  run({ db: knex(), env: process.env, out: (line) => console.log(line) })
+    .then((code) => { process.exitCode = code; })
+    .catch((error) => {
+      // Never print the error object: stay conservative about anything that could carry a key.
+      console.error(`Failed: ${error.code ?? error.message}`);
+      process.exitCode = 1;
+    })
+    .finally(() => destroy());
+}

@@ -19,7 +19,26 @@
  * documented rather than silently accepted.
  */
 
+const { ValidationError } = require('./errors');
+
 const formatterCache = new Map();
+
+/**
+ * The canonical IANA name for `value` ("africa/lagos" -> "Africa/Lagos"), or
+ * null when it is not a real timezone. Free-text values such as "Lagos",
+ * "LAGOS", "Africa" or "Africa/Asaba" are rejected: `Intl` throws for them,
+ * and so would every night-audit / overdue-sweep computation that reads the
+ * stored value. Case is repaired by `Intl` itself, never guessed.
+ */
+function normalizeTimeZone(value) {
+  if (typeof value !== 'string' || !value.trim() || value !== value.trim()) return null;
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
 
 function formatterFor(timeZone) {
   if (!formatterCache.has(timeZone)) {
@@ -79,4 +98,17 @@ function calendarDateInZone(instant, timeZone) {
   return `${String(p.year).padStart(4, '0')}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
 }
 
-module.exports = { zonedWallClockToUtc, calendarDateInZone };
+/** `normalizeTimeZone`, throwing `400 VALIDATION_INVALID_TIMEZONE` for anything that is not a real IANA zone. */
+function assertValidTimeZone(value) {
+  const canonical = normalizeTimeZone(value);
+  if (!canonical) {
+    throw new ValidationError(
+      'INVALID_TIMEZONE',
+      'Timezone must be a valid IANA name such as "Africa/Lagos".',
+      [{ field: 'timezone', issue: 'invalid' }]
+    );
+  }
+  return canonical;
+}
+
+module.exports = { normalizeTimeZone, assertValidTimeZone, zonedWallClockToUtc, calendarDateInZone };

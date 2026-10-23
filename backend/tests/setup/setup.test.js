@@ -256,6 +256,50 @@ describe('Setup module (PLAN.md Phase 1)', () => {
     });
   });
 
+  describe('property timezone validation', () => {
+    const BAD = ['Africa/Asaba', 'Benin/ Edo State', 'Africa', 'Lagos', 'LAGOS', 'lagos', 'African/delta', ' Africa/Lagos'];
+
+    it.each(BAD)('POST refuses %j and creates nothing', async (timezone) => {
+      const emptyTenant = await seedEmptyTenant();
+      const token = signAccessToken({ aud: 'staff', sub: String(emptyTenant.users[0].id), tenant_id: String(emptyTenant.id) });
+      const slug = `tz-bad-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const res = await t.request.post('/api/v1/properties').set('Authorization', `Bearer ${token}`)
+        .send({ name: 'TZ', slug, timezone, base_currency: 'NGN' });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_INVALID_TIMEZONE');
+      expect(await t.trx('properties').where({ slug }).first()).toBeUndefined();
+    });
+
+    it('POST stores the canonical name when only the letter case differs', async () => {
+      const emptyTenant = await seedEmptyTenant();
+      const token = signAccessToken({ aud: 'staff', sub: String(emptyTenant.users[0].id), tenant_id: String(emptyTenant.id) });
+      const res = await t.request.post('/api/v1/properties').set('Authorization', `Bearer ${token}`)
+        .send({ name: 'TZ', slug: `tz-case-${Date.now()}`, timezone: 'africa/lagos', base_currency: 'NGN' });
+      expect(res.status).toBe(201);
+      expect(res.body.data.timezone).toBe('Africa/Lagos');
+    });
+
+    it.each(['Lagos', 'Africa/Asaba'])('PATCH refuses %j and leaves the stored value alone', async (timezone) => {
+      const propertyId = await seedSetupManageCaller({ tenant: ctx.a });
+      const token = signAccessToken({ aud: 'staff', sub: String(ctx.a.users[0].id), tenant_id: String(ctx.a.id), property_id: String(propertyId) });
+      const before = await t.trx('properties').where({ id: propertyId }).first();
+      const res = await t.request.patch(`/api/v1/properties/${propertyId}`).set('Authorization', `Bearer ${token}`).send({ timezone });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_INVALID_TIMEZONE');
+      expect((await t.trx('properties').where({ id: propertyId }).first()).timezone).toBe(before.timezone);
+    });
+
+    it('PATCH accepts a real zone, and an update that does not mention timezone is unaffected', async () => {
+      const propertyId = await seedSetupManageCaller({ tenant: ctx.a });
+      const token = signAccessToken({ aud: 'staff', sub: String(ctx.a.users[0].id), tenant_id: String(ctx.a.id), property_id: String(propertyId) });
+      const ok = await t.request.patch(`/api/v1/properties/${propertyId}`).set('Authorization', `Bearer ${token}`).send({ timezone: 'Africa/Lagos' });
+      expect(ok.status).toBe(200);
+      expect(ok.body.data.timezone).toBe('Africa/Lagos');
+      const rename = await t.request.patch(`/api/v1/properties/${propertyId}`).set('Authorization', `Bearer ${token}`).send({ name: 'Renamed' });
+      expect(rename.status).toBe(200);
+    });
+  });
+
   describe('PATCH /api/v1/properties/:id', () => {
     it('rejects a caller with no setup.manage (manager, setup.view only) — the MFA-disable exploit this closes', async () => {
       const before = await t.trx('properties').where({ id: ctx.a.properties[0].id }).first();

@@ -45,6 +45,7 @@ const { seedTwoTenants } = require('../helpers/fixtures');
 const { managerApproval } = require('../helpers/approvals');
 const { signAccessToken } = require('../../src/auth/tokens');
 const paystackAdapterModule = require('../../src/modules/cashiering/paystack-adapter');
+const { GatewayRequestError } = paystackAdapterModule;
 const paystack = paystackAdapterModule.__mockAdapter;
 const { scopedDb } = require('../../src/db');
 const { workerContext } = require('../../src/modules/tenancy/context');
@@ -386,6 +387,70 @@ describe('POS Register — Paystack card/NQR checkout', () => {
         .send({ reason: 'Customer left' });
       expect(res.status).toBe(200);
       expect((await t.trx('payments').where({ id: started.body.data.id }).first()).status).toBe('CANCELLED');
+    });
+
+    describe('Paystack has no record of the transaction ("transaction not found")', () => {
+      const DAY = 24 * 60 * 60 * 1000;
+      const notFound = () => new GatewayRequestError('paystack', 'Transaction reference not found', { httpStatus: 400, body: { status: false, code: 'transaction_not_found' } });
+      const voidTab = (orderId) => t.request.post(`/api/v1/pos/orders/${orderId}/void`).set('Authorization', `Bearer ${token}`).send({ reason: 'Customer left' });
+
+      async function pendingCheckoutAged(days) {
+        const { orderId } = await openTabWithItem();
+        const started = await startCheckout(orderId, { tender: 'card' });
+        await t.trx('payments').where({ id: started.body.data.id }).update({ created_at: new Date(Date.now() - days * DAY) });
+        return { orderId, paymentId: started.body.data.id };
+      }
+
+      afterEach(() => {
+        delete process.env.PAYMENT_RECORD_NOT_FOUND_MIN_AGE_DAYS;
+      });
+
+      it('treats it as definitive for an old payment: closes it, audits it, and lets the tab void proceed', async () => {
+        const { orderId, paymentId } = await pendingCheckoutAged(10);
+        paystack.verifyTransaction.mockRejectedValue(notFound());
+
+        const res = await voidTab(orderId);
+        expect(res.status).toBe(200);
+        const payment = await t.trx('payments').where({ id: paymentId }).first();
+        expect(payment.status).toBe('CANCELLED');
+        const audit = await t.trx('audit_log').where({ entity_type: 'payments', entity_id: String(paymentId), action: 'gateway_payment_closed' }).first();
+        expect(audit).toBeTruthy();
+        expect(audit.before_state.status).toBe('PENDING');
+      });
+
+      it('is NOT definitive for a recent payment (propagation delay): the error still surfaces and nothing changes', async () => {
+        const { orderId, paymentId } = await pendingCheckoutAged(1);
+        paystack.verifyTransaction.mockRejectedValue(notFound());
+
+        const res = await voidTab(orderId);
+        expect(res.status).toBe(502);
+        expect(res.body.error.code).toBe('PAYMENT_GATEWAY_ERROR');
+        expect((await t.trx('payments').where({ id: paymentId }).first()).status).toBe('PENDING');
+        expect((await t.trx('pos_orders').where({ id: orderId }).first()).status).toBe('open');
+      });
+
+      it('uses the configured age threshold (PAYMENT_RECORD_NOT_FOUND_MIN_AGE_DAYS), and falls back to 7 days on garbage', async () => {
+        const { orderId, paymentId } = await pendingCheckoutAged(2);
+        paystack.verifyTransaction.mockRejectedValue(notFound());
+        process.env.PAYMENT_RECORD_NOT_FOUND_MIN_AGE_DAYS = 'banana';
+        expect((await voidTab(orderId)).status).toBe(502);
+        process.env.PAYMENT_RECORD_NOT_FOUND_MIN_AGE_DAYS = '1';
+        expect((await voidTab(orderId)).status).toBe(200);
+        expect((await t.trx('payments').where({ id: paymentId }).first()).status).toBe('CANCELLED');
+      });
+
+      it('leaves every other gateway error exactly as it was, however old the payment is', async () => {
+        const { orderId, paymentId } = await pendingCheckoutAged(30);
+        for (const error of [
+          new GatewayRequestError('paystack', 'Invalid key', { httpStatus: 401, body: { status: false, message: 'Invalid key' } }),
+          new GatewayRequestError('paystack', 'Bad gateway', { httpStatus: 502 }),
+          new GatewayRequestError('paystack', 'Some other bad request', { httpStatus: 400, body: { status: false, code: 'invalid_params' } }),
+        ]) {
+          paystack.verifyTransaction.mockRejectedValueOnce(error);
+          expect((await voidTab(orderId)).status).toBe(502);
+        }
+        expect((await t.trx('payments').where({ id: paymentId }).first()).status).toBe('PENDING');
+      });
     });
 
     it('still records a capture Paystack reports for a checkout already cancelled locally', async () => {

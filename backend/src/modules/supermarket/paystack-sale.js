@@ -596,6 +596,7 @@ module.exports = {
   listOnlineSalesNeedingReview,
   checkOnlineSale,
   cancelOnlineSale,
+  cancelLocally,
   finalizeCapturedOnlineSale,
   voidOnlineSale,
   refundOnlinePayment,

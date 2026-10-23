@@ -50,3 +50,31 @@ describe('<PropertyTab> — the MFA switch lives on the Security tab', () => {
     expect(mocks.updateProperty.mock.calls[0][1]).not.toHaveProperty('mfa_required_for_admin_roles');
   });
 });
+
+describe('<PropertyTab> — timezone is a select of valid zones', () => {
+  beforeEach(() => {
+    Object.values(mocks).forEach((fn) => fn.mockReset());
+    mocks.createProperty.mockResolvedValue(PROPERTY);
+    mocks.updateProperty.mockResolvedValue(PROPERTY);
+  });
+
+  it('defaults a new property to Africa/Lagos and sends the chosen zone', async () => {
+    render(<PropertyTab properties={[]} onPropertiesChanged={vi.fn()} />);
+    const select = screen.getByLabelText('Timezone');
+    expect(select.tagName).toBe('SELECT');
+    expect(select).toHaveValue('Africa/Lagos');
+    await userEvent.selectOptions(select, 'Africa/Accra');
+    await userEvent.type(screen.getByLabelText('Name'), 'Hotel');
+    await userEvent.type(screen.getByLabelText('Slug'), 'hotel');
+    await userEvent.type(screen.getByLabelText('Base currency'), 'NGN');
+    await userEvent.click(screen.getByRole('button', { name: /create property/i }));
+    expect(mocks.createProperty).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'Africa/Accra' }));
+  });
+
+  it('editing a property stored with an invalid zone forces a fresh choice', async () => {
+    render(<PropertyTab properties={[{ ...PROPERTY, timezone: 'Lagos' }]} onPropertiesChanged={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /edit/i }));
+    expect(screen.getByLabelText('Timezone')).toHaveValue('');
+    expect(screen.getByLabelText('Timezone')).toBeRequired();
+  });
+});
