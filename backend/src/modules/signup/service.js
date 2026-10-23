@@ -46,6 +46,7 @@ const { recordAuditEntry } = require('../../audit');
 const { trialEndsAtFromNow } = require('../../shared/tenant-lifecycle');
 const { withDuplicateMapping, ValidationError } = require('../../shared/errors');
 const { SignupEmailAlreadyUsedError } = require('./errors');
+const { assertValidTimeZone } = require('../../shared/timezone');
 const { writeOutboxEvent } = require('../../shared/outbox');
 const { lifecycleDomains, tenantBaseUrlFor } = require('../../shared/app-domains');
 
@@ -95,6 +96,7 @@ function assertValidSlug(slug) {
 async function signupTenant(input) {
   assertRequiredFields(input);
   assertValidSlug(input.slug);
+  const timezone = assertValidTimeZone(input.timezone);
 
   const passwordIssue = await validatePassword(input.adminPassword);
   if (passwordIssue) {
@@ -190,7 +192,7 @@ async function signupTenant(input) {
       const [propertyId] = await tenantDb.table('properties').insert({
         name: propertyName,
         slug: 'main',
-        timezone: input.timezone,
+        timezone,
         base_currency: input.baseCurrency,
         // Deliberately left null — PRODUCT_REQUIREMENTS.md §3.19's own
         // setup wizard opens the property, and `properties.current_business_date`

@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Button, Turnstile } from '../../../shared/components/index.js';
+import { Button, Turnstile, TimezoneSelect } from '../../../shared/components/index.js';
 import { Footer } from '../../shell/Footer.jsx';
 import { authApi, ApiError } from '../../../shared/api/index.js';
 import { buildTenantLoginUrl } from './tenant-url.js';
+import { DEFAULT_TIMEZONE } from '../../../shared/timezones.js';
 import { slugify } from './slugify.js';
 import lodgekeepIcon from '../../../assets/brand/lodgekeep-icon.png';
 import styles from './StaffLoginScreen.module.css';
@@ -10,7 +11,7 @@ import styles from './StaffLoginScreen.module.css';
 const EMPTY_FORM = {
   companyName: '',
   slug: '',
-  timezone: '',
+  timezone: DEFAULT_TIMEZONE,
   baseCurrency: '',
   adminFirstName: '',
   adminLastName: '',
@@ -226,13 +227,7 @@ export function SignupScreen({ isOffline = false }) {
               <div className={styles.row}>
                 <label className={styles.field}>
                   <span className={styles.label}>Timezone</span>
-                  <input
-                    className={styles.input}
-                    value={form.timezone}
-                    onChange={update('timezone')}
-                    placeholder="Africa/Lagos"
-                    required
-                  />
+                  <TimezoneSelect className={styles.input} value={form.timezone} onChange={(timezone) => setForm((current) => ({ ...current, timezone }))} />
                 </label>
                 <label className={styles.field}>
                   <span className={styles.label}>Base currency</span>

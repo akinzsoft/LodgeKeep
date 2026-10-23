@@ -22,3 +22,4 @@ export { CategoryCatalogueCard } from './CategoryCatalogueCard/CategoryCatalogue
 export { PrintLetterhead } from './Print/PrintLetterhead.jsx';
 export { PrintDocument } from './Print/PrintDocument.jsx';
 export { FolioBalance } from './FolioBalance/FolioBalance.jsx';
+export { TimezoneSelect } from './TimezoneSelect.jsx';

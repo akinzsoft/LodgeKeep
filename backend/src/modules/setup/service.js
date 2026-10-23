@@ -9,6 +9,7 @@
  * same rule every other module follows.
  */
 
+const { assertValidTimeZone } = require('../../shared/timezone');
 const { scopedDb } = require('../../db');
 const imageStore = require('../../shared/image-store');
 const { withDuplicateMapping, ValidationError } = require('../../shared/errors');
@@ -91,7 +92,8 @@ const MULTI_PROPERTY_FEATURE_KEY = 'multi_property';
  * header for why it's structurally different and lives inside this
  * function instead of route middleware.
  */
-async function createProperty({ context, name, slug, timezone, baseCurrency, address, businessDate }) {
+async function createProperty({ context, name, slug, timezone: rawTimezone, baseCurrency, address, businessDate }) {
+  const timezone = assertValidTimeZone(rawTimezone);
   const db = scopedDb().for(context);
 
   // The caller already has an active property in this tenant — an ordinary
@@ -170,7 +172,8 @@ async function createProperty({ context, name, slug, timezone, baseCurrency, add
  */
 async function updateProperty({ context, id, changes }) {
   const db = scopedDb().for(context);
-  await db.table('properties').where({ id }).update(changes);
+  const checked = changes.timezone === undefined ? changes : { ...changes, timezone: assertValidTimeZone(changes.timezone) };
+  await db.table('properties').where({ id }).update(checked);
   return getProperty({ context, id });
 }
 

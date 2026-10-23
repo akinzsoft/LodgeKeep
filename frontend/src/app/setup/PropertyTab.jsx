@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Card, DataTable, Button, Toast } from '../../shared/components/index.js';
+import { Card, DataTable, Button, Toast, TimezoneSelect } from '../../shared/components/index.js';
 import { setupApi, ApiError } from '../../shared/api/index.js';
+import { DEFAULT_TIMEZONE } from '../../shared/timezones.js';
 import styles from './SetupScreen.module.css';
 import formStyles from './SetupForm.module.css';
 
@@ -27,7 +28,7 @@ export function PropertyTab({ properties, onPropertiesChanged }) {
   const [toast, setToast] = useState(null);
 
   function emptyForm() {
-    return { name: '', slug: '', timezone: '', base_currency: '', address: '', business_date: '' };
+    return { name: '', slug: '', timezone: DEFAULT_TIMEZONE, base_currency: '', address: '', business_date: '' };
   }
 
   function startEdit(property) {
@@ -137,13 +138,7 @@ export function PropertyTab({ properties, onPropertiesChanged }) {
 
           <label className={formStyles.field}>
             <span className={formStyles.label}>Timezone</span>
-            <input
-              className={formStyles.input}
-              value={form.timezone}
-              onChange={(event) => setForm({ ...form, timezone: event.target.value })}
-              placeholder="Africa/Lagos"
-              required
-            />
+            <TimezoneSelect className={formStyles.input} value={form.timezone} onChange={(timezone) => setForm({ ...form, timezone })} />
           </label>
 
           <label className={formStyles.field}>

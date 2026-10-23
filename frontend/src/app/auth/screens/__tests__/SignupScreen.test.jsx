@@ -51,7 +51,7 @@ async function fillForm() {
   // "riverside-hotels" every test below expects, so it's deliberately not
   // typed into separately (that behavior itself is covered below).
   await userEvent.type(screen.getByLabelText(/company name/i), 'Riverside Hotels');
-  await userEvent.type(screen.getByLabelText(/timezone/i), 'Africa/Lagos');
+  // Timezone is a select that defaults to Africa/Lagos, so it is not touched here.
   await userEvent.type(screen.getByLabelText(/base currency/i), 'ngn');
   await userEvent.type(screen.getByLabelText(/your first name/i), 'Ada');
   await userEvent.type(screen.getByLabelText(/your last name/i), 'Okafor');
