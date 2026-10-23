@@ -151,6 +151,49 @@ describe('Folio card payment: pressing the button again reuses the unpaid paymen
     paystack.initializeTransaction.mockResolvedValue({ authorizationUrl: 'https://checkout.paystack.com/ac_1', accessCode: 'ac_1' });
   });
 
+  // Jest's sandbox lets strict-mode code assign to an undeclared variable (it creates a global) where Node throws
+  // "ReferenceError: x is not defined". So these tests also check that the route leaves no stray global behind.
+  const strayGlobals = () => ['reused', 'deposit', 'resolved'].filter((name) => Object.prototype.hasOwnProperty.call(globalThis, name));
+  beforeEach(() => {
+    delete globalThis.reused;
+  });
+
+  it('first press, nothing to reuse: one new INITIATED->PENDING payment, the shape the launcher reads, and no stray globals', async () => {
+    const folioId = await folioWithBalance('1000.00');
+    const res = await send(folioId);
+    expect(res.status).toBe(201);
+    // The frontend flattens `data` and `meta`: it needs id, status, accessCode and authorizationUrl.
+    expect(res.body.data).toEqual(expect.objectContaining({ id: expect.anything(), status: 'PENDING', amount: '1000.00' }));
+    expect(res.body.data).not.toHaveProperty('reused');
+    expect(res.body.meta).toEqual({ authorizationUrl: 'https://checkout.paystack.com/ac_1', accessCode: 'ac_1' });
+    expect(await paymentCount(folioId)).toBe(1);
+    const audits = await t.trx('audit_log').where({ entity_type: 'payments', entity_id: res.body.data.id });
+    expect(audits.map((a) => a.action).sort()).toEqual(['initiate_paystack_payment', 'start_checkout']);
+    expect(strayGlobals()).toEqual([]);
+  });
+
+  it('the reuse path has the same response shape and leaves no stray globals', async () => {
+    const folioId = await folioWithBalance('1000.00');
+    const first = await send(folioId);
+    const again = await send(folioId);
+    expect(again.body.data.id).toBe(first.body.data.id);
+    expect(again.body.data).not.toHaveProperty('reused');
+    expect(again.body.meta).toEqual({ authorizationUrl: 'https://checkout.paystack.com/ac_1', accessCode: 'ac_1' });
+    expect(strayGlobals()).toEqual([]);
+  });
+
+  it('retrying the SAME idempotency key (a stored replay) works and does not touch Paystack again', async () => {
+    const folioId = await folioWithBalance('1000.00');
+    const sameKey = () => t.request.post(`/api/v1${url(folioId)}`).set('Authorization', `Bearer ${token}`).set('Idempotency-Key', 'reu-fixed-key-1').send({ amount: '1000.00', currency: 'NGN', guest_email: 'g@example.com' });
+    const first = await sameKey();
+    delete globalThis.reused;
+    const replay = await sameKey();
+    expect(replay.status).toBe(201);
+    expect(replay.body.data.id).toBe(first.body.data.id);
+    expect(await paymentCount(folioId)).toBe(1);
+    expect(strayGlobals()).toEqual([]);
+  });
+
   it('a second press with a NEW idempotency key reuses the pending payment: one row, the same Paystack transaction', async () => {
     const folioId = await folioWithBalance('1000.00');
     const first = await send(folioId);
