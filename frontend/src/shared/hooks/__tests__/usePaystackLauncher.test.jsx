@@ -90,4 +90,54 @@ describe('usePaystackLauncher', () => {
     expect(result.current.fallbackUrl).toBe('https://checkout.paystack.com/ac_2');
     expect(result.current.opening).toBe(false);
   });
+
+  it('releases the guard after the fallback timeout, so pressing again launches again', () => {
+    popup.openPaystackPopup.mockImplementation(() => new Promise(() => {}));
+    const { result } = renderHook(() => usePaystackLauncher());
+    act(() => {
+      result.current.launch({ accessCode: 'ac_1' });
+    });
+    act(() => vi.advanceTimersByTime(5100));
+    expect(result.current.opening).toBe(false);
+    expect(result.current.fallbackUrl).toBe('https://checkout.paystack.com/ac_1');
+    act(() => {
+      result.current.launch({ accessCode: 'ac_1' });
+    });
+    expect(popup.openPaystackPopup).toHaveBeenCalledTimes(2);
+    expect(result.current.opening).toBe(true);
+    expect(result.current.fallbackUrl).toBeNull();
+  });
+
+  it('a late close from a replaced launch does not reset the newer one', async () => {
+    const handlers = [];
+    popup.openPaystackPopup.mockImplementation((args) => {
+      handlers.push(args);
+      return new Promise(() => {});
+    });
+    const { result } = renderHook(() => usePaystackLauncher());
+    let first;
+    act(() => {
+      first = result.current.launch({ accessCode: 'ac_1' });
+    });
+    act(() => vi.advanceTimersByTime(5100));
+    act(() => {
+      result.current.launch({ accessCode: 'ac_1' });
+    });
+    act(() => handlers[0].onClose());
+    expect(await first).toBe('closed');
+    // The newer launch is still waiting for its window.
+    expect(result.current.opening).toBe(true);
+  });
+
+  it('resets after a rejected load so the next press launches again', async () => {
+    popup.openPaystackPopup.mockRejectedValueOnce(new Error('blocked')).mockImplementation(() => new Promise(() => {}));
+    const { result } = renderHook(() => usePaystackLauncher());
+    await act(async () => {
+      await result.current.launch({ accessCode: 'ac_1' }).catch(() => {});
+    });
+    act(() => {
+      result.current.launch({ accessCode: 'ac_1' });
+    });
+    expect(popup.openPaystackPopup).toHaveBeenCalledTimes(2);
+  });
 });
