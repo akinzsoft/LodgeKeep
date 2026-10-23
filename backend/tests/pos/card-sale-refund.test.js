@@ -62,8 +62,8 @@ describe('refund a settled card sale', () => {
     otherOutletId = secondOutlet;
     const [terminalId] = await t.trx('pos_terminals').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, device_ref: `CS-T-${suffix}` });
     const [beer] = await insertMenuItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: 'Card Sale Beer', category: 'Drinks', price: '100.00' });
-    const [stockItemId] = await insertStockItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: `Card Keg ${suffix}`, unit: 'unit', purchase_cost: '30.00', current_quantity: '10.000', reorder_level: '1.000' });
-    await t.trx('stock_movements').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, stock_item_id: stockItemId, type: 'received', quantity: '10.000', unit_cost: '30.00', total_cost: '300.00', business_date: '2027-07-01', reference: 'seed' });
+    const [stockItemId] = await insertStockItem(t.trx, { tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, name: `Card Keg ${suffix}`, unit: 'unit', purchase_cost: '30.00', current_quantity: '500.000', reorder_level: '1.000' });
+    await t.trx('stock_movements').insert({ tenant_id: ctx.a.id, property_id: propertyId, outlet_id: outletId, stock_item_id: stockItemId, type: 'received', quantity: '500.000', unit_cost: '30.00', total_cost: '15000.00', business_date: '2027-07-01', reference: 'seed' });
     await t.trx('pos_menu_item_components').insert({ tenant_id: ctx.a.id, property_id: propertyId, menu_item_id: beer, stock_item_id: stockItemId, quantity: '1.000' });
     outlet = { outletId, terminalId, beer, stockItemId };
   });
@@ -322,6 +322,24 @@ describe('refund a settled card sale', () => {
       expect(report.tabs.find((tab) => String(tab.orderId) === String(orderId))).toBeUndefined();
       expect(report.summary.total).toBe('0.00');
       expect(report.refunds).toBeUndefined();
+    });
+
+    test('refund lines are newest first and in a fixed order even when two refunds share a second (or fall on different weekdays)', async () => {
+      await t.trx('properties').where({ id: propertyId }).update({ current_business_date: '2027-12-01' });
+      const first = await cardSale();
+      const second = await cardSale();
+      const third = await cardSale();
+      const refundIds = [];
+      for (const sale of [first, second, third]) refundIds.push((await refundAsCashier(sale.payment.id)).body.data.id);
+      // Same second for the first two; the third a Monday earlier in the week-day alphabet sense (a different day name).
+      await t.trx('payments').whereIn('id', [refundIds[0], refundIds[1]]).update({ captured_at: new Date('2027-12-01T10:00:00Z') });
+      await t.trx('payments').where({ id: refundIds[2] }).update({ captured_at: new Date('2027-11-30T23:00:00Z') });
+      await t.trx('refund_reconciliations').whereIn('payment_id', refundIds).update({ business_date: '2027-12-01' });
+
+      const report = await salesReport('2027-12-01', '2027-12-01');
+      const order = report.refunds.lines.map((line) => String(line.refundPaymentId));
+      // Newest first; the two that tie come out highest id first, every time.
+      expect(order).toEqual([String(refundIds[1]), String(refundIds[0]), String(refundIds[2])]);
     });
 
     test('Sales report CSV has a refunds section', async () => {

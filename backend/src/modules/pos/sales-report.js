@@ -190,7 +190,9 @@ async function listRefundLines({ db, dateFrom, dateTo, outletId, timeZone }) {
         tips: negateMoney(sumMoney(rows.map((row) => row.tip_amount))),
       };
     })
-    .sort((a, b) => String(b.refundedAt).localeCompare(String(a.refundedAt)));
+    // Newest first. A refund time is whole seconds, so ties are common: the highest id (the later refund) goes first,
+    // which keeps the order the same on every run.
+    .sort((a, b) => new Date(b.refundedAt) - new Date(a.refundedAt) || Number(b.refundPaymentId) - Number(a.refundPaymentId));
 }
 
 /**
