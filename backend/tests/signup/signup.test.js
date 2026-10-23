@@ -220,6 +220,14 @@ describe('POST /api/v1/signup', () => {
     expect(res.body.error.code).toBe('VALIDATION_MISSING_FIELD');
   });
 
+  it.each(['Lagos', 'Africa/Asaba', 'Africa'])('rejects the non-IANA timezone %j and creates nothing', async (timezone) => {
+    const body = validBody({ timezone });
+    const res = await t.request.post('/api/v1/signup').send(body);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_INVALID_TIMEZONE');
+    expect(await t.trx('tenants').where({ slug: body.slug })).toHaveLength(0);
+  });
+
   it('rejects a too-short password and creates nothing', async () => {
     const body = validBody({ admin_password: 'short' });
     const res = await t.request.post('/api/v1/signup').send(body);
