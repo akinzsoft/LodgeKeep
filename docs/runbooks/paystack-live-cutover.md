@@ -99,6 +99,8 @@ SQL
 
 ### 1.6 Subaccounts that must be re-created in live mode, and who owns them
 
+**Every** subaccount in this list was created under the test key, so none of them exists in live mode. Each must be re-created in live mode; the old test ones are not reused. Expect rows for alpha-motel (tenant 1) **and STICAL (tenant 2)**: STICAL has a property subaccount (Moniepoint ending 0847, account holder PASCAL ODOGWU, created 2026-10-04) even though it takes no online payments today. Do not rely on memory about who has one; the query below is the source of truth.
+
 ```bash
 $C exec -T mysql sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql -uroot "$MYSQL_DATABASE"' <<'SQL'
 SELECT 'property' AS level, t.id AS tenant_id, t.slug AS tenant, p.name AS property, NULL AS outlet,
@@ -122,6 +124,42 @@ Also check the current key kind (prints only true/false, never the key):
 ```bash
 $C exec -T backend node scripts/set-platform-paystack-key.js --check
 ```
+
+### 1.7 Stranded Register card payments
+
+Before cutover the Register must have none stranded. Check both:
+
+- In the app, the Register banner and the bell show no stranded card payments.
+- No Paystack payment is `INITIATED`/`PENDING` and older than 30 minutes (this is the 1.2 query with an age filter; it must return no rows):
+
+```bash
+$C exec -T mysql sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql -uroot "$MYSQL_DATABASE"' <<'SQL'
+SELECT id, tenant_id, property_id, settlement_target, status, amount, currency, provider_reference, created_at
+FROM payments
+WHERE provider = 'paystack' AND parent_payment_id IS NULL
+  AND status IN ('INITIATED','PENDING')
+  AND created_at < NOW() - INTERVAL 30 MINUTE
+ORDER BY created_at;
+SQL
+```
+
+Anything listed is a test-mode leftover that live mode cannot verify. Close it with `backend/scripts/close-stale-paystack-payments.js` (`--before` is required; dry-run by default, `--apply` closes the payments as CANCELLED with an audit row each and never refunds). Run the dry run first and read what it would close. That script and the Register banner/bell come from the stale-payments-cleanup and stranded-register-payments-alert branches: confirm both are merged and deployed before relying on this step.
+
+### 1.8 Property timezone and business date
+
+Every property must have a real IANA timezone (for example `Africa/Lagos`) and a current business date within one day of today, otherwise the first live day's charges, premature-run guard and overdue-audit alert misbehave.
+
+```bash
+$C exec -T mysql sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql -uroot "$MYSQL_DATABASE"' <<'SQL'
+SELECT t.slug AS tenant, p.id AS property_id, p.name, p.timezone, p.current_business_date,
+       DATEDIFF(CURDATE(), p.current_business_date) AS days_behind
+FROM properties p JOIN tenants t ON t.id = p.tenant_id
+ORDER BY t.id, p.id;
+SQL
+```
+
+- Timezone: SQL cannot tell a valid IANA name from a typo, so run `$C exec -T backend node scripts/fix-property-timezones.js --dry-run`. It must report nothing unrecognised (exit 0). Fix any it lists before cutover; `--apply` writes only `properties.timezone` and an audit row per property.
+- Business date: `days_behind` must be 0 or 1 (and not negative) for every property. A larger gap means Night Audit has not been run; it is a manual, one-day-per-run action, so catching up is a deliberate step by the property, not part of this cutover. Resolve or knowingly accept it before going live.
 
 ---
 
@@ -173,7 +211,14 @@ Also note where the **test** secret key can be re-copied from (Paystack dashboar
    (Paystack has separate test and live webhook fields; set the live one.)
 6. **Reachability check** (section 4).
 7. **Re-save every property and outlet payout account in live mode** (subaccount codes created under the test key do not exist in live). For each row from 1.6: *Setup → Payments* (property) and *Setup → outlet → Online payout account* (outlet), entering the real bank details. Then press **Verify with Paystack** on each outlet and check bank/last-4 match. A property subaccount is replaced in place; an outlet one adds a new history row.
+   - **Confirm each one in the live Paystack dashboard.** After re-saving each property/outlet subaccount, open the live dashboard → *Subaccounts*, find the new subaccount and confirm it shows **verified** and that the account name matches the registered account holder. The first payout on a new or updated subaccount is held until it is verified, so an unverified one delays that tenant's first settlement.
 8. **Tenants re-add cards** under *Billing → payment method* (list from 1.1). Tell them before cutover; do it for every real tenant before their next billing date.
+
+### 3.1 Settlement and fees (what to expect and what not to change)
+
+- **Payouts are next business day (T+1)** to each subaccount's bank account. Plan the smoke test (section 5) around that.
+- **The hotel bears the Paystack fee** (1.5% + ₦100, the ₦100 waived under ₦2,500, capped at ₦2,000) through `bearer=subaccount` (`PAYSTACK_FEE_BEARER`, default `subaccount`). The platform account is PLANMSYS LTD.
+- In the Paystack dashboard the **"Pass transaction fees to customers" toggle must stay OFF**. Turning it on would charge guests more than the amount LodgeKeep recorded, and the amount check would then reject those payments.
 
 ---
 
@@ -215,7 +260,7 @@ SQL
 
 ## 6. What happens to alpha-motel
 
-The guest key is **global**: after cutover every tenant's online card payments go through the live key. alpha-motel is the only tenant with a payout subaccount and its codes were created in test mode, so its online checkouts would fail with a Paystack error until its subaccounts are re-created live with its real bank accounts.
+The guest key is **global**: after cutover every tenant's online card payments go through the live key. alpha-motel's payout subaccounts were all created in test mode (as were STICAL's, see below), so its online checkouts would fail with a Paystack error until its subaccounts are re-created live with its real bank accounts.
 
 Recommendation: after go-live, **deactivate alpha-motel's subaccounts** unless you are using one as your own smoke-test account (section 5). A deactivated subaccount makes checkout refuse cleanly with "payout account not configured" instead of a confusing gateway error. This is a **write**: do it deliberately, per row from 1.6, for example:
 
@@ -225,7 +270,7 @@ UPDATE property_payment_subaccounts SET is_active = 0 WHERE tenant_id = <alpha-m
 UPDATE pos_outlet_payment_subaccounts SET is_active = 0 WHERE tenant_id = <alpha-motel tenant id>;
 ```
 
-Its cash, terminal and transfer payments are unaffected. Stical and Isaac take no online payments and have no subaccounts.
+Its cash, terminal and transfer payments are unaffected. Stical (tenant 2) takes no online payments today but **does** have a property subaccount (Moniepoint ending 0847, PASCAL ODOGWU, created 2026-10-04), which was created in test mode like the others: re-create it live, or deactivate it the same way, before Stical takes any online payment. Isaac (tenant 3) has none.
 
 ---
 
