@@ -9,7 +9,8 @@ import { VoucherDialog } from '../discounts/VoucherDialog.jsx';
 import { approvalConsequence, receiptDiscountLabel } from '../discounts/discountText.js';
 import { DiscountList } from '../discounts/DiscountList.jsx';
 import { RemoveReasonDialog } from './RemoveReasonDialog.jsx';
-import { openPaystackPopup } from '../../shared/paystack.js';
+import { usePaystackLauncher } from '../../shared/hooks/usePaystackLauncher.js';
+import { PaystackLaunchStatus } from '../../shared/PaystackLaunchStatus.jsx';
 import { CategoryIcon, AllCategoriesIcon, PaymentMethodIcon, TrashIcon } from './registerCategoryIcons.jsx';
 import { EXTERNAL_TERMINAL_LABEL } from '../../shared/terminalProviders.js';
 import formStyles from './POSForm.module.css';
@@ -227,6 +228,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const [settling, setSettling] = useState(false);
   // What the checkout button says while a card/NQR payment is in progress.
   const [paymentStage, setPaymentStage] = useState(null);
+  const paystackLauncher = usePaystackLauncher();
   const [settlementForms, setSettlementForms] = useState(null);
   const [settlementPreview, setSettlementPreview] = useState(null);
   // The outlet's own service charge rate, from the server's preview (null until it arrives).
@@ -906,18 +908,14 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
     }
 
     setPaymentStage(`Waiting for ${tenderName} payment…`);
-    await new Promise((resolve, reject) => {
-      // Paystack can fire more than one close callback; the first one wins.
-      let done = false;
-      openPaystackPopup({
-        accessCode,
-        onClose: () => {
-          if (done) return;
-          done = true;
-          resolve();
-        },
-      }).catch(() => reject(new PaymentNotCompletedError('Could not load the Paystack payment window. Check the connection and try again.')));
-    });
+    // Single flight and the "open payment page" fallback live in the launcher; it resolves 'ignored' if a window is already opening.
+    try {
+      const outcome = await paystackLauncher.launch({ accessCode });
+      if (outcome === 'ignored') throw new PaymentNotCompletedError('A payment window is already opening.');
+    } catch (caught) {
+      if (caught instanceof PaymentNotCompletedError) throw caught;
+      throw new PaymentNotCompletedError('Could not load the Paystack payment window. Check the connection and try again.');
+    }
 
     setPaymentStage('Confirming payment…');
     const verified = await posApi.verifyPaystackPayment(activeOrderId, payment.id);
@@ -1562,6 +1560,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                             <button type="submit" className={styles.checkoutButton} disabled={isOffline || settling || Boolean(voucherProblem) || !previewReadyFor(settlementForms)}>
                               {settling ? (paymentStage ?? 'Settling…') : 'Send to Bar & Checkout'}
                             </button>
+                            <PaystackLaunchStatus opening={paystackLauncher.opening} fallbackUrl={paystackLauncher.fallbackUrl} className={styles.launchNote} />
                           </div>
                         </form>
                       )
@@ -1651,6 +1650,7 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
                   <button type="submit" className={styles.confirmButton} disabled={isOffline || settling || !previewReadyFor(settlementForms)}>
                     {settling ? (paymentStage ?? 'Settling…') : 'Confirm settlement'}
                   </button>
+                  <PaystackLaunchStatus opening={paystackLauncher.opening} fallbackUrl={paystackLauncher.fallbackUrl} className={styles.launchNote} />
                   <button type="button" className={styles.cancelButton} onClick={() => setSplitModalOpen(false)}>
                     Cancel
                   </button>

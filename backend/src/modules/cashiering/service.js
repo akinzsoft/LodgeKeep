@@ -763,10 +763,28 @@ async function captureTerminalPayment({ trx, folioId, amount, currency, idempote
 // Payments — Paystack (real sandbox integration) — ARCHITECTURE.md §7
 // ---------------------------------------------------------------------
 
+// An unpaid folio card payment for the same amount is reopened rather than duplicated, but only while it is fresh.
+const REUSABLE_INTENT_MAX_AGE_MS = 30 * 60 * 1000;
+
 /** Phase 1 of 2 — the local intent row only, fully transactional. See file header for why the external call is NOT in here. */
-async function initiatePaystackPaymentIntent({ trx, folioId, amount, currency, idempotencyKey }) {
+async function initiatePaystackPaymentIntent({ trx, folioId, amount, currency, idempotencyKey, reuseOpen = false }) {
   const folio = await assertFolioOpenForPayment({ trx, folioId, amount, currency });
   amount = folio.checkedAmount;
+  if (reuseOpen) {
+    // The folio row is locked now, so two quick presses cannot both miss each other's row.
+    const cutoff = new Date(Date.now() - REUSABLE_INTENT_MAX_AGE_MS);
+    const open = await trx
+      .table('payments')
+      .where({ folio_id: folioId, provider: 'paystack', settlement_target: 'folio', currency })
+      .whereNull('parent_payment_id')
+      .whereIn('status', ['INITIATED', 'PENDING'])
+      .where('created_at', '>', cutoff)
+      .orderBy('id', 'desc')
+      // A locking read: a plain read would keep the snapshot taken before the folio lock was granted and miss a row the other press just committed.
+      .forUpdate();
+    const same = open.find((row) => compareMoney(row.amount, amount) === 0);
+    if (same) return { ...same, reused: true };
+  }
   const reference = generateUlid();
   const [paymentId] = await trx.table('payments').insert({
     folio_id: folioId,
@@ -896,7 +914,7 @@ async function resolvePayoutSubaccount(db, payment) {
  * actually used, never re-derived later (see that migration's own
  * header).
  */
-async function startPaystackCheckout({ context, paymentId, guestEmail, callbackUrl, channels }) {
+async function startPaystackCheckout({ context, paymentId, guestEmail, callbackUrl, channels, resume = false }) {
   const db = scopedDb().for(context);
   const payment = await db.table('payments').where({ id: paymentId }).first();
   if (!payment) throw new ValidationError('PAYMENT_NOT_FOUND', 'The specified payment does not exist.');
@@ -904,8 +922,12 @@ async function startPaystackCheckout({ context, paymentId, guestEmail, callbackU
     // A Register payment whose popup was closed unpaid stays PENDING (see
     // `verifyPayment`); hand back its stored access code so the cashier's
     // retry reopens the SAME Paystack transaction rather than a second one.
-    const resumable = RESUMABLE_TARGETS.has(payment.settlement_target) && payment.status === 'PENDING' ? payment.provider_access_code : null;
-    return { payment, authorizationUrl: null, accessCode: resumable ?? null };
+    // `resume` (the staff folio capture, when it reused its own unpaid
+    // payment) opts a folio payment into the same behaviour.
+    const resumable = (RESUMABLE_TARGETS.has(payment.settlement_target) || resume) && payment.status === 'PENDING' ? payment.provider_access_code : null;
+    // Paystack's hosted page for a transaction is always /<access_code>.
+    const resumedUrl = resume && resumable ? `https://checkout.paystack.com/${resumable}` : null;
+    return { payment, authorizationUrl: resumedUrl, accessCode: resumable ?? null };
   }
 
   // Security fix — `callback_url` used to reach Paystack unvalidated, a

@@ -1149,3 +1149,20 @@
     padding: var(--space-1) 0;
   }
 }
+
+/* "Opening payment page…" and the fallback link while the Paystack window is being opened. */
+.launchNote {
+  margin-top: var(--space-3);
+  font-size: var(--text-label-size);
+  color: var(--pos-register-text-primary);
+}
+
+.launchNote p {
+  margin: 0;
+}
+
+.launchNote a {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+}

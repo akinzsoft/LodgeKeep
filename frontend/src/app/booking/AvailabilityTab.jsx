@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Card, Button, DataTable, StatusPill, FolioBalance } from '../../shared/components/index.js';
 import { setupApi, reservationsApi, cashieringApi, groupBlocksApi, ApiError } from '../../shared/api/index.js';
-import { openPaystackPopup } from '../../shared/paystack.js';
+import { usePaystackLauncher } from '../../shared/hooks/usePaystackLauncher.js';
+import { PaystackLaunchStatus } from '../../shared/PaystackLaunchStatus.jsx';
 import { filterRateCodesForStay, resolvePrimaryRateCodeForStay } from './rate-code-eligibility.js';
 import { Money, formatMoney, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import { multiplyMoney } from '../../shared/money.js';
@@ -210,7 +211,8 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
   const [checkoutUrl, setCheckoutUrl] = useState(null);
   const [checkoutAccessCode, setCheckoutAccessCode] = useState(null);
   const [checkoutPaymentId, setCheckoutPaymentId] = useState(null);
-  const [openingPopup, setOpeningPopup] = useState(false);
+  const launcher = usePaystackLauncher();
+  const startingCard = useRef(false);
   const [paymentError, setPaymentError] = useState(null);
   const [paymentSuccess, setPaymentSuccess] = useState(null);
   const [capturingPayment, setCapturingPayment] = useState(false);
@@ -567,6 +569,9 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
    * `authorizationUrl` could never have reached this screen at all.
    */
   async function handleCardPayment() {
+    // Single flight: a second press while the first request is running does nothing.
+    if (startingCard.current) return;
+    startingCard.current = true;
     setCapturingPayment(true);
     setPaymentError(null);
     setPaymentSuccess(null);
@@ -594,6 +599,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
     } catch (caught) {
       setPaymentError(caught instanceof ApiError ? caught.message : 'Could not start the card payment.');
     } finally {
+      startingCard.current = false;
       setCapturingPayment(false);
     }
   }
@@ -608,30 +614,25 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
    * afterward, same as `CashieringScreen`'s identical flow.
    */
   async function handleResumePaystackPopup() {
-    setOpeningPopup(true);
     try {
-      await openPaystackPopup({
-        accessCode: checkoutAccessCode,
-        onClose: async () => {
-          const paymentId = checkoutPaymentId;
-          setCheckoutUrl(null);
-          setCheckoutAccessCode(null);
-          setCheckoutPaymentId(null);
-          setOpeningPopup(false);
-          if (!paymentId) return;
-          try {
-            await cashieringApi.verifyPayment(paymentId);
-          } catch {
-            // The verify call itself can fail honestly (e.g. no gateway
-            // credentials in this environment) — the folio refresh below
-            // still shows the real, current balance either way.
-          }
-          const refreshed = await cashieringApi.getFolio(folio.id);
-          setFolio(refreshed);
-        },
-      });
+      const outcome = await launcher.launch({ accessCode: checkoutAccessCode, authorizationUrl: checkoutUrl });
+      if (outcome !== 'closed') return;
+      const paymentId = checkoutPaymentId;
+      setCheckoutUrl(null);
+      setCheckoutAccessCode(null);
+      setCheckoutPaymentId(null);
+      if (!paymentId) return;
+      try {
+        await cashieringApi.verifyPayment(paymentId);
+      } catch {
+        // The verify call itself can fail honestly (e.g. no gateway
+        // credentials in this environment) — the folio refresh below
+        // still shows the real, current balance either way.
+      }
+      const refreshed = await cashieringApi.getFolio(folio.id);
+      setFolio(refreshed);
     } catch {
-      setOpeningPopup(false);
+      // The script could not load; the launcher is already showing the payment-page link.
     }
   }
 
@@ -1083,7 +1084,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                   <p className={formStyles.paymentPanelHint}>Complete payment securely via Paystack — the popup opens on this page.</p>
                   <div className={formStyles.actionsRow}>
                     {checkoutAccessCode && (
-                      <Button type="button" loading={openingPopup} disabled={isOffline} onClick={handleResumePaystackPopup}>
+                      <Button type="button" loading={launcher.opening} disabled={isOffline} onClick={handleResumePaystackPopup}>
                         Pay now
                       </Button>
                     )}
@@ -1091,6 +1092,7 @@ export function AvailabilityTab({ activeProperty, isOffline = false } = {}) {
                       Open payment page in a new tab
                     </a>
                   </div>
+                  <PaystackLaunchStatus opening={launcher.opening} fallbackUrl={launcher.fallbackUrl} className={formStyles.disabledNotice} />
                 </div>
               )}
 

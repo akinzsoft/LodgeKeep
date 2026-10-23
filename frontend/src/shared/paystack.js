@@ -66,10 +66,13 @@ export function loadPaystackInline() {
  *
  * @param {{accessCode: string, onClose: () => void}} params
  */
-export async function openPaystackPopup({ accessCode, onClose }) {
+export async function openPaystackPopup({ accessCode, onClose, onOpen, onError }) {
   const PaystackPop = await loadPaystackInline();
   const popup = new PaystackPop();
   popup.resumeTransaction(accessCode, {
+    // `onLoad` is Paystack's "the checkout window is up" signal.
+    onLoad: () => onOpen?.(),
+    onError: (error) => onError?.(error),
     onSuccess: () => onClose?.(),
     onCancel: () => onClose?.(),
     onClose: () => onClose?.(),

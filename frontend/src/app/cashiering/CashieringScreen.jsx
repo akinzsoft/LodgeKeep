@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, DataTable, Button, StatusPill, ConfirmDialog, PrintDocument, FolioBalance } from '../../shared/components/index.js';
 import { Money, isBalanceSettled, describeBalanceState } from '../../shared/format/money.jsx';
 import { cashieringApi, arApi, profilesApi, ApiError } from '../../shared/api/index.js';
-import { openPaystackPopup } from '../../shared/paystack.js';
+import { usePaystackLauncher } from '../../shared/hooks/usePaystackLauncher.js';
+import { PaystackLaunchStatus } from '../../shared/PaystackLaunchStatus.jsx';
 import { FolioSearchCard } from './FolioSearchCard.jsx';
 import { OutstandingBalancesTab } from './OutstandingBalancesTab.jsx';
 import { PrintedFolio } from './PrintedFolio.jsx';
@@ -212,7 +213,10 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
   const [checkoutUrl, setCheckoutUrl] = useState(null);
   const [checkoutAccessCode, setCheckoutAccessCode] = useState(null);
   const [checkoutPaymentId, setCheckoutPaymentId] = useState(null);
-  const [openingPopup, setOpeningPopup] = useState(false);
+  const launcher = usePaystackLauncher();
+  // Single flight for "Capture payment" by Paystack: a second press while the first request runs does nothing.
+  const startingCheckout = useRef(false);
+  const [startingCheckoutUi, setStartingCheckoutUi] = useState(false);
   // "Print folio": the printable folio is mounted only for the print, then
   // the browser's print dialog opens (it blocks until closed) and it goes.
   const [printing, setPrinting] = useState(false);
@@ -512,7 +516,7 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
         <PaymentForm
           currency={folio.currency}
           balance={folio.balance}
-          disabled={isOffline || submitting}
+          disabled={isOffline || submitting || startingCheckoutUi}
           onCash={async (values) => {
             await onAction(() => cashieringApi.captureCashPayment(folio.id, values));
             setShowPaymentForm(false);
@@ -524,11 +528,19 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
             reload();
           }}
           onPaystack={async (values) => {
-            const result = await cashieringApi.capturePaystackPayment(folio.id, values);
-            if (result?.authorizationUrl) setCheckoutUrl(result.authorizationUrl);
-            if (result?.accessCode) setCheckoutAccessCode(result.accessCode);
-            if (result?.id) setCheckoutPaymentId(result.id);
-            await reload();
+            if (startingCheckout.current) return;
+            startingCheckout.current = true;
+            setStartingCheckoutUi(true);
+            try {
+              const result = await cashieringApi.capturePaystackPayment(folio.id, values);
+              if (result?.authorizationUrl) setCheckoutUrl(result.authorizationUrl);
+              if (result?.accessCode) setCheckoutAccessCode(result.accessCode);
+              if (result?.id) setCheckoutPaymentId(result.id);
+              await reload();
+            } finally {
+              startingCheckout.current = false;
+              setStartingCheckoutUi(false);
+            }
           }}
           onCancel={() => setShowPaymentForm(false)}
         />
@@ -554,26 +566,21 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
               <Button
                 type="button"
                 disabled={isOffline}
-                loading={openingPopup}
+                loading={launcher.opening}
                 onClick={async () => {
-                  setOpeningPopup(true);
                   try {
-                    await openPaystackPopup({
-                      accessCode: checkoutAccessCode,
-                      onClose: async () => {
-                        const paymentId = checkoutPaymentId;
-                        setCheckoutUrl(null);
-                        setCheckoutAccessCode(null);
-                        setCheckoutPaymentId(null);
-                        setOpeningPopup(false);
-                        if (paymentId) {
-                          await onAction(() => cashieringApi.verifyPayment(paymentId));
-                          reload();
-                        }
-                      },
-                    });
+                    const outcome = await launcher.launch({ accessCode: checkoutAccessCode, authorizationUrl: checkoutUrl });
+                    if (outcome !== 'closed') return;
+                    const paymentId = checkoutPaymentId;
+                    setCheckoutUrl(null);
+                    setCheckoutAccessCode(null);
+                    setCheckoutPaymentId(null);
+                    if (paymentId) {
+                      await onAction(() => cashieringApi.verifyPayment(paymentId));
+                      reload();
+                    }
                   } catch {
-                    setOpeningPopup(false);
+                    // The script could not load; the launcher is already showing the payment-page link.
                   }
                 }}
               >
@@ -584,6 +591,7 @@ function FolioPanel({ folio, otherFolios, companies, isOffline, submitting, onAc
               Open payment page in a new tab
             </a>
           </div>
+          <PaystackLaunchStatus opening={launcher.opening} fallbackUrl={launcher.fallbackUrl} className={formStyles.disabledNotice} />
         </div>
       )}
 
