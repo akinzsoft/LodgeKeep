@@ -1,8 +1,14 @@
 {
   "_comment": "Screens to capture for the Help guides. Run against the demo hotel (backend/scripts/seed-help-demo.js). See docs/help-screenshots.md.",
   "baseUrl": "http://demo-help.localhost:5173",
-  "login": { "email": "manager@palm-grove.example.com", "password": "LodgeKeepDev123!" },
-  "viewport": { "width": 1280, "height": 800 },
+  "login": {
+    "email": "manager@palm-grove.example.com",
+    "password": "LodgeKeepDev123!"
+  },
+  "viewport": {
+    "width": 1280,
+    "height": 800
+  },
   "guides": [
     {
       "guide": "getting-started/01-property",
@@ -10,9 +16,25 @@
         {
           "name": "1-property",
           "alt": "The Setup screen on the Property tab, showing the property's timezone and currency",
-          "caption": "Setup → Property: check the timezone and currency first",
-          "steps": [{ "click": { "role": "button", "name": "Setup" } }, { "click": { "role": "tab", "name": "Property" } }],
-          "highlight": { "role": "tab", "name": "Property" }
+          "caption": "Setup \u2192 Property: check the timezone and currency first",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Property"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Property"
+          }
         }
       ]
     },
@@ -22,16 +44,48 @@
         {
           "name": "1-room-types",
           "alt": "The Room Types tab listing a Standard Room and a Deluxe Room",
-          "caption": "Setup → Room Types",
-          "steps": [{ "click": { "role": "button", "name": "Setup" } }, { "click": { "role": "tab", "name": "Room Types" } }],
-          "highlight": { "role": "tab", "name": "Room Types" }
+          "caption": "Setup \u2192 Room Types",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Room Types"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Room Types"
+          }
         },
         {
           "name": "2-rooms",
           "alt": "The Rooms tab listing rooms with their room type and status",
-          "caption": "Setup → Rooms",
-          "steps": [{ "click": { "role": "button", "name": "Setup" } }, { "click": { "role": "tab", "name": "Rooms" } }],
-          "highlight": { "role": "tab", "name": "Rooms" }
+          "caption": "Setup \u2192 Rooms",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Rooms"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Rooms"
+          }
         }
       ]
     },
@@ -41,9 +95,25 @@
         {
           "name": "1-taxes",
           "alt": "The Taxes tab listing VAT 7.5 percent",
-          "caption": "Setup → Taxes",
-          "steps": [{ "click": { "role": "button", "name": "Setup" } }, { "click": { "role": "tab", "name": "Taxes" } }],
-          "highlight": { "role": "tab", "name": "Taxes" }
+          "caption": "Setup \u2192 Taxes",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Taxes"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Taxes"
+          }
         }
       ]
     },
@@ -53,9 +123,25 @@
         {
           "name": "1-pos-setup",
           "alt": "POS Setup showing the Palm Bar outlet",
-          "caption": "POS → Setup",
-          "steps": [{ "click": { "role": "button", "name": "POS" } }, { "click": { "role": "tab", "name": "Setup" } }],
-          "highlight": { "role": "tab", "name": "Setup" }
+          "caption": "POS \u2192 Setup",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Setup"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Setup"
+          }
         }
       ]
     },
@@ -66,8 +152,2301 @@
           "name": "1-staff",
           "alt": "The Staff screen listing the demo team and their roles",
           "caption": "Staff",
-          "steps": [{ "click": { "role": "button", "name": "Staff" } }],
-          "highlight": { "role": "heading", "name": "Staff" }
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Staff"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "heading",
+            "name": "Staff"
+          }
+        }
+      ]
+    },
+    {
+      "guide": "screens",
+      "shots": [
+        {
+          "name": "home/home",
+          "alt": "The Home screen",
+          "caption": "Home",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Home"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "button",
+            "name": "Home"
+          }
+        },
+        {
+          "name": "booking/availability",
+          "alt": "Booking, Availability tab",
+          "caption": "Booking \u2192 Availability",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Booking"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Availability",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Search"
+              }
+            },
+            {
+              "wait": 1500
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Availability"
+          }
+        },
+        {
+          "name": "booking/tape-chart",
+          "alt": "Booking, Tape Chart tab",
+          "caption": "Booking \u2192 Tape Chart",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Booking"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Tape Chart",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Tape Chart"
+          }
+        },
+        {
+          "name": "booking/reservations",
+          "alt": "Booking, Reservations tab",
+          "caption": "Booking \u2192 Reservations",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Booking"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Reservations",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Reservations"
+          }
+        },
+        {
+          "name": "booking/waitlist",
+          "alt": "Booking, Waitlist tab",
+          "caption": "Booking \u2192 Waitlist",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Booking"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Waitlist",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Waitlist"
+          }
+        },
+        {
+          "name": "booking/front-desk",
+          "alt": "Booking, Front Desk tab",
+          "caption": "Booking \u2192 Front Desk",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Booking"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Front Desk",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Front Desk"
+          }
+        },
+        {
+          "name": "profiles/guests",
+          "alt": "Profiles, Guests tab",
+          "caption": "Profiles \u2192 Guests",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Profiles"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Guests",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Guests"
+          }
+        },
+        {
+          "name": "profiles/companies",
+          "alt": "Profiles, Companies tab",
+          "caption": "Profiles \u2192 Companies",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Profiles"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Companies",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Companies"
+          }
+        },
+        {
+          "name": "rooms/room-types",
+          "alt": "Rooms, Room Types tab",
+          "caption": "Rooms \u2192 Room Types",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Rooms"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Room Types",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Room Types"
+          }
+        },
+        {
+          "name": "rooms/rooms",
+          "alt": "Rooms, Rooms tab",
+          "caption": "Rooms \u2192 Rooms",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Rooms"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Rooms",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Rooms"
+          }
+        },
+        {
+          "name": "housekeeping/board",
+          "alt": "Housekeeping, Board tab",
+          "caption": "Housekeeping \u2192 Board",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Housekeeping"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Board",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Board"
+          }
+        },
+        {
+          "name": "housekeeping/discrepancies",
+          "alt": "Housekeeping, Discrepancies tab",
+          "caption": "Housekeeping \u2192 Discrepancies",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Housekeeping"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Discrepancies",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Discrepancies"
+          }
+        },
+        {
+          "name": "housekeeping/out-of-order",
+          "alt": "Housekeeping, Out of Order tab",
+          "caption": "Housekeeping \u2192 Out of Order",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Housekeeping"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Out of Order",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Out of Order"
+          }
+        },
+        {
+          "name": "cashiering/balances",
+          "alt": "Cashiering, Balances tab",
+          "caption": "Cashiering \u2192 Balances",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Cashiering"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Balances",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Balances"
+          }
+        },
+        {
+          "name": "cashiering/folio-lookup",
+          "alt": "Cashiering, Folio Lookup tab",
+          "caption": "Cashiering \u2192 Folio Lookup",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Cashiering"
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "View folio"
+              }
+            },
+            {
+              "wait": 1500
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Folio Lookup"
+          }
+        },
+        {
+          "name": "ar/accounts",
+          "alt": "Accounts Receivable, Accounts tab",
+          "caption": "Accounts Receivable \u2192 Accounts",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Accounts Receivable"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Accounts",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Accounts"
+          }
+        },
+        {
+          "name": "ar/invoices",
+          "alt": "Accounts Receivable, Invoices tab",
+          "caption": "Accounts Receivable \u2192 Invoices",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Accounts Receivable"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Invoices",
+                "force": true
+              }
+            },
+            {
+              "select": {
+                "selector": "select",
+                "option": {
+                  "label": "Sample Holdings Ltd"
+                }
+              }
+            },
+            {
+              "wait": 1200
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Invoices"
+          }
+        },
+        {
+          "name": "ar/ageing",
+          "alt": "Accounts Receivable, Ageing tab",
+          "caption": "Accounts Receivable \u2192 Ageing",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Accounts Receivable"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Ageing",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Ageing"
+          }
+        },
+        {
+          "name": "ar/payments",
+          "alt": "Accounts Receivable, Payments tab",
+          "caption": "Accounts Receivable \u2192 Payments",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Accounts Receivable"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Payments",
+                "force": true
+              }
+            },
+            {
+              "select": {
+                "selector": "select",
+                "option": {
+                  "label": "Sample Holdings Ltd"
+                }
+              }
+            },
+            {
+              "wait": 1200
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Payments"
+          }
+        },
+        {
+          "name": "group-blocks/blocks",
+          "alt": "Group Blocks, Blocks tab",
+          "caption": "Group Blocks \u2192 Blocks",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Group Blocks"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Blocks",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Blocks"
+          }
+        },
+        {
+          "name": "group-blocks/room-allocations",
+          "alt": "Group Blocks, Room Allocations tab",
+          "caption": "Group Blocks \u2192 Room Allocations",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Group Blocks"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Blocks",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Manage"
+              }
+            },
+            {
+              "wait": 800
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Room Allocations",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Room Allocations"
+          }
+        },
+        {
+          "name": "group-blocks/rooming-list",
+          "alt": "Group Blocks, Rooming List tab",
+          "caption": "Group Blocks \u2192 Rooming List",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Group Blocks"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Blocks",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Manage"
+              }
+            },
+            {
+              "wait": 800
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Rooming List",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Rooming List"
+          }
+        },
+        {
+          "name": "group-blocks/pickup-billing",
+          "alt": "Group Blocks, Pickup & Billing tab",
+          "caption": "Group Blocks \u2192 Pickup & Billing",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Group Blocks"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Blocks",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Manage"
+              }
+            },
+            {
+              "wait": 800
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Pickup & Billing",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Pickup & Billing"
+          }
+        },
+        {
+          "name": "reporting/business-summary",
+          "alt": "Reporting, Business summary tab",
+          "caption": "Reporting \u2192 Business summary",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Reporting"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Business summary",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Business summary"
+          }
+        },
+        {
+          "name": "reporting/occupancy",
+          "alt": "Reporting, Occupancy tab",
+          "caption": "Reporting \u2192 Occupancy",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Reporting"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Occupancy",
+                "force": true
+              }
+            },
+            {
+              "fill": {
+                "label": "From",
+                "value": "@today-4"
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Run report"
+              }
+            },
+            {
+              "wait": 1500
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Occupancy"
+          }
+        },
+        {
+          "name": "reporting/revenue",
+          "alt": "Reporting, Revenue tab",
+          "caption": "Reporting \u2192 Revenue",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Reporting"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Revenue",
+                "force": true
+              }
+            },
+            {
+              "fill": {
+                "label": "From",
+                "value": "@today-4"
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Run report"
+              }
+            },
+            {
+              "wait": 1500
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Revenue"
+          }
+        },
+        {
+          "name": "reporting/housekeeping",
+          "alt": "Reporting, Housekeeping tab",
+          "caption": "Reporting \u2192 Housekeeping",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Reporting"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Housekeeping",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Run report"
+              }
+            },
+            {
+              "wait": 1200
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Housekeeping"
+          }
+        },
+        {
+          "name": "reporting/payment-reconciliation",
+          "alt": "Reporting, Payment reconciliation tab",
+          "caption": "Reporting \u2192 Payment reconciliation",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Reporting"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Payment reconciliation",
+                "force": true
+              }
+            },
+            {
+              "fill": {
+                "label": "From",
+                "value": "@today-4"
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Run report"
+              }
+            },
+            {
+              "wait": 1500
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Payment reconciliation"
+          }
+        },
+        {
+          "name": "reporting/discounts-comps",
+          "alt": "Reporting, Discounts & comps tab",
+          "caption": "Reporting \u2192 Discounts & comps",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Reporting"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Discounts & comps",
+                "force": true
+              }
+            },
+            {
+              "fill": {
+                "label": "From",
+                "value": "@today-4"
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Run report"
+              }
+            },
+            {
+              "wait": 1500
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Discounts & comps"
+          }
+        },
+        {
+          "name": "pos/register",
+          "alt": "POS, Register tab",
+          "caption": "POS \u2192 Register",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Register",
+                "force": true
+              }
+            },
+            {
+              "select": {
+                "label": "Outlet",
+                "option": {
+                  "label": "Palm Bar"
+                }
+              }
+            },
+            {
+              "wait": 800
+            },
+            {
+              "select": {
+                "label": "Terminal",
+                "option": {
+                  "index": 1
+                }
+              }
+            },
+            {
+              "wait": 1500
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Table 4",
+                "exact": false
+              }
+            },
+            {
+              "wait": 1200
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Register"
+          }
+        },
+        {
+          "name": "pos/tickets",
+          "alt": "POS, Tickets tab",
+          "caption": "POS \u2192 Tickets",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Tickets",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Tickets"
+          }
+        },
+        {
+          "name": "pos/guest-orders",
+          "alt": "POS, Guest orders tab",
+          "caption": "POS \u2192 Guest orders",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Guest orders",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Guest orders"
+          }
+        },
+        {
+          "name": "pos/shifts",
+          "alt": "POS, Shifts tab",
+          "caption": "POS \u2192 Shifts",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Shifts",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Shifts"
+          }
+        },
+        {
+          "name": "pos/sales",
+          "alt": "POS, Sales tab",
+          "caption": "POS \u2192 Sales",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Sales",
+                "force": true
+              }
+            },
+            {
+              "fill": {
+                "label": "From",
+                "value": "@today-4"
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Run report"
+              }
+            },
+            {
+              "wait": 1500
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Sales"
+          }
+        },
+        {
+          "name": "pos/qr-codes",
+          "alt": "POS, QR codes tab",
+          "caption": "POS \u2192 QR codes",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "QR codes",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "QR codes"
+          }
+        },
+        {
+          "name": "pos/stock",
+          "alt": "POS, Stock tab",
+          "caption": "POS \u2192 Stock",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Stock"
+          }
+        },
+        {
+          "name": "pos/setup",
+          "alt": "POS, Setup tab",
+          "caption": "POS \u2192 Setup",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Setup",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Setup"
+          }
+        },
+        {
+          "name": "pos-stock/stock-items",
+          "alt": "POS, Stock items tab",
+          "caption": "POS \u2192 Stock items",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock items",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Stock items"
+          }
+        },
+        {
+          "name": "pos-stock/recipes",
+          "alt": "POS, Recipes tab",
+          "caption": "POS \u2192 Recipes",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Recipes",
+                "force": true
+              }
+            },
+            {
+              "wait": 1500
+            },
+            {
+              "select": {
+                "selector": "select",
+                "contains": "Palm Bar"
+              }
+            },
+            {
+              "wait": 1200
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Recipes"
+          }
+        },
+        {
+          "name": "pos-stock/goods-received",
+          "alt": "POS, Goods received tab",
+          "caption": "POS \u2192 Goods received",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Goods received",
+                "force": true
+              }
+            },
+            {
+              "wait": 1500
+            },
+            {
+              "select": {
+                "selector": "select",
+                "contains": "Store"
+              }
+            },
+            {
+              "wait": 1200
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Goods received"
+          }
+        },
+        {
+          "name": "pos-stock/requests",
+          "alt": "POS, Requests tab",
+          "caption": "POS \u2192 Requests",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Requests",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Requests"
+          }
+        },
+        {
+          "name": "pos-stock/transfer",
+          "alt": "POS, Transfer tab",
+          "caption": "POS \u2192 Transfer",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Transfer",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Transfer"
+          }
+        },
+        {
+          "name": "pos-stock/stock-takes",
+          "alt": "POS, Stock takes tab",
+          "caption": "POS \u2192 Stock takes",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock takes",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Stock takes"
+          }
+        },
+        {
+          "name": "pos-stock/wastage",
+          "alt": "POS, Wastage tab",
+          "caption": "POS \u2192 Wastage",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Wastage",
+                "force": true
+              }
+            },
+            {
+              "wait": 1500
+            },
+            {
+              "select": {
+                "selector": "select",
+                "contains": "Palm Bar"
+              }
+            },
+            {
+              "wait": 1200
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Wastage"
+          }
+        },
+        {
+          "name": "pos-stock/reorder-report",
+          "alt": "POS, Reorder report tab",
+          "caption": "POS \u2192 Reorder report",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Reorder report",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Reorder report"
+          }
+        },
+        {
+          "name": "pos-stock/reports",
+          "alt": "POS, Reports tab",
+          "caption": "POS \u2192 Reports",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "POS"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stock",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Reports",
+                "force": true
+              }
+            },
+            {
+              "click": {
+                "role": "button",
+                "name": "Run reports"
+              }
+            },
+            {
+              "wait": 1500
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Reports"
+          }
+        },
+        {
+          "name": "supermarket/sell",
+          "alt": "Supermarket, Sell tab",
+          "caption": "Supermarket \u2192 Sell",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Supermarket"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Sell",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Sell"
+          }
+        },
+        {
+          "name": "supermarket/todays-sales",
+          "alt": "Supermarket, Today's sales tab",
+          "caption": "Supermarket \u2192 Today's sales",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Supermarket"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Today's sales",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Today's sales"
+          }
+        },
+        {
+          "name": "supermarket/request-stock",
+          "alt": "Supermarket, Request stock tab",
+          "caption": "Supermarket \u2192 Request stock",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Supermarket"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Request stock",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Request stock"
+          }
+        },
+        {
+          "name": "supermarket/wastage",
+          "alt": "Supermarket, Wastage tab",
+          "caption": "Supermarket \u2192 Wastage",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Supermarket"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Wastage",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Wastage"
+          }
+        },
+        {
+          "name": "supermarket/all-sales",
+          "alt": "Supermarket, All sales tab",
+          "caption": "Supermarket \u2192 All sales",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Supermarket"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "All sales",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "All sales"
+          }
+        },
+        {
+          "name": "supermarket/setup",
+          "alt": "Supermarket, Setup tab",
+          "caption": "Supermarket \u2192 Setup",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Supermarket"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Setup",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Setup"
+          }
+        },
+        {
+          "name": "supermarket/products-import",
+          "alt": "Supermarket, Products import tab",
+          "caption": "Supermarket \u2192 Products import",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Supermarket"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Products import",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Products import"
+          }
+        },
+        {
+          "name": "night-audit/night-audit",
+          "alt": "The Night Audit screen",
+          "caption": "Night Audit",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Night Audit"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "button",
+            "name": "Night Audit"
+          }
+        },
+        {
+          "name": "staff/staff",
+          "alt": "The Staff screen",
+          "caption": "Staff",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Staff"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "button",
+            "name": "Staff"
+          }
+        },
+        {
+          "name": "setup/guided-setup",
+          "alt": "Setup, Guided Setup tab",
+          "caption": "Setup \u2192 Guided Setup",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Guided Setup",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Guided Setup"
+          }
+        },
+        {
+          "name": "setup/property",
+          "alt": "Setup, Property tab",
+          "caption": "Setup \u2192 Property",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Property",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Property"
+          }
+        },
+        {
+          "name": "setup/branding",
+          "alt": "Setup, Branding tab",
+          "caption": "Setup \u2192 Branding",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Branding",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Branding"
+          }
+        },
+        {
+          "name": "setup/room-types",
+          "alt": "Setup, Room Types tab",
+          "caption": "Setup \u2192 Room Types",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Room Types",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Room Types"
+          }
+        },
+        {
+          "name": "setup/rooms",
+          "alt": "Setup, Rooms tab",
+          "caption": "Setup \u2192 Rooms",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Rooms",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Rooms"
+          }
+        },
+        {
+          "name": "setup/rate-codes-calendar",
+          "alt": "Setup, Rate Codes & Calendar tab",
+          "caption": "Setup \u2192 Rate Codes & Calendar",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Rate Codes & Calendar",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Rate Codes & Calendar"
+          }
+        },
+        {
+          "name": "setup/taxes",
+          "alt": "Setup, Taxes tab",
+          "caption": "Setup \u2192 Taxes",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Taxes",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Taxes"
+          }
+        },
+        {
+          "name": "setup/reference-data",
+          "alt": "Setup, Reference Data tab",
+          "caption": "Setup \u2192 Reference Data",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Reference Data",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Reference Data"
+          }
+        },
+        {
+          "name": "setup/users",
+          "alt": "Setup, Users tab",
+          "caption": "Setup \u2192 Users",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Users",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Users"
+          }
+        },
+        {
+          "name": "setup/email",
+          "alt": "Setup, Email tab",
+          "caption": "Setup \u2192 Email",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Email",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Email"
+          }
+        },
+        {
+          "name": "setup/payments",
+          "alt": "Setup, Payments tab",
+          "caption": "Setup \u2192 Payments",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Payments",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Payments"
+          }
+        },
+        {
+          "name": "setup/security",
+          "alt": "Setup, Security tab",
+          "caption": "Setup \u2192 Security",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Security",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Security"
+          }
+        },
+        {
+          "name": "setup/notifications",
+          "alt": "Setup, Notifications tab",
+          "caption": "Setup \u2192 Notifications",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Notifications",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Notifications"
+          }
+        },
+        {
+          "name": "setup/support-access",
+          "alt": "Setup, Support access tab",
+          "caption": "Setup \u2192 Support access",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Setup"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Support access",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Support access"
+          }
+        },
+        {
+          "name": "billing/billing",
+          "alt": "The Billing screen",
+          "caption": "Billing",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Billing"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "button",
+            "name": "Billing"
+          }
+        },
+        {
+          "name": "expenses/categories",
+          "alt": "Expenses, Categories tab",
+          "caption": "Expenses \u2192 Categories",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Expenses"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Categories",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Categories"
+          }
+        },
+        {
+          "name": "expenses/record-expense",
+          "alt": "Expenses, Record Expense tab",
+          "caption": "Expenses \u2192 Record Expense",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Expenses"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Record Expense",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Record Expense"
+          }
+        },
+        {
+          "name": "expenses/recurring",
+          "alt": "Expenses, Recurring tab",
+          "caption": "Expenses \u2192 Recurring",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Expenses"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Recurring",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Recurring"
+          }
+        },
+        {
+          "name": "expenses/reports",
+          "alt": "Expenses, Reports tab",
+          "caption": "Expenses \u2192 Reports",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Expenses"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Reports",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Reports"
+          }
+        },
+        {
+          "name": "door-access/alerts",
+          "alt": "Door Access, Alerts tab",
+          "caption": "Door Access \u2192 Alerts",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Door Access"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Alerts",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Alerts"
+          }
+        },
+        {
+          "name": "door-access/import-lock-log",
+          "alt": "Door Access, Import lock log tab",
+          "caption": "Door Access \u2192 Import lock log",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Door Access"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Import lock log",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Import lock log"
+          }
+        },
+        {
+          "name": "door-access/stay-confirmations",
+          "alt": "Door Access, Stay confirmations tab",
+          "caption": "Door Access \u2192 Stay confirmations",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Door Access"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Stay confirmations",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Stay confirmations"
+          }
+        },
+        {
+          "name": "door-access/settings",
+          "alt": "Door Access, Settings tab",
+          "caption": "Door Access \u2192 Settings",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Door Access"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Settings",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Settings"
+          }
+        },
+        {
+          "name": "data-migration/templates",
+          "alt": "Data Migration, Templates tab",
+          "caption": "Data Migration \u2192 Templates",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Data Migration"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "Templates",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "Templates"
+          }
+        },
+        {
+          "name": "data-migration/new-import",
+          "alt": "Data Migration, New Import tab",
+          "caption": "Data Migration \u2192 New Import",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Data Migration"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "New Import",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "New Import"
+          }
+        },
+        {
+          "name": "data-migration/history",
+          "alt": "Data Migration, History tab",
+          "caption": "Data Migration \u2192 History",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Data Migration"
+              }
+            },
+            {
+              "click": {
+                "role": "tab",
+                "name": "History",
+                "force": true
+              }
+            }
+          ],
+          "highlight": {
+            "role": "tab",
+            "name": "History"
+          }
+        },
+        {
+          "name": "multi-property/roll-up",
+          "alt": "The Multi-Property Roll-up screen",
+          "caption": "Multi-Property Roll-up",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Multi-Property Roll-up"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "button",
+            "name": "Multi-Property Roll-up"
+          }
+        },
+        {
+          "name": "my-profile/my-profile",
+          "alt": "The My Profile window",
+          "caption": "User menu \u2192 My Profile",
+          "steps": [
+            {
+              "click": {
+                "selector": "button[class*=\"userButton\"]"
+              }
+            },
+            {
+              "click": {
+                "role": "menuitem",
+                "name": "My Profile"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "heading",
+            "name": "My Profile",
+            "exact": false
+          }
+        },
+        {
+          "name": "help/help",
+          "alt": "The Help screen",
+          "caption": "Help",
+          "steps": [
+            {
+              "click": {
+                "role": "button",
+                "name": "Help"
+              }
+            }
+          ],
+          "highlight": {
+            "role": "button",
+            "name": "Help"
+          }
         }
       ]
     }
