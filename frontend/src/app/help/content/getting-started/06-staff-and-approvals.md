@@ -1,3 +1,9 @@
+---
+images:
+  - file: getting-started/06-staff-and-approvals/1-staff.webp
+    alt: The Staff screen listing the demo team and their roles
+    caption: Staff
+---
 # Staff, roles and approval PINs
 
 ## What it is for

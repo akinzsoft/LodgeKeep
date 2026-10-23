@@ -1,3 +1,9 @@
+---
+images:
+  - file: getting-started/01-property/1-property.webp
+    alt: The Setup screen on the Property tab, showing the property's timezone and currency
+    caption: Setup → Property: check the timezone and currency first
+---
 # Property details and business date
 
 ## What it is for

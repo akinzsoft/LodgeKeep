@@ -52,6 +52,8 @@ const CONNECTION_OWNERS = [
   // Dev-only demo-data script (refuses NODE_ENV=production and any database but
   // lodgekeep_dev); it backdates rows by direct SQL, which no accessor allows.
   'scripts/seed-demo-tenant.js',
+  // Dev-only Help demo hotel (same guard); it deletes only its own tenant by direct SQL.
+  'scripts/seed-help-demo.js',
 ];
 
 /** Matches `knex`, `mysql2`, and any subpath of either — but not `knexfile`. */

@@ -1,3 +1,9 @@
+---
+images:
+  - file: getting-started/03-taxes-and-service-charge/1-taxes.webp
+    alt: The Taxes tab listing VAT 7.5 percent
+    caption: Setup → Taxes
+---
 # Taxes and service charge
 
 ## What it is for
