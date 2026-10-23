@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { Card, Button } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
 import { sumMoney, multiplyMoney, percentOfMoney } from '../../shared/money.js';
-import { openPaystackPopup } from '../../shared/paystack.js';
+import { usePaystackLauncher } from '../../shared/hooks/usePaystackLauncher.js';
+import { PaystackLaunchStatus } from '../../shared/PaystackLaunchStatus.jsx';
 import { clearCart } from '../cartStorage.js';
 import { qrOrderingApi, ApiError } from '../../shared/api/index.js';
 import styles from '../QrOrderScreen.module.css';
@@ -69,6 +70,12 @@ export function CheckoutScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [checkoutFailure, setCheckoutFailure] = useState(null);
+  const launcher = usePaystackLauncher();
+  // Single flight: a second tap while the order is being placed or its payment window is opening does nothing
+  // (a second order would otherwise be created).
+  const placing = useRef(false);
+  // The order whose payment window is opening, so the guest can still reach its status if the window never appears.
+  const [launchedOrderId, setLaunchedOrderId] = useState(null);
   // Gap closure — the stock-out override guard: `caught.details.items`
   // from a `BUSINESS_RULE_INSUFFICIENT_STOCK` rejection, or `null` while
   // no such prompt is showing. A guest has no reason to type free text, so
@@ -102,6 +109,8 @@ export function CheckoutScreen() {
    * is only ever `true` on that retry.
    */
   async function completeOrder(acknowledgeLowStock) {
+    if (placing.current) return;
+    placing.current = true;
     setSubmitting(true);
     setError(null);
     setCheckoutFailure(null);
@@ -123,12 +132,7 @@ export function CheckoutScreen() {
       }
 
       if (result.accessCode) {
-        await openPaystackPopup({
-          accessCode: result.accessCode,
-          onClose: () => {
-            navigate(`../orders/${result.id}/status`, { relative: 'path' });
-          },
-        });
+        await openPayment(result);
         return;
       }
 
@@ -144,7 +148,20 @@ export function CheckoutScreen() {
       }
       setError(caught instanceof ApiError ? caught.message : 'Could not place this order.');
     } finally {
+      placing.current = false;
       setSubmitting(false);
+    }
+  }
+
+  /** Opens the Paystack window for a placed order; the guest goes to its status page once it closes. */
+  async function openPayment(order) {
+    setLaunchedOrderId(order.id);
+    try {
+      const outcome = await launcher.launch({ accessCode: order.accessCode, authorizationUrl: order.authorizationUrl });
+      if (outcome === 'closed') navigate(`../orders/${order.id}/status`, { relative: 'path' });
+    } catch {
+      // The Paystack script could not load: the order is held, so offer the retry screen.
+      setCheckoutFailure({ id: order.id, message: 'Could not open the payment window. Your order is on hold — try again below.' });
     }
   }
 
@@ -159,22 +176,21 @@ export function CheckoutScreen() {
   }
 
   async function handleRetryCheckout() {
-    if (!checkoutFailure) return;
+    if (!checkoutFailure || placing.current) return;
+    placing.current = true;
     setSubmitting(true);
     setError(null);
     try {
       const retried = await qrOrderingApi.retryCheckout({ token, id: checkoutFailure.id });
       if (retried.accessCode) {
-        await openPaystackPopup({
-          accessCode: retried.accessCode,
-          onClose: () => navigate(`../orders/${checkoutFailure.id}/status`, { relative: 'path' }),
-        });
+        await openPayment({ id: checkoutFailure.id, accessCode: retried.accessCode, authorizationUrl: retried.authorizationUrl });
         return;
       }
       setCheckoutFailure({ ...checkoutFailure, message: 'Payment still could not be started. Please try again shortly.' });
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not retry payment.');
     } finally {
+      placing.current = false;
       setSubmitting(false);
     }
   }
@@ -196,6 +212,7 @@ export function CheckoutScreen() {
               View order status
             </Button>
           </div>
+          <PaystackLaunchStatus opening={launcher.opening} fallbackUrl={launcher.fallbackUrl} className={formStyles.hint} />
         </Card>
       </div>
     );
@@ -283,6 +300,14 @@ export function CheckoutScreen() {
               Place order
             </Button>
           </div>
+          <PaystackLaunchStatus opening={launcher.opening} fallbackUrl={launcher.fallbackUrl} className={formStyles.hint} />
+          {launcher.fallbackUrl && launchedOrderId && (
+            <div className={formStyles.actionsRow}>
+              <Button type="button" variant="ghost" onClick={() => navigate(`../orders/${launchedOrderId}/status`, { relative: 'path' })}>
+                I have paid, view order status
+              </Button>
+            </div>
+          )}
         </form>
       </Card>
     </div>
