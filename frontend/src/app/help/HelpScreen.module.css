@@ -1,0 +1,136 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 48rem;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line);
+  font-weight: var(--text-h1-weight);
+  color: var(--text-primary);
+}
+
+.summary {
+  margin: 0 0 var(--space-2);
+  color: var(--text-primary);
+}
+
+.bar {
+  height: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--border);
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.next {
+  margin: var(--space-3) 0 0;
+  color: var(--text-secondary);
+}
+
+.checklist {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.item {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h-touch);
+}
+
+.check input {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+
+.link {
+  min-height: var(--control-h-touch);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-label-size);
+}
+
+.guideList {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.back {
+  align-self: flex-start;
+  min-height: var(--control-h-touch);
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.article {
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.article h1 {
+  font-size: var(--text-h1-size);
+}
+
+.article h2 {
+  font-size: var(--text-h2-size, 1.125rem);
+  margin-top: var(--space-5);
+}
+
+.article a {
+  color: var(--accent);
+}
+
+.stepLabel {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.stepNav {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+.stepNav button {
+  min-height: var(--control-h-touch);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
