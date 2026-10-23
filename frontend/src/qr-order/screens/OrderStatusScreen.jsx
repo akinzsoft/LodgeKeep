@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { Card, Button, StatusPill } from '../../shared/components/index.js';
 import { Money } from '../../shared/format/money.jsx';
-import { openPaystackPopup } from '../../shared/paystack.js';
+import { usePaystackLauncher } from '../../shared/hooks/usePaystackLauncher.js';
+import { PaystackLaunchStatus } from '../../shared/PaystackLaunchStatus.jsx';
 import { qrOrderingApi, ApiError } from '../../shared/api/index.js';
 import { guestOrderStatusTone, guestOrderStatusLabel, guestOrderPaymentTone, guestOrderPaymentLabel, isGuestOrderStillMoving } from '../status.js';
 import styles from '../QrOrderScreen.module.css';
@@ -42,6 +43,7 @@ export function OrderStatusScreen() {
   const [error, setError] = useState(null);
 
   const [retrying, setRetrying] = useState(false);
+  const launcher = usePaystackLauncher();
   const [retryError, setRetryError] = useState(null);
   const [confirming, setConfirming] = useState(false);
 
@@ -70,12 +72,14 @@ export function OrderStatusScreen() {
   }, [order, load]);
 
   async function handleRetryCheckout() {
+    if (retrying) return;
     setRetrying(true);
     setRetryError(null);
     try {
       const retried = await qrOrderingApi.retryCheckout({ token, id });
       if (retried.accessCode) {
-        await openPaystackPopup({ accessCode: retried.accessCode, onClose: load });
+        const outcome = await launcher.launch({ accessCode: retried.accessCode, authorizationUrl: retried.authorizationUrl });
+        if (outcome === 'closed') load();
         return;
       }
       setRetryError('Payment still could not be started. Please try again shortly.');
@@ -230,6 +234,7 @@ export function OrderStatusScreen() {
               I&rsquo;ve already paid
             </Button>
           </div>
+          <PaystackLaunchStatus opening={launcher.opening} fallbackUrl={launcher.fallbackUrl} className={formStyles.hint} />
         </Card>
       )}
 
