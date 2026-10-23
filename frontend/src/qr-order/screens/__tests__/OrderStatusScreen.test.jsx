@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { OrderStatusScreen } from '../OrderStatusScreen.jsx';
 import { renderQrOrderScreen, TOKEN } from './renderQrOrderScreen.jsx';
@@ -95,6 +95,24 @@ describe('<OrderStatusScreen>', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Retry checkout' }));
     expect(mocks.retryCheckout).toHaveBeenCalledWith({ token: TOKEN, id: '9' });
     await waitFor(() => expect(mocks.openPaystackPopup).toHaveBeenCalledWith(expect.objectContaining({ accessCode: 'ac_9' })));
+  });
+
+  it('Retry checkout is single flight and shows the payment-page link when the window does not appear', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mocks.getOrderStatus.mockResolvedValue(baseOrder());
+    mocks.retryCheckout.mockResolvedValue({ accessCode: 'ac_9', authorizationUrl: 'https://checkout.paystack.com/ac_9' });
+    mocks.openPaystackPopup.mockImplementation(() => new Promise(() => {}));
+    renderScreen();
+
+    const retry = await screen.findByRole('button', { name: 'Retry checkout' });
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    await waitFor(() => expect(mocks.openPaystackPopup).toHaveBeenCalledTimes(1));
+    expect(mocks.retryCheckout).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('status')).toHaveTextContent('Opening payment page…');
+
+    await act(async () => vi.advanceTimersByTime(5100));
+    expect(screen.getByRole('link', { name: 'Open payment page' })).toHaveAttribute('href', 'https://checkout.paystack.com/ac_9');
   });
 
   it('"I\'ve already paid" re-verifies against the real gateway and updates the shown status', async () => {
