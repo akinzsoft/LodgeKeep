@@ -88,6 +88,30 @@ const internalsRestriction = {
   message: INTERNALS_MESSAGE,
 };
 
+/**
+ * `no-undef` — an undeclared identifier (`reused is not defined`) is a
+ * ReferenceError waiting for the one code path that reaches it, and a test
+ * suite that never takes that path will not notice. The rule only works if
+ * every legitimate global is declared, so they are listed here explicitly
+ * rather than pulling in a package or switching the rule off per file.
+ */
+const NODE_GLOBALS = Object.fromEntries(
+  [
+    'process', 'console', 'Buffer', 'URL', 'URLSearchParams', 'TextEncoder', 'TextDecoder',
+    'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'setImmediate', 'clearImmediate',
+    'queueMicrotask', 'structuredClone', 'AbortController', 'AbortSignal', 'fetch', 'Headers',
+    'Request', 'Response', 'FormData', 'Blob', 'performance', 'global', 'globalThis',
+    'module', 'require', 'exports', '__dirname', '__filename',
+  ].map((name) => [name, 'readonly']),
+);
+
+const JEST_GLOBALS = Object.fromEntries(
+  [
+    'describe', 'it', 'test', 'expect', 'beforeAll', 'afterAll', 'beforeEach', 'afterEach',
+    'jest',
+  ].map((name) => [name, 'readonly']),
+);
+
 module.exports = [
   {
     ignores: ['node_modules/**', 'coverage/**'],
@@ -98,8 +122,11 @@ module.exports = [
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'commonjs',
+      globals: NODE_GLOBALS,
     },
     rules: {
+      'no-undef': 'error',
+
       // Catches `require('knex')` — the form this codebase actually uses.
       'no-restricted-syntax': ['error', driverRestriction, internalsRestriction],
 
@@ -121,6 +148,7 @@ module.exports = [
     // reads the files behind the module surface. It still may not construct a
     // connection — that stays with `tests/helpers` below.
     files: ['tests/**/*.js'],
+    languageOptions: { globals: JEST_GLOBALS },
     rules: {
       'no-restricted-syntax': ['error', driverRestriction],
       'no-restricted-imports': [
