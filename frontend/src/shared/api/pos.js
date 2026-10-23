@@ -228,6 +228,12 @@ export function listOrders({ outletId, status } = {}) {
   return request(`/pos/orders${query ? `?${query}` : ''}`);
 }
 
+/** Card payments Paystack captured whose open tab was never settled (customer paid, tab still open), for one outlet. */
+export function listStrandedPayments({ outletId } = {}) {
+  const query = outletId ? `?${new URLSearchParams({ outlet_id: outletId })}` : '';
+  return request(`/pos/stranded-payments${query}`);
+}
+
 /** The kitchen/bar ticket queue: open tabs with something to make, oldest first, items included. */
 export function listKitchenTickets({ outletId } = {}) {
   const query = outletId ? `?${new URLSearchParams({ outlet_id: outletId })}` : '';

@@ -23,6 +23,7 @@ const outletScope = require('./outlet-scope');
 const { assertPermission } = require('../../auth');
 const { PermissionDeniedError } = require('../../auth/errors');
 const { computeSalesReport } = require('./sales-report');
+const { listStrandedRegisterPayments } = require('./stranded-payments');
 const { computeCostOfSalesMargin } = require('../stock/reporting');
 const { toCsv } = require('../reporting/service');
 const { claimApproval, approvalConsumer } = require('../approvals');
@@ -602,6 +603,15 @@ async function listOrders(req, res, next) {
   }
 }
 
+async function listStrandedPayments(req, res, next) {
+  try {
+    const outletIds = await outletScope.scopeForRequest(req);
+    res.status(200).json(ok(await listStrandedRegisterPayments({ db: scopedDb().for(req.context), outletId: req.query.outlet_id, outletIds })));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function listKitchenTickets(req, res, next) {
   try {
     const outletIds = await outletScope.scopeForRequest(req);
@@ -1077,6 +1087,7 @@ module.exports = {
   archiveMenuItem,
   findInHouseForCharge,
   listOrders,
+  listStrandedPayments,
   listKitchenTickets,
   markTicketDone,
   getOrder,

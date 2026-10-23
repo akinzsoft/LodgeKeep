@@ -8,6 +8,7 @@ import { approveInDialog, TEST_APPROVERS, TEST_APPROVAL_TOKEN } from '../../appr
 
 const mocks = vi.hoisted(() => ({
   listOutlets: vi.fn(),
+  listStrandedPayments: vi.fn(),
   getMyOutlets: vi.fn(),
   listTransferCandidates: vi.fn(),
   transferTabs: vi.fn(),
@@ -110,6 +111,7 @@ describe('<RegisterTab>', () => {
     mocks.listMenuItems.mockResolvedValue([MENU_ITEM]);
     mocks.listMenuCategories.mockResolvedValue([]);
     mocks.listOrders.mockResolvedValue([]);
+    mocks.listStrandedPayments.mockResolvedValue([]);
     // The redesign fetches a real preview reactively as soon as the order
     // has items — not only behind an explicit "Settle" click, which no
     // longer exists — so every test that adds an item needs this default
@@ -143,6 +145,35 @@ describe('<RegisterTab>', () => {
     // Service is a fixed 7.5% of the real 20.00 subtotal = 1.50, computed
     // automatically — no cashier input exists to type it.
     expect(mocks.settleOrder).toHaveBeenCalledWith('9', [expect.objectContaining({ method: 'cash', serviceCharge: '1.50' })], expect.objectContaining({}));
+  });
+
+  describe('stranded card payments banner', () => {
+    const STRANDED = { id: '78', pos_order_id: '9', table_label: 'Table 10', amount: '23.00', currency: 'NGN', outlet_id: '1' };
+
+    it('lists a paid-but-unsettled tab for the outlet and opens it in one tap', async () => {
+      mocks.listStrandedPayments.mockResolvedValue([STRANDED]);
+      mocks.listOrders.mockResolvedValue([{ id: '9', table_label: 'Table 10', status: 'open' }]);
+      mocks.getOrder.mockResolvedValue({ order: { id: '9', table_label: 'Table 10', status: 'open' }, items: [], settlements: [] });
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
+      expect(screen.queryByTestId('stranded-payments')).not.toBeInTheDocument();
+      await selectStation();
+
+      const banner = await screen.findByTestId('stranded-payments');
+      expect(banner).toHaveTextContent('Customer paid by card but the tab is not settled');
+      expect(banner).toHaveTextContent('Table 10');
+      expect(mocks.listStrandedPayments).toHaveBeenCalledWith({ outletId: '1' });
+
+      await userEvent.click(within(banner).getByRole('button', { name: 'Open tab' }));
+      expect(mocks.getOrder).toHaveBeenCalledWith('9');
+    });
+
+    it('shows no banner when nothing is stranded or the lookup fails', async () => {
+      mocks.listStrandedPayments.mockRejectedValue(new Error('boom'));
+      render(<RegisterTab activeProperty={{ base_currency: 'NGN' }} />);
+      await selectStation();
+      await screen.findByRole('button', { name: '+ New tab' });
+      expect(screen.queryByTestId('stranded-payments')).not.toBeInTheDocument();
+    });
   });
 
   describe('Card (external terminal)', () => {

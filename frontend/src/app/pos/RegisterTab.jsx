@@ -209,6 +209,8 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
   const [terminalId, setTerminalId] = useState('');
 
   const [openOrders, setOpenOrders] = useState([]);
+  // Card payments Paystack captured whose tab is still open and unsettled (customer paid, tab not settled).
+  const [strandedPayments, setStrandedPayments] = useState([]);
   const [activeOrderId, setActiveOrderId] = useState(null);
   const [activeOrder, setActiveOrder] = useState(null);
 
@@ -323,6 +325,25 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
         setError(caught instanceof ApiError ? caught.message : 'Could not load outlets.');
       });
   }, []);
+
+  // Re-read the stranded payments whenever the outlet, its open tabs or the settle result change, so a
+  // settled or refunded payment drops off the banner. Best-effort: a failed read just shows no banner.
+  const registerPaymentsKey = (activeOrder?.registerPayments ?? []).map((payment) => `${payment.id}:${payment.status}`).join(',');
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const rows = outletId ? await posApi.listStrandedPayments({ outletId }) : [];
+        if (!cancelled) setStrandedPayments(Array.isArray(rows) ? rows : []);
+      } catch {
+        if (!cancelled) setStrandedPayments([]);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [outletId, openOrders, settleResult, registerPaymentsKey]);
 
   async function loadOutletContext(id) {
     try {
@@ -1141,6 +1162,21 @@ export function RegisterTab({ activeProperty, isOffline = false, currentUserLabe
         </p>
       )}
       {isOffline && <p className={formStyles.disabledNotice}>You are offline. Orders cannot be settled until connectivity returns.</p>}
+      {strandedPayments.length > 0 && (
+        <div role="alert" className={formStyles.errorBanner} data-testid="stranded-payments">
+          <p>Customer paid by card but the tab is not settled: open the tab and press checkout, or refund.</p>
+          <ul>
+            {strandedPayments.map((payment) => (
+              <li key={payment.id}>
+                {payment.table_label || `Tab #${payment.pos_order_id}`} — <Money amount={payment.amount} currencyCode={payment.currency} />{' '}
+                <button type="button" className={styles.renameLink} onClick={() => switchToTab({ id: payment.pos_order_id })}>
+                  Open tab
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <>
           {/*
