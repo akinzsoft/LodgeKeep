@@ -130,7 +130,7 @@ $C exec -T backend node scripts/set-platform-paystack-key.js --check
 Before cutover the Register must have none stranded. Check both:
 
 - In the app, the Register banner and the bell show no stranded card payments.
-- No Paystack payment is `INITIATED`/`PENDING` and older than 30 minutes (this is the 1.2 query with an age filter; it must return no rows):
+- No Paystack payment is `INITIATED`/`PENDING` and older than 30 minutes (the 1.2 query with an age filter; it must return no rows):
 
 ```bash
 $C exec -T mysql sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql -uroot "$MYSQL_DATABASE"' <<'SQL'
@@ -143,7 +143,14 @@ ORDER BY created_at;
 SQL
 ```
 
-Anything listed is a test-mode leftover that live mode cannot verify. Close it with `backend/scripts/close-stale-paystack-payments.js` (`--before` is required; dry-run by default, `--apply` closes the payments as CANCELLED with an audit row each and never refunds). Run the dry run first and read what it would close. That script and the Register banner/bell come from the stale-payments-cleanup and stranded-register-payments-alert branches: confirm both are merged and deployed before relying on this step.
+Anything listed is a test-mode leftover that live mode cannot verify. Close it with `backend/scripts/close-stale-paystack-payments.js`, run inside the backend container like the other scripts, dry run first:
+
+```bash
+$C exec -T backend node scripts/close-stale-paystack-payments.js --before=<ISO timestamp>           # dry run, writes nothing
+$C exec -T backend node scripts/close-stale-paystack-payments.js --before=<ISO timestamp> --apply   # closes them
+```
+
+**Which staleness rule applies: the script's, not the 30 minutes.** The script has no age threshold. It selects Paystack payments (not refunds) that are `INITIATED`/`PENDING` and were created **before the `--before` timestamp you give it** (required, and refused if in the future). The 30-minute figure above is only the pre-flight pass/fail check; to close exactly what that check lists, pass `--before` as the current time minus 30 minutes, or the moment of the key swap to leave nothing created after it untouched. `--apply` moves each to `CANCELLED` (one audit row per payment) and never refunds.
 
 ### 1.8 Property timezone and business date
 
