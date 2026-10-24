@@ -84,6 +84,18 @@
   padding-left: var(--space-5);
 }
 
+.groupTitle {
+  margin: var(--space-4) 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-label-size);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.groupTitle:first-child {
+  margin-top: 0;
+}
+
 .back {
   align-self: flex-start;
   min-height: var(--control-h-touch);

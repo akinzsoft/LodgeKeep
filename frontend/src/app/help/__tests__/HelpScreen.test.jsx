@@ -60,4 +60,19 @@ describe('HelpScreen', () => {
     await user.click(screen.getByRole('button', { name: /Back to Help/ }));
     expect(screen.getByRole('heading', { name: 'Help and Training' })).toBeInTheDocument();
   });
+
+  it('lists the screen guides under their work area and opens one', async () => {
+    const user = userEvent.setup();
+    render(<HelpScreen activeProperty={PROPERTY} currentUserId="5" />);
+    expect(await screen.findByRole('heading', { name: 'How to use each screen' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Restaurant and bar' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Cashiering and money' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Supermarket' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Opening and closing a shift' }));
+    expect(screen.getByRole('heading', { name: 'Opening and closing a shift' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Who can do this' })).toBeInTheDocument();
+    expect(screen.queryByText(/^Step \d+ of 9$/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('link', { name: 'The daily routine' }));
+    expect(screen.getByText('Step 8 of 9')).toBeInTheDocument();
+  });
 });
