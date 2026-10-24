@@ -13,7 +13,8 @@ The Sales tab shows what the Register took. It is also where a manager refunds a
 ## Who can do this
 - The **Sales** tab needs the permission `pos.manage`. By default that is manager, admin and super admin.
 - The **Refund** button needs `cashiering.void_line` as well. By default that is cashier, manager, admin and super admin.
-- Every refund needs a **manager's approval PIN**. The manager who approves must hold `pos.manage`, and must have set a PIN under My Profile.
+- **Starting** a refund needs `cashiering.void_line`.
+- Every refund then needs a **manager's approval PIN**. The manager who approves must hold `pos.manage` and must have set an approval PIN under My Profile → Approval PIN. A manager who has no PIN yet cannot be picked.
 - **Clear stuck refund** needs `cashiering.refund_clear`. By default that is manager, admin and super admin.
 ## Where to click
 POS → **Sales**. Choose the dates and, if you wish, an **Outlet**, then press **Run report**.
@@ -32,12 +33,21 @@ The reason is written beside it. The ones you may see are:
 - "This sale is no longer standing."
 - "The card payment was not captured."
 ## Card payments to refund
-This list shows card money that Paystack took but that no sale is using, for example a guest who paid after their tab was removed. Press **Refund**, and a manager enters their PIN and a reason in the same way.
+This list is on the same Sales tab. It shows card money that Paystack took but that no sale is using. It is not limited to the dates you chose, and it includes a payment whose tab is still open. That is the usual case for a customer who paid but whose tab was never settled.
+1. The Register warns about the same payment with a red message, "Customer paid by card but the tab is not settled", and an **Open tab** button. See [Selling at the Register](help:screens/restaurant-and-bar/01-selling-at-the-register).
+2. If the tab's total still equals the amount paid, the cashier can settle the tab with that payment and no refund is needed.
+3. If the total has changed (for example tax or service charge was switched on or off), settling fails with an amount mismatch. The payment will not fit. Do not retry. Refund it here instead.
+4. Find the payment under **Card payments to refund** and press **Refund**. A manager picks their own name, types their 6-digit PIN and a reason, then presses **Approve refund**. The whole amount goes back to the customer.
+5. After the refund, the tab can be paid again at its correct total.
 ## What it looks like in the reports
-- The original sale stays in the totals on the day it was sold. The refund is a separate line on the day the refund was processed. Past days do not change.
-- The Sales summary then shows **Refunds** and **Net sales**, and a table called **Refunds processed in this period** lists each one with the day it counts on and the day it was sold. The tab in Settled tabs is marked "(refunded)".
+- The original sale stays in the figures on the day it was sold. That day does not change afterwards.
+- The refund is its own **negative line**, dated with the business date of the day the refund was processed. This date is recorded when the refund is processed. If none was recorded, the date the card was charged (in the property's timezone) is used.
+- **POS → Sales** then shows **Refunds** and **Net sales** in its summary, and lists each refund under **Refunds processed in this period**, with the day it counts on and the day it was sold.
+- **Reporting → Payment reconciliation** lists the refund as its own line on the day it was processed.
+- **Reporting → Business summary** takes the refund into the outlet's Collected figure for that day. It also shows it in the "Refunds / unsettled" column.
 - A sale refunded in full no longer counts in top-selling items or profit, and the stock it used is put back.
-- In Reporting → **Payment reconciliation** the refund is listed as its own line on the day it was processed. That report needs the permission `reconciliation.view` (by default manager, admin and super admin).
+- **Shift cash totals are not affected.** A shift only counts cash sales, and a card refund never touches the drawer.
+- Payment reconciliation needs `reconciliation.view` (by default manager, admin and super admin).
 ## A refund that is stuck
 Some refunds stay "waiting on Paystack" because Paystack was not reachable or its answer was unclear. They are listed under **Card refunds waiting on Paystack**, with a note of what LodgeKeep found when it last checked.
 1. Do nothing at first. LodgeKeep keeps checking.
