@@ -4,6 +4,7 @@ import { GuideMedia } from './GuideMedia.jsx';
 import { Markdown } from './markdown.jsx';
 import { getGuide, listGuides } from './guides.js';
 import { STEPS } from './gettingStarted.js';
+import { listScreenGuideGroups } from './screenGroups.js';
 import { useGettingStartedProgress } from './useGettingStartedProgress.js';
 import styles from './HelpScreen.module.css';
 
@@ -28,6 +29,7 @@ export function HelpScreen({ activeProperty, currentUserId }) {
   const guide = openSlug ? getGuide(openSlug) : null;
   const stepForGuide = STEPS.findIndex((step) => step.guide === openSlug);
   const problemGuides = listGuides('common-problems');
+  const screenGroups = listScreenGuideGroups();
 
   if (guide) {
     return (
@@ -101,6 +103,25 @@ export function HelpScreen({ activeProperty, currentUserId }) {
           ))}
         </ol>
       </Card>
+
+      {screenGroups.length > 0 && (
+        <Card title="How to use each screen">
+          {screenGroups.map((group) => (
+            <section key={group.folder} aria-labelledby={`screens-${group.folder}`}>
+              <h3 id={`screens-${group.folder}`} className={styles.groupTitle}>{group.label}</h3>
+              <ul className={styles.guideList}>
+                {group.guides.map((item) => (
+                  <li key={item.slug}>
+                    <button type="button" className={styles.link} onClick={() => setOpenSlug(item.slug)}>
+                      {item.title}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </Card>
+      )}
 
       <Card title="Common problems">
         <ul className={styles.guideList}>
