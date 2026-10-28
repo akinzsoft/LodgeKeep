@@ -6,7 +6,7 @@ const SCREEN_GUIDES = Object.values(GUIDES).filter((guide) => guide.slug.startsW
 const REQUIRED_HEADINGS = ['What it is for', 'Who can do this', 'Where to click', 'Fields that matter', 'You are done when', 'What can go wrong'];
 
 describe('"How to use each screen" guides', () => {
-  it('has the ten screen guides', () => {
+  it('has the fifteen screen guides', () => {
     expect(SCREEN_GUIDES.map((guide) => guide.slug).sort()).toEqual([
       'screens/back-office-and-admin/01-running-night-audit',
       'screens/cashiering-and-money/01-cashiering-folios',
@@ -17,7 +17,12 @@ describe('"How to use each screen" guides', () => {
       'screens/restaurant-and-bar/01-selling-at-the-register',
       'screens/restaurant-and-bar/02-opening-and-closing-a-shift',
       'screens/restaurant-and-bar/03-voids-and-card-refunds',
+      'screens/stock/01-stock-items-recipes-and-reorder',
+      'screens/stock/02-receiving-requesting-and-moving-stock',
+      'screens/stock/03-stock-takes-and-wastage',
+      'screens/stock/04-stock-reports',
       'screens/supermarket/01-the-supermarket-till',
+      'screens/supermarket/02-supermarket-stock-and-setup',
     ]);
   });
 
@@ -42,7 +47,7 @@ describe('"How to use each screen" guides', () => {
 
   it('groups guides by work area, in order, hiding empty groups', () => {
     const groups = listScreenGuideGroups();
-    expect(groups.map((group) => group.label)).toEqual(['Front desk', 'Cashiering and money', 'Restaurant and bar', 'Supermarket', 'Back office and Admin']);
+    expect(groups.map((group) => group.label)).toEqual(['Front desk', 'Cashiering and money', 'Restaurant and bar', 'Supermarket', 'Stock', 'Back office and Admin']);
     expect(groups[2].guides.map((guide) => guide.title)).toEqual(['Selling at the Register', 'Opening and closing a shift', 'Voids and card refunds from Sales']);
   });
 });

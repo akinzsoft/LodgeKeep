@@ -27,6 +27,11 @@ const REGISTER = 'screens/restaurant-and-bar/01-selling-at-the-register';
 const SHIFTS = 'screens/restaurant-and-bar/02-opening-and-closing-a-shift';
 const VOIDS = 'screens/restaurant-and-bar/03-voids-and-card-refunds';
 const SUPERMARKET = 'screens/supermarket/01-the-supermarket-till';
+const STOCK_ITEMS = 'screens/stock/01-stock-items-recipes-and-reorder';
+const STOCK_MOVE = 'screens/stock/02-receiving-requesting-and-moving-stock';
+const STOCK_TAKES = 'screens/stock/03-stock-takes-and-wastage';
+const STOCK_REPORTS = 'screens/stock/04-stock-reports';
+const SUPERMARKET_STOCK = 'screens/supermarket/02-supermarket-stock-and-setup';
 const PROPERTY = 'getting-started/01-property';
 const ROOMS_AND_RATES = 'getting-started/02-rooms-and-rates';
 const TAXES = 'getting-started/03-taxes-and-service-charge';
@@ -61,36 +66,36 @@ export const COVERAGE = [
   { screen: 'cashiering', tab: 'Balances', ...covered([CASHIERING]) },
   { screen: 'cashiering', tab: 'Folio Lookup', ...covered([CASHIERING]) },
 
-  { screen: 'pos', tab: null, ...planned },
+  { screen: 'pos', tab: null, ...covered([REGISTER, SHIFTS, VOIDS, POS_SETUP, STOCK_ITEMS, STOCK_MOVE, STOCK_TAKES, STOCK_REPORTS]) },
   { screen: 'pos', tab: 'Register', ...covered([REGISTER]) },
   { screen: 'pos', tab: 'Tickets', ...covered([REGISTER]) },
   { screen: 'pos', tab: 'Guest orders', ...covered([REGISTER]) },
   { screen: 'pos', tab: 'Shifts', ...covered([SHIFTS]) },
   { screen: 'pos', tab: 'Sales', ...covered([VOIDS]) },
   { screen: 'pos', tab: 'QR codes', ...covered([POS_SETUP]) },
-  { screen: 'pos', tab: 'Stock', ...planned },
+  { screen: 'pos', tab: 'Stock', ...covered([STOCK_ITEMS, STOCK_MOVE, STOCK_TAKES, STOCK_REPORTS]) },
   { screen: 'pos', tab: 'Setup', ...covered([POS_SETUP]) },
 
   // The stock tabs: shown inside POS → Stock, and as the sidebar's own Stock item for storekeepers.
-  { screen: 'stock', tab: null, ...planned },
-  { screen: 'stock', tab: 'Stock items', ...planned },
-  { screen: 'stock', tab: 'Recipes', ...planned },
-  { screen: 'stock', tab: 'Goods received', ...planned },
-  { screen: 'stock', tab: 'Requests', ...planned },
-  { screen: 'stock', tab: 'Transfer', ...planned },
-  { screen: 'stock', tab: 'Stock takes', ...planned },
-  { screen: 'stock', tab: 'Wastage', ...planned },
-  { screen: 'stock', tab: 'Reorder report', ...planned },
-  { screen: 'stock', tab: 'Reports', ...planned },
+  { screen: 'stock', tab: null, ...covered([STOCK_ITEMS, STOCK_MOVE, STOCK_TAKES, STOCK_REPORTS]) },
+  { screen: 'stock', tab: 'Stock items', ...covered([STOCK_ITEMS]) },
+  { screen: 'stock', tab: 'Recipes', ...covered([STOCK_ITEMS]) },
+  { screen: 'stock', tab: 'Goods received', ...covered([STOCK_MOVE]) },
+  { screen: 'stock', tab: 'Requests', ...covered([STOCK_MOVE]) },
+  { screen: 'stock', tab: 'Transfer', ...covered([STOCK_MOVE]) },
+  { screen: 'stock', tab: 'Stock takes', ...covered([STOCK_TAKES]) },
+  { screen: 'stock', tab: 'Wastage', ...covered([STOCK_TAKES]) },
+  { screen: 'stock', tab: 'Reorder report', ...covered([STOCK_ITEMS]) },
+  { screen: 'stock', tab: 'Reports', ...covered([STOCK_REPORTS]) },
 
-  { screen: 'supermarket', tab: null, ...planned },
+  { screen: 'supermarket', tab: null, ...covered([SUPERMARKET, SUPERMARKET_STOCK]) },
   { screen: 'supermarket', tab: 'Sell', ...covered([SUPERMARKET]) },
   { screen: 'supermarket', tab: "Today's sales", ...covered([SUPERMARKET]) },
-  { screen: 'supermarket', tab: 'Request stock', ...planned },
-  { screen: 'supermarket', tab: 'Wastage', ...planned },
+  { screen: 'supermarket', tab: 'Request stock', ...covered([SUPERMARKET_STOCK]) },
+  { screen: 'supermarket', tab: 'Wastage', ...covered([SUPERMARKET_STOCK, STOCK_TAKES]) },
   { screen: 'supermarket', tab: 'All sales', ...covered([SUPERMARKET]) },
-  { screen: 'supermarket', tab: 'Setup', ...planned },
-  { screen: 'supermarket', tab: 'Products import', ...planned },
+  { screen: 'supermarket', tab: 'Setup', ...covered([SUPERMARKET_STOCK]) },
+  { screen: 'supermarket', tab: 'Products import', ...covered([SUPERMARKET_STOCK]) },
 
   { screen: 'staff', tab: null, ...covered([STAFF]) },
 
