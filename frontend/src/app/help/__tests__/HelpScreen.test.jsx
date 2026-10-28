@@ -67,7 +67,7 @@ describe('HelpScreen', () => {
     expect(await screen.findByRole('heading', { name: 'How to use each screen' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Restaurant and bar' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Cashiering and money' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Supermarket' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Supermarket' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Opening and closing a shift' }));
     expect(screen.getByRole('heading', { name: 'Opening and closing a shift' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Who can do this' })).toBeInTheDocument();

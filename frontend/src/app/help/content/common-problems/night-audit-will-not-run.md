@@ -12,3 +12,5 @@ The Run button is refused, or a run is shown as failed or running for a long tim
 
 ## Still stuck
 Do not start a second run while one shows as running. Wait a few minutes, then contact your administrator.
+
+For how a normal run works and what it posts, see [Running Night Audit and reading the result](help:screens/back-office-and-admin/01-running-night-audit).
