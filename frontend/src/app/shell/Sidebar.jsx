@@ -1,4 +1,4 @@
-import lodgekeepIcon from '../../assets/brand/lodgekeep-icon.png';
+import { BrandLogo } from '../../shared/components/BrandLogo/BrandLogo.jsx';
 import { initialsFor } from './initials.js';
 import { NavIcon } from './navIcons.jsx';
 import { isNavItemVisible } from './nav-config.js';
@@ -73,8 +73,10 @@ export function Sidebar({
           tenant's staff regardless of theming (DESIGN_SYSTEM.md §1: "the
           admin shell keeps the product's own identity"). */}
       <div className={styles.brand}>
-        <img src={lodgekeepIcon} alt="LodgeKeep" className={styles.brandIcon} />
-        {!collapsed && <span className={styles.brandWordmark}>LodgeKeep</span>}
+        {/* Navy sidebar: always the -white artwork. Collapsed rail = the mark,
+            expanded = the horizontal lockup. The property's own logo (or, with
+            none, just its name) is the separate block below. */}
+        <BrandLogo variant={collapsed ? 'mark' : 'horizontal'} surface="dark" height={collapsed ? 28 : 32} className={styles.brandLogo} />
       </div>
 
       {(property?.logoUrl || (!collapsed && property?.name)) && (

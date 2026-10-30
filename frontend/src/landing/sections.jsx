@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { BrandLogo } from '../shared/components/BrandLogo/BrandLogo.jsx';
 import { Button } from '../shared/components/index.js';
 import { formatMoney } from '../shared/format/money.jsx';
 import { slugify } from '../app/auth/screens/slugify.js';
@@ -24,8 +25,7 @@ export function Header({ content }) {
     <header className={styles.header}>
       <div className={`${styles.container} ${styles.headerInner}`}>
         <a className={styles.brand} href="/" aria-label={`${content.brand} home`}>
-          <span className={styles.brandMark} aria-hidden="true">L</span>
-          <span className={styles.brandName}>{content.brand}</span>
+          <BrandLogo variant="horizontal" surface="light" height={32} className={styles.brandLogo} />
         </a>
         <nav className={styles.nav} aria-label="Sections">
           <a className={styles.navLink} href="#features">Features</a>
@@ -353,7 +353,8 @@ export function Footer({ content }) {
     <footer className={styles.footer}>
       <div className={`${styles.container} ${styles.footerInner}`}>
         <div>
-          <p className={styles.footerBrand}>{content.brand}</p>
+          {/* Dark footer: the -white lockup. */}
+          <BrandLogo variant="horizontal" surface="dark" height={32} className={styles.footerLogo} />
           <p className={styles.footerText}>{content.footer.blurb}</p>
         </div>
         <ul className={styles.footerLinks}>

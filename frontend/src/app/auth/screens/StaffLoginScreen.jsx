@@ -4,7 +4,7 @@ import { Button } from '../../../shared/components/index.js';
 import { ApiError, authApi } from '../../../shared/api/index.js';
 import { Footer } from '../../shell/Footer.jsx';
 import { deriveTenantLabelFromHost } from './tenant-label.js';
-import lodgekeepIcon from '../../../assets/brand/lodgekeep-icon.png';
+import { BrandLogo } from '../../../shared/components/BrandLogo/BrandLogo.jsx';
 import styles from './StaffLoginScreen.module.css';
 
 /**
@@ -69,6 +69,7 @@ export function StaffLoginScreen({ isOffline = false }) {
   // answers — or if it fails — the subdomain-derived label stands in, so
   // the screen never waits on it or breaks without it.
   const [branding, setBranding] = useState(null);
+  const [brandingSettled, setBrandingSettled] = useState(false);
   const [logoFailed, setLogoFailed] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -77,7 +78,10 @@ export function StaffLoginScreen({ isOffline = false }) {
       .then((result) => {
         if (!cancelled) setBranding(result);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setBrandingSettled(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -156,10 +160,7 @@ export function StaffLoginScreen({ isOffline = false }) {
       <div className={styles.mainRow}>
         <div className={styles.brandPanel}>
           <div className={styles.brandTop}>
-            <div className={styles.logoMark}>
-              <img src={lodgekeepIcon} alt="" className={styles.logoMarkIcon} />
-            </div>
-            <p className={styles.wordmark}>LodgeKeep</p>
+            <BrandLogo variant="horizontal" surface="dark" height={40} className={styles.brandLogo} />
           </div>
 
           <div className={styles.brandContent}>
@@ -176,7 +177,11 @@ export function StaffLoginScreen({ isOffline = false }) {
               </p>
             )}
 
-            {tenantLogoUrl && (
+            {/* The tenant's own logo always wins. Only once the branding lookup
+                has answered (or failed) and there is none — or it will not
+                load — does the form card show LodgeKeep's -colour logo (it
+                sits on a white card, so never the -white artwork). */}
+            {tenantLogoUrl ? (
               <div className={styles.tenantLogoRow}>
                 <img
                   src={tenantLogoUrl}
@@ -185,6 +190,12 @@ export function StaffLoginScreen({ isOffline = false }) {
                   onError={() => setLogoFailed(true)}
                 />
               </div>
+            ) : (
+              brandingSettled && (
+                <div className={styles.tenantLogoRow}>
+                  <BrandLogo variant="horizontal" surface="light" height={40} />
+                </div>
+              )
             )}
 
             {view === 'signin' && (

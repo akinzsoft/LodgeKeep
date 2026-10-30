@@ -1,4 +1,4 @@
-import lodgekeepIcon from '../../assets/brand/lodgekeep-icon.png';
+import { BrandLogo } from '../../shared/components/BrandLogo/BrandLogo.jsx';
 import styles from './Footer.module.css';
 
 /**
@@ -14,7 +14,7 @@ import styles from './Footer.module.css';
 export function Footer() {
   return (
     <footer className={styles.footer}>
-      <img src={lodgekeepIcon} alt="" className={styles.icon} />
+      <BrandLogo variant="mark" surface="light" height={20} className={styles.icon} />
       <a
         href="https://www.planmsys.com"
         target="_blank"

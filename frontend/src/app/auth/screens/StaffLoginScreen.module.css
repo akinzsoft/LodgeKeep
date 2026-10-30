@@ -76,34 +76,10 @@
   gap: var(--space-3);
 }
 
-.logoMark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--control-h);
-  height: var(--control-h);
+/* LodgeKeep's -white lockup, drawn straight onto the dark brand panel. */
+.brandLogo {
   flex-shrink: 0;
-  padding: var(--space-1);
-  border-radius: var(--radius-md);
-
-  /* A near-white chip, not the --text-inverse tint used elsewhere on this
-     panel: the logo's own colours (blue/teal/orange) are the point of
-     showing it, and tinting the chip purple would fight them rather than
-     frame them. */
-  background: color-mix(in srgb, var(--surface-card) 92%, transparent);
-}
-
-.logoMarkIcon {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.wordmark {
-  margin: 0;
-  font-size: var(--text-h2-size);
-  line-height: var(--text-h2-line);
-  font-weight: var(--text-h2-weight);
+  max-width: 100%;
 }
 
 .brandContent {

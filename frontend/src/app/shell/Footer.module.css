@@ -17,9 +17,7 @@
 }
 
 .icon {
-  width: var(--space-5);
-  height: var(--space-5);
-  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .text {
