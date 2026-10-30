@@ -159,6 +159,11 @@ export function describeNotification(notification) {
         title: `Card payment not settled — ${table}`,
         detail: join(money(p.amount, p.currency), 'Customer paid by card but the tab is not settled: open the tab and press checkout, or refund.'),
       };
+    case 'platform.redis_memory_high':
+      return {
+        title: 'Server job memory is nearly full',
+        detail: `Redis is using ${p.usedMb} MB of ${p.maxMb} MB (${p.percent}%). Contact whoever runs the server before background jobs stop.`,
+      };
     default:
       return { title: notification.type, detail: '' };
   }

@@ -85,7 +85,7 @@ async function scheduleNotificationsSweep() {
   await notificationsSweepQueue().upsertJobScheduler(
     SWEEP_SCHEDULER_ID,
     { every: SWEEP_INTERVAL_MS },
-    { name: SWEEP_JOB_NAME, data: {}, opts: { removeOnComplete: true, removeOnFail: 100 } }
+    { name: SWEEP_JOB_NAME, data: {}, opts: {} }
   );
 }
 

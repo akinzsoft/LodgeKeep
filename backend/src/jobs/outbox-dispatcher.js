@@ -67,7 +67,7 @@ async function enqueueOutboxDispatch({ tenantId, propertyId }) {
   await outboxDispatchQueue().add(
     DISPATCH_JOB_NAME,
     { tenantId, propertyId },
-    { attempts: 5, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true, removeOnFail: 100 }
+    { attempts: 5, backoff: { type: 'exponential', delay: 5000 } }
   );
 }
 

@@ -66,7 +66,9 @@ function askRateLimiter() {
     limit: 120,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: ipKeyGenerator,
+    // express-rate-limit v8 calls keyGenerator(req, res); ipKeyGenerator wants the address string.
+    // Passing it bare keyed every client as 'ask-tls-rl:[object Object]' (one shared bucket).
+    keyGenerator: (req) => ipKeyGenerator(req.ip || ''),
     store: new RedisStore({
       prefix: 'ask-tls-rl:',
       sendCommand: (...args) => rateLimitRedisConnection().call(...args),

@@ -66,6 +66,7 @@
 
 const { Queue } = require('bullmq');
 const { redisConnection } = require('./redis-connection');
+const { queueOptions } = require('./job-retention');
 
 const OUTBOX_DISPATCH_QUEUE = 'outbox-dispatch';
 const TRIAL_EXPIRY_QUEUE = 'trial-expiry';
@@ -78,6 +79,21 @@ const EXPENSE_SCHEDULES_QUEUE = 'expense-schedules';
 const NIGHT_AUDIT_OVERDUE_QUEUE = 'night-audit-overdue';
 const PAYMENT_WEBHOOKS_QUEUE = 'payment-webhooks';
 const TENANT_PURGE_QUEUE = 'tenant-purge';
+
+/** Every queue name this process can create — the retention test and `scripts/trim-bullmq-jobs.js` iterate it. */
+const ALL_QUEUE_NAMES = Object.freeze([
+  OUTBOX_DISPATCH_QUEUE,
+  TRIAL_EXPIRY_QUEUE,
+  SUBSCRIPTION_BILLING_QUEUE,
+  TENANT_DATA_EXPORT_QUEUE,
+  DATA_IMPORT_QUEUE,
+  NOTIFICATIONS_SWEEP_QUEUE,
+  DOOR_ACCESS_RETENTION_QUEUE,
+  EXPENSE_SCHEDULES_QUEUE,
+  NIGHT_AUDIT_OVERDUE_QUEUE,
+  PAYMENT_WEBHOOKS_QUEUE,
+  TENANT_PURGE_QUEUE,
+]);
 
 let queue = null;
 let trialExpiryQueueInstance = null;
@@ -93,63 +109,63 @@ let tenantPurgeQueueInstance = null;
 
 function outboxDispatchQueue() {
   if (!queue) {
-    queue = new Queue(OUTBOX_DISPATCH_QUEUE, { connection: redisConnection() });
+    queue = new Queue(OUTBOX_DISPATCH_QUEUE, queueOptions(OUTBOX_DISPATCH_QUEUE, redisConnection()));
   }
   return queue;
 }
 
 function trialExpiryQueue() {
   if (!trialExpiryQueueInstance) {
-    trialExpiryQueueInstance = new Queue(TRIAL_EXPIRY_QUEUE, { connection: redisConnection() });
+    trialExpiryQueueInstance = new Queue(TRIAL_EXPIRY_QUEUE, queueOptions(TRIAL_EXPIRY_QUEUE, redisConnection()));
   }
   return trialExpiryQueueInstance;
 }
 
 function subscriptionBillingQueue() {
   if (!subscriptionBillingQueueInstance) {
-    subscriptionBillingQueueInstance = new Queue(SUBSCRIPTION_BILLING_QUEUE, { connection: redisConnection() });
+    subscriptionBillingQueueInstance = new Queue(SUBSCRIPTION_BILLING_QUEUE, queueOptions(SUBSCRIPTION_BILLING_QUEUE, redisConnection()));
   }
   return subscriptionBillingQueueInstance;
 }
 
 function tenantDataExportQueue() {
   if (!tenantDataExportQueueInstance) {
-    tenantDataExportQueueInstance = new Queue(TENANT_DATA_EXPORT_QUEUE, { connection: redisConnection() });
+    tenantDataExportQueueInstance = new Queue(TENANT_DATA_EXPORT_QUEUE, queueOptions(TENANT_DATA_EXPORT_QUEUE, redisConnection()));
   }
   return tenantDataExportQueueInstance;
 }
 
 function dataImportQueue() {
   if (!dataImportQueueInstance) {
-    dataImportQueueInstance = new Queue(DATA_IMPORT_QUEUE, { connection: redisConnection() });
+    dataImportQueueInstance = new Queue(DATA_IMPORT_QUEUE, queueOptions(DATA_IMPORT_QUEUE, redisConnection()));
   }
   return dataImportQueueInstance;
 }
 
 function notificationsSweepQueue() {
   if (!notificationsSweepQueueInstance) {
-    notificationsSweepQueueInstance = new Queue(NOTIFICATIONS_SWEEP_QUEUE, { connection: redisConnection() });
+    notificationsSweepQueueInstance = new Queue(NOTIFICATIONS_SWEEP_QUEUE, queueOptions(NOTIFICATIONS_SWEEP_QUEUE, redisConnection()));
   }
   return notificationsSweepQueueInstance;
 }
 
 function doorAccessRetentionQueue() {
   if (!doorAccessRetentionQueueInstance) {
-    doorAccessRetentionQueueInstance = new Queue(DOOR_ACCESS_RETENTION_QUEUE, { connection: redisConnection() });
+    doorAccessRetentionQueueInstance = new Queue(DOOR_ACCESS_RETENTION_QUEUE, queueOptions(DOOR_ACCESS_RETENTION_QUEUE, redisConnection()));
   }
   return doorAccessRetentionQueueInstance;
 }
 
 function expenseSchedulesQueue() {
   if (!expenseSchedulesQueueInstance) {
-    expenseSchedulesQueueInstance = new Queue(EXPENSE_SCHEDULES_QUEUE, { connection: redisConnection() });
+    expenseSchedulesQueueInstance = new Queue(EXPENSE_SCHEDULES_QUEUE, queueOptions(EXPENSE_SCHEDULES_QUEUE, redisConnection()));
   }
   return expenseSchedulesQueueInstance;
 }
 
 function nightAuditOverdueQueue() {
   if (!nightAuditOverdueQueueInstance) {
-    nightAuditOverdueQueueInstance = new Queue(NIGHT_AUDIT_OVERDUE_QUEUE, { connection: redisConnection() });
+    nightAuditOverdueQueueInstance = new Queue(NIGHT_AUDIT_OVERDUE_QUEUE, queueOptions(NIGHT_AUDIT_OVERDUE_QUEUE, redisConnection()));
   }
   return nightAuditOverdueQueueInstance;
 }
@@ -164,7 +180,7 @@ function nightAuditOverdueQueue() {
  */
 function paymentWebhooksQueue() {
   if (!paymentWebhooksQueueInstance) {
-    paymentWebhooksQueueInstance = new Queue(PAYMENT_WEBHOOKS_QUEUE, { connection: redisConnection() });
+    paymentWebhooksQueueInstance = new Queue(PAYMENT_WEBHOOKS_QUEUE, queueOptions(PAYMENT_WEBHOOKS_QUEUE, redisConnection()));
   }
   return paymentWebhooksQueueInstance;
 }
@@ -177,7 +193,7 @@ function paymentWebhooksQueue() {
  */
 function tenantPurgeQueue() {
   if (!tenantPurgeQueueInstance) {
-    tenantPurgeQueueInstance = new Queue(TENANT_PURGE_QUEUE, { connection: redisConnection() });
+    tenantPurgeQueueInstance = new Queue(TENANT_PURGE_QUEUE, queueOptions(TENANT_PURGE_QUEUE, redisConnection()));
   }
   return tenantPurgeQueueInstance;
 }
@@ -231,6 +247,7 @@ async function __closeQueuesForTesting() {
 }
 
 module.exports = {
+  ALL_QUEUE_NAMES,
   OUTBOX_DISPATCH_QUEUE,
   outboxDispatchQueue,
   TRIAL_EXPIRY_QUEUE,
