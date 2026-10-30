@@ -11,8 +11,11 @@ describe('<Footer>', () => {
     expect(logo).toHaveAttribute('height');
   });
 
-  it('keeps the Powered by Planmsys credit link', () => {
+  it('links the "Powered by Planmsys" credit to www.planmsys.com', () => {
     render(<Footer />);
-    expect(screen.getByRole('link', { name: 'Powered by Planmsys' })).toHaveAttribute('href', 'https://www.planmsys.com');
+    const link = screen.getByRole('link', { name: 'Powered by Planmsys' });
+    expect(link).toHaveAttribute('href', 'https://www.planmsys.com');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
   });
 });
