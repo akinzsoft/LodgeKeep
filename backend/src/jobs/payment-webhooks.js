@@ -27,6 +27,7 @@
  * attempt and a Paystack redelivery racing on one event apply it once.
  */
 
+const { runRedisMemoryCheck } = require('./redis-memory-watch');
 const { Worker } = require('bullmq');
 const { redisConnection } = require('./redis-connection');
 const { paymentWebhooksQueue, PAYMENT_WEBHOOKS_QUEUE } = require('./queues');
@@ -189,6 +190,7 @@ function startPaymentWebhooksWorker() {
       await runSupermarketRefundSweep();
       await runRefundReconciliationSweep();
       await runStrandedRegisterPaymentSweep();
+      await runRedisMemoryCheck();
     },
     { connection: redisConnection() }
   );

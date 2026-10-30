@@ -20,6 +20,7 @@
  */
 
 const { useTestApp } = require('../helpers/app');
+const { rateLimitRedisConnection } = require('../../src/shared/rate-limit-redis-connection');
 const { flushRateLimitPrefixes } = require('../helpers/rate-limit');
 
 describe('GET /internal/ask-tls', () => {
@@ -32,6 +33,15 @@ describe('GET /internal/ask-tls', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ status: 'ok' });
+  });
+
+  test('rate-limit key is the client address, not a stringified object', async () => {
+    await flushRateLimitPrefixes(['ask-tls-rl:']);
+    await t.request.get(`/internal/ask-tls?domain=${process.env.APP_DOMAIN}`);
+    const keys = await rateLimitRedisConnection().keys('ask-tls-rl:*');
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).not.toMatch(/object/i);
+    expect(keys[0]).toMatch(/^ask-tls-rl:[0-9a-f.:]+$/i);
   });
 
   test('is case-insensitive for the bare APP_DOMAIN', async () => {

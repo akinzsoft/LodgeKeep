@@ -83,7 +83,7 @@ async function enqueueTenantDataExportJob({ tenantId, exportId }) {
   await tenantDataExportQueue().add(
     EXPORT_JOB_NAME,
     { tenantId, exportId },
-    { attempts: 3, backoff: { type: 'exponential', delay: 10_000 }, removeOnComplete: true, removeOnFail: 100 }
+    { attempts: 3, backoff: { type: 'exponential', delay: 10_000 } }
   );
 }
 

@@ -107,6 +107,13 @@ const NOTIFICATION_EVENTS = Object.freeze([
     defaultRoles: ['manager', 'admin', 'super_admin'],
   },
   {
+    eventType: 'platform.redis_memory_high',
+    group: 'Payments',
+    label: 'Server job queue memory is nearly full',
+    description: 'Redis (the background job store) has passed 80% of its memory limit. Sweeps, e-mails and rate limits stop working when it fills. Tell whoever runs the server.',
+    defaultRoles: ['super_admin'],
+  },
+  {
     eventType: 'payments.refund_needs_attention',
     group: 'Payments',
     label: 'Card refund needs attention',

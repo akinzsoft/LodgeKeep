@@ -90,7 +90,7 @@ async function enqueueDataImportJob({ tenantId, importRunId }) {
   await dataImportQueue().add(
     IMPORT_JOB_NAME,
     { tenantId, importRunId },
-    { attempts: 3, backoff: { type: 'exponential', delay: 10_000 }, removeOnComplete: true, removeOnFail: 100 }
+    { attempts: 3, backoff: { type: 'exponential', delay: 10_000 } }
   );
 }
 

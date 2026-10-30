@@ -114,6 +114,14 @@ describe('stranded Register payment notification', () => {
   });
 });
 
+describe('redis memory notification', () => {
+  it('says how full it is and what to do', () => {
+    const text = describeNotification({ type: 'platform.redis_memory_high', payload: { usedMb: 420, maxMb: 512, percent: 82 } });
+    expect(text.title).toBe('Server job memory is nearly full');
+    expect(text.detail).toContain('420 MB of 512 MB (82%)');
+  });
+});
+
 describe('security notifications', () => {
   it('the verification-code-off alert names who and why, and opens Setup', () => {
     expect(describeNotification({ type: 'security.mfa_requirement_disabled', payload: { actorName: 'Ada Bello', reason: 'Mailbox down' } })).toEqual({
