@@ -63,13 +63,14 @@ describe('<StaffLoginScreen>', () => {
   it("shows the tenant's own logo and name on the sign-in card when branding has one", async () => {
     mocks.getLoginBranding.mockResolvedValue({ tenantName: 'Diamond Age Hotels', logoUrl: '/api/v1/media/property-logos/logo.png' });
     renderScreen();
-    const logo = await screen.findByRole('img', { name: 'Diamond Age Hotels logo' });
+    const logo = await screen.findByAltText('Diamond Age Hotels logo');
     expect(logo).toHaveAttribute('src', '/api/v1/media/property-logos/logo.png');
-    // The tenant's logo wins: the form card carries no LodgeKeep fallback, only
-    // the dark brand panel's white lockup remains.
-    const lockups = horizontalLockups();
-    expect(lockups).toHaveLength(1);
-    expect(lockups[0]).toHaveAttribute('src', '/brand/lodgekeep-logo-horizontal-white.png');
+    // The tenant's logo wins and appears once, on the brand panel: no LodgeKeep
+    // lockup (white or colour) anywhere, and it is not repeated on the form card.
+    expect(horizontalLockups()).toHaveLength(0);
+    expect(screen.getAllByAltText('Diamond Age Hotels logo')).toHaveLength(1);
+    expect(logo.closest('form')).toBeNull();
+    expect(logo.closest('[class*="formCard"]')).toBeNull();
     expect(screen.getByText('Sign in to Diamond Age Hotels')).toBeInTheDocument();
   });
 
@@ -80,7 +81,7 @@ describe('<StaffLoginScreen>', () => {
     // dark brand panel -> white, white form card -> colour
     expect(srcs).toContain('/brand/lodgekeep-logo-horizontal-white.png');
     expect(srcs).toContain('/brand/lodgekeep-logo-horizontal-colour.png');
-    expect(screen.queryByRole('img', { name: /logo$/ })).not.toBeInTheDocument();
+    expect(screen.queryByAltText(/ logo$/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
   });
 
@@ -94,10 +95,21 @@ describe('<StaffLoginScreen>', () => {
   it('drops a logo that fails to load rather than showing a broken image', async () => {
     mocks.getLoginBranding.mockResolvedValue({ tenantName: 'Alpha', logoUrl: '/missing.png' });
     renderScreen();
-    const logo = await screen.findByRole('img', { name: 'Alpha logo' });
+    const logo = await screen.findByAltText('Alpha logo');
     fireEvent.error(logo);
-    expect(screen.queryByRole('img', { name: 'Alpha logo' })).not.toBeInTheDocument();
+    expect(screen.queryByAltText('Alpha logo')).not.toBeInTheDocument();
+    // Back to the default: white lockup on the panel, colour lockup on the card.
     await vi.waitFor(() => expect(horizontalLockups()).toHaveLength(2));
+  });
+
+  it('holds back every LodgeKeep lockup until branding has answered, so none flashes before a tenant logo', async () => {
+    let resolve;
+    mocks.getLoginBranding.mockReturnValue(new Promise((r) => (resolve = r)));
+    renderScreen();
+    expect(horizontalLockups()).toHaveLength(0);
+    resolve({ tenantName: 'Alpha', logoUrl: '/a.png' });
+    await screen.findByAltText('Alpha logo');
+    expect(horizontalLockups()).toHaveLength(0);
   });
 
   it('links to the real /signup screen, PLAN.md Phase 5 gap closure', () => {

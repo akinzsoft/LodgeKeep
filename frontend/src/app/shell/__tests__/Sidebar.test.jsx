@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Sidebar } from '../Sidebar.jsx';
 
@@ -102,33 +102,43 @@ describe('<Sidebar>', () => {
     expect(container.querySelector('img[src*="colour"]')).toBeNull();
   });
 
-  it('does not show LodgeKeep a second time for a property with no logo — its name only', () => {
-    render(<Sidebar user={user} navGroups={navGroups} property={{ name: 'Diamond Age Hotel', logoUrl: null }} />);
-    expect(screen.getAllByAltText('Lodgekeep')).toHaveLength(1);
-    expect(screen.getByText('Diamond Age Hotel')).toBeInTheDocument();
-  });
+  const withLogo = { name: 'Diamond Age Hotel', logoUrl: '/logo.png' };
+  const noLogo = { name: 'Diamond Age Hotel', logoUrl: null };
 
-  it("keeps the property's own logo beside the brand row without replacing it", () => {
-    render(<Sidebar user={user} navGroups={navGroups} property={{ name: 'Diamond Age Hotel', logoUrl: '/logo.png' }} />);
+  it('with a property logo, shows only that logo and no LodgeKeep image', () => {
+    const { container } = render(<Sidebar user={user} navGroups={navGroups} property={withLogo} />);
     expect(screen.getByAltText('Diamond Age Hotel logo')).toHaveAttribute('src', '/logo.png');
-    expect(screen.getByAltText('Lodgekeep')).toBeInTheDocument();
-  });
-
-  it("shows the active property's logo and name under the product mark", () => {
-    render(<Sidebar user={user} navGroups={navGroups} property={{ name: 'Diamond Age Hotel', logoUrl: '/logo.png' }} />);
-    expect(screen.getByAltText('Diamond Age Hotel logo')).toHaveAttribute('src', '/logo.png');
+    expect(screen.queryByAltText('Lodgekeep')).not.toBeInTheDocument();
+    expect(container.querySelector('img[src*="/brand/"]')).toBeNull();
+    expect(screen.getAllByAltText(/logo/)).toHaveLength(1);
     expect(screen.getByText('Diamond Age Hotel')).toBeInTheDocument();
   });
 
-  it('shows the property name alone when it has no logo', () => {
-    render(<Sidebar user={user} navGroups={navGroups} property={{ name: 'Diamond Age Hotel', logoUrl: null }} />);
-    expect(screen.getByText('Diamond Age Hotel')).toBeInTheDocument();
-    expect(screen.queryByAltText(/logo/)).not.toBeInTheDocument();
-  });
-
-  it('keeps only the property logo when collapsed', () => {
-    render(<Sidebar user={user} navGroups={navGroups} collapsed property={{ name: 'Diamond Age Hotel', logoUrl: '/logo.png' }} />);
+  it('collapsed with a property logo: only that logo, no LodgeKeep mark, no name text', () => {
+    const { container } = render(<Sidebar user={user} navGroups={navGroups} collapsed property={withLogo} />);
     expect(screen.getByAltText('Diamond Age Hotel logo')).toBeInTheDocument();
+    expect(screen.queryByAltText('Lodgekeep')).not.toBeInTheDocument();
+    expect(container.querySelector('img[src*="/brand/"]')).toBeNull();
     expect(screen.queryByText('Diamond Age Hotel')).not.toBeInTheDocument();
+  });
+
+  it('with no property logo, shows the LodgeKeep default once, plus the name as text', () => {
+    render(<Sidebar user={user} navGroups={navGroups} property={noLogo} />);
+    expect(screen.getAllByAltText('Lodgekeep')).toHaveLength(1);
+    expect(screen.getByAltText('Lodgekeep')).toHaveAttribute('src', '/brand/lodgekeep-logo-horizontal-white.png');
+    expect(screen.getByText('Diamond Age Hotel')).toBeInTheDocument();
+    expect(screen.queryByAltText(/ logo$/)).not.toBeInTheDocument();
+  });
+
+  it('collapsed with no property logo: the LodgeKeep white mark', () => {
+    render(<Sidebar user={user} navGroups={navGroups} collapsed property={noLogo} />);
+    expect(screen.getByAltText('Lodgekeep')).toHaveAttribute('src', '/brand/lodgekeep-mark-white.png');
+  });
+
+  it('falls back to LodgeKeep when the property logo fails to load', () => {
+    render(<Sidebar user={user} navGroups={navGroups} property={withLogo} />);
+    fireEvent.error(screen.getByAltText('Diamond Age Hotel logo'));
+    expect(screen.queryByAltText('Diamond Age Hotel logo')).not.toBeInTheDocument();
+    expect(screen.getByAltText('Lodgekeep')).toBeInTheDocument();
   });
 });

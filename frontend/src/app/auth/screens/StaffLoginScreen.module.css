@@ -71,6 +71,7 @@
 }
 
 .brandTop {
+  min-height: 40px;
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -138,8 +139,18 @@
   margin-bottom: var(--space-4);
 }
 
+/* The tenant's logo on the dark panel: a white rounded chip keeps a dark
+   logo readable on navy. */
+.tenantLogoChip {
+  display: inline-flex;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+
 .tenantLogo {
-  max-height: 72px;
+  display: block;
+  max-height: 56px;
   max-width: 200px;
   object-fit: contain;
 }
