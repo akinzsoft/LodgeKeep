@@ -128,21 +128,10 @@
   text-decoration: none;
 }
 
-.brandMark {
-  align-items: center;
-  background: var(--accent-navy);
-  border-radius: var(--radius-md);
-  color: var(--text-inverse);
-  display: inline-flex;
-  font-weight: 700;
-  height: var(--space-6);
-  justify-content: center;
-  width: var(--space-6);
-}
-
-.brandName {
-  font-size: var(--text-h2-size);
-  font-weight: 700;
+/* LodgeKeep's -colour lockup on the light nav. */
+.brandLogo {
+  display: block;
+  max-width: 100%;
 }
 
 .nav {
@@ -767,11 +756,11 @@
   gap: var(--space-4);
 }
 
-.footerBrand {
-  color: var(--text-inverse);
-  font-size: var(--text-h2-size);
-  font-weight: 700;
-  margin: 0;
+/* The -white lockup on the dark footer. */
+.footerLogo {
+  display: block;
+  margin-bottom: var(--space-2);
+  max-width: 100%;
 }
 
 .footerText,

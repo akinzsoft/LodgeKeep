@@ -177,3 +177,28 @@ describe('hero, header, footer', () => {
     expect(screen.getByText(new RegExp(`${new Date().getFullYear()} ${realContent.company}`))).toBeInTheDocument();
   });
 });
+
+describe('landing brand', () => {
+  it('shows the -colour horizontal lockup in the light nav and the -white one in the dark footer', () => {
+    const { container } = render(
+      <>
+        <Header content={realContent} />
+        <Footer content={realContent} />
+      </>
+    );
+    const header = container.querySelector('header');
+    const footer = container.querySelector('footer');
+    expect(header.querySelector('img')).toHaveAttribute('src', '/brand/lodgekeep-logo-horizontal-colour.png');
+    expect(footer.querySelector('img')).toHaveAttribute('src', '/brand/lodgekeep-logo-horizontal-white.png');
+    for (const img of container.querySelectorAll('img')) {
+      expect(img).toHaveAttribute('alt', 'Lodgekeep');
+      expect(img).toHaveAttribute('width');
+      expect(img).toHaveAttribute('height');
+    }
+  });
+
+  it('no longer draws the text "L" monogram', () => {
+    render(<Header content={realContent} />);
+    expect(screen.queryByText('L', { exact: true })).not.toBeInTheDocument();
+  });
+});

@@ -35,16 +35,10 @@
   padding: 0 var(--space-4);
 }
 
-/* LodgeKeep's own full-colour mark sits on a white tile, as on the previous
-   dark sidebar, so it reads the same against any sidebar colour. */
-.brandIcon {
-  width: 36px;
-  height: 36px;
+/* LodgeKeep's own white logo, drawn directly on the navy sidebar. */
+.brandLogo {
   flex-shrink: 0;
-  padding: var(--space-1);
-  border-radius: var(--radius-md);
-  background: var(--surface-card);
-  object-fit: contain;
+  max-width: 100%;
 }
 
 /* The active property's own logo and name — see Sidebar.jsx. */
@@ -98,18 +92,6 @@
 
 .collapsed .propertyLogo {
   max-height: 32px;
-}
-
-.brandWordmark {
-  font-family: var(--font-display);
-  font-size: 22px;
-  line-height: 1.2;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--sidebar-active-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .userPanel {

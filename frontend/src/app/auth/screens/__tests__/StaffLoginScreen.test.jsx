@@ -41,6 +41,11 @@ function renderScreen(props = {}) {
   );
 }
 
+// The two horizontal lockups on this screen (dark brand panel + form card); the
+// app footer's small mark also says "Lodgekeep" and is not one of them.
+const horizontalLockups = () =>
+  screen.queryAllByAltText('Lodgekeep').filter((img) => img.getAttribute('src').includes('logo-horizontal'));
+
 describe('<StaffLoginScreen>', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset());
@@ -60,13 +65,22 @@ describe('<StaffLoginScreen>', () => {
     renderScreen();
     const logo = await screen.findByRole('img', { name: 'Diamond Age Hotels logo' });
     expect(logo).toHaveAttribute('src', '/api/v1/media/property-logos/logo.png');
+    // The tenant's logo wins: the form card carries no LodgeKeep fallback, only
+    // the dark brand panel's white lockup remains.
+    const lockups = horizontalLockups();
+    expect(lockups).toHaveLength(1);
+    expect(lockups[0]).toHaveAttribute('src', '/brand/lodgekeep-logo-horizontal-white.png');
     expect(screen.getByText('Sign in to Diamond Age Hotels')).toBeInTheDocument();
   });
 
-  it('shows no logo (and still the form) when the tenant has none', async () => {
+  it('falls back to the -colour LodgeKeep lockup on the form card when the tenant has no logo', async () => {
     renderScreen();
-    await vi.waitFor(() => expect(mocks.getLoginBranding).toHaveBeenCalled());
-    expect(screen.queryByRole('img', { name: /logo/ })).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(horizontalLockups()).toHaveLength(2));
+    const srcs = horizontalLockups().map((img) => img.getAttribute('src'));
+    // dark brand panel -> white, white form card -> colour
+    expect(srcs).toContain('/brand/lodgekeep-logo-horizontal-white.png');
+    expect(srcs).toContain('/brand/lodgekeep-logo-horizontal-colour.png');
+    expect(screen.queryByRole('img', { name: /logo$/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
   });
 
@@ -83,6 +97,7 @@ describe('<StaffLoginScreen>', () => {
     const logo = await screen.findByRole('img', { name: 'Alpha logo' });
     fireEvent.error(logo);
     expect(screen.queryByRole('img', { name: 'Alpha logo' })).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(horizontalLockups()).toHaveLength(2));
   });
 
   it('links to the real /signup screen, PLAN.md Phase 5 gap closure', () => {

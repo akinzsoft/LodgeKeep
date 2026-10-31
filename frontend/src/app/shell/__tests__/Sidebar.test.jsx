@@ -82,16 +82,36 @@ describe('<Sidebar>', () => {
     expect(screen.getAllByRole('button')).toHaveLength(3);
   });
 
-  it("shows LodgeKeep's own platform mark as the product brand row", () => {
+  it('shows the white horizontal lockup as the brand row when expanded', () => {
     render(<Sidebar user={user} navGroups={navGroups} permissions={new Set()} />);
-    expect(screen.getByAltText('LodgeKeep')).toBeInTheDocument();
-    expect(screen.getByText('LodgeKeep')).toBeInTheDocument();
+    const logo = screen.getByAltText('Lodgekeep');
+    expect(logo).toHaveAttribute('src', '/brand/lodgekeep-logo-horizontal-white.png');
+    expect(logo).toHaveAttribute('width');
+    expect(logo).toHaveAttribute('height');
   });
 
-  it('keeps the brand icon but hides the wordmark text when collapsed', () => {
+  it('shows the white mark as the brand row when collapsed', () => {
     render(<Sidebar user={user} navGroups={navGroups} permissions={new Set()} collapsed />);
-    expect(screen.getByAltText('LodgeKeep')).toBeInTheDocument();
-    expect(screen.queryByText('LodgeKeep')).not.toBeInTheDocument();
+    expect(screen.getByAltText('Lodgekeep')).toHaveAttribute('src', '/brand/lodgekeep-mark-white.png');
+  });
+
+  it('never puts a -colour logo on the navy sidebar', () => {
+    const { container, rerender } = render(<Sidebar user={user} navGroups={navGroups} />);
+    expect(container.querySelector('img[src*="colour"]')).toBeNull();
+    rerender(<Sidebar user={user} navGroups={navGroups} collapsed />);
+    expect(container.querySelector('img[src*="colour"]')).toBeNull();
+  });
+
+  it('does not show LodgeKeep a second time for a property with no logo — its name only', () => {
+    render(<Sidebar user={user} navGroups={navGroups} property={{ name: 'Diamond Age Hotel', logoUrl: null }} />);
+    expect(screen.getAllByAltText('Lodgekeep')).toHaveLength(1);
+    expect(screen.getByText('Diamond Age Hotel')).toBeInTheDocument();
+  });
+
+  it("keeps the property's own logo beside the brand row without replacing it", () => {
+    render(<Sidebar user={user} navGroups={navGroups} property={{ name: 'Diamond Age Hotel', logoUrl: '/logo.png' }} />);
+    expect(screen.getByAltText('Diamond Age Hotel logo')).toHaveAttribute('src', '/logo.png');
+    expect(screen.getByAltText('Lodgekeep')).toBeInTheDocument();
   });
 
   it("shows the active property's logo and name under the product mark", () => {

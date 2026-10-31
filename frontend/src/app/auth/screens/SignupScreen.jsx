@@ -5,7 +5,7 @@ import { authApi, ApiError } from '../../../shared/api/index.js';
 import { buildTenantLoginUrl } from './tenant-url.js';
 import { DEFAULT_TIMEZONE } from '../../../shared/timezones.js';
 import { slugify } from './slugify.js';
-import lodgekeepIcon from '../../../assets/brand/lodgekeep-icon.png';
+import { BrandLogo } from '../../../shared/components/BrandLogo/BrandLogo.jsx';
 import styles from './StaffLoginScreen.module.css';
 
 const EMPTY_FORM = {
@@ -128,10 +128,7 @@ export function SignupScreen({ isOffline = false }) {
         <div className={styles.mainRow}>
           <div className={styles.brandPanel}>
             <div className={styles.brandTop}>
-              <div className={styles.logoMark}>
-                <img src={lodgekeepIcon} alt="" className={styles.logoMarkIcon} />
-              </div>
-              <p className={styles.wordmark}>LodgeKeep</p>
+              <BrandLogo variant="horizontal" surface="dark" height={40} className={styles.brandLogo} />
             </div>
             <div className={styles.brandContent}>
               <p className={styles.tenantLabel}>You&rsquo;re all set</p>
@@ -165,10 +162,7 @@ export function SignupScreen({ isOffline = false }) {
       <div className={styles.mainRow}>
         <div className={styles.brandPanel}>
           <div className={styles.brandTop}>
-            <div className={styles.logoMark}>
-              <img src={lodgekeepIcon} alt="" className={styles.logoMarkIcon} />
-            </div>
-            <p className={styles.wordmark}>LodgeKeep</p>
+            <BrandLogo variant="horizontal" surface="dark" height={40} className={styles.brandLogo} />
           </div>
           <div className={styles.brandContent}>
             <p className={styles.tenantLabel}>Start your free trial</p>
