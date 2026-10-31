@@ -160,7 +160,22 @@ export function StaffLoginScreen({ isOffline = false }) {
       <div className={styles.mainRow}>
         <div className={styles.brandPanel}>
           <div className={styles.brandTop}>
-            <BrandLogo variant="horizontal" surface="dark" height={40} className={styles.brandLogo} />
+            {/* Branding answered: the tenant's logo alone (on a white chip), else
+                LodgeKeep's -white lockup. Held back until then so the wrong
+                logo never flashes. */}
+            {brandingSettled &&
+              (tenantLogoUrl ? (
+                <span className={styles.tenantLogoChip}>
+                  <img
+                    src={tenantLogoUrl}
+                    alt={tenantLabel ? `${tenantLabel} logo` : 'Hotel logo'}
+                    className={styles.tenantLogo}
+                    onError={() => setLogoFailed(true)}
+                  />
+                </span>
+              ) : (
+                <BrandLogo variant="horizontal" surface="dark" height={40} className={styles.brandLogo} />
+              ))}
           </div>
 
           <div className={styles.brandContent}>
@@ -177,25 +192,13 @@ export function StaffLoginScreen({ isOffline = false }) {
               </p>
             )}
 
-            {/* The tenant's own logo always wins. Only once the branding lookup
-                has answered (or failed) and there is none — or it will not
-                load — does the form card show LodgeKeep's -colour logo (it
-                sits on a white card, so never the -white artwork). */}
-            {tenantLogoUrl ? (
+            {/* With a tenant logo it is shown once, on the brand panel, and not
+                repeated here. Without one, the -colour lockup (this card is
+                white, so never the -white artwork). */}
+            {!tenantLogoUrl && brandingSettled && (
               <div className={styles.tenantLogoRow}>
-                <img
-                  src={tenantLogoUrl}
-                  alt={tenantLabel ? `${tenantLabel} logo` : 'Hotel logo'}
-                  className={styles.tenantLogo}
-                  onError={() => setLogoFailed(true)}
-                />
+                <BrandLogo variant="horizontal" surface="light" height={40} />
               </div>
-            ) : (
-              brandingSettled && (
-                <div className={styles.tenantLogoRow}>
-                  <BrandLogo variant="horizontal" surface="light" height={40} />
-                </div>
-              )
             )}
 
             {view === 'signin' && (

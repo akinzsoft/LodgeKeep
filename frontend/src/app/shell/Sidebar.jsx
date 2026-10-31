@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { BrandLogo } from '../../shared/components/BrandLogo/BrandLogo.jsx';
 import { initialsFor } from './initials.js';
 import { NavIcon } from './navIcons.jsx';
@@ -42,7 +43,7 @@ import styles from './Sidebar.module.css';
  * @param {(key: string) => void} [onNavigate]
  * @param {boolean} [collapsed]
  * @param {boolean} [mobileOpen]
- * @param {{name?: string, logoUrl?: string|null}} [property]   The active property, shown under the product mark: its Setup → Branding logo on a white tile (a logo made for white paper stays legible on the dark sidebar) and its name. Logo only when collapsed; nothing at all when there is neither.
+ * @param {{name?: string, logoUrl?: string|null}} [property]   The active property, its Setup → Branding logo replaces the LodgeKeep logo in the brand row (on a white tile, so a logo made for white paper stays legible on navy); its name is text beside it, expanded only. With no logo, LodgeKeep's white lockup/mark shows.
  */
 export function Sidebar({
   user,
@@ -55,6 +56,9 @@ export function Sidebar({
   mobileOpen = false,
   property,
 }) {
+  const [failedLogoUrl, setFailedLogoUrl] = useState(null);
+  const showPropertyLogo = Boolean(property?.logoUrl) && failedLogoUrl !== property.logoUrl;
+
   const visibleGroups = navGroups
     .map((group) => ({
       ...group,
@@ -67,28 +71,24 @@ export function Sidebar({
       className={`${styles.sidebar} ${collapsed ? styles.collapsed : ''} ${mobileOpen ? styles.mobileOpen : ''}`.trim()}
       aria-label="Main"
     >
-      {/* LodgeKeep's own platform mark — never the tenant's own branding
-          (the property's logo is the block just below it). This is the
-          product's own identity, shown the same way to every
-          tenant's staff regardless of theming (DESIGN_SYSTEM.md §1: "the
-          admin shell keeps the product's own identity"). */}
+      {/* One brand row. A property's own logo always wins and is then the only
+          logo shown; LodgeKeep's -white artwork is the fallback when there is
+          none (or it will not load). The name stays as text beside it. */}
       <div className={styles.brand}>
-        {/* Navy sidebar: always the -white artwork. Collapsed rail = the mark,
-            expanded = the horizontal lockup. The property's own logo (or, with
-            none, just its name) is the separate block below. */}
-        <BrandLogo variant={collapsed ? 'mark' : 'horizontal'} surface="dark" height={collapsed ? 28 : 32} className={styles.brandLogo} />
+        {showPropertyLogo ? (
+          <span className={styles.propertyLogoTile}>
+            <img
+              src={property.logoUrl}
+              alt={property.name ? `${property.name} logo` : 'Property logo'}
+              className={styles.propertyLogo}
+              onError={() => setFailedLogoUrl(property.logoUrl)}
+            />
+          </span>
+        ) : (
+          <BrandLogo variant={collapsed ? 'mark' : 'horizontal'} surface="dark" height={collapsed ? 28 : 32} className={styles.brandLogo} />
+        )}
+        {!collapsed && property?.name && <p className={styles.propertyName}>{property.name}</p>}
       </div>
-
-      {(property?.logoUrl || (!collapsed && property?.name)) && (
-        <div className={styles.property} title={collapsed ? property.name : undefined}>
-          {property.logoUrl && (
-            <span className={styles.propertyLogoTile}>
-              <img src={property.logoUrl} alt={property.name ? `${property.name} logo` : 'Property logo'} className={styles.propertyLogo} />
-            </span>
-          )}
-          {!collapsed && property.name && <p className={styles.propertyName}>{property.name}</p>}
-        </div>
-      )}
 
       <div className={styles.userPanel}>
         {user.avatarUrl ? (
