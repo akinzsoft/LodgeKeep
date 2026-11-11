@@ -233,6 +233,17 @@ async function resolveClientBusinessDate({ trx, folioId, clientDate, canBackdate
  * folio to already exist; this is the one function that ever creates it.
  */
 async function ensurePrimaryFolio({ trx, reservationId }) {
+  // H-2 (security audit): there is no database constraint that keeps one
+  // primary folio per reservation (`folios` is unique on (reservation_id,
+  // folio_number) and the number is a fresh ULID), so the guarantee is
+  // serialisation. The reservation row is the point every folio-opening path
+  // shares (open-folio, check-in); callers that already hold it re-lock it
+  // for free. The existence read below must also be FRESH: the two racing
+  // callers run at READ COMMITTED (`FOLIO_CREATING_ISOLATION`), where a plain
+  // read sees what the lock's previous holder committed. A locking read here
+  // is deliberately NOT used: on an empty index range it takes gap locks, and
+  // concurrent folio creation for different reservations then deadlocks.
+  await trx.table('reservations').where({ id: reservationId }).forUpdate().first('id');
   const existing = await trx.table('folios').where({ reservation_id: reservationId }).first();
   if (existing) return existing;
 
@@ -466,6 +477,11 @@ async function postCharge({ trx, folioId, type, description, amount, businessDat
  * never double-posts.
  */
 async function postRoomChargesForStay({ trx, reservationId, folioId, userId }) {
+  // H-2: folio lock first (module lock order); the once-per-night guard below
+  // is a plain read, fresh because the racing callers run at READ COMMITTED
+  // (see `ensurePrimaryFolio`). Not a locking read: that would gap-lock an
+  // empty range and deadlock concurrent portal bookings.
+  await lockFolio({ trx, folioId });
   const dailyRates = await trx.table('reservation_daily_rates').where({ reservation_id: reservationId });
   for (const dailyRate of dailyRates) {
     const alreadyPosted = await trx
