@@ -250,7 +250,7 @@ async function listWaitlist(req, res, next) {
   }
 }
 
-function transitionAction(operationSuffix, serviceFn) {
+function transitionAction(operationSuffix, serviceFn, { isolationLevel } = {}) {
   return async function action(req, res, next) {
     try {
       const { id } = req.params;
@@ -262,6 +262,7 @@ function transitionAction(operationSuffix, serviceFn) {
         entityType: 'reservations',
         entityId: id,
         action: operationSuffix,
+        isolationLevel,
         handler: async (trx) => {
           const reservation = await serviceFn({ trx, req });
           return { status: 200, body: ok(reservation) };
@@ -405,7 +406,9 @@ async function listFreeRooms(req, res, next) {
  * A financial mutation (it posts real folio_line_items), so it goes
  * through the same idempotency wrapper every other one here does.
  */
-const openBookingFolio = transitionAction('open_folio', ({ trx, req }) => service.openBookingFolio({ trx, id: req.params.id }));
+const openBookingFolio = transitionAction('open_folio', ({ trx, req }) => service.openBookingFolio({ trx, id: req.params.id }), {
+  isolationLevel: service.FOLIO_CREATING_ISOLATION,
+});
 
 async function checkIn(req, res, next) {
   try {
@@ -419,6 +422,7 @@ async function checkIn(req, res, next) {
       entityType: 'reservations',
       entityId: id,
       action: 'check_in',
+      isolationLevel: service.FOLIO_CREATING_ISOLATION,
       handler: async (trx) => {
         const reservation = await service.checkIn({ trx, id, roomId, overrideDirty: req.body?.override_dirty === true });
         return { status: 200, body: ok(reservation) };

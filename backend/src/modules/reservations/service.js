@@ -647,8 +647,19 @@ async function createReservation({
  * skips a night already posted — reopening the booking screen (or a
  * network retry) never double-bills.
  */
+/**
+ * H-2: the transactions that can CREATE a primary folio and post its room charges (open-folio, check-in) run at READ
+ * COMMITTED. Both lock the reservation row first, so they serialize; at the default REPEATABLE READ the loser's plain
+ * reads would still show the snapshot fixed by `withIdempotency`'s key lookup, BEFORE it waited for that lock, and it
+ * would not see the folio or charge lines the winner just committed. A locking read is not an alternative: on an empty
+ * range it takes gap locks and concurrent check-ins of different reservations deadlock (tested in RES-5).
+ */
+const FOLIO_CREATING_ISOLATION = 'read committed';
+
 async function openBookingFolio({ trx, id }) {
-  const reservation = await trx.table('reservations').where({ id }).first();
+  // H-2: locking read, like every other transition — two concurrent opens
+  // (different Idempotency-Keys) or an open racing check-in serialize here.
+  const reservation = await lockReservation({ trx, id });
   if (!reservation) return null;
   if (reservation.status !== 'confirmed') {
     throw new ValidationError(
@@ -1923,6 +1934,7 @@ function maskGuestName(firstName, lastName) {
 }
 
 module.exports = {
+  FOLIO_CREATING_ISOLATION,
   generateUlid,
   expandStayDates,
   isValidTransition,
